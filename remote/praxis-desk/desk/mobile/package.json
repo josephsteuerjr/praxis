@@ -1,0 +1,18 @@
+{
+  "name": "frame-mobile",
+  "private": true,
+  "version": "2.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5175 --strictPort --host",
+    "build": "tsc --noEmit && vite build"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "lottie-web": "^5.13.0",
+    "wavesurfer.js": "8.0.3"
+  }
+}

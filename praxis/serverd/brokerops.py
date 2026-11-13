@@ -693,13 +693,31 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def edit(root_value: str, action: str, path: str = "", content: str = "", old: str = "",
-         new: str = "", patch: str = "", expected_sha256: str = "") -> dict:
+         new: str = "", patch: str = "", expected_sha256: str = "", all: bool = False) -> dict:
+    """Distinguish refusal before publication from an uncertain attempted edit."""
+    phase = {"started": False}
+    try:
+        result = _edit_with_stage(root_value, action, path, content, old, new, patch,
+                                  expected_sha256, all=all, phase=phase)
+    except Exception as exc:
+        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if not result.get("ok"):
+        result["stage"] = "apply" if phase["started"] else "preflight"
+    return result
+
+
+def _edit_with_stage(root_value: str, action: str, path: str = "", content: str = "", old: str = "",
+         new: str = "", patch: str = "", expected_sha256: str = "", *, all=False, phase) -> dict:
+    if not isinstance(all, bool) or (all and str(action).strip().lower() != "replace"):
+        return {"ok": False, "error": "all must be a boolean and applies only to replace"}
     root, err = _root(root_value)
     if err:
         return {"ok": False, "error": err}
     assert root is not None
     action = str(action or "").strip().lower()
     if action == "patch":
+        if expected_sha256:
+            return {"ok": False, "error": "patch has no per-file SHA contract; use versioned replace/write"}
         if not patch.strip():
             return {"ok": False, "error": "patch is required"}
         for raw in re.findall(r"^(?:---|\+\+\+)\s+(?:[ab]/)?([^\t\n]+)", patch, re.MULTILINE):
@@ -712,6 +730,7 @@ def edit(root_value: str, action: str, path: str = "", content: str = "", old: s
         if code != 0:
             return {"ok": False, "error": "git apply --check failed", "text": checked[:8000], "exit": code}
         before = _git(_git_root(root) or root, "status", "--short")
+        phase["started"] = True
         code, applied = _sh(["git", "apply", "--whitespace=nowarn", "-"], root, 90, patch)
         after = _git(_git_root(root) or root, "status", "--short")
         return {"ok": code == 0, "text": applied or after, "exit": code, "before": before,
@@ -731,27 +750,57 @@ def edit(root_value: str, action: str, path: str = "", content: str = "", old: s
                 "error": (f"файл {target} есть, но sha256 не считается ({before_error}) — "
                           f"подтвердить, что он тот самый ({expected}), нечем. Ничего не "
                           f"записано; это не конфликт версий, а нечитаемый файл.")}
-    if expected and expected != before:
+    if expected and not re.fullmatch(r"[0-9a-f]{16}|[0-9a-f]{64}", expected):
+        return {"ok": False, "error": "expected_sha256 must be 16 or 64 hexadecimal characters"}
+    if expected and expected[:16] != before:
         return {"ok": False, "error": f"hash conflict: expected {expected}, current {before}; reread"}
+    if len(expected) == 64 and hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+        return {"ok": False, "error": "full hash conflict; reread"}
     if action == "replace":
         if not target.is_file():
             return {"ok": False, "error": f"not a file: {target}"}
-        current = target.read_text(encoding="utf-8", errors="replace")
-        count = current.count(old)
-        if count != 1:
-            return {"ok": False, "error": f"exact replace needs one match, found {count}"}
-        content = current.replace(old, new, 1)
+        if not isinstance(old, str) or not old or not isinstance(new, str):
+            return {"ok": False, "error": "replace requires nonempty old and text new"}
+        raw = target.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        if expected and not digest.startswith(expected):
+            return {"ok": False, "error": "hash conflict before replacement; reread"}
+        before = digest[:16]
+        current = raw.decode("utf-8")  # strict: refusing cannot corrupt non-UTF-8 bytes
+        positions, cursor = [], 0
+        while True:
+            index = current.find(old, cursor)
+            if index < 0:break
+            positions.append(index);cursor = index + 1
+        count = len(positions)
+        if not count or (count != 1 and not all):
+            return {"ok": False, "error": f"exact replace needs one match unless all=true, found {count}"}
+        if any(a + len(old) > b for a, b in zip(positions, positions[1:])):
+            return {"ok": False, "error": "overlapping matches are ambiguous even with all=true"}
+        content = current.replace(old, new, -1 if all else 1)
     if len(content.encode("utf-8")) > MAX_WRITE_BYTES:
         return {"ok": False, "error": f"write exceeds {MAX_WRITE_BYTES} bytes"}
+    # Resolve again before publication; never follow a changed external symlink.
+    current_target, current_error = _inside(root, path)
+    if current_error or current_target != target:
+        return {"ok": False, "error": current_error or "path changed before publication"}
+    if action == "replace" and target.read_bytes() != raw:
+        return {"ok": False, "error": "file changed after replacement preflight; reread"}
     backup, backup_error = _backup(target)
     existed = target.exists()
+    phase["started"] = True
     _atomic_write(target, content)
     after, after_error = _hash_probe(target)
+    if not after_error and after != hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]:
+        after_error = "readback hash differs from the intended bytes"
     was = before or (f"не прочитан ({before_error})" if before_error
                      else ("файл был, sha256 нет" if existed else "new"))
     became = after or (f"не прочитан ({after_error})" if after_error else "?")
     result = {"ok": True, "text": f"{action}: {target}; sha256 {was} → {became}",
               "before": before, "after": after, "backup": backup}
+    if action == "replace":
+        result["replacements"] = count
+        result["text"] += f"; replacements={count}"
     if before_error:
         result["before_error"] = before_error
     if after_error:

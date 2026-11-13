@@ -929,145 +929,6 @@ class ResumeToolCeilingTests(_RunHarness):
 #  6. Судья: расщеплённый слот, названные капы, обрыв вердикта
 # --------------------------------------------------------------------------- #
 
-class GuardInputSplitTests(unittest.TestCase):
-    STATE = "\n".join(json.dumps({"fact": f"f{i}", "value": "x" * 20})
-                      for i in range(12))
-
-    def _capture(self, verdict: str = "PRIVACY_OK", stop_reason: str = "end_turn"):
-        captured: dict = {}
-
-        class FakeResp:
-            text = verdict
-
-        FakeResp.stop_reason = stop_reason
-
-        def fake_chat(_role, **kw):
-            captured["system"] = kw.get("system", "")
-            captured["max_tokens"] = kw.get("max_tokens")
-            messages = kw.get("messages") or []
-            captured["content"] = messages[0]["content"] if messages else ""
-            return FakeResp()
-
-        return captured, fake_chat
-
-    def test_state_and_topic_orientation_are_two_blocks_with_named_caps(self):
-        captured, fake_chat = self._capture()
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            verdict, _ = agent.evaluate_reply(
-                "черновик", "TOPIC MAP: ветка A -> ветка B",
-                state=self.STATE, audience_accepts_private=False)
-        self.assertEqual(verdict, "ok")
-        content = captured["content"]
-        self.assertIn("STATE (machine truth", content)
-        self.assertIn("ROOM/TOPIC ORIENTATION", content)
-        self.assertIn(f"cap {agent._GUARD_STATE_CHARS} chars", content)
-        self.assertIn(f"cap {agent._GUARD_TOPIC_CHARS} chars", content)
-        self.assertIn("TOPIC MAP: ветка A -> ветка B", content)
-        self.assertIn('"fact": "f0"', content)
-
-    def test_topic_orientation_can_no_longer_evict_state(self):
-        # ⚠ Корень: один слот на 900 символов; в 123 из 200 судимых ходов в нём лежала
-        # карта веток, и STATE не доезжал вовсе.
-        captured, fake_chat = self._capture()
-        huge_topic = "\n".join(f"branch {i}: " + "y" * 200 for i in range(80))
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            agent.evaluate_reply("черновик", huge_topic, state=self.STATE,
-                                 audience_accepts_private=False)
-        content = captured["content"]
-        self.assertIn('"fact": "f11"', content, "STATE обязан доехать целиком")
-        self.assertIn("line(s) did not fit", content, "усечение обязано быть НАЗВАНО")
-
-    def test_clip_jsonl_block_cuts_on_line_boundaries_only(self):
-        lines = ['{"a":1}', '{"b":2}', '{"c":3}']       # по 7 символов
-        text = "\n".join(lines)
-        whole, dropped, over = agent._clip_jsonl_block(text, len(text))
-        self.assertEqual((whole, dropped, over), (text, 0, 0))
-        # На один символ меньше — последняя строка не влезает ЦЕЛИКОМ и выпадает.
-        cut, dropped, over = agent._clip_jsonl_block(text, len(text) - 1)
-        self.assertEqual(cut, "\n".join(lines[:2]))
-        self.assertEqual((dropped, over), (1, 0))
-        for piece in cut.splitlines():
-            json.loads(piece)                            # ни одной битой строки
-
-    def test_a_first_line_longer_than_the_cap_is_kept_whole_AND_the_overrun_is_reported(self):
-        # ⚠ Здесь стояло `self.assertEqual(dropped, 0)` и на этом тест заканчивался: он
-        # ЗАКРЕПЛЯЛ молчание. Компромисс (не рвать JSON) правильный, но кап был объявлен
-        # судье и не соблюдён, а заголовок печатал «cap 4000 chars; 0 line(s) did not fit»
-        # над блоком вдвое длиннее капа. Кап может не соблюдаться — молча нет (закон 2).
-        line = '{"long":"' + "z" * 100 + '"}'
-        single, dropped, over = agent._clip_jsonl_block(line, 10)
-        json.loads(single)                               # строка цела, а не огрызок
-        self.assertEqual(single, line)
-        self.assertEqual(dropped, 0)
-        self.assertEqual(over, len(line) - 10, "перебор обязан быть посчитан, а не забыт")
-
-    def test_the_unenforced_cap_is_confessed_in_the_header_the_evaluator_reads(self):
-        captured, fake_chat = self._capture()
-        one_huge_line = json.dumps({"fact": "state", "value": "q" * 6000})
-        self.assertGreater(len(one_huge_line), agent._GUARD_STATE_CHARS)
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            agent.evaluate_reply("черновик", state=one_huge_line,
-                                 audience_accepts_private=False)
-        content = captured["content"]
-        self.assertIn(one_huge_line, content, "строка обязана доехать целой")
-        self.assertIn("cap NOT enforced", content, "несоблюдённый кап обязан быть назван")
-        self.assertIn(str(len(one_huge_line) - agent._GUARD_STATE_CHARS), content,
-                      "перебор обязан быть назван числом")
-        self.assertNotIn("0 line(s) did not fit", content)
-        # А там, где кап СОБЛЮДЁН, признания быть не должно — иначе это шум, а не правда.
-        captured_ok, fake_chat_ok = self._capture()
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat_ok):
-            agent.evaluate_reply("черновик", state=self.STATE,
-                                 audience_accepts_private=False)
-        self.assertNotIn("cap NOT enforced", captured_ok["content"])
-
-    def test_audience_block_carries_the_self_description_caveat(self):
-        captured, fake_chat = self._capture()
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            agent.evaluate_reply("черновик", privacy_frame="peer 555000444 is not owner",
-                                 audience_accepts_private=False)
-        self.assertIn("self-description", captured["content"])
-
-    def test_wrapped_verdict_is_read_but_prose_is_not_interpreted(self):
-        for wrapped in ("```PRIVACY_OK```", "PRIVACY_OK.", "  `PRIVACY_OK` "):
-            captured, fake_chat = self._capture(verdict=wrapped)
-            with mock.patch.object(agent.llm, "configured", return_value=True), \
-                    mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-                verdict, _ = agent.evaluate_reply("t", audience_accepts_private=False)
-            self.assertEqual(verdict, "ok", wrapped)
-        captured, fake_chat = self._capture(verdict="I would not say PRIVACY_OK here")
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            verdict, reason = agent.evaluate_reply("t", audience_accepts_private=False)
-        self.assertEqual(verdict, "unavailable")
-        self.assertIn("malformed", reason)
-
-    def test_a_verdict_cut_by_its_ceiling_is_named_and_not_blamed_on_her_draft(self):
-        turns.note_truncated(model="evaluator-model", chars=5)
-        captured, fake_chat = self._capture(verdict="PRIVACY_",
-                                            stop_reason="max_tokens")
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            verdict, reason = agent.evaluate_reply("t", audience_accepts_private=False)
-        self.assertEqual(verdict, "unavailable")
-        self.assertIn("cut by its token ceiling", reason)
-        self.assertEqual(turns.take_truncation(), {},
-                         "обрыв судьи не должен приписываться её фразе")
-
-    def test_verdict_ceiling_is_generous_enough_for_reasoning_models(self):
-        captured, fake_chat = self._capture()
-        with mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            agent.evaluate_reply("t", audience_accepts_private=False)
-        self.assertEqual(captured["max_tokens"], agent._GUARD_VERDICT_MAX_TOKENS)
-        self.assertGreaterEqual(agent._GUARD_VERDICT_MAX_TOKENS, 1000)
-
-
 class GuardInputSnapshotTests(_RunHarness):
     def test_snapshot_stores_the_draft_it_judged(self):
         context = self._create("guard-snapshot")
@@ -1078,8 +939,8 @@ class GuardInputSnapshotTests(_RunHarness):
             outbound_images=(), repeat_discriminator="", outbound=[],
         )
         self.assertEqual(value["draft"], "ровно этот черновик")
-        # STATE в снимке не хранится: его собирает сам судья в момент вызова, и пустое
-        # поле здесь утверждало бы, что судья работал без заземления.
+        # STATE в снимке не хранится: его собирал только судья приватности, которого
+        # с 10.11 нет (Егор, «сними»), — пустое поле здесь врало бы о заземлении.
         self.assertNotIn("state", value)
         read = agent._outbound_guard_input(context.run_id, draft="ровно этот черновик")
         self.assertEqual(read["draft"], "ровно этот черновик")
@@ -1106,123 +967,31 @@ class GuardInputSnapshotTests(_RunHarness):
         self.assertEqual(read["draft"], "")
 
 
-class LazyStateCollectionTests(unittest.TestCase):
-    """Цена STATE платится ТОЛЬКО там, где судья вправду работает.
+class OutboundNeverPaysForStateTests(unittest.TestCase):
+    """Выход к не-owner аудитории не собирает STATE и не зовёт модель.
 
-    ⚠ Сбор — это две сетевые пробы (`serverd_client.status()` ~0.15 с и
-    `body_client.status_probe(timeout=5)` ~1.0 с живьём, до 10 с двумя таймаутами при
-    выключенном ПК Егора) плюс обход всех нетерминальных ранов с файловым замком на
-    каждый (1159 на проде). Первая версия собирала его в `voice_turn_envelope` — то есть
-    на КАЖДОМ ходе к не-owner аудитории, включая её молчание и ходы, которые держит
-    кред-пол: регресс ровно в ту сторону, которую дом лечил двумя latency-пассами.
+    Сбор STATE — две сетевые пробы (serverd ~0.15 с, тело до 10 с при выключенном ПК
+    Егора) плюс обход всех нетерминальных ранов с замком на каждый. Его платил только
+    судья приватности; с 10.11 (Егор, «сними») судьи нет — и сбора на выходе нет вовсе.
     """
 
-    def setUp(self):
-        agent._GUARD_STATE_CACHE = None
-        self.addCleanup(setattr, agent, "_GUARD_STATE_CACHE", None)
-        self.builds: list[int] = []
-
-    def _build_probe(self):
-        def build(**_kw):
-            self.builds.append(1)
-            return '{"fact":"process","uptime_minutes":3}'
-        return mock.patch.object(agent, "build_state_block", side_effect=build)
-
-    def _judge(self, verdict: str = "PRIVACY_OK"):
-        captured: dict = {}
-
-        class FakeResp:
-            text = verdict
-            stop_reason = "end_turn"
-
-        def fake_chat(_role, **kw):
-            messages = kw.get("messages") or []
-            captured["content"] = messages[0]["content"] if messages else ""
-            return FakeResp()
-
-        return captured, fake_chat
-
-    def test_the_judge_collects_state_itself_when_it_actually_runs(self):
-        captured, fake_chat = self._judge()
-        with self._build_probe(), \
-                mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
-            verdict, _ = agent.evaluate_reply("черновик", audience_accepts_private=False,
-                                              collect_state=True)
-        self.assertEqual(verdict, "ok")
-        self.assertEqual(len(self.builds), 1)
-        self.assertIn('"fact":"process"', captured["content"])
-
-    def test_nothing_is_collected_when_the_judge_returns_before_the_model(self):
-        # Три ранних выхода: приватная аудитория, пустая нагрузка, выключенный судья.
-        with self._build_probe(), \
-                mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat",
-                                  side_effect=AssertionError("судья не должен вызываться")):
-            agent.evaluate_reply("черновик", audience_accepts_private=True,
-                                 collect_state=True)
-            agent.evaluate_reply("   ", audience_accepts_private=False,
-                                 collect_state=True)
-        with self._build_probe(), \
-                mock.patch.object(agent.llm, "configured", return_value=False):
-            agent.evaluate_reply("черновик", audience_accepts_private=False,
-                                 collect_state=True)
-        self.assertEqual(self.builds, [], "сбор фактов не для кого — и не должен идти")
-
-    def test_a_silent_turn_and_a_credential_floor_never_pay_for_state(self):
+    def test_silence_credential_and_ordinary_reply_never_build_state(self):
+        builds: list[int] = []
         ctx = agent.ChannelContext(chat_id="555000444", principal_id="555000444",
                                    is_dm=True, owner=False, known=True)
-        self.assertFalse(ctx.audience_accepts_private)
-        with self._build_probe(), \
-                mock.patch.object(agent.llm, "configured", return_value=True), \
+        self.assertFalse(ctx.owner_audience)
+        with mock.patch.object(agent, "build_state_block",
+                               side_effect=lambda **_kw: builds.append(1) or ""), \
+                mock.patch.object(agent, "_held_self_wake"), \
                 mock.patch.object(agent.llm, "chat",
-                                  side_effect=AssertionError("судья не должен вызываться")):
+                                  side_effect=AssertionError("модель на выходе не зовётся")):
             self.assertEqual(agent._guard_outbound("[молчу]", ctx=ctx), "")
             held = agent._guard_outbound("вот ключ sk-ant-api03-" + "z" * 90, ctx=ctx)
-        self.assertEqual(held, "", "кред-пол держит и без судьи")
-        self.assertEqual(self.builds, [])
-
-    def test_state_reaches_the_judge_in_a_non_owner_dm(self):
-        # ⚠ Раньше STATE собирался только при `ctx.owner and not ctx.is_dm`; скан ~800
-        # ранов не нашёл НИ ОДНОГО рана со STATE при не-owner триггере.
-        captured, fake_chat = self._judge()
-        ctx = agent.ChannelContext(chat_id="555000444", principal_id="555000444",
-                                   is_dm=True, owner=False, known=True)
-        with self._build_probe(), \
-                mock.patch.object(agent.llm, "configured", return_value=True), \
-                mock.patch.object(agent.llm, "chat", side_effect=fake_chat):
             out = agent._guard_outbound("мой аптайм три минуты", ctx=ctx,
                                         orient="TOPIC MAP: ветка A")
+        self.assertEqual(held, "", "кред-пол держит и без судьи")
         self.assertEqual(out, "мой аптайм три минуты")
-        self.assertIn('"fact":"process"', captured["content"])
-        self.assertIn("ROOM/TOPIC ORIENTATION", captured["content"],
-                      "STATE больше не подменяет собой ориентацию")
-
-    def test_the_reused_snapshot_names_its_own_age_and_is_rebuilt_after_the_window(self):
-        with self._build_probe():
-            first = agent._guard_state_block()
-            second = agent._guard_state_block()
-            self.assertEqual(len(self.builds), 1, "в окне снимок переиспользуется")
-            self.assertIn('"collected_seconds_ago":0', first)
-            self.assertIn(f'"recollected_after_seconds":{int(agent._GUARD_STATE_TTL_SEC)}',
-                          second)
-            # Граница окна: на секунду раньше — тот же снимок, на секунду позже — новый.
-            stamp, block = agent._GUARD_STATE_CACHE
-            agent._GUARD_STATE_CACHE = (stamp - agent._GUARD_STATE_TTL_SEC + 1, block)
-            inside = agent._guard_state_block()
-            self.assertEqual(len(self.builds), 1)
-            self.assertIn('"collected_seconds_ago":59', inside)
-            agent._GUARD_STATE_CACHE = (stamp - agent._GUARD_STATE_TTL_SEC - 1, block)
-            agent._guard_state_block()
-            self.assertEqual(len(self.builds), 2, "за окном снимок собирается заново")
-
-    def test_a_failed_collection_is_empty_and_is_not_cached_as_truth(self):
-        with mock.patch.object(agent, "build_state_block",
-                               side_effect=RuntimeError("серверд молчит")):
-            self.assertEqual(agent._guard_state_block(), "")
-        self.assertIsNone(agent._GUARD_STATE_CACHE)
-        with self._build_probe():
-            self.assertIn('"fact":"process"', agent._guard_state_block())
+        self.assertEqual(builds, [])
 
 
 # --------------------------------------------------------------------------- #

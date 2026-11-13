@@ -92,7 +92,6 @@ class BoundaryTests(unittest.TestCase):
                 self.assertEqual(json.loads(a.tool_send_message('42', 'mesage'))['status'], 'not_sent')
             hooks['send_message'].assert_not_called()
             with mock.patch.object(a.stewardship, 'outgoing_denial', return_value=None), \
-                 mock.patch.object(a, 'private_record_floor', return_value=None), \
                  mock.patch.object(a._core_secrets, 'credential_floor', return_value=None):
                 a.tool_send_message('42', 'mesage', spelling_confirm_text='mesage')
                 hooks['send_message'].assert_called_once_with('42', 'mesage')
@@ -117,7 +116,6 @@ class BoundaryTests(unittest.TestCase):
         with mock.patch.object(spelling, 'preflight', return_value=(None, 'fail-open')), \
              mock.patch.dict(a._TELETHON, {'send_message': mock.Mock(return_value='delivered')}) as hooks, \
              mock.patch.object(a.stewardship, 'outgoing_denial', return_value=None), \
-             mock.patch.object(a, 'private_record_floor', return_value=None), \
              mock.patch.object(a._core_secrets, 'credential_floor', return_value=None), \
              mock.patch.object(a, 'tool_journal'):
             self.assertIn('fail-open', a.tool_send_message('42', 'my mesage'))

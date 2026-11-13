@@ -9,7 +9,7 @@
 | Кто я, как говорю, мои правила | `/app/soul/` |
 | Навык или памятку «как делать» | `/app/soul/skills/` |
 | Человека, комнату, эпизод, желание, прошлый run | `/app/memory/` → начать с `INDEX.md` |
-| Живой код Praxis | `/app/*.py`, `/app/body/`, `/app/hands/`, `/app/serverd/` |
+| Живой код Praxis | `/app/*.py`, `/app/body/`, `/app/serverd/` |
 | Входящий Telegram-файл | `/app/workspace/inbox/` |
 | Файл, который готовлю к отправке | `/app/workspace/outbox/` |
 | Черновик, распаковку, временный результат | `/app/workspace/` |

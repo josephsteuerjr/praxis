@@ -73,7 +73,6 @@ class CodingReads(unittest.TestCase):
         def broken(**kwargs):raise ValueError('corrupt read input')
         with run_context.bind_run(ctx),mock.patch.object(agent,'_RUN_MANAGER',manager),\
              mock.patch.object(agent,'_model_call',side_effect=responses),\
-             mock.patch.object(agent,'_arm_private_floor',return_value=0),\
              mock.patch.object(agent,'_work_loop_continue',return_value=False),\
              mock.patch.object(agent,'_durable_model_text',side_effect=lambda text,*a,**k:text),\
              mock.patch.object(agent,'TOOL_CEILING_SEC',0),\

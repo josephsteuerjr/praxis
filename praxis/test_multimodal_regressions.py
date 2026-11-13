@@ -417,7 +417,7 @@ class TestAgentGuardRegressions(RegressionBase):
         self.assertIn(spoken, context)
         self.assertIn("КОНЕЦ_НЕ_ОБРЕЗАН", context)
 
-    def test_owner_audience_media_bypasses_evaluator_for_praxis_self(self) -> None:
+    def test_owner_audience_media_goes_out_for_praxis_self(self) -> None:
         source = self.photo_path()
         owner_audience = agent.ChannelContext(
             chat_id="777", principal_id=agent.PRAXIS_SELF_PRINCIPAL,
@@ -431,10 +431,6 @@ class TestAgentGuardRegressions(RegressionBase):
         with (
             patch.object(agent.llm, "configured", return_value=True),
             patch.object(agent, "_voice", side_effect=fake_voice),
-            patch.object(
-                agent, "evaluate_reply",
-                side_effect=AssertionError("owner-audience media must not reach evaluator"),
-            ),
             patch.object(agent, "_presence_frame", return_value=""),
             patch.object(agent, "build_state_block", return_value=""),
             patch.object(agent, "recent_journal", return_value=""),
@@ -449,44 +445,9 @@ class TestAgentGuardRegressions(RegressionBase):
         self.assertEqual(len(envelope.outbound), 1)
         self.assertEqual(envelope.outbound[0].caption, "owner-only diagram")
 
-    def test_outbound_image_is_passed_to_evaluator(self) -> None:
-        source = self.photo_path()
-        seen: dict = {}
-        known_dm = agent.ChannelContext(chat_id="778", is_dm=True, owner=False, known=True)
-
-        def fake_voice(*args, **kwargs):
-            agent._stage_turn_media(source, kind="photo", caption="diagram")
-            return "Вот изображение."
-
-        def fake_evaluate(*args, **kwargs):
-            seen.update(kwargs)
-            return "ok", ""
-
-        with (
-            patch.object(agent.llm, "configured", return_value=True),
-            patch.object(agent, "_voice", side_effect=fake_voice),
-            patch.object(agent, "evaluate_reply", side_effect=fake_evaluate),
-            patch.object(agent, "_presence_frame", return_value=""),
-            patch.object(agent, "build_state_block", return_value=""),
-            patch.object(agent, "recent_journal", return_value=""),
-            patch.object(agent.notes, "append", return_value=None),
-            patch.object(agent.turns, "begin", return_value={"kind": "chat"}),
-            patch.object(agent.turns, "record", return_value=None),
-            patch.object(agent.turns, "tail_block", return_value=""),
-        ):
-            envelope = agent.voice_turn_envelope(
-                "778", "Гость: пришли картинку", "Гость", ctx=known_dm)
-
-        self.assertEqual(envelope.text, "Вот изображение.")
-        self.assertEqual(len(envelope.outbound), 1)
-        images = seen["outbound_images"]
-        self.assertEqual(len(images), 1)
-        self.assertEqual(images[0]["type"], "image")
-        self.assertEqual(images[0]["mime"], "image/jpeg")
-        self.assertEqual(Path(images[0]["path"]), envelope.outbound[0].path)
-
-    def _turn_with_staged_photo(self, judge, *, caption="diagram"):
-        """Ход с одним вложением и заданным поведением судьи -> (конверт, staged-копии)."""
+    def _turn_with_staged_photo(self, *, caption="diagram"):
+        """Ход гостя с одним вложением -> (конверт, staged-копии). Модель на выходе не зовётся:
+        судьи приватности нет (Егор 10.11, «сними»), и любой вызов llm.chat — регрессия."""
         source = self.photo_path()
         staged: list[media.OutboundMedia] = []
         known_dm = agent.ChannelContext(chat_id="778", is_dm=True, owner=False, known=True)
@@ -498,7 +459,8 @@ class TestAgentGuardRegressions(RegressionBase):
 
         with (
             patch.object(agent.llm, "configured", return_value=True),
-            patch.object(agent.llm, "chat", **judge),
+            patch.object(agent.llm, "chat",
+                         side_effect=AssertionError("на выходе не должно быть вызова модели-судьи")),
             patch.object(agent, "_voice", side_effect=fake_voice),
             patch.object(agent, "_presence_frame", return_value=""),
             patch.object(agent, "build_state_block", return_value=""),
@@ -515,52 +477,20 @@ class TestAgentGuardRegressions(RegressionBase):
         self.assertEqual(len(staged), 1)
         return envelope, staged
 
-    def test_evaluator_failure_neither_holds_her_word_nor_eats_her_attachment(self) -> None:
-        # ⚠ Тест назывался `..._holds_and_deletes_staged_media` и закреплял fail-closed:
-        # судья упал -> её текст придержан, её вложение УДАЛЕНО. Решением Егора 27.07
-        # недоступность судьи перестала быть классом отказа вообще: нет ответа — нет и
-        # совета, а её работа не платит за чужой сбой.
-        envelope, staged = self._turn_with_staged_photo(
-            {"side_effect": RuntimeError("evaluator unavailable")})
+    def test_guest_image_goes_out_with_her_word_and_no_judge_call(self) -> None:
+        # Раньше вложение гостю шло судье второй моделью (единственный стоп — кред на
+        # пикселях, и только при PRAXIS_OUTBOUND_ADVISOR=on; вживую он был выключен).
+        # Егор 10.11 («сними»): судьи нет вовсе — слово и вложение уходят как написаны.
+        envelope, staged = self._turn_with_staged_photo()
 
         self.assertEqual(envelope.text, "Safe-looking wrapper.")
         self.assertEqual(len(envelope.outbound), 1)
-        self.assertTrue(staged[0].path.exists(),
-                        "вложение не выбрасывается из-за того, что судья не ответил")
-
-    def test_unassessable_media_is_advice_not_a_confiscation(self) -> None:
-        # «Я не смогла посмотреть» — признание судьи о себе, а не находка о приватности.
-        class _Resp:
-            text = "PRIVACY_HOLD_UNASSESSABLE_MEDIA"
-            stop_reason = "end_turn"
-
-        envelope, staged = self._turn_with_staged_photo({"return_value": _Resp()})
-
-        self.assertEqual(envelope.text, "Safe-looking wrapper.")
-        self.assertEqual(len(envelope.outbound), 1)
-        self.assertTrue(staged[0].path.exists())
-
-    def test_staged_image_credential_still_stops_and_removes_the_outbound_copy(self) -> None:
-        # Единственный код судьи, который остался стопом: пиксели механический кред-пол
-        # не читает, а ключ на скриншоте — тот же ключ (адверсарка 23.07).
-        class _Resp:
-            text = "PRIVACY_HOLD_CREDENTIAL"
-            stop_reason = "end_turn"
-
-        source = self.photo_path()
-        envelope, staged = self._turn_with_staged_photo({"return_value": _Resp()})
-
-        self.assertEqual(envelope.text, "")
-        self.assertEqual(envelope.outbound, ())
-        self.assertFalse(staged[0].path.exists(), "копия в исходящем спуле убрана")
-        self.assertTrue(source.exists(),
-                        "исходный файл в её рабочем дереве не трогаем — это её работа")
+        self.assertTrue(staged[0].path.exists(), "вложение уходит, ничего не изъято")
 
     def test_authored_repetition_is_never_silently_suppressed(self) -> None:
         ctx = agent.ChannelContext(chat_id="-100", is_dm=False, owner=False, known=True)
 
         with (
-            patch.object(agent, "evaluate_reply", return_value=("ok", "")),
             patch.object(agent.notes, "append", return_value=None),
             patch.object(agent.turns, "tail_block", return_value=""),
         ):

@@ -236,11 +236,6 @@ NUMBERS: tuple[tuple[str, str, str, str], ...] = (
      r"(?m)^OPERATION_LIST_CAP = (\d+)", "{:g} строк"),
     ("host_list_caps", "serverd/brokerops.py", r"(?m)^LOG_TAIL_CAP = (\d+)", "{:g}"),
     ("host_list_caps", "serverd/brokerops.py", r"(?m)^LOG_TAIL_MIN = (\d+)", "{:g}"),
-    # Потолок ОТВЕТА судьи — восьмой предел того же контура и единственный не на входе.
-    # Его исчерпание теперь значит «совета не будет вовсе», а не «придержу»; в манифесте
-    # его не было ни в одной редакции.
-    ("evaluator_evidence_caps", "agent.py",
-     r"(?m)^_GUARD_VERDICT_MAX_TOKENS = (\d+)", "{:g} токенов"),
     # Сроки остановки хостовой операции: сколько у её команды есть на добровольный выход и
     # сколько op.stop ждёт номер группы, прежде чем сознаться, что останавливать нечего.
     ("host_operation_stop", "serverd/hostproc.py",
@@ -264,8 +259,6 @@ INVENTORY: dict[str, tuple[str, ...]] = {
     # ⚠ Здесь стояло «cut»: рельс цитировал метку «… cut N chars …», которой в демоне уже
     # не было. Тест был зелёным, потому что проверял ту же выдуманную цитату.
     "host_answer_cap": ("вырезано",),
-    # капы входа судьи приватности — agent._guard_outbound
-    "evaluator_evidence_caps": ("лента канала", "трейс тулов"),
     # dead-man авто-откат хостовых правок + список критических субъектов
     "host_deadman": ("host.confirm", "ssh"),
     # квота перезапусков legacy-маршрута services.py
@@ -277,8 +270,8 @@ INVENTORY: dict[str, tuple[str, ...]] = {
     "window_gates": ("_ONE_MIND",),
     # механический кред-пол — единственное твёрдое вето
     "credential_floor": ("твёрдое",),
-    # полные права на Windows-ПК Егора + парный гейт делегирования
-    "windows_body_authority": ("admit", "computer_access"),
+    # полные права на Windows-ПК Егора в любом ходе; с 10.11 пары делегирования нет
+    "windows_body_authority": ("SYSTEM", "ВСЕ ПРАВА"),
     # залогиненная GitHub-личность Егора в HOME её root-руки
     "github_identity": ("gh", "josephsteuerjr"),
     # намерение гаснет по факту созданного прогона
@@ -316,11 +309,11 @@ INVENTORY: dict[str, tuple[str, ...]] = {
     "host_text_clip": ("PRAXIS_HOST_TEXT_CAP", "хвост"),
     # след нити ≠ почта Егору: durable-последствие каждой моей отправки наружу
     "followup_notice": ("telegram_account", "след"),
-    # --- вечер 27.07: судья в разговорах ослаблен решением Егора ---
-    # Запись обязана назвать ровно три вещи: что судья СОВЕТУЕТ, что держит только кред на
-    # картинке и что молчание судьи не держит ничего. Без любой из трёх она продолжит
-    # считать, что её слово можно придержать.
-    "evaluator_mirror": ("СОВЕТ", "PRIVACY_HOLD_CREDENTIAL", "недоступность"),
+    # --- 10.11: проверка чужого приватного на выходе снята словом Егора («сними») ---
+    # Запись обязана назвать решение, двери, через которые её слово уходит, и то, что
+    # [private]-записи ей видны без механического стопа, — иначе она продолжит считать,
+    # что её слово кто-то придержит.
+    "outbound_privacy": ("сними", "send_message", "narrate", "send_file", "[private]"),
     # короткий режим ожидания замка записки: «до 5с» перестаёт быть правдой после первого
     # же истечения, и без этого имени узнать об этом неоткуда
     "scratch_note_lock": ("_LOCK_DEGRADE_FOR_SEC", "_PROBE_WAIT_SEC"),
@@ -389,8 +382,8 @@ class TestInventoryIsNamed(Base):
 
     def test_no_rail_value_is_silently_unreadable(self):
         """«не читается»/«не прочиталось» допустимо, но не там, где число есть в коде."""
-        for rail_id in ("evaluator_evidence_caps", "host_deadman", "host_operation_caps",
-                        "host_answer_cap", "forge_scan_caps"):
+        for rail_id in ("host_deadman", "host_operation_caps",
+                        "host_answer_cap", "forge_scan_caps", "outbound_privacy"):
             value = str(self.rail(rail_id)["value"])
             self.assertNotIn("не прочиталось", value,
                              f"{rail_id}: рельс потерял связь с исходником — значит молчит "
@@ -406,79 +399,6 @@ class TestNumbersComeFromCode(Base):
     сверка это увидит. Если же число зафиксируют литералом в rails.py, сверка увидит
     расхождение при следующей же правке соседа.
     """
-
-    def test_judge_caps_match_agent(self):
-        """Капы-константы — из живого модуля, f-строчные — из кода, а не из комментария.
-
-        ⚠ Прежняя редакция этой сверки искала `Context: \\{context\\[:(\\d+)\\]` тем же
-        способом, что и рельс, в том же файле — и обе попадали в ОБЪЯСНИТЕЛЬНЫЙ
-        КОММЕНТАРИЙ agent.py, где строка осталась после расщепления слота. Тест был зелён
-        ровно потому, что повторял ошибку. Здесь константы берутся из `import agent`.
-        """
-        import agent
-        value = str(self.rail("evaluator_evidence_caps")["value"])
-        for const in ("_GUARD_STATE_CHARS", "_GUARD_TOPIC_CHARS"):
-            live = getattr(agent, const)
-            self.assertIn(str(live), value, f"{const}={live} — реальный кап входа судьи, "
-                                            f"а рельс его не называет")
-        agent_src = _src("agent.py")
-        found = 0
-        for pattern in (r"\{conversation\[-(\d+):\]\}",
-                        r"\{tool_trace\[:(\d+)\]\}",
-                        r"\{prior_turns\[:(\d+)\]\}",
-                        r"\{privacy_frame\[:(\d+)\]\}"):
-            match = re.search(pattern, agent_src)
-            if not match:
-                continue
-            found += 1
-            self.assertIn(match.group(1), value,
-                          f"кап {pattern} = {match.group(1)}, а рельс его не называет")
-        self.assertGreaterEqual(found, 4, "капы судьи в agent.py не нашлись — сверка вакуумна")
-
-    def test_orientation_cap_is_the_live_constant_not_a_comment(self):
-        """Рельс не имеет права называть число, которого в живом коде нет.
-
-        Живой инцидент 27.07: `judge_caps()` отдавала «ориентация 900», вычитанную из
-        комментария; реальные 4000/2000 не назывались вовсе. Один закон нарушен дважды —
-        и выдуманный предел, и два молчаливых.
-        """
-        import agent
-        caps = rails.judge_caps()
-        self.assertEqual(caps["машинное STATE"], agent._GUARD_STATE_CHARS)
-        self.assertEqual(caps["ориентация в комнате"], agent._GUARD_TOPIC_CHARS)
-        ghost = re.search(r"Context: \{context\[:(\d+)\]\}", _src("agent.py"))
-        if ghost and int(ghost.group(1)) != agent._GUARD_TOPIC_CHARS:
-            self.assertNotIn(int(ghost.group(1)),
-                             [caps["машинное STATE"], caps["ориентация в комнате"]],
-                             "кап прочитан из комментария: слота `context[:N]` в коде нет")
-        # Не литерал: живая константа обязана менять то, что видит она.
-        original = (agent._GUARD_STATE_CHARS, agent._GUARD_TOPIC_CHARS)
-        try:
-            agent._GUARD_STATE_CHARS, agent._GUARD_TOPIC_CHARS = 4321, 2345
-            value = str(self.rail("evaluator_evidence_caps")["value"])
-            self.assertIn("4321", value)
-            self.assertIn("2345", value)
-        finally:
-            agent._GUARD_STATE_CHARS, agent._GUARD_TOPIC_CHARS = original
-
-    def test_guard_const_fallback_regex_ignores_comments(self):
-        """Фолбэк (agent не поднят) обязан читать ОБЪЯВЛЕНИЕ, а не любое вхождение имени."""
-        import agent
-        src = _src("agent.py")
-        for const in ("_GUARD_STATE_CHARS", "_GUARD_TOPIC_CHARS"):
-            match = re.search(rf"^{const} = (\d+)\s*$", src, re.M)
-            self.assertIsNotNone(match, f"объявление {const} не нашлось — фолбэк вакуумен")
-            self.assertEqual(int(match.group(1)), getattr(agent, const))
-        # Имя, встреченное в комментарии/докстринге, не должно давать значение.
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: ("# _GUARD_STATE_CHARS = 900 — было раньше\n"
-                                              if rel == "agent.py" else original(rel))
-            del sys.modules["agent"]          # имитируем «agent в процессе не поднят»
-            self.assertIsNone(rails._guard_const("_GUARD_STATE_CHARS"))
-        finally:
-            rails._source_text = original
-            sys.modules["agent"] = agent
 
     def test_serverd_rail_names_every_published_deadline(self):
         """Все сроки клиента демона — из его же `deadlines()`, не пересказом двух из пяти.
@@ -729,6 +649,9 @@ class TestNamesAndNumbersExistInTheCode(Base):
 SIGNATURE_LIMITS: dict[tuple[str, str], tuple[str | None, int]] = {
     ("tool_coding_verify", "timeout"): ("verification_deadline", 900),
     ("tool_coding_run", "timeout"): (None, 600),
+    ("tool_shell", "timeout"): (None, 0),
+    # Native Python: 0 selects home default, or unlimited in a local Forge task.
+    ("tool_python", "timeout"): (None, 0),
     ("tool_coding_process", "timeout"): (None, 0),
     ("tool_computer", "timeout_ms"): (None, 1500),
     # Не предел, а темп ввода; в таблице он затем, чтобы её изменение тоже требовало
@@ -1366,20 +1289,17 @@ class TestTheManifestCanLieByValue(Base):
             out.append(line)
         rails.RAILS_MD.write_text("\n".join(out) + "\n", encoding="utf-8")
 
-    def test_a_stale_judge_address_is_seen(self):
+    def test_a_rewritten_witness_value_is_seen(self):
         rails.sync_md()
         self.assertTrue(rails.manifest_drift()["ok"])
         said = rails.manifest_values(rails.RAILS_MD.read_text(encoding="utf-8"))
-        rel, line, _owner = rails.outbound_judge_sites()[0]
-        self.assertIn(f"{rel}:{line}", said["evaluator_mirror"],
-                      "адрес судьи не доехал до файла — сверять нечего")
-        self._rewrite_value("evaluator_mirror",
-                            said["evaluator_mirror"].replace(f"{rel}:{line}", f"{rel}:13656"))
+        self.assertTrue(said.get("place_key_by_knowledge"), "значение не доехало до файла")
+        self._rewrite_value("place_key_by_knowledge", "ключ места строится по номеру чата")
         drift = rails.manifest_drift()
-        self.assertFalse(drift["ok"], "файл называет адрес, которого нет, а прибор «свеж»")
+        self.assertFalse(drift["ok"], "файл называет не то, что в коде, а прибор «свеж»")
         self.assertEqual(drift["missing"], [])     # состав цел — врёт именно значение
         self.assertEqual(drift["stale"], [])
-        self.assertIn("evaluator_mirror", drift["value_stale"])
+        self.assertIn("place_key_by_knowledge", drift["value_stale"])
         self.assertIn("значение врёт", rails.manifest_state())
         self.assertIn("ОТСТАЛ", rails.state_line())
 
@@ -1451,9 +1371,9 @@ class TestTheManifestCanLieByValue(Base):
         rails.sync_md()
         witnesses = dict(rails.VALUE_WITNESSES)
         try:
-            rails.VALUE_WITNESSES["evaluator_mirror"] = lambda: None
+            rails.VALUE_WITNESSES["place_key_by_knowledge"] = lambda: None
             drift = rails.manifest_drift()
-            self.assertIn("evaluator_mirror", drift["unchecked"])
+            self.assertIn("place_key_by_knowledge", drift["unchecked"])
             self.assertTrue(drift["ok"], "непосчитанный свидетель — не расхождение")
             self.assertNotEqual(rails.manifest_state(brief=True), "свеж")
             self.assertIn("не проверялось", rails.manifest_state())
@@ -1469,8 +1389,8 @@ class TestTheManifestCanLieByValue(Base):
             raise RuntimeError("свидетель упал")
 
         try:
-            rails.VALUE_WITNESSES["evaluator_mirror"] = _boom
-            self.assertIn("evaluator_mirror", rails.manifest_drift()["unchecked"])
+            rails.VALUE_WITNESSES["place_key_by_knowledge"] = _boom
+            self.assertIn("place_key_by_knowledge", rails.manifest_drift()["unchecked"])
         finally:
             rails.VALUE_WITNESSES.clear()
             rails.VALUE_WITNESSES.update(witnesses)
@@ -1522,15 +1442,25 @@ class TestTheManifestCanLieByValue(Base):
 class TestRetractedPromises(Base):
     """Снятые обещания сняты. Каждая проверка — против конкретной строки, которая врала."""
 
-    def test_outbound_contract_is_not_called_unified(self):
-        whole = self.text("evaluator_mirror")
-        self.assertNotIn("единый outbound", whole,
-                         "контур не единый: send_message не зовёт evaluate_reply вовсе")
-        # Двери названы её именами (так она их и зовёт), и названы все три: первая
-        # редакция починки перечисляла две и молчала про send_file — то есть чинила
-        # ложь наполовину.
+    def test_outbound_privacy_names_every_door_and_watches_the_code(self):
+        # Раньше рельс судьи обязан был не называть контур «единым» и перечислить двери мимо
+        # судьи. С 10.11 судьи нет нигде — рельс называет все двери и сторожит, не вернулась
+        # ли проверка в код.
+        whole = self.text("outbound_privacy")
         for door in ("send_message", "narrate", "send_file"):
-            self.assertIn(door, whole, f"дверь {door} не названа среди несудимых")
+            self.assertIn(door, whole, f"дверь {door} не названа")
+        self.assertNotIn("⚠", str(self.rail("outbound_privacy")["value"]))
+        original = rails._source_text
+        try:
+            rails._source_text = lambda rel: (
+                "def evaluate_reply(text):\n    return 'ok', ''\n" if rel == "agent.py"
+                else original(rel))
+            self.assertIn("снова есть проверка", str(self.rail("outbound_privacy")["value"]))
+            rails._source_text = lambda rel: "" if rel == "agent.py" else original(rel)
+            self.assertIn("не прочитался", str(self.rail("outbound_privacy")["value"]),
+                          "непрочитанный исходник не имеет права звучать как «проверки нет»")
+        finally:
+            rails._source_text = original
 
     def test_window_gates_no_longer_claims_there_are_no_other_gates(self):
         whole = self.text("window_gates")
@@ -1723,29 +1653,23 @@ class TestCapabilitiesTellTheTruth(Base):
         mine = {t["name"] for t in agent.PRAXIS_SELF_TOOLS
                 if isinstance(t, dict) and t.get("name")}
         self.assertTrue(mine <= printed, f"её собственные руки потерялись: {mine - printed}")
-        for name in sorted(agent._HUMAN_OWNER_ONLY_TOOL_NAMES):
-            self.assertNotIn(name, printed,
-                             f"{name} — делегирование доверия Егора; в не-owner ходе "
-                             f"agent.offered_tools_for его не даёт")
+        self.assertEqual(mine, {t["name"] for t in agent.OWNER_TOOLS},
+                         "Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному")
 
     def test_owner_view_still_names_what_only_yegor_has(self):
         """Убрать из списка — не значит промолчать: закон 2 держится и на этой строке."""
-        import agent
         text = capabilities.describe("owner")
         self.assertNotIn("owner-тулы (в личке с Егором)", text,
                          "список описывает РУКИ, а скобка описывала аудиторию — "
                          "с 26.07 эти руки при ней в любом канале")
-        line = next(l for l in text.splitlines() if l.startswith("- не мои, только у Егора"))
-        for name in sorted(agent._HUMAN_OWNER_ONLY_TOOL_NAMES):
-            self.assertIn(name, line)
+        line = next(l for l in text.splitlines() if l.startswith("- сверх моих рук только у Егора"))
+        self.assertTrue(line.endswith(": ничего"), line)
 
     def test_human_only_line_is_the_difference_of_the_two_sets(self):
-        import agent
         s = capabilities.snapshot()
         expected = sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"]))
-        self.assertEqual(capabilities._human_only_line(s), ", ".join(expected))
-        self.assertTrue(set(agent._HUMAN_OWNER_ONLY_TOOL_NAMES) <= set(expected),
-                        "человеко-владельческий тул пропал из разницы наборов")
+        self.assertEqual(capabilities._human_only_line(s), ", ".join(expected) or "ничего")
+        self.assertEqual(expected, [], "Егор 10.11: рук только у Егора нет")
 
     def test_human_only_line_catches_the_gated_owner_extra(self):
         """Строка «что не моё» считается РАЗНИЦЕЙ наборов, а не копией frozenset.
@@ -1771,21 +1695,23 @@ class TestCapabilitiesTellTheTruth(Base):
         self.assertIn("не читается",
                       capabilities._human_only_line({"tools": {"owner": ["admit"]}}))
 
-    def test_state_line_counts_her_hands_not_the_owner_set(self):
-        """STATE едет каждым ходом: лишние два тула — ложь, повторённая ежечасно."""
+    def test_state_line_counts_her_hands_which_are_the_full_set(self):
+        """STATE едет каждым ходом. Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному."""
         s = capabilities.snapshot()
-        self.assertNotEqual(len(s["tools"]["self"]), len(s["tools"]["owner"]),
-                            "наборы совпали — сверка вакуумна")
+        self.assertEqual(s["tools"]["self"], s["tools"]["owner"])
         line = capabilities.state_line()
         self.assertIn(f"суверенные {len(s['tools']['self'])}", line)
-        self.assertNotIn(f"суверенные {len(s['tools']['owner'])}", line)
 
     def test_group_view_does_not_call_delegated_tools_sovereign(self):
+        # Делегированных рук в живом наборе больше нет (Егор 10.11); функция всё равно обязана
+        # честно назвать такую руку, если ход её получит, — проверяем на синтетическом имени.
         s = capabilities.snapshot()
-        human = sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"]))
-        self.assertTrue(human, "нечего проверять — сверка вакуумна")
+        self.assertEqual(sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"])), [])
+        fake = {**s, "tools": {**s["tools"], "owner": list(s["tools"]["owner"]) + ["delegated_fixture"]}}
+        human = ["delegated_fixture"]
         mine = sorted(s["tools"]["self"])[0]
-        text = capabilities.describe("group", offered=[mine, human[0], "recall"])
+        with mock.patch.object(capabilities, "snapshot", return_value=fake):
+            text = capabilities.describe("group", offered=[mine, human[0], "recall"])
         line = next(l for l in text.splitlines() if l.startswith("- руки В ЭТОМ ходе"))
         head, marker, tail = line.partition("плюс делегированное Егором")
         self.assertTrue(marker, "делегированный тул в ходе есть, а назван не был")
@@ -1821,10 +1747,13 @@ class TestCapabilitiesTellTheTruth(Base):
         finally:
             rails._serverd_value = original
 
-    def test_outbound_description_names_the_hole(self):
+    def test_outbound_description_has_no_advisor_left(self):
+        # Раньше описание обязано было назвать дыру: прямые тулы шли мимо советника.
+        # 10.11 (Егор, «сними») советника нет вовсе — дыры нет, и описание не имеет права
+        # обещать проверку, которой нет.
         snap_source = inspect.getsource(capabilities.snapshot)
-        self.assertIn("прямые тулы", snap_source)
-        self.assertNotIn("единый outbound-советник", snap_source)
+        self.assertNotIn("outbound-советник", snap_source)
+        self.assertIn("только кред-пол", snap_source)
 
 
 class TestHostOutputIsCutTwice(Base):
@@ -2235,147 +2164,6 @@ class TestStatusIsNotCanon(unittest.TestCase):
                          "показывать ей несуществующую работу")
 
 
-class TestOutboundContourIsCountedNotRemembered(Base):
-    """Исходящий контур манифест обязан СЧИТАТЬ, а не помнить.
-
-    История, ради которой этот класс написан. Рельс обещал «единый outbound data-authority
-    contract»; контур единым не был никогда — судья приватности (`agent.evaluate_reply`)
-    стоит на голосе, а `send_message`/`narrate`/`send_file` его не зовут вовсе. 26.07 судья
-    придержал её ход в AbstractDL, и через 48 секунд тот же материал ушёл прямым тулом
-    (сообщение 94165). Обещание переписали честно — и это ПОЛОВИНА починки: переписанный
-    текст точно так же держится на памяти и точно так же протухнет молча, если контур
-    когда-нибудь сведут. Проверки ниже привязывают запись к живому исходнику: изменится
-    число вызывающих — покраснеет здесь, а не выяснится через месяц по её ошибке.
-    """
-
-    def test_the_judge_has_exactly_one_call_site_today(self):
-        """Опорный факт всей записи. Изменится — обязана измениться и запись."""
-        sites = rails.outbound_judge_sites()
-        self.assertEqual(
-            len(sites), 1,
-            f"число вызывающих evaluate_reply изменилось: {sites}. Рельс evaluator_mirror "
-            f"и capabilities.reflexes.evaluator написаны под ОДИН судимый путь — "
-            f"перечитай их текст, иначе манифест продолжит описывать вчерашний день")
-        rel, line, owner = sites[0]
-        self.assertEqual(rel, "agent.py")
-        self.assertEqual(owner, "_guard_outbound",
-                         "судья переехал из голосового пути — рельс называет голос")
-        self.assertRegex(_src(rel).splitlines()[line - 1], r"evaluate_reply\(")
-
-    def test_the_rail_names_the_site_it_counted(self):
-        value = str(self.rail("evaluator_mirror")["value"])
-        rel, line, owner = rails.outbound_judge_sites()[0]
-        self.assertIn(f"{rel}:{line}", value, "рельс не показывает адрес, который сам посчитал")
-        self.assertIn(owner, value)
-
-    def test_the_counter_ignores_comments_and_the_definition(self):
-        """Невакуумность счётчика: в agent.py про судью дважды написано в ПОЯСНЕНИЯХ.
-
-        Наивный поиск насчитал бы три судимых пути там, где он один, — тем же способом
-        соседний рельс однажды нашёл кап судьи внутри комментария и назвал ей число,
-        которого в коде нет.
-        """
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: (
-                "def evaluate_reply(text, context=''):\n"
-                "    # судья (`evaluate_reply(collect_state=True)`) — здесь его не зовут\n"
-                "    return ('ok', '')\n"
-                "# ещё одна записка про evaluate_reply(...) для того, кто правит файл\n"
-                if rel == "agent.py" else "")
-            self.assertEqual(rails.outbound_judge_sites(), [],
-                             "объявление или комментарий посчитаны за живой вызов")
-        finally:
-            rails._source_text = original
-
-    def test_a_second_caller_makes_the_rail_stop_promising_the_hole(self):
-        """Контур свели — рельс обязан сказать это САМ, а не повторять старое описание."""
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: (
-                "def _guard_outbound(reply):\n"
-                "    verdict, reason = evaluate_reply(reply)\n"
-                "    return verdict\n"
-                if rel == "agent.py" else
-                "def _sync_send_message(to, text):\n"
-                "    v, r = agent.evaluate_reply(text)\n"
-                "    return v\n"
-                if rel == "mtproto_runner.py" else "x = 1\n")
-            sites = rails.outbound_judge_sites()
-            self.assertEqual(len(sites), 2, f"вызов через атрибут не посчитан: {sites}")
-            self.assertEqual([s[0] for s in sites], ["agent.py", "mtproto_runner.py"])
-            value = str(self.rail("evaluator_mirror")["value"])
-            self.assertIn("2 путей", value)
-            self.assertIn("mtproto_runner.py:2", value)
-            self.assertNotIn("ровно ОДИН", value)
-            self.assertNotIn("его не зовут вовсе", value,
-                             "контур свели, а значение всё ещё обещает дыру")
-            self.assertIn("вчерашний день", value,
-                          "расхождение с текстом рельса должно быть названо вслух")
-        finally:
-            rails._source_text = original
-
-    def test_a_judge_nobody_calls_is_said_out_loud(self):
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: ("def evaluate_reply(text):\n    return ('ok','')\n"
-                                              if rel == "agent.py" else "x = 1\n")
-            value = str(self.rail("evaluator_mirror")["value"])
-            self.assertIn("НИ ОДНА дверь", value)
-            self.assertIn("кред-пол", value)
-        finally:
-            rails._source_text = original
-
-    def test_unreadable_doors_say_i_do_not_know(self):
-        """«Не смогла прочесть» обязано выглядеть как «не знаю», а не как «путь один»."""
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: ("" if rel == "agent.py" else original(rel))
-            value = str(self.rail("evaluator_mirror")["value"])
-            self.assertIn("НЕ ВИДНО", value)
-            self.assertIn("agent.py", value)
-            self.assertNotIn("ровно ОДИН", value)
-        finally:
-            rails._source_text = original
-
-    def test_capabilities_counts_the_same_doors_as_rails(self):
-        """Два пересказа одного факта расходятся молча — счётчик обязан быть один."""
-        line = capabilities._outbound_judge_line()
-        rel, num, _owner = rails.outbound_judge_sites()[0]
-        self.assertIn(f"{rel}:{num}", line)
-        self.assertIn(line, capabilities.snapshot()["reflexes"]["evaluator"])
-
-    def test_the_direct_doors_really_bypass_the_judge(self):
-        """Обещание «идут мимо» проверяется по телу самих дверей, а не по счётчику.
-
-        Счётчик говорит, СКОЛЬКО путей судится; здесь проверяется, что названные поимённо
-        двери — вправду не из их числа, и что вместо судьи на них стоит то, что рельс и
-        обещает: механический кред-пол.
-        """
-        import agent
-        source = _src("agent.py").splitlines()
-        for name in ("tool_send_message", "tool_narrate"):
-            start = agent.__dict__[name].__code__.co_firstlineno
-            # Тело режется по СЛЕДУЮЩЕМУ объявлению верхнего уровня, а не по «плюс N
-            # строк»: окно наугад легко заезжает к соседу и находит там чужой кред-пол,
-            # то есть подтверждает обещание уликой из другой функции.
-            end = next((i for i in range(start, len(source))
-                        if re.match(r"^(?:async )?def ", source[i])), len(source))
-            body = "\n".join(source[start:end])
-            self.assertGreater(len(body.splitlines()), 5, f"тело {name} не нарезалось")
-            self.assertNotIn("evaluate_reply", body, f"{name} внезапно зовёт судью — "
-                                                     f"рельс обещает обратное")
-            self.assertIn("credential_floor", body,
-                          f"{name} остался без кред-пола, а рельс обещает его как "
-                          f"единственный предел на этой двери")
-
-    def test_the_state_line_does_not_read_as_the_whole_outbound(self):
-        line = capabilities.state_line()
-        self.assertIn("на голосе", line)
-        self.assertIn("прямые тулы", line,
-                      "в STATE строка снова читается как «весь мой исходящий смотрят»")
-
-
 class TestCredentialFloorPromisesOnlyWhatItReads(Base):
     """Файловая дверь кред-пола: обещание было шире кода.
 
@@ -2457,257 +2245,6 @@ class TestProtectedRootsAreNotGuessedFromHere(Base):
         self.assertIn('"floor"', advisor)
         self.assertIn("admin.advisor", _src("serverd_client.py"),
                       "глагола admin.advisor у клиента нет — спросить нечем")
-
-
-class _FakeAgentSource:
-    """Подменяет `rails._source_text` для agent.py и глушит чтение живого модуля.
-
-    Глушение `_live` — не украшение. Оба словаря вердиктов рельс сперва берёт из уже
-    поднятого `agent` (там применены все правки процесса), и если модуль в этом прогоне
-    импортирован соседним тестом, подменённый исходник будет молча проигнорирован — тест
-    станет вакуумным и позеленеет на чём угодно. Порядок тестов такому решать нельзя.
-    """
-
-    def __init__(self, case, text: str):
-        self.case, self.text = case, text
-
-    def __enter__(self):
-        self._src, self._live = rails._source_text, rails._live
-        original = self._src
-        rails._source_text = lambda rel: (self.text if rel == "agent.py" else original(rel))
-        rails._live = lambda module, name: (None if module == "agent"
-                                            else self._live(module, name))
-        return self
-
-    def __exit__(self, *exc):
-        rails._source_text, rails._live = self._src, self._live
-        return False
-
-
-class TestJudgeAdviceIsNotAHold(Base):
-    """27.07, решение Егора: судья в разговорах ослаблен — он СОВЕТУЕТ, а не держит.
-
-    Почему это отдельный класс, а не строка в описи. Утренняя редакция рельса описывала
-    судью, который придерживал её слово, и недоступность которого была таким же отказом.
-    Вечером обе конструкции убраны из agent.py. Ошибка «оставить вчерашний текст поверх
-    сегодняшнего кода» здесь дороже обычного: манифест, обещающий придержку там, где её
-    нет, заставляет её молчать по собственной воле — то есть строит забор словами после
-    того, как забор сняли кодом. Поэтому ни одно утверждение записи не держится на памяти:
-    что стопорит, что советует, будит ли совет и держит ли молчание судьи — всё считано.
-    """
-
-    STOP = "PRIVACY_HOLD_CREDENTIAL"
-
-    def test_exactly_one_code_still_stops_her_and_the_rail_names_it(self):
-        import agent
-        self.assertEqual(tuple(agent._PRIVATE_DM_PRIVACY_HOLDS), (self.STOP,),
-                         "набор придерживающих кодов изменился — рельс evaluator_mirror и "
-                         "STATE написаны под «держит только кред на картинке»")
-        value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn(f"ОСТАНАВЛИВАЕТ 1 код(ов) судьи: {self.STOP}", value)
-
-    def test_every_advice_code_is_named_as_advice(self):
-        """Совет назван поимённо: «часть вердиктов советует» ей ничего не даёт."""
-        import agent
-        self.assertTrue(agent._PRIVATE_DM_PRIVACY_ADVICE,
-                        "словарь советов пуст — тогда сверка ниже вакуумна")
-        value = str(self.rail("evaluator_mirror")["value"])
-        for code in agent._PRIVATE_DM_PRIVACY_ADVICE:
-            self.assertIn(code, value, f"{code} — совет, а рельс его не называет")
-            self.assertNotIn(code, str(self.rail("evaluator_mirror")["holds"]),
-                             "код совета попал в текст про то, что держит")
-
-    def test_the_codes_really_behave_as_the_rail_says(self):
-        """Сверка со СМЫСЛОМ, а не с двумя словарями: спрашиваем сам разбор вердикта."""
-        import agent
-        self.assertEqual(agent._privacy_code_verdict(self.STOP)[0], "deny")
-        for code in agent._PRIVATE_DM_PRIVACY_ADVICE:
-            self.assertEqual(agent._privacy_code_verdict(code)[0], "advice",
-                             f"{code} разбирается не как совет, а рельс обещает совет")
-
-    def test_advice_reaches_her_and_does_not_wake_her(self):
-        value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("совет доезжает дневником", value)
-        self.assertIn("не будит", value)
-        # Невакуумность: вернём пробуждение в ветку совета — рельс обязан сказать это сам.
-        with _FakeAgentSource(self, _AGENT_ADVICE_WAKES):
-            loud = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("БУДИТ меня", loud,
-                      "пробуждение на каждое замечание вернулось, а манифест молчит")
-
-    def test_a_silent_advice_channel_is_shouted(self):
-        with _FakeAgentSource(self, _AGENT_ADVICE_SILENT):
-            value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("НИКУДА не пишется", value,
-                      "вердикт вынесен, следа у неё нет — и манифест это скрыл")
-
-    def test_unavailability_no_longer_stops_her(self):
-        """Оба места, где молчание чужой модели держало её слово, обязаны остаться снятыми."""
-        code = re.sub(r"(?m)#.*$", "", _src("agent.py"))
-        self.assertNotRegex(code, r'RunStopped\(\s*["\'][^"\']*advisor unavailable',
-                            "возобновлённый ход снова останавливается из-за молчания судьи")
-        self.assertNotRegex(code, r'advisor_verdict"\)\s*==\s*"unavailable"',
-                            "расписка «судья не ответил» снова гоняет гард заново")
-        value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("недоступность судьи не держит и не советует ничего", value)
-        with _FakeAgentSource(self, _AGENT_UNAVAILABLE_STOPS):
-            loud = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("СНОВА держит мой ход", loud,
-                      "fail-closed по недоступности вернулся, а манифест обещает обратное")
-
-    def test_moving_a_code_back_into_holds_is_said_out_loud(self):
-        with _FakeAgentSource(self, _AGENT_CROSS_PERSON_HOLDS):
-            value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("ОСТАНАВЛИВАЕТ 2 код(ов)", value)
-        self.assertIn("это НЕ только кред на картинке", value,
-                      "стопор добавили молча — ровно тот класс правки, который манифест "
-                      "уже дважды за сутки не заметил")
-
-    def test_removing_the_split_altogether_is_shouted(self):
-        with _FakeAgentSource(self, _AGENT_NO_ADVICE_DICT):
-            value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("разделения на стоп и совет в коде БОЛЬШЕ НЕТ", value)
-        self.assertIn("вчерашний день", value)
-
-    def test_unreadable_agent_says_i_do_not_know(self):
-        with _FakeAgentSource(self, ""):
-            value = str(self.rail("evaluator_mirror")["value"])
-        self.assertIn("НЕ ВИДНО", value)
-        self.assertNotIn("ОСТАНАВЛИВАЕТ 1", value)
-
-    def test_the_rail_text_no_longer_promises_a_hold(self):
-        """Утренняя формулировка не имеет права пережить вечерний код."""
-        holds = str(self.rail("evaluator_mirror")["holds"])
-        self.assertIn("НИЧЕГО НЕ ОСТАНАВЛИВАЕТ", holds)
-        self.assertIn("СОВЕТ", holds)
-        self.assertNotIn("типизированная проверка полномочия", holds,
-                         "вернулась утренняя формулировка про проверку, которая держит")
-        self.assertIn("не удаляется", holds,
-                      "молчаливая потеря вложения за неоценимое медиа снята — а её и надо "
-                      "назвать, иначе она продолжит считать, что рискует работой")
-
-    def test_state_line_and_snapshot_speak_the_same_authority(self):
-        """Два пересказа одного факта расходятся молча — источник обязан быть один."""
-        line = capabilities.state_line()
-        self.assertIn("СОВЕТУЕТ", line)
-        self.assertIn("прямые тулы", line)
-        self.assertIn("на голосе", line)
-        self.assertIn(rails.outbound_judge_authority(),
-                      capabilities.snapshot()["reflexes"]["evaluator"])
-
-    def test_state_line_shouts_if_the_hold_comes_back(self):
-        with _FakeAgentSource(self, _AGENT_CROSS_PERSON_HOLDS):
-            line = capabilities._outbound_stop_word()
-        self.assertIn("⚠", line)
-        self.assertIn("PRIVACY_HOLD_CROSS_PERSON", line)
-
-
-# Подложные исходники agent.py для проверок выше. Держатся рядом с классом намеренно:
-# каждый отличается от соседа ровно одной чертой, ради которой написан.
-_AGENT_DICTS = (
-    '_PRIVATE_DM_PRIVACY_HOLDS = {\n'
-    '    "PRIVACY_HOLD_CREDENTIAL": "privacy:credential",\n'
-    '}\n'
-    '_PRIVATE_DM_PRIVACY_ADVICE = {\n'
-    '    "PRIVACY_HOLD_CROSS_PERSON": "privacy:cross-person-private",\n'
-    '}\n'
-)
-_AGENT_JUDGE_CALL = (
-    'def _guard_outbound(reply):\n'
-    '    verdict, reason = evaluate_reply(reply)\n'
-)
-_AGENT_ADVICE_OK = (
-    '    if verdict == "advice":\n'
-    '        tool_journal("[совет] " + reason)\n'
-    '    if verdict == "deny":\n'
-    '        _held_self_wake(ctx, reason=reason, reply=reply)\n'
-    '    return reply\n'
-)
-_AGENT_ADVICE_WAKES = _AGENT_DICTS + _AGENT_JUDGE_CALL + (
-    '    if verdict == "advice":\n'
-    '        tool_journal("[совет] " + reason)\n'
-    '        _held_self_wake(ctx, reason=reason, reply=reply)\n'
-    '    if verdict == "deny":\n'
-    '        return ""\n'
-    '    return reply\n'
-)
-_AGENT_ADVICE_SILENT = _AGENT_DICTS + _AGENT_JUDGE_CALL + (
-    '    if verdict == "advice":\n'
-    '        pass\n'
-    '    if verdict == "deny":\n'
-    '        return ""\n'
-    '    return reply\n'
-)
-_AGENT_UNAVAILABLE_STOPS = _AGENT_DICTS + _AGENT_JUDGE_CALL + (
-    '    if verdict == "unavailable":\n'
-    '        raise RunStopped("privacy advisor unavailable; retry outbound guard")\n'
-) + _AGENT_ADVICE_OK
-_AGENT_CROSS_PERSON_HOLDS = (
-    '_PRIVATE_DM_PRIVACY_HOLDS = {\n'
-    '    "PRIVACY_HOLD_CREDENTIAL": "privacy:credential",\n'
-    '    "PRIVACY_HOLD_CROSS_PERSON": "privacy:cross-person-private",\n'
-    '}\n'
-    '_PRIVATE_DM_PRIVACY_ADVICE = {\n'
-    '    "PRIVACY_HOLD_CROSS_CHAT": "privacy:cross-chat-private",\n'
-    '}\n'
-) + _AGENT_JUDGE_CALL + _AGENT_ADVICE_OK
-_AGENT_NO_ADVICE_DICT = (
-    '_PRIVATE_DM_PRIVACY_HOLDS = {\n'
-    '    "PRIVACY_HOLD_CREDENTIAL": "privacy:credential",\n'
-    '    "PRIVACY_HOLD_CROSS_PERSON": "privacy:cross-person-private",\n'
-    '}\n'
-) + _AGENT_JUDGE_CALL + _AGENT_ADVICE_OK
-
-
-class TestJudgeEvidenceCapsSplitNamedFromSilent(Base):
-    """Рельс говорил «сам судья об усечении НЕ предупреждается» — а это уже неправда.
-
-    У блоков STATE и ориентации владелец agent.py дописал к содержимому «cap N chars»,
-    у остальных пяти видов улик срез так и остался немым. Разница не косметическая:
-    молчаливо урезанная лента выглядит для судьи как вся лента, и вердикт о её слове
-    выносится по куску, о котором судья не знает. Значит и здесь список «кто из них кто»
-    обязан считаться, а не переписываться руками.
-    """
-
-    def test_named_caps_are_really_named_in_the_block(self):
-        import agent
-        code = re.sub(r"(?m)#.*$", "", _src("agent.py"))
-        value = str(self.rail("evaluator_evidence_caps")["value"])
-        for const in ("_GUARD_STATE_CHARS", "_GUARD_TOPIC_CHARS"):
-            self.assertIn(f"cap {{{const}}}", code,
-                          f"{const} перестал называться судье — значит он в НЕМОМ списке")
-            self.assertIn(str(getattr(agent, const)), value)
-        self.assertIn("срез НАЗВАН судье у:", value)
-
-    def test_the_silent_ones_are_listed_as_silent(self):
-        value = str(self.rail("evaluator_evidence_caps")["value"])
-        head, _, tail = value.partition("НЕМОЙ срез у:")
-        self.assertTrue(tail, "немого списка нет, хотя немые срезы в agent.py есть")
-        for name in ("лента канала", "прожитые ходы", "рамка аудитории"):
-            self.assertIn(name, tail, f"{name} режется молча, а рельс числит его названным")
-            self.assertNotIn(name, head.partition("срез НАЗВАН судье у:")[2])
-
-    def test_the_verdict_ceiling_is_named_with_what_it_now_means(self):
-        """Восьмой предел контура — на ВЫХОДЕ судьи, и его смысл сменился вместе с волной."""
-        import agent
-        value = str(self.rail("evaluator_evidence_caps")["value"])
-        self.assertIn(f"{agent._GUARD_VERDICT_MAX_TOKENS} токенов", value)
-        self.assertIn("совета не будет вовсе", value,
-                      "исчерпание потолка описано как придержка — это вчерашний смысл")
-
-    def test_naming_a_cap_moves_it_out_of_the_silent_list(self):
-        """Невакуумность: припишут «cap N» к ленте — рельс обязан перестать звать её немой."""
-        original = rails._source_text
-        try:
-            rails._source_text = lambda rel: (
-                original(rel) + '\nf"cap 6000 chars, cut on line boundaries"\n'
-                if rel == "agent.py" else original(rel))
-            value = str(self.rail("evaluator_evidence_caps")["value"])
-        finally:
-            rails._source_text = original
-        named = value.partition("срез НАЗВАН судье у:")[2].partition("НЕМОЙ срез у:")[0]
-        self.assertIn("лента канала", named,
-                      "приписку к блоку добавили, а рельс всё ещё зовёт срез немым")
 
 
 class TestNoteLimitsSurviveWithoutTheModule(Base):

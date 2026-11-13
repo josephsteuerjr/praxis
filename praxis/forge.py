@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,8 @@ import forge_learning
 import forge_swarm
 import body_client
 import computer_memory
+import hands
+import tool_report
 import serverd_client
 import selfdev
 from process_liveness import is_process_alive
@@ -90,24 +92,6 @@ def _atomic_json(path: Path, data: dict | list) -> None:
             if os.name != "nt" or attempt == 20:
                 raise
             time.sleep(.01)
-
-
-def _atomic_text(path: Path, text: str) -> None:
-    """Replace one file atomically so readers never observe a half-written source file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = None
-    try:
-        mode = path.stat().st_mode
-    except OSError:
-        pass
-    tmp = path.with_name(path.name + f".{os.getpid()}.{uuid.uuid4().hex[:6]}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    if mode is not None:
-        try:
-            os.chmod(tmp, mode)
-        except OSError:
-            pass
-    tmp.replace(path)
 
 
 def _proc_started_at(pid: int) -> str:
@@ -2460,21 +2444,23 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
     digest = hashlib.sha256(raw).hexdigest()
     expected = str(expected_sha256 or "").strip().lower()
     if expected and expected != digest:
-        return (f"Конфликт версии: ожидался sha256={expected}, сейчас {digest}. "
-                "Перечитай файл с start=1, start_char=0; не смешивай страницы разных версий.")
+        return InspectReply(f"Конфликт версии: ожидался sha256={expected}, сейчас {digest}. "
+                            "Перечитай файл с start=1, start_char=0; не смешивай страницы разных версий.",
+                            "refused")
     try:
         lines = raw.decode("utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
-        return (f"{path.relative_to(root)}: paging requires valid UTF-8; "
-                f"{len(raw)} bytes, sha256={digest}. No lossy page was delivered.")
+        return InspectReply(f"{path.relative_to(root)}: paging requires valid UTF-8; "
+                            f"{len(raw)} bytes, sha256={digest}. No lossy page was delivered.", "refused")
     s = max(1, int(start or 1))
     offset = int(start_char or 0)
     if offset < 0 or (offset and not expected):
-        return "Для продолжения внутри строки нужны start_char >= 0 и expected_sha256 полной версии файла."
+        return InspectReply("Для продолжения внутри строки нужны start_char >= 0 и expected_sha256 "
+                            "полной версии файла.", "refused")
     if s <= len(lines) and offset > len(lines[s - 1]):
-        return f"start_char={offset} вне строки {s} ({len(lines[s - 1])} символов)."
+        return InspectReply(f"start_char={offset} вне строки {s} ({len(lines[s - 1])} символов).", "refused")
     if s > len(lines) and offset:
-        return f"start_char={offset} вне файла ({len(lines)} строк)."
+        return InspectReply(f"start_char={offset} вне файла ({len(lines)} строк).", "refused")
     if s <= len(lines) and offset == len(lines[s - 1]):
         s, offset = s + 1, 0
     stop = min(len(lines), int(end or len(lines)))
@@ -2529,20 +2515,45 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
     return best
 
 
+class InspectReply(str):
+    """Observation text that also names its outcome for the journal; callers still get a str.
+
+    10.11: fs_ls/fs_search/coding_inspect on a task left `unknown` in the journal. Refusals are
+    marked where they are returned; a remote backend or a lever stays `unknown` (not claimed ok).
+    """
+    def __new__(cls, text, outcome="ok"):
+        value = super().__new__(cls, text)
+        value.outcome = outcome
+        return value
+
+
+def noted(out, default: str = ""):
+    """Journal an observation's own outcome for the calling hand; the text is returned unchanged."""
+    tool_report.note(outcome=getattr(out, "outcome", default))
+    return out
+
+
 def inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
             glob: str = "**/*", start: int = 1, end: int = 0,
             start_char: int = 0, expected_sha256: str = "") -> str:
+    out = _inspect(task_id, action, path, query, glob, start, end, start_char, expected_sha256)
+    return out if isinstance(out, InspectReply) else InspectReply(out, "ok")
+
+
+def _inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
+             glob: str = "**/*", start: int = 1, end: int = 0,
+             start_char: int = 0, expected_sha256: str = "") -> str:
     # Рычаг наблюдения стоит ДО разбора задачи: перечислить и снять наблюдение она
     # вправе и тогда, когда задача, из чьей цели оно выросло, давно закрыта или
     # потеряна, — иначе «снять» работало бы ровно там, где оно уже не нужно.
     if str(action or "").strip().lower() in ("watch", "unwatch", "watching"):
-        return upstream_lever(action, task_id=task_id, arg=query or path)
+        return InspectReply(upstream_lever(action, task_id=task_id, arg=query or path), "unknown")
     task, root, err = _task_root(task_id)
     action = str(action or "status").strip().lower()
     # Durable observations survive disposable worktrees; file and mutation
     # operations still require the ordinary root admission below.
     if err and (task is None or action not in {"status", "history",'coordination'}):
-        return err
+        return InspectReply(err, "refused")
     assert task is not None
     if action == "history":
         return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
@@ -2612,17 +2623,19 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
         # supports the local revision/cursor protocol. Never silently downgrade
         # an exact continuation into an unguarded remote read.
         if start_char or expected_sha256:
-            return ("Remote Forge backend does not support paged reads: "
-                    "start_char/expected_sha256 are unavailable. No read was performed.")
+            return InspectReply("Remote Forge backend does not support paged reads: "
+                                "start_char/expected_sha256 are unavailable. No read was performed.",
+                                "refused")
         with _remote_observations(task):
-            return remote.workspace_inspect(
+            # The remote backend answers in its own words; its success is not claimed here.
+            return InspectReply(remote.workspace_inspect(
                 str(root), action, path=path, query=query, glob=glob, start=start, end=end,
                 base=str(task.get("base_commit") or ""),
-            )
+            ), "unknown")
     if action == "diff":
         git = _git_root(root)
         if not git:
-            return "У этой задачи нет git — diff недоступен."
+            return InspectReply("У этой задачи нет git — diff недоступен.", "refused")
         base = task.get("base_commit") or "HEAD"
         status = _git_text(git, "status", "--short")
         diff = _git_text(git, "diff", "--stat", str(base)) + "\n" + _git_text(git, "diff", str(base))
@@ -2640,7 +2653,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                                ensure_ascii=False, indent=2), 30000)
     if action == "references":
         if not query:
-            return "Для references нужен query с именем символа."
+            return InspectReply("Для references нужен query с именем символа.", "refused")
         return _cap(json.dumps(forge_intelligence.references(root, query, path=path),
                                ensure_ascii=False, indent=2), 30000)
     if action == "diagnostics":
@@ -2656,11 +2669,11 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
             ensure_ascii=False, indent=2), 30000)
     p, path_err = _inside(root, path)
     if path_err:
-        return path_err
+        return InspectReply(path_err, "refused")
     assert p is not None
     if action == "read":
         if not p.is_file():
-            return f"Нет файла {p.relative_to(root)}."
+            return InspectReply(f"Нет файла {p.relative_to(root)}.", "refused")
         raw = p.read_bytes()
         if b"\x00" in raw[:4096]:
             return f"{p.relative_to(root)}: бинарный файл, {len(raw)} байт, sha256={hashlib.sha256(raw).hexdigest()[:16]}"
@@ -2679,7 +2692,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                           start_char=0, expected_sha256="")
     if action == "list":
         if not p.is_dir():
-            return f"Нет директории {p.relative_to(root)}."
+            return InspectReply(f"Нет директории {p.relative_to(root)}.", "refused")
         entries = []
         for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:400]:
             mark = "/" if child.is_dir() else f" · {child.stat().st_size}B"
@@ -2687,7 +2700,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
         return "\n".join(entries) or "(пусто)"
     if action == "search":
         if not query:
-            return "Для search нужен query."
+            return InspectReply("Для search нужен query.", "refused")
         rg = shutil.which("rg")
         if rg:
             cmd = [rg, "--line-number", "--no-heading", "--color", "never", "-g", glob or "**/*",
@@ -2697,13 +2710,15 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                 out = r.stdout or ""
                 if r.returncode not in (0, 1):
                     out += r.stderr or ""
-                return _cap(out.strip() or "Ничего не найдено.", 20000)
+                # rg exit 2 is an error (bad regex, unreadable root); 0/1 are found/none.
+                return InspectReply(_cap(out.strip() or "Ничего не найдено.", 20000),
+                                    "ok" if r.returncode in (0, 1) else "failed")
             except Exception as exc:
-                return f"Поиск упал: {type(exc).__name__}: {exc}"
+                return InspectReply(f"Поиск упал: {type(exc).__name__}: {exc}", "failed")
         try:
             rx = re.compile(query)
         except re.error as exc:
-            return f"Плохой regex: {exc}"
+            return InspectReply(f"Плохой regex: {exc}", "refused")
         hits = []
         base = p if p.is_dir() else p.parent
         for file in base.glob(glob or "**/*"):
@@ -2720,23 +2735,48 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
             if len(hits) >= 200:
                 break
         return "\n".join(hits) or "Ничего не найдено."
-    return ("action: status | orientation | overview | review | model | symbols | references | "
-            "diagnostics | impact | checks | lessons | observations | mailbox | read | list | "
-            "search | diff | history")
+    return InspectReply("action: status | orientation | overview | review | model | symbols | references | "
+                        "diagnostics | impact | checks | lessons | observations | mailbox | read | list | "
+                        "search | diff | history", "refused")
 
 
 def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
-                   new: str = "", patch: str = "", expected_sha256: str = "") -> str:
+                   new: str = "", patch: str = "", expected_sha256: str = "", files=None, mode: str = "snapshot", _typed_result=False, all: bool=False) -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
     assert task is not None and root is not None
     remote = _remote_client(task)
+    action = str(action or '').strip().lower()
+    if action == 'batch' or files is not None:
+        import edit_batch
+        if action != 'batch' or path or content or old or new or patch or expected_sha256 or all:
+            return edit_batch.render(edit_batch.refused(files, 'Use action=batch with files and mode only.'))
+        if remote is not None:
+            return edit_batch.render(edit_batch.refused(files, 'Remote host/Windows batch is not supported; no remote edit was sent.'))
+        value = edit_batch.apply(files, lambda name: _inside(root, name), mode)
+        _event(task_id, 'batch_edit', outcome=value['status'], files=value['files'])
+        return edit_batch.render(value)
+    if not isinstance(all, bool) or (all and action!='replace'):
+        return 'Edit refused: all must be boolean and applies only to replace.'
+    if mode != 'snapshot':
+        return 'Edit refused: mode applies only to action=batch.'
     if remote is not None:
+        if all and getattr(remote, 'NEGOTIATES_EDIT_ALL', False) is not True:
+            return "Edit refused: this remote backend does not negotiate all replacement; no edit sent."
         with _remote_observations(task):
+            if _typed_result:
+                import editor
+                try:
+                    result = remote.workspace_edit_result(str(root), action, path=path, content=content,
+                        old=old, new=new, patch=patch, expected_sha256=expected_sha256,
+                        **({'all': True} if all else {}))
+                except Exception as exc:
+                    result = {'ok': False, 'code': 'unknown', 'error': f'Remote edit response unavailable: {type(exc).__name__}'}
+                return 'remote_edit: ' + json.dumps(editor.remote_result(result), ensure_ascii=False)
             return remote.workspace_edit(
                 str(root), action, path=path, content=content, old=old, new=new, patch=patch,
-                expected_sha256=expected_sha256,
+                expected_sha256=expected_sha256, **({'all': True} if all else {}),
             )
     action = str(action or "").strip().lower()
     if action == "patch":
@@ -2766,52 +2806,92 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
     if path_err:
         return path_err
     assert p is not None
-    current_hash = _hash(p) if p.exists() else ""
-    expected = str(expected_sha256 or "").strip().lower()
-    if expected and (len(expected) not in {16, 64} or not re.fullmatch(r"[0-9a-f]+", expected)):
-        return "expected_sha256: нужен полный 64-hex хеш или legacy 16-hex prefix."
-    observed = (_hash(p, full=True) if len(expected) == 64 and p.exists() else current_hash)
-    if expected and expected != observed.lower():
-        return (f"Конфликт версии: ожидался sha256={expected}, сейчас {observed or 'файла нет'}. "
-                "Перечитай файл и наложи правку на актуальную версию.")
-    before = current_hash
+    rel = str(p.relative_to(root))
+    try:
+        raw, digest = hands.snapshot(p)
+    except OSError as exc:
+        return f"Правка не начата: {rel} не читается ({type(exc).__name__})."
+    conflict = hands.version_conflict(expected_sha256, digest)
+    if conflict:
+        return conflict
+    before = (digest or "")[:16]
     if action == "write":
-        _atomic_text(p, str(content or ""))
+        try:
+            data = str(content or "").encode("utf-8")
+        except UnicodeError:
+            return "Правка не начата: content не кодируется в UTF-8."
     elif action == "replace":
-        if not p.is_file():
-            return f"Нет файла {p.relative_to(root)}."
-        if not old:
-            return "Для replace нужен непустой old."
-        text = p.read_text(encoding="utf-8", errors="replace")
-        count = text.count(old)
-        if count != 1:
-            if count == 0:
-                return "Не найдено точное вхождение old; перечитай актуальный файл."
-            positions, cursor = [], 0
-            for _ in range(min(count, 8)):
-                idx = text.index(old, cursor)
-                positions.append(str(text[:idx].count("\n") + 1))
-                cursor = idx + 1
-            return f"old неоднозначен: {count} совпадений, первые строки {', '.join(positions)}."
-        _atomic_text(p, text.replace(old, new, 1))
+        if raw is None:
+            return f"Нет файла {rel}."
+        data, refusal = hands.replace_once(raw, old, new, all=all)
+        if data is None:
+            return refusal
     else:
         return "action: write | replace | patch"
-    after = _hash(p)
-    rel = str(p.relative_to(root))
-    _event(task_id, f"file_{action}", path=rel, before=before, after=after,
-           summary=f"{rel} {before or 'new'}->{after}")
-    return f"{action}: {rel}; sha256 {before or 'new'} → {after}; {p.stat().st_size} байт."
+    result = hands.publish(p, data, digest,
+                           recheck=lambda: "" if _inside(root, path)[0] == p else "путь изменился")
+    if result["status"] != "confirmed":
+        return result["message"]
+    after = result["after_sha256"]
+    _event(task_id, f"file_{action}", path=rel, before=before, after=after[:16],
+           summary=f"{rel} {before or 'new'}->{after[:16]}")
+    counts = f"; replacements={raw.decode('utf-8').count(old) if all else 1}" if action == "replace" else ""
+    return f"{action}: {rel}; sha256 {before or 'new'} → {after}; {len(data)} байт.{counts}"
+
+
+def _edit_outcome(reply: str) -> str:
+    """Исход правки по её ответу: у forge.edit текст и есть контракт."""
+    text = str(reply or "")
+    if text.startswith('remote_edit: '):
+        try:return json.loads(text[13:])['status']
+        except (ValueError,KeyError):return 'in_doubt'
+    if text.startswith('batch: '):
+        try:
+            return json.loads(text[7:])['status']
+        except (ValueError, KeyError):
+            return 'in_doubt'
+    if text.startswith(("Исход правки неизвестен", "Исход неизвестен", "Patch прошёл check")):
+        return "in_doubt"
+    if re.match(r"(write|replace): .+; sha256 ", text):
+        return "confirmed"
+    if text.startswith("Patch применён"):
+        return "ok"
+    return "refused"
 
 
 def edit(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
          new: str = "", patch: str = "", expected_sha256: str = "",
-         _parent_request_path: str = "") -> str:
+         _parent_request_path: str = "", files=None, mode: str = "snapshot", _script_context=None, _typed_result=False, all: bool=False) -> str:
+    if not isinstance(all, bool):
+        tool_report.note(outcome='refused', target=str(path))
+        return 'Edit refused: all must be a boolean.'
+    out = _edit_guarded(task_id, action, path=path, content=content, old=old, new=new, patch=patch,
+                        expected_sha256=expected_sha256, _parent_request_path=_parent_request_path, files=files, mode=mode, _script_context=_script_context, _typed_result=_typed_result, all=all)
+    if (str(action or '').strip().lower() == 'batch' or files is not None) and not out.startswith('batch: '):
+        import edit_batch
+        out = edit_batch.render(edit_batch.refused(files, out))
+    tool_report.note(outcome=_edit_outcome(out), target=str(path or (", ".join(str(f.get("path", "")) for f in files if isinstance(f, dict)) if isinstance(files, list) else "(patch)")))
+    return out
+
+
+def _edit_guarded(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
+                  new: str = "", patch: str = "", expected_sha256: str = "",
+                  _parent_request_path: str = "", files=None, mode: str = "snapshot", _script_context=None, _typed_result=False, all: bool=False) -> str:
     _, _, root_error = _task_root(task_id)
     if root_error:
         return root_error
+    result: str | None = None
     try:
         with _mutation_lock(task_id) as beat:
-            reason = _admission_reason(task_id, _parent_request_path, general=True)
+            command_unit = ''
+            if _script_context is not None:
+                import forge_script
+                try:
+                    _parent_request_path, command_unit = forge_script.validate(sys.modules[__name__],task_id,_script_context)
+                except (ValueError, OSError, TypeError) as exc:
+                    return f'Edit refused: {exc}'
+            reason = (_admission_reason(task_id, _parent_request_path, general=True, executing_process=command_unit)
+                      if command_unit else _admission_reason(task_id, _parent_request_path, general=True))
             if reason:
                 return f"Edit refused: {reason}"
             # Правка — один вызов, ударить внутри него нечем; объявляем срок молчания
@@ -2819,7 +2899,7 @@ def edit(task_id: str, action: str, path: str = "", content: str = "", old: str 
             beat(_remote_step_lease(get(task_id)))
             task, root, err = _task_root(task_id)
             if not err and task is not None and root is not None and _remote_client(task) is None \
-                    and str(action or "").strip().lower() in {"write", "replace", "patch"}:
+                    and str(action or "").strip().lower() in {"write", "replace", "patch", "batch"}:
                 # Task mutexes differ across coding tasks. A multi-file patch
                 # and fs_edit share the workshop's short mutation transaction,
                 # including both git apply --check and git apply itself.
@@ -2827,15 +2907,30 @@ def edit(task_id: str, action: str, path: str = "", content: str = "", old: str 
                 with workshop.mutation_lock() as lock:
                     result = _edit_unlocked(task_id, action, path=path, content=content,
                                             old=old, new=new, patch=patch,
-                                            expected_sha256=expected_sha256)
+                                            expected_sha256=expected_sha256, files=files, mode=mode,
+                                            **({"_typed_result": True} if _typed_result else {}), **({"all": True} if all else {}))
                 if lock.lost_to_takeover:
+                    if result.startswith('batch: '):
+                        import edit_batch
+                        return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), 'Transaction ownership changed; inspect before retry.'))
                     return ("Исход правки неизвестен: блокировка файла потеряла владельца; "
                             "перечитай файл, не повторяй слепо.")
                 return result
-            return _edit_unlocked(task_id, action, path=path, content=content, old=old, new=new,
-                                  patch=patch, expected_sha256=expected_sha256)
-    except TimeoutError as exc:
-        return f"Правка не началась: {exc}. Файл или задача заняты; перечитай перед повтором."
+            result = _edit_unlocked(task_id, action, path=path, content=content, old=old, new=new,
+                                    patch=patch, expected_sha256=expected_sha256, files=files, mode=mode,
+                                            **({"_typed_result": True} if _typed_result else {}), **({"all": True} if all else {}))
+            return result
+    except OSError as exc:  # TimeoutError — его подкласс
+        if result is not None:
+            if result.startswith('batch: '):
+                import edit_batch
+                return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), f'Lock release failed: {type(exc).__name__}.'))
+            log.warning("task %s: замок не отпустился после правки", task_id, exc_info=True)
+            return (f"Исход правки неизвестен: замок не отпустился ({type(exc).__name__}); "
+                    f"перечитай файл, не повторяй слепо. Ответ правки: {result}")
+        if isinstance(exc, TimeoutError):
+            return f"Правка не началась: {exc}. Файл или задача заняты; перечитай перед повтором."
+        raise
 
 
 # Потолок руки в agent.py (TOOL_CEILING_SEC). Импортировать нельзя — agent сам импортирует
@@ -2975,14 +3070,48 @@ def _retain_foreground_unknown(task_id: str, proc: subprocess.Popen, command: st
     return unit_id
 
 
+def _note_remote_run(command: str, cwd: str, reply: str) -> None:
+    """Удалённая команда отвечает JSON: журналу нужны её исход и код выхода."""
+    try:
+        row = json.loads(reply)
+    except ValueError:
+        tool_report.note(outcome="refused", target=str(cwd))
+        return
+    if not isinstance(row, dict):
+        return
+    result = row.get("remote_result") if isinstance(row.get("remote_result"), dict) else {}
+    code, status, place = result.get("exit", result.get("exit_code")), str(row.get("status")), str(row.get("cwd") or cwd)
+    tool_report.execution({"kind": "remote", "command": command, "cwd": place, "status": status, "exit_code": code,
+                           "operation_id": row.get("remote_id") or row.get("id")})
+    tool_report.note(outcome="in_doubt" if status == "unknown" else
+                     "ok" if status == "done" and code in (0, None) else "failed", target=place)
+
+
+# Одна оболочка: обычный shell и Forge оба запускают bash, /bin/sh понимает меньше.
+_FORGE_SHELL = (shutil.which("bash") if os.name != "nt" else None)
+
+
+def run_python(task_id: str, code: str, cwd: str = ".", timeout: int = 600,
+               _parent_request_path: str = "") -> str:
+    """Direct Python argv, within the same task custody and Stop protocol as run."""
+    if not isinstance(code, str):
+        tool_report.note(outcome="refused")
+        return "Python refused: code must be a string."
+    return run(task_id, "<python>", cwd, timeout, _parent_request_path,
+               _python_code=code)
+
+
 def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
-        _parent_request_path: str = "") -> str:
+        _parent_request_path: str = "", *, _python_code: str | None = None) -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
     assert task is not None and root is not None
     remote = _remote_client(task)
     if remote is not None:
+        if _python_code is not None:
+            tool_report.note(outcome="refused", target=str(root))
+            return "Python refused before execution: direct Python is local Linux only; use coding_run or computer for this remote task."
         # ⚠ Тот же рельс, что и на shell: задача со scope=host отдаёт произвольную
         # команду root-брокеру, и адверсарка 26.07 прошла ею мимо рельса хардбота
         # («rm -rf /opt/hardbot2/data && docker restart hardbot2-bot-1» → root, ok).
@@ -2998,6 +3127,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         given, deadline_note = _remote_run_deadline(asked)
         import forge_remote_run
         out = forge_remote_run.run(sys.modules[__name__], task_id, command, cwd, given, _parent_request_path)
+        _note_remote_run(command, cwd, out)
         return out + deadline_note
     place, path_err = _inside(root, cwd)
     if path_err or place is None or not place.is_dir():
@@ -3014,27 +3144,37 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     unresolved = ""
     unit_id = _id("proc")
     directory = _unit_dir(task_id, "processes", unit_id)
+    import command_execution
+    before_workspace = None
     try:
-        with log_path.open("wb") as log_file:
+        with log_path.open("wb") as log_file, ExitStack() as inputs:
             with _mutation_lock(task_id):
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
                 if reason:
                     return f"Run refused: {reason}"
+                before_workspace = command_execution.workspace_snapshot(place)
                 parent_id, _ = _worker_parent(task_id, _parent_request_path)
+                import forge_script
+                script_env, script_binding = forge_script.issue(task_id,unit_id,_parent_request_path,base=BASE)
                 intent={"id":unit_id,"task_id":task_id,"command_custody":"foreground-group-v1",
+                    "script_edit_context":script_binding,
                     "command":command,"cwd":str(place),"created":_now(),"status":"starting",
                     "parent_unit_id":parent_id,"log":str(log_path)}
                 _atomic_json(directory/'request.json',intent)
-                from command_process import CommandProcess
-                proc = CommandProcess(command, shell=True, cwd=str(place), stdout=log_file,defer_start=True,
-                                        custody_directory=directory/'command-custody',
-                                        stderr=subprocess.STDOUT,
-                                        start_new_session=(os.name != "nt"),
-                                        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
+                import command_execution
+                if _python_code is None:
+                    launch, use_shell, executable, source = command, True, _FORGE_SHELL, subprocess.DEVNULL
+                else:
+                    import python_execution
+                    launch, use_shell, executable = python_execution.argv(), False, None
+                    source = inputs.enter_context(python_execution.source_input(_python_code))
+                proc = command_execution.launch(launch, shell=use_shell, executable=executable, stdin=source,
+                                        cwd=str(place), stdout=log_file,defer_start=True,
+                                        custody_directory=directory/'command-custody', env=script_env)
                 born = _proc_started_at(proc.pid)
                 _RUNNERS[int(proc.pid)] = proc
                 _atomic_json(directory / "request.json", {"id": unit_id, "task_id": task_id,
-                    "command_custody": "foreground-group-v1",
+                    "command_custody": "foreground-group-v1", "script_edit_context":script_binding,
                     "command": command, "cwd": str(place), "created": _now(), "status": "running",
                     "supervisor_pid": proc.pid, "supervisor_started_at": born,
                     "parent_unit_id": parent_id, "log": str(log_path),'command_identity':proc.custody_identity()})
@@ -3086,7 +3226,12 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     _event(task_id, "command", command=command, cwd=str(place), code=code, status=status,
            duration_s=duration, log=str(log_path), summary=f"{status} exit={code} {duration}s")
     note = f"; process_id={unresolved} (poll/stop; finish blocked)" if unresolved else ""
-    return _cap(str(out).strip() or "(пустой вывод)") + f"\n[forge: {status}; exit {code}; {duration}s; log {log_path}{note}]"
+    tool_report.execution({"kind": "process", "command": command, "cwd": str(place), "status": status,
+                           "exit_code": code, "duration_s": duration, "log": str(log_path)})
+    tool_report.note(outcome={"ok": "ok", "unknown": "in_doubt"}.get(status, "failed"), target=str(place))
+    changes = command_execution.workspace_changes(before_workspace, place)
+    return _cap(str(out).strip() or "(пустой вывод)") + command_execution.tail(
+        code, status, changes, duration=duration, log=log_path, unresolved=unresolved)
 
 
 def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str:
@@ -3300,7 +3445,7 @@ def _result_identity(path: Path) -> str:
 
 
 def _admission_reason(task_id: str, parent_request_path: str = "", *, general: bool = False,
-                      waiting: bool = False) -> str:
+                      waiting: bool = False, executing_process: str = "") -> str:
     """Called under the task mutex by every admitting writer, including nested work."""
     task = get(task_id)
     if not task or task.get("status") not in LIVE_TASK_STATUSES:
@@ -3371,10 +3516,10 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
         parent_id = _parent_of(task_id, parent_id)
     if parent_id:
         return "corrupt/cyclic worker ancestry"
-    return _shared_writer_reason(task_id, caller) if general else ""
+    return (_shared_writer_reason(task_id, caller, executing_process) if executing_process else _shared_writer_reason(task_id, caller)) if general else ""
 
 
-def _shared_writer_reason(task_id: str, caller: str) -> str:
+def _shared_writer_reason(task_id: str, caller: str, executing_process: str = "") -> str:
     """General tools obey the same root ownership as worker admission."""
     import forge_roots
     foreign = forge_roots.foreign_writer_reason(sys.modules[__name__], task_id)
@@ -3395,7 +3540,7 @@ def _shared_writer_reason(task_id: str, caller: str) -> str:
     # and Stop remain available; starting another writer must wait for exit.
     for kind in ("processes", "verifications"):
         writers.extend(str(row["id"]) for row in _units(task_id, kind)
-                       if not row.get('custody_recovered') and row.get("status") not in (_TERMINAL_AGENT_STATES | {
+                       if not (kind == "processes" and str(row["id"]) == executing_process) and not row.get('custody_recovered') and row.get("status") not in (_TERMINAL_AGENT_STATES | {
                            "passed", "passed_with_skips", "stale"}))
     return "shared-root writer occupied: " + ",".join(writers) if writers else ""
 
@@ -5475,7 +5620,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             # Манифест рельсов не должен стареть от дневных мержей: уже третий раз
             # номер строки судьи в soul/rails.md гниёт (16855→16999→17008→17011),
             # потому что мерж сдвигает agent.py, а файл чинит только ночной сон.
-            # Тяжёлые билдеры значений (outbound_judge_sites и родня) читают исходник
+            # Тяжёлые билдеры значений (свидетели манифеста) читают исходник
             # с диска по mtime; живой agent в этом процессе для них только плюс
             # (_live), не подмена. sync_md пишет только при расхождении.
             import rails

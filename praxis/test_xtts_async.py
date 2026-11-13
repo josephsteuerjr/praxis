@@ -190,7 +190,7 @@ class ToolCase(GenerationFixture):
 
     def test_frames_expose_split_tools_and_keep_old_dispatch_only_for_replay(self):
         names = {tool['name'] for tool in self.agent.TOOLS}
-        self.assertTrue({'generate_voice', 'voice_generation', 'send_voice'} <= names)
+        self.assertTrue({'generate_voice', 'voice_job', 'send_voice'} <= names)
         self.assertNotIn('voice_message', names)
         self.assertNotIn('speak', names)
         self.assertIs(self.agent.TOOL_IMPL['speak'], self.agent.TOOL_IMPL['voice_message'])

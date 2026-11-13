@@ -1,335 +1,310 @@
-# Praxis — текущий статус
+# Praxis hands: outcomes named on every frequent step — 11.11.2026 (Claude)
 
-> ⚠ **Этот файл — НЕ канон и не авторитет.** Он снимок, который делает человек руками, и
-> поэтому он отстаёт молча. 27.07.2026 обнаружено, что он отстал на месяц работы: шапка
-> говорила «актуально на 2026-07-23», строка live-кода называла `e0150fe`, а на проде уже
-> был `fb09430b` — 29 коммитов спустя; и он держал открытым направление, закрытое решением
-> Егора. Praxis читает этот файл своим `fs_read` — то есть неверная строка здесь становится
-> её ложным воспоминанием о собственном доме.
->
-> **Канон — только проверяемое:** `git -C /opt/praxis log` (что реально развёрнуто),
-> `rails.registry()` (что её держит), `capabilities.snapshot()` (что она умеет). Все трое
-> собираются КОДОМ из живых констант. Если этот файл спорит с ними — прав не он.
->
-> Проверять расхождение: `git -C /opt/praxis rev-parse --short HEAD` против шапки ниже.
+Qualified code 7c1702b501529339e3307ac05eaccfc99e065ada on top of b4d5018f. On 10.11 the phone's step
+cards showed «исход неизвестен» for 219 of 266 calls: reply, end_turn, memory_compact, task_control,
+send_message, narrate and others never told tool_report what happened. Egor's step spec (09.11) asks to
+see successes and refusals on every step.
 
-## Local follow-on 2026-10-14: unified workshop/edition/UI candidate (NOT RELEASED)
+- reply / send_message / narrate: a refusal before transport is `refused`; the transport's refusal type
+  is `refused`; acceptance is `ok`. After a transport exception the outbox decides: accepted `ok`,
+  dead_letter `failed`, pending/retry and ledger errors `in_doubt`, otherwise `failed`.
+- end_turn, task_control, memory_compact, manage_notes, remember, journal, react, stay_silent name their
+  outcome at each return point.
+- Dispatcher: arguments that do not bind and malformed JSON are `refused`; a hand that stayed silent but
+  answered a JSON object with a boolean `ok` has named its own outcome.
+- tool_report: the atomic rename of the run manifest is the run's bookkeeping, not the hand's action;
+  renames are filtered by their target like every other operation.
+- The model-facing text of every hand is unchanged. Forge worker hands, coding_agent/coding_swarm and
+  telegram_account still report `unknown` where they do not name it.
 
-- Branch `oro/python-workshop-phase1-1310` extends the separate Phase-A candidate;
-  the implementation checkpoint is `14dfc202df56e4bc78f580ac4ba24ff4fb6d3e3f`.
-  Version metadata and source inventory target 1.7.0, but the *release candidate*
-  still needs a final exact-SHA test/build receipt. No push, installed runtime or
-  public 1.7.0 release is claimed by this section.
-- Edition's `agent.py`/`forge.py`/tool text now select the Python-first contracts in the
-  actual Hélène package overlay; edition `desktop.rs` already supported native v2
-  mouse-down/up/drag, and a regression checks the model schema and event ordering.
-  Windows file move's partial-copy/reparse case has a bounded static guard in the
-  selected `praxis/body` source; a malicious concurrent junction swap remains out
-  of this guarantee. Forge verification refuses reuse on a dirty Git tree or a tree
-  moved during verification; process stop with live/unknown descendants no longer
-  gets a terminal-success receipt. `coding_inspect(read)` pages a capped result with
-  a whole-file digest; raw source is not truncated to pretend it is complete.
-- The Hélène System screen now receives the effective post-overlay model-tool
-  catalog, and the Plans screen receives Forge parent/result/disposition/unknown
-  projections. `praxis/accept_workshop.py --list` describes the reproducible
-  focused Linux acceptance path. Local targeted Python/Node/source-browser checks
-  are preparation, not a four-platform release gate. A complete isolated writable
-  Linux run, native build/package checks, installed UI and public bytes are still
-  unverified at this checkpoint; later exact-commit evidence must replace this note.
+Two full passes on 7c17: /opt/deploy-operator/hands-1011/drain/round6-r{1,2}. This docs-only commit
+follows 7c17 and becomes live only with its host-service publication receipt. Rollback ref
+refs/task-rollbacks/hands-1011-round6 (b4d5018f).
 
-## Historical local candidate 2026-10-13: Python workshop/tool Phase A (NOT LIVE)
+# Praxis outbound and Telegram: the last two floors removed — 10.11.2026 (Claude)
 
-- Root checkout `C:\Users\yegor\Downloads\Praxis`, separate branch
-  `oro/python-workshop-phase1-1310` based on sanitized `d6ff83957e3a3d89195ebd7b850183f35887960c`.
-  This is a **local source candidate**, not installed Praxis or Hélène 1.6.1.
-- First vertical contract only: model-visible `fs_*` edits now return confirmed/refused/in_doubt
-  with hashes, native write/edit cannot trigger fallback, attempted shell exec cannot silently
-  rerun on another backend; Forge worker requests carry parent identity, task-wide active slots,
-  result hash, separate parent disposition and agent-only subtree stop. Detached process/verify
-  jobs remain task-scoped and require separate stop. Windows `computer.*` is unchanged.
-- Hermetic, single-process focused suite: 111 tests OK, one binary-unavailable skip,
-  no network. An independent source critic found two equal-preimage CAS races; the first
-  was addressed with a target lock for `fs_*`, the second by sharing it with local Forge
-  write/replace; thread-barrier regressions passed. The critic did not execute tests or
-  review these final corrected bytes. The first Forge builder failed on the host's usage
-  accounting lock; its surviving code was inspected and tested by the integrating task.
-- **Not verified:** full Linux battery twice on this exact commit, native detached worker
-  stop/process behavior, live server, or cross-backend Windows parity. No push, tag, deploy,
-  service restart or production state change was performed for this candidate. Any release
-  requires the ordinary exact-commit server gates and separate live decision/receipts.
+Qualified code 9683ca5a4ad2d024272acfbba2d8d026c17c7972 on top of 291415c5. Egor 10.11, verbatim:
+«сними» (the outbound privacy check) and, asked whether the Telegram owner gate also covers account
+deletion, phone change and payments/Premium, «Снять целиком».
 
-## Live update 2026-10-13: hosted web action receipts
+- Outbound: the second-model privacy judge (evaluate_reply, its prompt, caps and STATE collection)
+  and the verbatim [private]-record floor (24 chars, armed outside the owner contour, holding the
+  voice and refusing send_message/narrate) are deleted. To a non-owner audience only the mechanical
+  credential floor holds: a secret in the text or in staged document bytes. Images are no longer
+  checked for credentials; the judge that did it only ran with PRAXIS_OUTBOUND_ADVISOR=on, and live
+  was off, so the env value in /opt/praxis/.env is now a no-op.
+- Telegram: telegram_confirmation.py (challenge store, one-use proof, secret spool) is deleted.
+  The registry and the runner dispatch account-critical calls for the owner and Praxis directly;
+  confirm / pending_confirmations / cancel_confirmation are gone. Parameters and results of those
+  calls are still never echoed into receipts, JSONL or run evidence.
+- Rails: evaluator_mirror and evaluator_evidence_caps give way to one outbound_privacy rail that
+  reads agent.py (and says «не знаю» if it cannot): 54 -> 53. capabilities, the hold reminder and
+  the group description say the same. soul/rails.md is regenerated by her sleep.
+- Tests that exercised the removed machinery are deleted (7256 -> 7156); the rest pin the new rule.
+  Frame pins (rails count, state line, describe('group')) are re-measured in the same fixed
+  environment.
 
-- Tested implementation `4e93f7acd72ea592f6ce6e7a37e16b5049b22fdd` deployed fast-forward
-  from `423639b2`. Exact full Linux gate: 6310 tests, 6 skips, twice; narrow receipt/continuation10PASS.
-- Running relay source `cb6b639ab6c423f3dd260d7d857d93ed7fbc79a5` preserves released image/auth/terminal
-  routes from a262932. Rust112PASS and Clippy warnings denied. Release binary SHA-256
-  `e52379e5ec9e9c824375ed97c5a9780dbad623a858dbd6a96812741ffff82dc5`, image `relay:provider-observation-cb6b639ab6c4`; startup and images route verified.
-- Explicit `PRAXIS_PROVIDER_EVENT_FEEDBACK=1` only in the praxis Compose environment.
-  Metadata persists with model-output and enters subsequent tool/text continuations; missing coverage
-  remains unknown. No query, URL, page content, reasoning, style rewrite or semantic veto is added.
-- Live voice/OpenAI/gpt-6.1-sol diagnostic `run-20261012T220001169089Z-c660e75b` is done: completed
-  `ws_0048cf96446096c9016acd5866a9ec87d199318e27aa83b6c3` was saved and supplied in the next model-input0005;
-  the model exactly reported the sameID. Two real model phases, one read-only diagnostic function,
-  no external diagnostic delivery. First successful wire probe retained a failed recorder receipt;
-  recorder was corrected and this final repeat completed normally.
-- Migration author `deploy:4e93f7a...`, explicitbefore/after/reason/undo and canonical life event;
-  one visible migration receipt supplied in the first diagnostic. Undo: change the praxis environment
-  entry to `PRAXIS_PROVIDER_EVENT_FEEDBACK=0`, then recreate only praxis.
-- Rollback tag `rollback-provider-observation-pre-20261012T213428Z`; archive directory
-  `/root/praxis-provider-observation-rollbacks/20261012T213428Z`. Memory archive was copied while live and had one changing file;
-  it is a reconciled-restore resource, not an atomic runtime snapshot. New private immutable core/relay
-  refs created; old refs and bare master not moved. .env, soul, device authority, mailbot/serverapp preserved.
-- Only relay/praxis recreated. An invalid initial YAML flag was corrected before replacement;
-  delayed Docker old-container removal caused several minutes downtime. Prepared replacement was
-  started only after old stopped and assigned the canonical name. Root broker/audit and model/image/
-  serverapp HTTP checks passed. Other services and Docker daemon were not restarted.
-- This following documentation commit changes STATUS/CODEMAP only; runtime implementation bytes
-  remain exactly those of the tested core commit above. Production visibility is accepted by the
-  diagnostic; disappearance of the original self-correction behavior has not been established.
+Two full passes on 9683: /opt/deploy-operator/hands-1011/drain/gate5-r{1,2}, 424 modules,
+7156 / 7156 tests, 16 / 16 skips, 0 / 0 failures, equal rosters. This docs-only commit
+(AGENTS/ARCHITECTURE/CODEMAP/STATUS) follows 9683 and becomes live only with its host-service
+publication receipt. Rollback ref refs/task-rollbacks/hands-1011-round5 (291415c5).
 
-## Historical update 2026-10-06: Codex image generation
+# Praxis hands: every hand native, every right everywhere — 10.11.2026 (Claude)
 
-- Tested core `e2a4a50e1d52422f763311708abd53abaae2a57c` deployed fast-forward from
-  `2514439b`. Full Linux gate: 6190 tests, 6 skips, twice on this exact commit.
-- Relay 0.8.4: standalone generation/edit JSON routes, separate image-model catalog,
-  and the documented `/v1/chat/completions` alias. Final Rust source `a262932`:
-  109 tests and Clippy with warnings denied; released server binary receipt records its SHA-256.
-- Real isolated canary: GLM 5.3 selected `generate_image`; Codex `gpt-6-astra` selected
-  an edit of that artifact. Both returned verified PNG files with actual dimensions and hashes.
-- Telegram System serves `index-C4Ikaf0V.js` with the Images card replacing the old folding-model
-  card. Live API read/write/reload passed; `images.enabled=true`, model `gpt-image-2`,
-  quality/size `auto`, background `opaque`. Voice remains GLM 5.3; text roles/frameworks preserved.
-- Rollback: `rollback-images-pre-20261006T163635Z`; private source/config/relay/UI archives in
-  `/root/praxis-imagegen-rollbacks/20261006T163635Z`. Immutable core release ref:
-  `refs/releases/codex-images-20261006-e2a4a50`. Soul files were not edited.
-- Hélène integration is a separate next stage. Real phone UI interaction and visible Telegram
-  delivery have not yet been accepted on-device; installed API/artifact checks do not claim that.
+Qualified code 95d8cee369306d8ee138cfc267d860247e88de55 on top of a75e3293. Egor 10.11,
+verbatim: «хочу, чтобы оставалось только инструментом для скриптов, а также, чтобы у нее
+ВЕЗДЕ БЫЛИ ВСЕ ПРАВА. это правило ДАВНО устарело»; about admit/computer_access: «это вообще
+из старющего миниаппа ... не актуально»; «управление ноутом должно быть и было у всех».
 
-## Historical update 2026-08-06: Praxis Mini App/PWA сняты
+- The Python tail is gone: `offered_tools_for` returns the whole catalogue natively; h.hand
+  stays as the scripting tool (outcome field, late-hand receipts), K no longer lists rare
+  signatures.
+- admit and computer_access are removed (schema, English text, K family, owner contract slot,
+  frame authority line). The catalogue is identical for every speaker: 76 canonical schemas
+  plus context hands (reply/end_turn/task_control/provider). `computer` stays hers in any turn.
+- voice_backend writes use the sovereign actor, so they no longer depend on who speaks.
+- Kept as floors, not rights: account-critical Telegram executes only after the exact owner-DM
+  phrase; privacy is still checked on the outbound boundary.
 
-- Implementation commit `e1a846aeb2e7cc1c232860bd93c0ae08a3289d2c` развёрнут fast-forward от
-  прежнего live `be1c82891cf503e9dd4e72c6c2c7e37f4b9657d8`.
-- `praxis-mailbot` оставлен как headless-процесс: обязательный IMAP poll/ingest, mailbox index,
-  уведомления о новых письмах, proposal/self-merge/host/room cards, restart signal и contact flow.
-  HTTP listener отсутствует; host binding `8092` удалён; Telegram menu не содержит WebApp.
-- Caddy больше не публикует `praxis.*` и `mail.*`; `/px`, `/app` и прежний mail origin не имеют
-  публичного HTTP-сервиса. Атланта (`srv.*`/`praxis-serverapp`) осталась доступна и отвечает 200.
-- Gate exact commit: targeted mailbot 19 OK; полный Linux suite 3498 OK, 4 skip, два раза подряд.
-  Live checks: IMAP fetch успешен, `memory/mailbox.json` валиден (31 запись), mailbot polling active,
-  `praxis` и `praxis-serverapp` не перезапускались.
-- Rollback: tag `rollback-mailbot-pwa-pre-20260806T002834Z`, tar
-  `/root/praxis-mailbot-pwa-pre-20260806T002834Z.tar.gz`, Caddy backup
-  `/root/Caddyfile.pre-mailbot-headless-20260806T002834Z`, immutable release ref
-  `refs/releases/mailbot-headless-20260806T002834Z-e1a846a`.
+Two full passes on 95d8: /opt/deploy-operator/hands-1011/drain/gate4-r{1,2}. This
+docs-only commit (AGENTS/ARCHITECTURE/CODEMAP/STATUS) follows 95d8 and becomes live only with
+its host-service publication receipt. Rollback ref refs/task-rollbacks/hands-1011-round4 (a75e).
 
-Шапка сверена с продом кодом **2026-08-01** (`git rev-parse HEAD`; остальной текст файла с этой сверкой НЕ пересматривался). Это живой снимок релиза, а не журнал прошлых PASS.
-История удалённых спек и прежних статусов остаётся дословно доступна через git.
+# Praxis hands: acceptance corrections — 10.11.2026 (Claude)
 
-## Текущее состояние (live-снимок: 2026-08-07; исторические разделы ниже — прежние)
+Qualified code commits on top of 584/f4c3, all by Claude after Egor asked to accept
+Codex's work and fix what was found:
 
-- **Live ref для этого снимка:** `30bc74df` — «Ф3 календарной даты: даты в её записях и каталог корзины». Сверено в отдельном проходе через `git rev-parse --short HEAD` в рабочем дереве. Это датированная точка чтения, не обещание, что файл будет автоматически поддерживаться вровень с каждым коммитом.
-- **Статус файла:** ручной оперативный снимок live/candidate, а не самособирающийся источник истины. При следующем решении сперва сверять live `HEAD`, gate и rollback по проверяемым источникам; подробности нынешней ветки календарной даты — в Git (`4b6f3e7f` → `30bc74df`).
-- **Предыдущий релизный блок Mini App/PWA выше сохранён как историческая запись релиза от 2026-08-06; он не описывает текущую HEAD-ветку.**
-- **Задеплоены и живут (по порядку):**
-  - **PASS 26 «она одна»** (`7e2ae49`) — лечение диссоциации: одиночность прогонов (single-flight
-    `_ONE_MIND`), восстановленный телеграм-канон (Telethon закрыт на её окно), reaper зомби-прогонов,
-    терминал мёртвых Telegram-доставок, её глаза на durable-run слой (`list_active_runs` + STATE),
-    похороны системы тасков (честные намерения вместо тикетов), неприкосновенный сон (`rest`),
-    снятие блоб-пинов + инварианты Егора.
-  - **PASS 27 «она одна v2»** (`19e571c1`) + F3 focus/rest (`25d17b3d`) + F5 status-threads (`e3b8fa7a`):
-    resume под `_ONE_MIND`, мини-апп authorize-only, transport-aware reaper (без lease).
-  - **Мини-апп A+B** (`4a8bda11`) + F6 (`3aeb16e7`): Telegram SDK + устойчивая initData, мульти-токен
-    (@praxis_home_bot), reopen-контрол привязки. Whisper-монтаж восстановлен — распознавание работает.
-  - **PASS 28 «целостность ядра»** (`16aac495`): media-safe дедуп cancel-шва текст-ответа +
-    terminalizability-маршрут reaper (без in_doubt-ловушки и `running`-зомби).
-  - **PASS 29 «осознанное переавторство»** (`520ca724`): при перебивке новым сообщением ДО отправки
-    черновик бросается терминально (нет механического «автоотбойника»), уже-запланированный свежий
-    ход переавторствует живьём; drop-safe (`_supersede_gen` + shutdown-гейт).
-- **PASS 30 «она — оркестратор» (Этапы 0–3, 2026-07-22/23):** Этап 0 симптомы (observe(file),
-  обещание=задача, придержка будит её, гигиена сирот) → Этап 1 «сердце» (`core/events.py` +
-  `core/subagents.py`: завершение/падение/потеря субагента будит её ходом `forge_event` за секунды
-  вместо часа; снапшоты шелла ушли из master в `refs/praxis-snapshots`) → Этап 2 наррация
-  (`narrate` — строка процесса в тред мимо трибунала, durable direct-outbox) → Этап 3 прямой
-  ремоут: `computer.*` получил файловые глаголы read/hash/write/replace (write/replace — sovereign-
-  only), `coding_session(scope='windows')` — deprecated прокси (жив для субагентов, умирает
-  следующим пассом со сносом под её приёмку).
-- **После PASS 30 (не перечислено выше построчно):** ~29 коммитов от 23.07 до 27.07 — в их числе
-  веб-руки v2, лечение латентности (recall/relay), способность `kind=wake` (пробуждение со связью,
-  пульс без разрыва Telethon), миграция «место = то, что разделил Telegram», и `fb09430b` —
-  замок форжа перестал переживать смерть своего держателя. Точный список: `git log e0150fe..fb09430b`.
-- **Открытые направления (отдельные сессии):** «persist group wake» (остаток PASS 29),
-  PASS 31 память/provenance.
-- **ЗАКРЫТО решением Егора:** PASS 30 Этап 4 (Claude Code CLI как второй раннер) — подписочный
-  паттерн «автономный агент гоняет CC unattended» признан серой зоной ToS; строку держали
-  открытой после решения, теперь она закрыта здесь же, а не только в чужой памяти.
+- 14c5ef416b5a0e73a87ed60eeef4130ed2625ecb (live since 12:15:14 UTC): a python/shell
+  script killed by its own timeout (home default 30 s) while a slow nested h.hand call
+  (proposal test/submit, coding_review, second_look) was running made the whole run
+  in_doubt. `Bridge.drain` now refuses new requests, waits for started ones while the run
+  is running without pause/cancel, and appends `[late hand …]` receipts after [exit N].
+  Outer ceiling, pause or cancel keep the explicit in_doubt path. Two full passes:
+  424 modules / 7260 tests / 16 skips / 0 failures, equal rosters (+4/−1 vs 584);
+  installed-container check 6 PASS on disposable state.
+- 5353cc8e9646ba381d797fc7edb38a1bc698a8d6 + 39e37ff1778e77b5a87704966cea757078a50944:
+  Egor 10.11 — manage_identity and manage_desire return to native schemas (owner 63,
+  guest 61; Python tail 15). h.hand returns the hand's journal outcome as r['outcome'].
+  fs_ls, fs_search, coding_inspect and task/paged/batch reads note ok/refused/failed/
+  partial; Forge marks refusals via `InspectReply` (still a str) and `forge.noted`
+  journals them; a remote backend reply stays unknown. The first full pass on 5353
+  found one real defect (AST-loaded tool_coding_inspect had no agent helper; RED kept in
+  /opt/deploy-operator/hands-1011/drain/gate2-r1); 39e3 fixes it. Two full passes on
+  39e3: /opt/deploy-operator/hands-1011/drain/gate3-r{1,2} (424 modules, 7268 tests,
+  16 skips, 0 failures, equal rosters).
 
-## Локальный кандидат shared STT — НЕ live
+This STATUS/ARCHITECTURE/CODEMAP-only commit follows 39e3 and changes no code. It becomes live only with the
+host-service publication receipt /opt/deploy-operator/tools-1109/deploy-<this sha>/RESULT.json;
+a failed publication restores the previous bytes. Rollback refs:
+refs/task-rollbacks/hands-1011-drain (f4c3) and refs/task-rollbacks/hands-1011-round2 (14c5).
+continuation_mode=legacy is the append-only contract of 28.10, not compatibility; unchanged.
+Her own soul/HOME.md:26 and soul/skills/unknown_private_admission.md:23 still name retired
+hands; they are hers, a note went to her private inbox, they were not edited.
 
-- В изолированной ветке `codex/hardbot-stt-shared-live-cb2ba4e` подготовлен authenticated
-  HTTP-over-UDS endpoint без TCP и второй Whisper-модели. Он использует resident backend
-  `mtproto_runner`, принимает только `ru|uz|auto` и использует штатный accuracy-профиль Praxis
-  (`PRAXIS_STT_BEAM_SIZE=5` в live-конфигурации), ограничивает upload 15 MiB, rate/burst и
-  single-flight, не пишет PII/audio/transcript в лог. Внешний путь не загружает модель и не
-  ставит работу в очередь.
-- Compose-кандидат сохраняет проверенный live envelope `Memory=4608 MiB`,
-  `MemorySwap=6144 MiB`, требует заранее созданные fail-closed bind paths и держит request audio
-  в private 32 MiB tmpfs. После bootguard-рестарта child exact startup-sweep удаляет только
-  same-uid regular temp files собственного prefix; symlink и чужие файлы не трогает.
-- Проверено локально 29.07: `py_compile`, `git diff --check`, Compose parse/contract;
-  `test_media_audio + test_stt_rpc` — 24 tests green на Windows (2 Linux-only skip) и 24 в Linux
-  без skip, включая реальный Unix socket и forced cancellation. С `test_media` общий focused
-  прогон — 51 tests green (Windows 2 skip; Linux 1 platform skip). Независимое adversarial review
-  не нашло P0/P1; найденные bind/crash-residue/malformed-multipart замечания исправлены.
-- На `/opt/praxis` этот кандидат **не переносился**, контейнер не перезапускался. Live остаётся
-  на exact `cb2ba4e`; source-code paths не менялись, а `git status` показывает только прежние
-  runtime-изменения `memory/notes/events.jsonl` и `soul/rails.md`.
-- Активация кандидата требует validated `docker compose up -d --no-deps praxis`: простой
-  `restart praxis` не применит новые mounts, env и declarative resource limits.
+# Praxis hands COMPLETE — 10.11.2026
 
-> Разделы ниже (архитектура, проверки релиза, Windows/провенанс) описывают базовый релиз **PASS 24**
-> (`905e09d`) и с тех пор построчно под 26–29 не пересматривались: верны по духу архитектуры, но
-> конкретные хэши, счётчики тестов и evidence — историчны.
+Qualified deployed code is 584741eb3b0e0fd444679c88faaccdcb3979b23e (11:32:18 UTC).
+Worker contract, catalogue A/B, native Python, batch/task reads, all replacements,
+common command tail and serverd corrections are installed in separately qualified
+waves. h.hand/h.describe now use the real parent dispatcher and durable nested
+receipts. Two final complete Linux passes on584 each passed424 modules /7257 tests /
+16 skips, with identical test-ID multisets and skips. All11 last-wave deployed files
+matched Git; smoke passed, actual pointers=off and continuation_mode=legacy retained.
+Three further installed-container checks passed: actual child IPC/schema/hand call,
+restricted-catalogue refusal and exact rare signatures, using disposable state,
+without provider calls or Telegram sends. Runtime is healthy, restart count0.
 
-## Прежний live release (PASS 24, для истории)
+The final rare-schema projection is installed: canonical78 tools remain authorized,
+61 carry native schemas,17 have complete K signatures and live Python dispatch.
+The combined schema/K projection is15490 characters smaller than the prior78-native
+stage (89569→74079); K itself is5316 characters. Full catalogue names, exact owner/
+guest common schema prefix, authored computer schema, English text and signatures
+are separately verified. Context-dependent reply/end_turn/task_control/provider
+tools can change an actual request's count. No executable retired-name aliases.
 
-- приватная ветка разработки: `pass24`;
-- exact deployed code: `905e09d8d82b6cf13cf427d8cfb838c9fd1a1305`;
-- предыдущий live head: `c24f87e94b25a142e49ac93d586e2f809247215a`;
-- release archive: `/root/praxis-pass24-905e09d-20260714T152830Z-v2.tar.gz`, 4 525 645 bytes,
-  SHA-256 `cacc138b63d71619da21aacf9f2ea38c3dfaba608dd54d9562a0a19241c2f9b4`;
-- Linux bridge: SHA-256 `43660e0514432a1719f146dced45bb3006e63c431ed7bb80ec84e88a99c337b2`;
-- deploy unit: `praxis-pass24-deploy-905e09d-20260714T152830Z-v2.service`; terminal receipt:
-  `/root/praxis-pass24-20260714T153233Z.receipt.log` с exact `PASS24_DEPLOY_OK`;
-- rollback tree: `/opt/.praxis-pass24-rollback-20260714T153233Z`; backup prefix:
-  `/root/praxis-pre-pass24-20260714T153233Z`;
-- `praxis-serverd` и `praxis-body-bridge` enabled/active; `praxis`, `praxis-mailbot`,
-  `praxis-serverapp`, `praxis-dockerproxy` running с `RestartCount=0`; HTTP и serverd audit зелёные.
-  Этот документационный snapshot намеренно следует за deployed code и сам не меняет runtime.
+Evidence: /opt/deploy-operator/hands-1011/tail-final-r{1,2}/SUMMARY.json;
+host deployment /opt/deploy-operator/tools-1109/deploy-584741eb3b/RESULT.json;
+installed check /opt/deploy-operator/hands-1011/live-tail-smoke.log.
+Release refs/task-releases/hands-1011-* and rollback refs are immutable. This
+following STATUS-only commit records the completed rollout; no executable code
+changed after the exact584 qualification, and publishing this note needs no restart.
 
-## Что уже собрано
+Serverd source103cc4c and its two daemon files were separately deployed 07:46–07:48
+UTC. Actual Unix-socket Unicode/CRLF all-replace, stale-SHA refusal and invalid-UTF8
+preservation passed 07:49:55. Remote backend ok still is not a local readback claim;
+remote batch and unsupported all backends refuse explicitly. No Windows/macOS
+foreground IPC/custody qualification is claimed. These are Linux Praxis changes.
 
-- Один server-side агентный контур: LLM, память, Forge, задачи, workers и решения остаются на
-  сервере. Windows Body не содержит второго мозга, памяти или task store.
-- Durable runs сохраняют immutable context snapshot, модельные и tool-фазы, результаты,
-  артефакты и `RECAP.md`; restart сначала восстанавливает структуру и outbox, затем продолжает
-  исполнимые runs. Неопределённый side effect становится `in_doubt`, а не повторяется вслепую.
-- Основной tool-loop не имеет скрытого default cap. Ограниченный бюджет остаётся только у явно
-  вспомогательных read-only проходов. Resume reconstruction отдельно fail-closed ограничена
-  cumulative evidence budgets; это не ограничение количества действий Praxis.
-- Telegram имеет crash-safe text/file outbox, корректные topic routes, архив и карту форумных тем,
-  edited-message identity и sovereign owner/self noncritical/raw/join/leave. Account-critical вызов
-  Praxis или owner требует exact нового owner-DM confirmation; инициатор и подтвердивший остаются
-  разными audit fields, параметры хранятся в encrypted TTL spool, а durable run logs получают только
-  redacted marker/digest/reference. Hourly social pulse видит follow-up и recent delivery receipts,
-  но не имеет per-pulse, daily или target cap: количество действий и адресатов выбирает Praxis.
-- В owner/private DM нет semantic sanitizer: для human owner и exact `praxis:self` отключены
-  evaluator, rewrite, style/mirroring score, impersonation cut и anti-repeat. Только отдельное точное
-  `[молчу]` остаётся управляющим маркером тишины; встроенный маркер является обычным текстом.
-  В private DM с другим человеком остаётся только fail-closed privacy-классификатор v2 с фиксированным
-  enum; он не имеет права менять формулировку, тон, стиль или повторяемость. Групповой/public контур
-  остаётся отдельным.
-- Praxis self имеет полные docs/code/server/root и Windows interactive/SYSTEM hands. Verification,
-  provenance, rollback и risk review являются усилителями, не veto. Только human owner выдаёт и
-  отзывает human trust; trusted human не делегирует, не вызывает raw Telegram RPC и не получает
-  SYSTEM. При полном self shell/root это governance-инвариант, не криптографическая sandbox-граница.
-- Память получила rebuildable FTS и bounded Markdown-карты людей, комнат, тем, проектов, runs и
-  компьютеров. Сырая запись дневника помечена как `UNTRUSTED EPISODIC` и автоматически не
-  устанавливает факт, self, желание, rail или policy. Broad automatic recall также не подмешивает
-  legacy people dossiers; exact principal-bound participant context остаётся адресно доступен.
-  Старое self-history — архивное evidence,
-  не текущая личность. Scheduled consolidation не делает normative mutations; ночные изменения
-  проходят claim/attack/provenance formation. Persona/night/bench fail-closed требуют валидный
-  CURRENT с проверяемой history digest и не подставляют legacy/history.
-- Windows Body установлен как automatic LocalSystem router плюс hidden interactive host/tray.
-  Есть файлы и артефакты в обе стороны, процессы/логи/статусы, Git/build/test, Win32 окна,
-  клавиатура/мышь/wheel, screenshot PNG, clipboard и явный выбор interactive/SYSTEM identity.
-- Собрана новая Praxis App: versioned server snapshot/control API, installable PWA, движущийся
-  particle/glass shell, runs, Windows, memory, Telegram, trust и system surfaces. Service worker
-  кэширует только shell; verified offline snapshot и черновики partitioned по principal/device,
-  мутации после reconnect автоматически не воспроизводятся.
-- Device-specific доступ выдаёт только owner через одноразовую fragment-link с TTL до 24 часов.
-  Ссылка погашается один раз, bearer возвращается один раз, exact scopes и revoke живут в private
-  HMAC event chain. API отвечает 401 на отсутствующую/невалидную/revoked session credential и 403 на
-  недостаточный scope уже аутентифицированного principal.
-- Command/server-effect mutations и Windows side effects из PWA требуют idempotency key: retry того
-  же намерения возвращается к одному durable server claim/receipt или тем же body
-  `request_id`/`operation_id`, а повтор ключа с иным намерением отклоняется. Access grant/revoke
-  идемпотентен по effective state, но retry после потерянного ответа может добавить audit event;
-  enrollment secret не сохраняется и не replayable. Browser import/export по умолчанию ограничен
-  64 MiB в каждую сторону и проверяет имя, размер и SHA-256.
-- Owner delivery получил общий PWA/Telegram ledger со state/revision, hash-chain/head anchor,
-  dedupe/coalesce и мягким history budget: unread и read-but-not-acted не скрываются. Реальные
-  producer-интеграции сейчас покрывают follow-up answers, terminal failure/expiry и успешный
-  owner-directed `send_file` как PWA-only `file_ready`.
+Final read-only inspection observed private live Git HEAD821079459b53c2f52fb7b32775301a62d5a73ac5:
+Praxis herself committed soul/skills/coding_hands.md at07:29:40 UTC, adding her
+actual narrow file-hands smoke. That authored text is preserved exactly, without
+replacing it by our earlier donor. Of73 cumulative changed paths,72 match the
+qualified source; this one authored skill matches her own live Git commit.
+Deployment identity is the receipt plus exact program bytes, not the private HEAD.
+Old paused/in_doubt work and authored computer description remain untouched.
+No Hélène installation/release or public Git push was performed. Hélène is a
+separate session. Real autonomous usage is distinct from test qualification.
 
-## Проверки релиза
+--- Previous dated observations retained below ---
 
-- focused speech/privacy suites и adversarial regression cases зелёные;
-- два независимых full Linux discovery на exact `905e09d`: 1778 OK, 1 skip за 155.127 s и
-  1778 OK, 1 skip за 155.139 s;
-- exact server clone после deploy: 1778 OK, 1 skip за 99.922 s; live checkout остался чистым;
-- Rust workspace: 50/50 tests, `cargo clippy --workspace -- -D warnings`, release build и fmt зелёные;
-  `--all-targets` не заявляется из-за известного test-only tungstenite lint;
-- package `bash -n`, ShellCheck, точный SHA manifest, safe-member check и deploy rollback matrix
-  зелёные;
-- final live evidence: exact head/clean tree, services, four zero-restart containers, HTTP, audit,
-  memory navigation и fail2ban owner-home unban — `PASS24_FINAL_EVIDENCE_OK`.
+# Unified editor installed — 2026-11-09T22:49:37.198515+00:00
 
-## Windows release evidence
+Qualified code `71abc90830f0f6f828c5fea800d6d382ffe245df` replaces public fs_edit/coding_edit with one edit tool;
+the old tool names have no aliases. action=replace/write/patch/batch. Omitted task_id
+addresses home with its existing proposal/write-zone rules; task_id addresses Forge.
+Workers receive task authority from runtime. K, English schemas and ARCHITECTURE
+describe the same API and JSON outcomes. fs_write remains available.
 
-- установленный `praxis-body.exe`: SHA-256
-  `17C9032B35CF6E24751BBC2FBDEC21F8B93F3A16845B2D1E76CA5321CDE90CD9`;
-- tray: SHA-256 `AFB805C18B5AADDAA8BCD90CAC7B2EF7C93394457E96ECD531E18A89621EC8DE`;
-- system router: SHA-256
-  `EF2A0C84846FF5DEF344E7D99E1DEDDB9031EA86997C65915BBA3BE76FA05397`;
-- все три installed hash-named executable совпадают с release source artifacts;
-- SCM service: Automatic, LocalSystem; scheduled tray task: Highest/Interactive; console windows
-  отсутствуют; dial fallback настроен на tunnel endpoint и внешний endpoint;
-- exact-live canary: interactive high/session 1 и SYSTEM/session 0, оба elevated; UTF-8 process output
-  точен, двусторонний file import/edit/export сохранил имена, размер и SHA-256; canary-файлы удалены;
-- live bridge и server code подтверждены exact `905e09d`; canary script SHA-256
-  `341ef0d91bfe416a11eb10d68484090893af93a7f30c520930f4c81cfaeddf99`;
-- более ранний изолированный scroll-canary подтвердил `0 -> 18` и window PNG `760x520`, но после
-  exact-final reinstall desktop был non-input/locked (`foreground=null`, `cursor=null`). Поэтому
-  scroll на exact-final binary честно остаётся pending до активной desktop session.
+Python h.edit uses this editor. Linux local foreground coding_run/run scripts inherit
+their task; h.read/h.write follow it too. A nonce hash, live custodian birth identity
+and real caller descent validate the current command. Only that process is excluded
+from competing writers: other jobs, tasks and worker ancestry/Stop/Pause still gate
+mutation. This is cooperative custody, not a sandbox against the same-UID shell.
+Patch still needs a Forge task, uses git apply --check/apply and returns ok without
+a per-file SHA readback claim. Remote single operations preserve structured backend
+evidence: terminal success is ok, nonterminal/lost/ambiguous failure is in_doubt,
+known unavailable-before-dispatch is refused. No text guessing or local readback
+promise for remote calls. Remote batch still refuses before dispatch. Automatic
+inheritance is limited to Linux local foreground commands; h.search remains home search.
 
-## Провенанс и открытые ограничения
+Focused 290 checks: OK (skipped=2). Two complete sharded Linux passes cover all
+416 discovered root test modules: [{"tests": 7162, "skipped": 16}, {"tests": 7162, "skipped": 16}].
+The initial red baseline and fixture failures are retained in task evidence. The first
+candidate's second full pass exposed a Stop-test race: the supervisor legitimately
+killed the script before its refusal marker. The final test accepts caught refusal
+or confirmed command Stop and requires the admitted file bytes to remain unchanged.
+The historical frame-cardinality fixture explicitly reconstructs the approved old
+two-tool shape; actual current catalogue, dispatch and K are independently checked.
 
-- Содержимое старого дневника не использовалось как ориентир этой постройки. Старые
-  `memory/people/*` могут содержать загрязнённые выводы и ждут owner-led correction; они не были
-  молча переписаны и исключены из broad automatic recall.
-- Старые root Markdown удалены из текущего дерева, а не переписаны задним числом. Живые
-  документы дерева: `README.md`, `ARCHITECTURE.md`, `CODEMAP.md`, `STATUS.md`, `VISION.md`,
-  `AGENTS.md`. ⚠ Прежде эта строка называла их «каноническими», и `STATUS.md` тем самым
-  объявлял каноном сам себя. Ни один из них не собирается кодом и не сверяется автоматически —
-  все шесть отстают молча. Канон о развёрнутом состоянии — git на `/opt/praxis`; канон о её
-  ограничениях — `rails.registry()`; канон о её возможностях — `capabilities.snapshot()`.
-- Orphan `roomgate`/`probe`, старые env/memory backups, exact-phrase PASS 8 soul test и tracked
-  personality archive убраны из текущего дерева; provenance остаётся в Git. Приватные dialogues,
-  access trust и goals сняты с source tracking, но сохранены как live runtime data.
-- Device bootstrap использует owner-issued one-time enrollment и scoped bearer, а не mTLS. Это
-  текущий реализованный контракт, не заявление о криптографической привязке к hardware.
-- PASS 24 server/PWA/Telegram и Windows bridge развёрнуты на exact `905e09d`. PWA live canary
-  подтвердил one-use enrollment, second-use reject, exact scopes, одноразовые event/artifact tickets,
-  file import replay contract и немедленную 401 после revoke; isolated ledger удалён. Canary script
-  SHA-256 `c30336dd431f185a20ea04cea422484971ece8850529aa64fce4223a3780f730`.
-- Карты `memory/INDEX.md`, PEOPLE/ROOMS/PROJECTS/THREADS/RUNS/COMPUTERS и
-  `memory/computer/MAP.md` пересобраны из live-канона; FTS содержит 10 810 chunks из 351 source.
-  Private review archive находится только локально вне Git/cloud:
-  `praxis-memory-review-905e09d-20260714T154136Z.tar.gz`, 781 388 bytes, 342 members / 339 source
-  files, SHA-256 `c3cf4ba11c91c38dd6df4f54029b236a39f9d55c5afaba382409a306a7ccd8b5`.
-  SQLite/FTS не включён: это rebuildable index, не каноническая память.
-- Real-browser visual/install/offline gate сейчас недоступен: browser runtime не поднят. Статические
-  и HTTP-контракты проверяются, но успешная установка и визуальная проверка в настоящем браузере не
-  объявлены завершёнными.
-- PWA server-operation claim имеет durable heartbeat/lease и никогда не повторяет callback после
-  смерти или неоднозначности executor. Отдельный основной durable-run executor пока не имеет
-  универсальной автоматической orphan recovery после смерти процесса; это остаётся release risk
-  долгих runs вне server-operation контура.
-- Не все старые ad-hoc owner notifications переведены в новый delivery ledger. Логи Windows ещё без
-  rotation. Same-key browser export сериализован durable run ledger и даёт один artifact/ticket, но
-  физический cold reboot после текущей установки ещё не повторён.
-- Автоматические PWA/Body canaries завершены. Остаётся один человеческий owner canary: голосом
-  попросить Praxis прислать реальный файл и проверить видимое имя, topic/reply route, SHA/размер и
-  durable delivery receipt.
+After deployment, every changed target matches the frozen commit. Actual installed
+Python/Forge write, read, batch and stale-SHA refusal passed in disposable state;
+the live catalogue/dispatch has edit only and K is current. mtproto_runner.py is running.
+Private live Git HEAD `40b98a826d9760be051c6b2a07e986f3fe4fd64c` and unrelated WIP remain unchanged.
+Receipts, immutable candidate/rollback refs and exact preimages: /opt/deploy-operator/edit-1011.
+This following commit updates STATUS only. No Hélène release or recipient message.
+
+--- Previous dated observations retained below ---
+
+# Batch file edits installed — 2026-11-09T22:01:37.948333+00:00
+
+Qualified code `88cab751e29b06407565b7f164b5b5775d3bf581` adds snapshot/sequential batch replacements to worker edit,
+coding_edit, fs_edit and Python praxis_hands.edit, with all-file preflight, per-file
+versioned receipts, partial/in_doubt and no automatic rollback. Tool schemas, K and
+ARCHITECTURE explain the same contract. Remote host/Windows batch explicitly refuses
+before sending edits; single-file operations remain available. No Hélène release here.
+
+Two complete sharded Linux passes, all 415 discovered test modules:
+[{"tests": 7149, "skipped": 16}, {"tests": 7149, "skipped": 16}].
+Earlier pointer-budget and privacy-fixture failures remain in task evidence; runtime
+context budgets and continuation_mode=legacy were not changed. The pointer fixture
+budget reflects the added nested schema; privacy fixtures isolate changing tool text.
+
+Live target bytes match the qualified code. Python write/read/two-file snapshot edit
+and stale-SHA refusal passed in the formerly blocked project root. Exact legacy
+process code-ef9dd458/proc-f2679b40 was released through explicit reboot evidence;
+its historical outcome remains lost, and original request/state/log bytes are unchanged.
+No old PID was signalled. Receipts and exact code rollback bytes:
+/opt/deploy-operator/batch-1011. Existing live Git HEAD/private WIP were preserved;
+source candidate refs live in that task's source repository. No recipient message sent.
+
+--- Previous dated observations retained below ---
+
+# Fish catalogue search installed — 2026-11-05T01:08:12.466639+00:00
+
+Owner requested useful Fish website discovery mechanics in MiniApp/PWA. Qualified source `805d92ed4c945a9ff547a0b236aca7c6bcd845df`: provider-wide title/language/tag search, sort, optional licensed filter, metadata/current voice card, direct Fish share-link or ID lookup. Lookup and preview remain separate from explicit selection and canonical sending. Current owner selection and all jobs were preserved; no synthesis or Telegram send by the operator. No core Praxis restart, provider migration, tool binding or context change. Existing catalogue endpoint remains compatible; authenticated read-only POST /api/speech/fish/search and /resolve added.
+
+Focused99 PASS, strict TypeScript and actual-module functional checks PASS; actual private app owner/device/auth/no-store/read-only routing PASS. Both actual mobile UI builds390px browser acceptance PASS. Full Linux pair: ['Ran 6992 tests in 631.677s\n\nOK (skipped=16)', 'Ran 6992 tests in 636.189s\n\nOK (skipped=16)']. Live verification `/opt/deploy-operator/fish-discovery-0511/POSTCHECK.json`; exact rollback `rollback-fish-discovery-0511-20261105T010725Z`, backups `/opt/deploy-operator/fish-discovery-0511/rollback-20261105T010725Z`, permanent candidate `/opt/praxis-candidates/fish-discovery-805d92ed4c94`. This following commit changes STATUS only. Hélène desktop handoff remains the owner's existing parallel chat scope.
+
+--- Previous dated observations retained below ---
+
+# Fish expressive voice installed — 2026-11-04T23:09:28.698164+00:00
+
+Observed deployment, not behavioral canon. Qualified source `c18b538bdb2098b55b3dd1fd97a458967a488cdf`; this following commit only updates STATUS. Owner requested Fish for Praxis, free-form intonation, Telegram/PWA controls and a separate Hélène handoff. Explicit selection: Fish Drama3, enabled, same server-owned state for model tools and app. Generation stays asynchronous and sending stays a separate canonical action. Original XTTS profiles/jobs remain, no silent fallback. Proposed skill is in skill_proposals/fish-voice; operator did not write soul/skills.
+
+Canonical Linux full gates: ['Ran 6985 tests in 635.451s\n\nOK (skipped=16)', 'Ran 6985 tests in 626.228s\n\nOK (skipped=16)']. Focus127 and private owner/device HTTP acceptance passed; both real prior MiniApp/PWA bundles checked at390px, actual HTTP CORS and lost-response replay covered. Real canonical Fish output decoded successfully; operator sent no Telegram message. Listening quality and cache-hit usage remain separate measurements. Live source/API/selection/auth/private-cache/mount/config/context checks: `/opt/deploy-operator/praxis-fish-0511/POSTCHECK.json`.
+
+Rollback tag `rollback-fish-0511-20261104T230600Z`, exact code/UI/config backup `/opt/deploy-operator/praxis-fish-0511/rollback-20261104T230600Z`, receipts `/opt/deploy-operator/praxis-fish-0511`. Private inbox notice workspace/inbox/private/server-recovery/FISH-VOICE-05-11.md is awaiting Praxis review/adoption; delivery does not prove reading or acceptance.
+
+--- Previous dated observations retained below ---
+
+# Coding recovery deployed — 2026-11-03T13:25:26.133417+00:00
+
+Qualified source `e33d8078a7e696ad07ecadb0a8a9c3c307919591` installed by owner command. This status commit contains documentation only. Pure worker reads, exact result paging, coordinator checkpoint compatibility, bounded active orientation and explicit reboot-backed legacy custody recovery are live. Historical outcomes remain intact; the two crashed read-only wake attempts were reconciled and terminalized as failed, not success. Existing coding jobs remain active. Exact full gates: [["Ran 6935 tests in 655.388s", "OK (skipped=16)"], ["Ran 6935 tests in 633.562s", "OK (skipped=16)"]]. Actual runtime, source bytes, native startup, backend audit, protected state, queue admission and code-only rollback verified. Services/voice state preserved. Full receipts `/opt/deploy-operator/praxis-coding-fix-0311`, private candidate `/opt/praxis-candidates/coding-recovery-e33d8078a7e6`, internal post-factum handoff `workspace/inbox/private/server-recovery/CODING-RECOVERY-03-11.md`. Praxis read/acceptance and provider cache percentage are not claimed.
+
+--- Previous dated snapshots retained verbatim below ---
+
+# Forge/backend11 and voice transport deployed — 2026-11-03T00:09:03.878698+00:00
+
+STATUS is a dated observation, not behavioral canon. Qualified runtime source: `7504b8b2df70edcd7ac7e5651fc3c53b489cfda2`. The following commit changes only this status record. Actual receipts: `/opt/deploy-operator/forge-voice-deploy-0311/APPLIED.json`, `POSTCHECK.json`, `RUNTIME-READY.json`, `COMPLETE.json`.
+
+Forge wave2 is installed together with backend11, retaining media identity repair and discovery latency code. The durable .blob audio transport now passes MIME and visible filename. Old message62054 was a generic document; intent receipt fields did not prove voice presentation. Exact new code upload-only Telegram probe returned audio/ogg, voice=true and duration56. No new chat message was sent by the operator; recipient/device presentation remains separately unverified.
+
+Exact clean source gates: Ran 6907 tests in 635.004s, OK (skipped=16); Ran 6907 tests in 634.549s, OK (skipped=16). Backend production-equivalent qualification: 59 checks, including auth/cgroup, resource limits, custody, recovery and rollback without losing new records. Actual installed backend/client root, command-tree proof, replay and audit passed. Native startup ready; XTTS and STT ready. Voice selection, original audio, configuration, Soul and stored legacy contexts retained. Live latency/cache rate were not measured; tool changes form an explicit binding boundary.
+
+Artifact tag `praxis:forge-voice-7504b8b2df70`; live deployment uses the existing bind-mounted runtime. Post-factum handoff: `workspace/inbox/private/server-recovery/FORGE-VOICE-DEPLOY-03-11.md`. This does not claim Praxis read or accepted it. Owner authorization covers deployment; no further adoption stage is pending for this installed version.
+
+--- Previous dated snapshots retained verbatim below ---
+
+## Candidate 2026-11-03: Forge wave2 plus addressed media repair
+
+This isolated composition is based on deployed source `5e39b1470e4c0e6a014e475c3fb913c13ee651d7` and adds the
+accepted Forge donor `46611f1aebcec6712e3bfcd35ceccd56a25711d2`. The deployed addressed send_media identity,
+idempotency, proof/reconciliation and resume changes are preserved. The reverse
+composition (media patch onto Forge) produces identical overlapping source bytes.
+
+Candidate only: no production installation, backend replacement or restart.
+The paired backend11 remains required; current production auth/cgroup/custody and
+rollback acceptance must precede backend adoption, then source adoption. Full
+gates apply to this new exact composition; donor results are not its acceptance.
+XTTS is currently active and this work does not change its state. Legacy exact
+append, latency and authored/private state are preserved. Review receipts and
+current qualification live in the candidate sidecars.
+
+# Addressed media repair deployed — 2026-11-02T21:37:43.411086+00:00
+
+STATUS.md — **НЕ канон** поведения или актуального состояния. Проверяемые источники: `rails.registry()`, `capabilities.snapshot()`, actual live checkout and SHA-bound receipts.
+
+**Qualified runtime/source ref:** `29786098c620fec46addebcbb3c7a5690c7cec2c`. At this final observation it is installed, native startup is ready, and the subsequent commit changes only this dated status record. Actual deployment receipts: `/opt/deploy-operator/send-media-fix-0311/APPLIED.json`, `POSTCHECK.json`, `RUNTIME-READY.json`, `STATUS-FINALIZED.json` and `COMPLETE.json`.
+
+Addressed send_media now keeps its actual tool/run/call identity through the file bridge, typed proof, stable delivery key, acceptance and crash recovery. Existing send_file receipts and ordinary staged media remain compatible. Exact-source full gates: Ran 6728 tests in 584.583s, OK (skipped=6); Ran 6728 tests in 573.569s, OK (skipped=6). Focus: Ran 299 tests in 38.841s, OK. Installed source, native restart, XTTS/STT readiness and retained original audio were verified. Source review was performed by the implementing operator, not an independent reviewer.
+
+**Open acceptance:** actual Telegram delivery of the user's recording is not claimed; the operator did not send it. Forge wave2 remains separately unapplied. The existing selected voice/active XTTS, configuration, Soul, server backend and stored legacy context were preserved. Technical handoff for post-factum review is in `workspace/inbox/private/server-recovery/SEND-MEDIA-REPAIR-03-11.md`; delivery of that note is not evidence of Praxis's acceptance.
+
+--- Previous dated snapshots retained below ---
+
+# Addressed media identity repair — dated qualification snapshot
+
+STATUS.md — **НЕ канон** поведения или текущего состояния. Проверяемые источники: `rails.registry()`, `capabilities.snapshot()`, actual `/opt/praxis`, SHA-bound qualification and deployment receipts.
+
+Live baseline observed 2026-11-02T21:13:06.223154+00:00: `d46b4fd48262107bcf20722ebb634f75bea56a03`. This is the pre-repair source baseline, not a promise about the current deployed HEAD. Candidate qualification and deployment are recorded under `/opt/deploy-operator/send-media-fix-0311`.
+
+Addressed `send_media` keeps its own durable run/call identity, typed media intent, receipt and replay key through the shared file bridge. The repair also covers pending-acceptance resume and receipt reconciliation. Existing `send_file` records keep their original purpose/proof format. Ordinary unaddressed media staging is unchanged.
+
+Open acceptance: complete the exact-candidate full gates, deploy through the native restart path and verify runtime. Real Telegram voice-note receipt must be observed separately; mocked transport is not live delivery. At baseline the existing XTTS service is active with its chosen voice; the historical stopped-state text below describes its earlier observation only. Forge wave2 remains a separate unapplied candidate. Legacy context append, Soul, private data, credentials and service policy are preserved.
+
+--- Previous dated status retained verbatim ---
+
+# Telegram latency fix — датированный снимок подготовки
+
+STATUS.md — **НЕ канон** поведения или актуального состояния. Проверяемые источники: `rails.registry()`, `capabilities.snapshot()`, фактический checkout `/opt/praxis` и привязанные к SHA receipts.
+
+**Live ref для этого снимка:** `cf97f7e17e6af47de01df374e890fb2fa5764ad5` (проверенный source preflight; точка чтения 2026-11-02T14:14:27.786189+00:00, до установки отдельного latency fix). Этот ref не обещает, что live HEAD останется прежним после снимка.
+
+**Открытые направления (проверять по текущим receipts, не по памяти этого файла):**
+  - Квалификация и живая проверка фикса Telegram latency, последующее ревью Праксис.
+  - Отдельная добровольная приёмка Forge wave2; этот latency fix не включает его автоматически.
+
+Фикс перечисления durable runs сохраняет свежую проверку membership, видимость непроверенных записей и строгую WAL-валидацию. Метки времени этапов не являются измерением всей задержки до получения естественного сообщения. Итоговые gates и факт установки определяются QUALIFICATION/APPLIED/POSTCHECK в `/opt/deploy-operator/telegram-latency-0211`, а не этим датированным указателем. Режим точного межходового дописывания `continuation_mode=legacy` и самостоятельное решение Праксис о wave2 сохраняются.
+
+Предыдущая сводка владельца ниже сохранена целиком как историческое свидетельство; её утверждения о проверенном состоянии относятся к указанной в ней дате. XTTS остаётся остановленной по прямому указанию владельца.
+
+# Async voice deployed; XTTS stopped after acceptance at owner's request
+
+Qualified Python/source commit: `b615d14a295e47e4eae7e4a396bda4827c62793d`. Current state verified 2026-10-30T12:38:31.686079+00:00.
+
+- Owner explicitly requested stopping XTTS after the final check. The unit is now inactive/MainPID0; the chosen voice, VoiceOn setting, installed weights and normal service enablement are preserved. Do not start it again in this session without another owner request. Shared resident Whisper is running and its authenticated UDS health is ready.
+- `generate_voice` creates a durable background audio job and sends nothing; `voice_job` inspects or requests cancellation; `send_voice` separately admits a streamed Telegram voice note through the canonical media outbox. The original turn can end, late results are best effort, no overall producer/result TTL is imposed. Old combined names are replay-only. Legacy exact append, private state and Soul preserved; migration/inbox notice is available for Praxis's review, not proof of acceptance.
+- Exact clean Linux gates: 6706, 6706 tests, 6, 6 skips. Real installed model produced 13.8667s OGG/Opus; 93/97 native parts preceded completion, final SHA/voice attribute/ffmpeg decode passed. Injected transport: no actual Telegram upload/message was sent. Final hot check again confirmed both models ready, exact source, current voice and same runtime image/container before the requested stop.
+- Capacity incidents are retained: 2 kernel OOM kills after source deployment under concurrent heavy workload. Runtime drop-in `/etc/systemd/system/praxis-xtts.service.d/30-critical-oom-hold.conf` biases critical OOM victim selection toward XTTS (`OOMScoreAdjust=900`) and prevents automatic restart after its main process's SIGKILL (`RestartPreventExitStatus=SIGKILL`). Syntax and isolated sleep-process kill/restart behavior verified without loading models or provoking OOM. This is not a general pressure watcher or absolute kernel immunity for Whisper. No new OOM or automatic restart occurred in the final owner check window.
+- Own temporary source/test/audio stands removed; permanent models, profiles, author work and bounded rollback retained in `/opt/deploy-operator/praxis-xtts-async-contract-3010`. No public push, Compose/image/environment/Caddy changes or cloud provider connection. Source qualification and later STATUS-only commits are separate identities.

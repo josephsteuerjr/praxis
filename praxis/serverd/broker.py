@@ -600,6 +600,7 @@ def dispatch(verb: str, args: dict, send_chunk=lambda _text: None, request_id: s
         # усечённом наборе. Числа приезжают вместе со списком, а не остаются в срезе.
         ops = brokerops.op_list(limit=40)
         answer = {"ok": True, "protocol": PROTOCOL, "capabilities": CAPABILITIES,
+                  "features": {"edit_all_v1": True, "edit_preflight_v1": True, "edit_utf8_v1": True},
                   "operations": ops.get("operations", []),
                   "operations_total": ops.get("total", 0),
                   "audit": AUDIT.status(), "advisor": advisor.manifest(),

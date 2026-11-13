@@ -21,6 +21,7 @@ import traceback
 from pathlib import Path
 
 import forge
+import tool_report
 import llm
 import run_context
 import forge_runtime
@@ -146,9 +147,9 @@ INSPECT_TOOL = {
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
                     "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
-                    "read", "list", "search", "diff", "history"]},
-        "path": {"type": "string"}, "query": {"type": "string"},
-        "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
+                    "read", "list", "search", "diff", "history"], "description": "What to inspect in this task."},
+        "path": {"type": "string", "description": "File or directory relative to the task root."}, "query": {"type": "string", "description": "Text or symbol to find."},
+        "glob": {"type": "string", "description": "File mask narrowing the search."}, "start": {"type": "integer", "description": "First line, one-based."}, "end": {"type": "integer", "description": "Last line, inclusive."},
         "start_char": {"type": "integer", "description": "Unicode character offset within start line, for paged reads."},
         "expected_sha256": {"type": "string", "description": "Full 64-hex source hash from a read page; pins continuation to those bytes."},
     }, ["action"]),
@@ -161,10 +162,10 @@ VERIFY_TOOL = {
         "actual diff/impact map; start runs checks outside this model turn; poll gathers exact logs."
     ),
     "input_schema": _obj({
-        "action": {"type": "string", "enum": ["plan", "start", "poll", "stop", "list"]},
-        "verification_id": {"type": "string"}, "commands": {"type": "string"},
-        "full": {"type": "boolean"}, "max_parallel": {"type": "integer"},
-        "timeout": {"type": "integer"}, "tail": {"type": "integer"},
+        "action": {"type": "string", "enum": ["plan", "start", "poll", "stop", "list"], "description": "plan derives checks; start launches them; poll reads results; stop requests cancellation; list shows runs."},
+        "verification_id": {"type": "string", "description": "Verification run to poll or stop."}, "commands": {"type": "string", "description": "Explicit commands overriding the derived plan."},
+        "full": {"type": "boolean", "description": "Run the authoritative project gate."}, "max_parallel": {"type": "integer", "description": "Maximum concurrent check commands."},
+        "timeout": {"type": "integer", "description": "Seconds per command; 0 means unbounded."}, "tail": {"type": "integer", "description": "Trailing log lines to return."},
     }, ["action"]),
 }
 
@@ -176,36 +177,26 @@ SIGNAL_TOOL = {
     ),
     "input_schema": _obj({
         "kind": {"type": "string", "enum": ["finding", "question", "blocker", "contract",
-                                                    "result", "claim", "release"]},
-        "message": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}},
+                                                    "result", "claim", "release"], "description": "finding, question, blocker, contract, result, advisory claim or release."},
+        "message": {"type": "string", "description": "Finding, question or coordination message."}, "files": {"type": "array", "items": {"type": "string"}, "description": "Task-relative paths this signal concerns."},
     }, ["kind"]),
 }
 
-EDIT_TOOL = {
-    "name": "edit",
-    "description": (
-        "Edit inside this task root. replace is an exact unique replacement; write creates or "
-        "rewrites a file; patch applies a unified diff only after git apply --check. Pass the "
-        "full sha256 from inspect(read) as expected_sha256 for write/replace when another "
-        "worker may race you (legacy 16-hex digests remain accepted). A multi-file patch "
-        "refuses expected_sha256 rather than pretending it checked one file's hash."
-    ),
-    "input_schema": _obj({
-        "action": {"type": "string", "enum": ["replace", "write", "patch"]},
-        "path": {"type": "string"}, "content": {"type": "string"},
-        "old": {"type": "string"}, "new": {"type": "string"},
-        "patch": {"type": "string"}, "expected_sha256": {"type": "string"},
-    }, ["action"]),
-}
+import edit_batch
+import editor
+
+EDIT_TOOL = {"name": "edit", "description": 'Change files inside your task root. For one or a few changes call this hand directly. For many mechanical changes a Python script is welcome: import praxis_hands as h and call h.edit, the same editor and shared write lock. Bare open().write or str.replace followed by writing bypasses both. Read first with inspect(action=read) and pass its sha256 as expected_sha256. replace: old must occur exactly once; all=true replaces every non-overlapping occurrence and reports the count. Overlapping matches still refuse; widen old. A confirmed after_sha256 is valid for the next edit. batch: files=[{path, expected_sha256, edits:[{old,new}]}]; every file is checked before any write. mode=snapshot (default) matches the original text; mode=sequential applies replacements in order. A batch stops at its first write failure; later files are untouched. No automatic rollback: reread and revert explicitly with fresh versions. write: new file or full rewrite. patch: unified diff, checked with git apply --check first. Reply is edit: JSON with status. confirmed: written and read back. refused: nothing written. in_doubt: writing may have happened; reread, never retry blind. partial (batch): some files written, some refused; inspect files. ok (patch or remote edit): backend reports success, no local readback promise. Host and Windows tasks refuse batch before sending it; use replace per file.',
+             "input_schema": editor.schema(worker=True)}
 
 RUN_TOOL = {
     "name": "run",
     "description": (
         "Run an arbitrary foreground shell command in the task. Full output is kept as evidence; "
-        "the reply is capped. timeout=0 means no timeout. Use this to test, build, lint and probe."
+        "the reply is capped. timeout=0 means no timeout. Use this to test, build, lint and probe. "
+        "Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same editor and shared mutation lock; the current Linux local foreground Forge command context is inherited; refusals raise. Edit files that way, not with str.replace."
     ),
-    "input_schema": _obj({"command": {"type": "string"}, "cwd": {"type": "string"},
-                           "timeout": {"type": "integer"}}, ["command"]),
+    "input_schema": _obj({"command": {"type": "string", "description": "Foreground shell command to execute."}, "cwd": {"type": "string", "description": "Working directory inside the task root; omitted uses the root."},
+                           "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}}, ["command"]),
 }
 
 PROCESS_TOOL = {
@@ -215,10 +206,10 @@ PROCESS_TOOL = {
         "id immediately and keeps the complete log. timeout=0 is unbounded."
     ),
     "input_schema": _obj({
-        "action": {"type": "string", "enum": ["start", "poll", "stop", "list"]},
-        "process_id": {"type": "string"}, "command": {"type": "string"},
-        "cwd": {"type": "string"}, "name": {"type": "string"},
-        "timeout": {"type": "integer"}, "tail": {"type": "integer"},
+        "action": {"type": "string", "enum": ["start", "poll", "stop", "list"], "description": "start launches a durable command; poll reads it; stop requests cancellation; list shows commands."},
+        "process_id": {"type": "string", "description": "Process to poll or stop."}, "command": {"type": "string", "description": "Command to start."},
+        "cwd": {"type": "string", "description": "Working directory inside the task root."}, "name": {"type": "string", "description": "Human-readable command name."},
+        "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}, "tail": {"type": "integer", "description": "Trailing log lines to return."},
     }, ["action"]),
 }
 
@@ -233,20 +224,20 @@ DELEGATE_TOOL = {
         "and returns its full terminal result before you regain ownership. First settle detached jobs."
     ),
     "input_schema": _obj({
-        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition", "wait"]},
-        "agent_id": {"type": "string"}, "result_sha256": {"type": "string"},
-        "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
-        "brief": {"type": "string"},
-        "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
+        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition", "wait"], "description": "spawn a child, list descendants, poll/stop one, disposition its exact result, or wait while yielding the writer slot."},
+        "agent_id": {"type": "string", "description": "Child or descendant agent selected for this action."}, "result_sha256": {"type": "string", "description": "Full result hash from poll; required for disposition."},
+        "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"], "description": "integrated, irrelevant or deferred: how the exact child result was handled."},
+        "brief": {"type": "string", "description": "Concrete assignment for the child."},
+        "role": {"type": "string", "enum": ["scout", "worker", "reviewer"], "description": "scout and reviewer inspect; worker may edit and execute."},
         "model": {"type": "string", "description": "Optional per-agent model; omitted keeps the voice-role default."},
-        "max_iters": {"type": "integer"},
+        "max_iters": {"type": "integer", "description": "Model-turn ceiling for the child; omitted uses the runtime default."},
     }, ["action"]),
 }
 
 CHECKPOINT_TOOL = {
     "name": "checkpoint",
     "description": "Commit the current task working tree as a recoverable checkpoint.",
-    "input_schema": _obj({"message": {"type": "string"}}, ["message"]),
+    "input_schema": _obj({"message": {"type": "string", "description": "What this recoverable task commit contains."}}, ["message"]),
 }
 
 
@@ -278,6 +269,7 @@ Operating contract:
 - The task root is your exact address. Inspect current files and git state; never invent project facts.
 - Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
+- Change files with `edit` (replace, batch, write, patch) after inspect(action=read). When a script suits the job, write Python and use import praxis_hands as h (h.read, h.edit): the same version check and write lock. Bare file writes, including str.replace followed by open().write, bypass both.
 - A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Stop of an agent branch also requests Stop for its descendant-owned process/verification jobs. A job keeps custody until its whole command tree is proven settled; an unknown outcome is never a clean Stop. Legacy task-scoped jobs without a parent require explicit job or whole-task control.
 - Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
 - Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
@@ -314,7 +306,7 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
     if name == "inspect":
         return forge.inspect(task_id, **clean)
     if name == "edit":
-        return forge.edit(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
+        return editor.edit(task_id=task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "run":
         return forge.run(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "process":
@@ -359,7 +351,7 @@ def run(request_path: Path) -> int:
 
 
 TRANSCRIPT_TOOL={'name':'transcript','description':'Read an immutable full output from this execution by exact SHA; offset and limit page Unicode characters. Other task/private directories are inaccessible.',
-    'input_schema':_obj({'sha256':{'type':'string'},'offset':{'type':'integer'},'limit':{'type':'integer'}},['sha256'])}
+    'input_schema':_obj({'sha256':{'type':'string', "description": "Exact full output SHA from this execution."},'offset':{'type':'integer', "description": "Zero-based Unicode character offset."},'limit':{'type':'integer', "description": "Maximum Unicode characters in this page."}},['sha256'])}
 
 
 def _route_identity(request):
@@ -415,15 +407,23 @@ def _loop(journal, request_path, request, adapter):
                           receipt={"kind": "python", "handler": (f"{type(adapter).__module__}.{type(adapter).__qualname__}.dispatch"
                                       if adapter is not None else "forge_worker._dispatch"),
                                    "status": "entered"})
+            report = tool_report.new()
+            report_token = tool_report.attach(report)
+            tool_error = None
             try:
                 output = (adapter.dispatch(request, call["name"], args) if adapter is not None
                           else _dispatch(request, call["name"], args))
             except Exception as exc:
                 output = f"Tool error {type(exc).__name__}: {exc}"
+                tool_error = exc
+            finally:
+                tool_report.detach(report_token)
             output = str(output)
             output_ref = journal.payload(output)
             event = journal.event("tool_result", call_id=call["id"], tool=call["name"],
-                                  input_ref=input_ref, output_ref=output_ref)
+                                  input_ref=input_ref, output_ref=output_ref,
+                                  executions=report["executions"],
+                                  **tool_report.summary(report, error=tool_error))
             state["trace"].append({"tool": call["name"], "input_ref": input_ref,
                                     "output_ref": output_ref, "call_id": call["id"],
                                     "iteration": state["iteration"], "at": event["at"]})

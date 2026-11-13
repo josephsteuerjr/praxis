@@ -551,8 +551,27 @@ def workspace_inspect(root: str, action: str = "status", **kwargs) -> str:
     return "\n".join(piece for piece in [text, *notes] if piece)
 
 
+# This client negotiates; the flag does not assert that the running daemon supports it.
+NEGOTIATES_EDIT_ALL = True
+
+
+def workspace_edit_result(root: str, action: str, **kwargs) -> dict:
+    if kwargs.get("all") is True:
+        try:
+            observed = call("admin.status", {})
+        except Exception as exc:
+            return {"ok": False, "stage": "preflight", "code": "unsupported",
+                    "error": f"Cannot check serverd edit features ({type(exc).__name__}); no edit sent."}
+        features = observed.get("features") if isinstance(observed, dict) else None
+        if (not isinstance(observed, dict) or observed.get("ok") is not True or
+                not isinstance(features, dict) or features.get("edit_all_v1") is not True):
+            return {"ok": False, "stage": "preflight", "code": "unsupported",
+                    "error": "Running serverd has not advertised edit_all_v1; no edit sent."}
+    return call("workspace.edit", {"root": root, "action": action, **kwargs})
+
+
 def workspace_edit(root: str, action: str, **kwargs) -> str:
-    result = call("workspace.edit", {"root": root, "action": action, **kwargs})
+    result = workspace_edit_result(root, action, **kwargs)
     if not result.get("ok"):
         return "\n".join(_with_note([f"[serverd] {result.get('error') or result.get('text')}"],
                                     result))

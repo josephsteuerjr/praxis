@@ -509,6 +509,10 @@ class RunManager:
         # обычно поглощающая. Guard-owned cancelled — узкое исключение: другой
         # процесс может явно reopen-нуть его, поэтому рядом держим подпись файла.
         self._settled: set[str] = set()
+        # Only irreversible terminals may be skipped without checking durable files.
+        # Keep guard-owned cancellations discoverable across managers/processes,
+        # including a reopen persisted only in the WAL after a publication crash.
+        self._reversible_settled: set[str] = set()
         self._settled_signatures: dict[
             str, tuple[tuple[int, int, int], tuple[int, int, int]]
         ] = {}
@@ -516,6 +520,10 @@ class RunManager:
         # Each lookup enumerates current names and checks manifest existence.
         self._discovery_rows: dict[str, tuple[str, Path, Path]] = {}
         self._settled_wal_paths: dict[Path, Path] = {}
+        # Хотя бы один полный `live_run_ids` в этом процессе дошёл до конца: только
+        # после него `_settled` годится как список «про этих решать нечего» для
+        # дешёвого `unsettled_run_ids`. До того дешёвый вид честно идёт полным путём.
+        self._settled_ready = False
 
     @staticmethod
     def _file_signature(path: Path) -> tuple[int, int, int]:
@@ -536,8 +544,13 @@ class RunManager:
     def _cache_settled(
             self, run_id: str, manifest_path: Path, *,
             signature: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None,
+            reversible: bool = False,
     ) -> None:
         self._settled.add(run_id)
+        if reversible:
+            self._reversible_settled.add(run_id)
+        else:
+            self._reversible_settled.discard(run_id)
         try:
             self._settled_signatures[run_id] = (
                 signature if signature is not None
@@ -545,10 +558,10 @@ class RunManager:
             )
         except OSError:
             # Если подпись не снялась, следующий scan обязан перечитать manifest.
-            self._settled.discard(run_id)
-            self._settled_signatures.pop(run_id, None)
+            self._uncache_settled(run_id)
 
     def _uncache_settled(self, run_id: str) -> None:
+        self._reversible_settled.discard(run_id)
         self._settled.discard(run_id)
         self._settled_signatures.pop(run_id, None)
 
@@ -917,9 +930,78 @@ class RunManager:
                     result.append(run_id)
                     continue
                 self._cache_settled(run_id, manifest_path,
-                                    signature=after_signature)
+                                    signature=after_signature,
+                                    reversible=(status == "cancelled" and
+                                                (raw_manifest.get("resume_stale_guard") or {})
+                                                .get("phase") == "closed"))
                 continue
             result.append(run_id)
+        self._settled_ready = True
+        return result
+
+    def unsettled_run_ids(self) -> list[str]:
+        """Дешёвый вид «кто ещё может быть жив» — только для горячего пути (07.11).
+
+        `live_run_ids` на каждый вызов перепроверяет подпись КАЖДОГО уже терминального
+        прогона: lstat манифеста плюс stat манифеста и WAL — около трёх syscall на прогон,
+        а прогонов на проде 07.11 — 9 102. Без конкуренции это ~0,15 с. Но реплика
+        владельца в ЛС ждала этого обхода до `_arm` (`core.notices.note_owner_line` →
+        `agent._live_window_run_ids`), и пока соседний поток пересобирал память группы,
+        каждый syscall ждал GIL до 5 мс: `notices_ms` 6–26 с на живом проде, тогда как в
+        чужих личках (без этого обхода) — 5–10 мс.
+
+        Здесь — только листинг каталогов месяцев. Имена, которые прошлый ПОЛНЫЙ обход уже
+        признал терминальными, не трогаются вовсе; остальные (живые, новые, сомнительные)
+        проверяются так же, как в `_manifest_rows` (манифест на месте). До первого полного
+        обхода в процессе кэша вердиктов нет — тогда идём полным путём.
+
+        Guard-owned cancelled — исключение: эти обратимые терминальные прогоны
+        НЕ пропускаются. Их обычный locked manifest/WAL reader у вызывающего замечает
+        authorize_resume другого менеджера или процесса, даже после WAL-only crash.
+        Никакой process-local generation не может служить такой границей когерентности.
+        Остальные терминальные прогоны не требуют stat; стоимость зависит от живых,
+        новых и обратимых прогонов, а не от всей терминальной истории. Для доставки,
+        жнеца и возобновления по-прежнему нужен полный `live_run_ids`.
+        """
+        if not self._settled_ready:
+            return self.live_run_ids()
+        result: list[str] = []
+        if not self.root.exists():
+            return result
+        settled = self._settled
+        try:
+            with os.scandir(self.root) as entries:
+                months = sorted((e.name for e in entries if e.is_dir()), key=os.path.normcase)
+        except OSError:
+            return self.live_run_ids()
+        for month in months:
+            path = os.path.join(os.fspath(self.root), month)
+            try:
+                with os.scandir(path) as entries:
+                    names = sorted((e.name for e in entries), key=os.path.normcase)
+            except OSError:
+                continue
+            for name in names:
+                if name in settled and name not in self._reversible_settled:
+                    continue
+                try:
+                    run_id = self._validate_id(name)
+                except ValueError:
+                    continue
+                directory = os.path.join(path, name)
+                row = self._discovery_rows.get(directory)
+                if row is None:
+                    run_dir = Path(directory)
+                    row = (name, run_dir, run_dir / "manifest.json")
+                    self._discovery_rows[directory] = row
+                try:
+                    row[2].lstat()
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except OSError:
+                    pass  # как в `_manifest_rows`: нечитаемое — не доказательство отсутствия
+                self._paths[run_id] = row[1]
+                result.append(run_id)
         return result
 
     def status(self, run_id: str, *, max_events: int | None = None,
@@ -1952,7 +2034,7 @@ class RunManager:
             manifest["updated_at"] = now
             _atomic_json(run_dir / "manifest.json", manifest)
             if not unresolved:
-                self._cache_settled(run_id, run_dir / "manifest.json")
+                self._cache_settled(run_id, run_dir / "manifest.json", reversible=True)
             return manifest
 
     def authorize_resume(self, run_id: str, *, actor: str, reason: str = "",

@@ -159,7 +159,7 @@ class SelfdevFlow(unittest.TestCase):
         self.assertEqual(item["status"], "proposed")
         self.assertEqual(item["tests"]["status"], "timed_out")
         self.assertIn("НЕ смёржено", msg)
-        self.assertIn(f'submit_proposal(id="{pid}"', msg)
+        self.assertIn(f'proposal(action="submit", id="{pid}"', msg)
         self.assertNotIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
 
         # Повторный submit того же id перепрогоняет гейт и мёржит на вердикте.
@@ -255,7 +255,7 @@ class ReviewIsHers(unittest.TestCase):
     def test_submit_without_review_refused(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
         msg = selfdev.submit(pid, "поднять VALUE")
-        self.assertIn("proposal_diff", msg, "отказ обязан подсказать посмотреть дифф")
+        self.assertIn('proposal(action="diff"', msg, "отказ обязан подсказать посмотреть дифф")
         self.assertEqual(selfdev.get(pid)["status"], "building", "предложение осталось открытым")
         self.assertIn("VALUE = 1", (self.repo / "core.py").read_text())
 

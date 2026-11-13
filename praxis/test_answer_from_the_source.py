@@ -149,7 +149,7 @@ class TheSystemMirrorIsOffInChat(unittest.TestCase):
     ЗЕРКАЛА, ЭТО И СТАНОВИТСЯ СООБЩЕНИЕМ. Реплика в чате — продукт хода, и лишний поворот
     даёт последнему слову затереть ответ.
 
-    `say` жив: там зеркало приходит РЕЗУЛЬТАТОМ ИНСТРУМЕНТА, то есть данными, и её
+    `preview_reply` жив: там зеркало приходит РЕЗУЛЬТАТОМ ИНСТРУМЕНТА, то есть данными, и её
     следующий текст остаётся ответом человеку.
     """
 
@@ -182,7 +182,7 @@ class TheGuessingIsGone(unittest.TestCase):
 
 
 class HerOwnLookCrossesTheThreadBoundary(unittest.TestCase):
-    """`say` исполняется в отдельном потоке — слот прогона, а не contextvars."""
+    """`preview_reply` исполняется в отдельном потоке — слот прогона, а не contextvars."""
 
     def setUp(self):
         work_loop._STATE.clear()
@@ -199,7 +199,7 @@ class HerOwnLookCrossesTheThreadBoundary(unittest.TestCase):
 
     def test_say_is_not_counted_as_evidence_of_looking_at_the_world(self):
         with self._run():
-            work_loop.note_hand("say")
+            work_loop.note_hand("preview_reply")
             self.assertEqual(work_loop.hands_called(), ())
 
     def test_the_same_hand_twice_is_named_once(self):

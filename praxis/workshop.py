@@ -15,10 +15,9 @@ Praxis — мастерская: настоящие кодинг-руки вме
   * code_map — ast-карта кода (проверяемое «как я устроена»), кэш по mtime;
   * code_outline — скелет одного файла (PASS 16.5).
 
-PASS 16.3: рельсы этой мастерской продублированы в компилируемом полу (`hands/`,
-бинарь praxis-hands). Если он собран — путь/зоны/таймауты/потолки решает ОН,
-и её правки этого файла пола не двигают. Не собран — всё работает как раньше, той же
-семантикой. Одна семантика, две реализации; расхождение ловят тесты.
+Файловая мутация, поиск, скелет и запуск — чистый Python (`hands.py`), одна реализация
+на операцию. Запись и правка: снимок байтов → сверка версии → публикация через временный
+файл → чтение результата; ответ — подтверждено, отказ или «исход неизвестен».
 
 Модель здесь не зовётся. agent импортируется лениво (тулы регистрируются в agent).
 """
@@ -34,11 +33,11 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import hands
 import rails
+import tool_report
 import selfdev
 
 log = logging.getLogger("praxis-workshop")
@@ -72,10 +71,9 @@ MAP_CAP = 14000             # символов code_map
 _REGEX_META = re.compile(r"[\\^$.|?*+()\[\]{}]")
 
 WRITE_ZONES = ("workspace", "soul", "memory")   # как у shell: её дом для записи
-# Совместимость с генератором Rust-пола и старыми тестовыми импортами. После решения
-# владельца имя файла больше никогда не делает его секретом.
+# После решения владельца имя файла больше никогда не делает его секретом.
 _SECRET_NAME = re.compile(r"(?!)")
-_SKIP_DIRS = {".git", ".venv", "__pycache__", ".proposals", "node_modules", ".vectors"}
+_SKIP_DIRS = hands.SKIP_DIRS
 
 
 def _slug(name: str) -> str:
@@ -96,7 +94,7 @@ def _resolve_read(path: str) -> Path | None:
     cand = p if p.is_absolute() else (BASE / p)
     try:
         cand = cand.resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     for root in (BASE, REPO):
         try:
@@ -118,7 +116,7 @@ def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
     if proposal_id:
         wt = selfdev.worktree_path(str(proposal_id).strip())
         if not wt.exists():
-            return None, f"нет worktree предложения {proposal_id} — открой start_proposal"
+            return None, f"нет worktree предложения {proposal_id} — открой proposal(action=start)"
         p = Path(raw)
         cand = p if p.is_absolute() else (wt / p)
         try:
@@ -136,8 +134,8 @@ def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
         return None, "путь вне дома"
     first = rel.parts[0] if rel.parts else ""
     if first not in WRITE_ZONES:
-        return None, ("ядро — через предложение: start_proposal → правки в его worktree "
-                      "(передай proposal_id) → submit_proposal. Без него пишу только в "
+        return None, ("ядро — через предложение: proposal(action=start) → правки в его worktree "
+                      "(передай proposal_id) → proposal(action=submit). Без него пишу только в "
                       "workspace/, soul/, memory/.")
     return cand, ""
 
@@ -393,13 +391,10 @@ def sniff_image_mime(head: bytes) -> str | None:
 def fs_probe_image(path: str) -> tuple[str, str, int] | None:
     """(resolved, mime, size), если файл — картинка; None — не картинка или гарды против.
 
-    PASS 30.0.c. Гарды ровно те же, что у fs_read (компилируемый пол, затем дом): при
-    любом отказе возвращаем None, чтобы вызвавший ушёл в обычный fs_read и получил
-    честный текст отказа тем же путём. Никакого собственного решения о доступе здесь нет."""
+    PASS 30.0.c. Гард ровно тот же, что у fs_read: при любом отказе возвращаем None,
+    чтобы вызвавший ушёл в обычный fs_read и получил честный текст отказа тем же путём.
+    Никакого собственного решения о доступе здесь нет."""
     try:
-        g = hands.guard(path, op="read", base=BASE)
-        if g is not None and not g.get("ok"):
-            return None
         p = _resolve_read(path)
         if p is None or not p.is_file():
             return None
@@ -415,152 +410,141 @@ def fs_probe_image(path: str) -> tuple[str, str, int] | None:
 
 
 def fs_read(path: str, start: int = 0, end: int = 0) -> str:
-    # 16.3+: решение «можно ли читать» — у компилируемого пола, если он собран.
-    # Строже двух реализаций побеждает: отказ бинаря режет даже то, что питон бы пустил.
-    g = hands.guard(path, op="read", base=BASE)
-    if g is not None and not g.get("ok"):
-        return f"Не читаю: {g.get('msg') or 'рельсы против'}"
     p = _resolve_read(path)
     if p is None:
         rails.deny("hands_floor", "fs_read", f"вне дома: {str(path)[:120]}")
+        tool_report.note(outcome="refused", target=str(path))
         return "Не читаю: путь вне дома. Для хоста используй Forge scope='host'."
     if not p.is_file():
+        tool_report.note(outcome="refused", target=str(path))
         return f"Нет файла {path}."
-    lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+    tool_report.note(outcome="ok", target=str(path))
+    raw = p.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if b"\x00" in raw[:4096]:
+        return (f"{path}: бинарный файл, {len(raw)}Б; sha256={digest}. "
+                "Текстовым просмотрщиком его не разбираю.")
+    try:
+        text, decoding = raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        # Хэш покрывает все исходные байты; замены — ограничение показа, не содержимое файла.
+        text, decoding = raw.decode("utf-8", "replace"), "не UTF-8: показ с заменами, edit откажет"
+    lines = text.splitlines()
     s = max(1, int(start) or 1)
     e = min(len(lines), int(end) or (s + READ_CAP_LINES - 1))
     body = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(s, e + 1))
     tail = f"\n… (в файле {len(lines)} строк; дальше — fs_read(start={e + 1}))" if e < len(lines) else ""
-    return body + tail if body else "(пустой файл)"
+    return (body + tail if body else "(пустой файл)") + (
+        f"\n[весь файл: sha256={digest}; {len(raw)} байт; {decoding}]")
 
 
 SHRINK_GUARD_RATIO = 0.7    # PASS 16.5: новый текст < 70% старого = похоже на усечение
 
 
-def _wt_root(proposal_id: str) -> str:
-    """Корень worktree предложения строкой (для бинаря) или '' — обычный дом."""
-    return str(selfdev.worktree_path(str(proposal_id).strip())) if proposal_id else ""
+def _publish(p: Path, data: bytes, before: str | None, path: str, proposal_id: str, success: str) -> dict:
+    def moved() -> str:
+        again, err = _resolve_write(path, proposal_id)
+        return "" if again == p else (err or "путь изменился")
+    result = hands.publish(p, data, before, recheck=moved)
+    if result["status"] == "confirmed":
+        log.info("%s (%d байт)%s", success, len(data), f" [proposal {proposal_id}]" if proposal_id else "")
+        result["message"] = success
+    return result
 
 
 def _fs_write_unlocked(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
-             force: bool = False) -> str:
+                       force: bool = False, expected_sha256: str = "") -> dict:
     """Создать файл; overwrite=True — осознанно переписать существующий.
 
     PASS 16.5: перезапись возможна, но под гардом усечения (новый текст меньше 70%
-    старого → отказ, force=true снимает). PASS 16.3: если собран компилируемый пол —
-    решение принимает он (та же семантика, рельсы вне самоизменяемого питона)."""
-    r = hands.write(path, content, root=_wt_root(proposal_id), overwrite=overwrite,
-                    force=force, base=BASE)
-    if r is not None:
-        if r.get("ok"):
-            log.info("fs_write(hands) %s%s", path, f" [proposal {proposal_id}]" if proposal_id else "")
-        return r.get("msg") or ("Записала." if r.get("ok") else "Не пишу.")
-
+    старого → отказ, force=true снимает)."""
     p, err = _resolve_write(path, proposal_id)
     if p is None:
         rails.deny("hands_floor", "fs_write", f"{err}: {str(path)[:100]}")
-        return f"Не пишу: {err}"
-    if p.exists():
+        return hands.outcome("refused", f"Не пишу: {err}")
+    try:
+        raw, before = hands.snapshot(p)
+        data = content.encode("utf-8")
+    except OSError as exc:
+        return hands.outcome("refused", f"Не пишу: {path} не читается ({type(exc).__name__}).")
+    except (AttributeError, UnicodeError):
+        return hands.outcome("refused", "Не пишу: content должен быть текстом, кодируемым в UTF-8.")
+    conflict = hands.version_conflict(expected_sha256, before)
+    if conflict:
+        return hands.outcome("refused", conflict, before)
+    if raw is not None:
         if not overwrite:
-            return (f"Файл {path} уже существует — правь точечно через fs_edit, "
-                    "или передай overwrite=true, если правда хочешь переписать целиком.")
-        if not force:
-            old_len = len(p.read_text(encoding="utf-8", errors="ignore"))
-            if old_len > 0 and len(content) < old_len * SHRINK_GUARD_RATIO:
-                pct = round(len(content) / old_len * 100)
-                rails.deny("hands_floor", "fs_write", f"shrink-guard {pct}%: {str(path)[:100]}")
-                return (f"Стоп: новый текст {path} — {pct}% от старого ({old_len} → {len(content)} симв.). "
-                        "Похоже на случайное усечение. Точечно — fs_edit; если перезапись "
-                        "осознанная — force=true.")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
-    log.info("fs_write %s (%d байт)%s", path, len(content.encode("utf-8", "ignore")),
-             f" [proposal {proposal_id}]" if proposal_id else "")
-    return f"Записала {path} ({len(content)} симв.)."
+            return hands.outcome("refused", (f"Файл {path} уже существует — правь точечно через edit (action=replace), "
+                                             "или передай overwrite=true, если правда хочешь переписать целиком."),
+                                 before)
+        old_len = len(raw.decode("utf-8", "replace"))
+        if not force and old_len > 0 and len(content) < old_len * SHRINK_GUARD_RATIO:
+            pct = round(len(content) / old_len * 100)
+            rails.deny("hands_floor", "fs_write", f"shrink-guard {pct}%: {str(path)[:100]}")
+            return hands.outcome("refused", (f"Стоп: новый текст {path} — {pct}% от старого ({old_len} → {len(content)} симв.). "
+                                             "Похоже на случайное усечение. Точечно — edit с action=replace; если перезапись "
+                                             "осознанная — force=true."), before)
+    return _publish(p, data, before, path, proposal_id, f"Записала {path} ({len(content)} симв.).")
 
 
-def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "") -> str:
+def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "", expected_sha256: str = "", *, all: bool = False) -> dict:
     """Точная правка: `old` должен встречаться РОВНО один раз. 0 или >1 — отказ с подсказкой.
 
     PASS 16.5: при >1 совпадении называем номера строк первых вхождений — меньше слепых
-    итераций. PASS 16.3: при собранном поле правку делает бинарь (одна семантика)."""
-    r = hands.edit(path, old, new, root=_wt_root(proposal_id), base=BASE)
-    if r is not None:
-        if r.get("ok"):
-            log.info("fs_edit(hands) %s%s", path, f" [proposal {proposal_id}]" if proposal_id else "")
-        return r.get("msg") or ("Поправила." if r.get("ok") else "Не правлю.")
-
+    итераций."""
     p, err = _resolve_write(path, proposal_id)
     if p is None:
-        rails.deny("hands_floor", "fs_edit", f"{err}: {str(path)[:100]}")
-        return f"Не правлю: {err}"
-    if not p.is_file():
-        return f"Нет файла {path} — новый файл создаётся fs_write."
-    if not old:
-        return "Пустой old — так не правлю (для нового файла есть fs_write)."
-    text = p.read_text(encoding="utf-8", errors="ignore")
-    n = text.count(old)
-    if n == 0:
-        return ("Вхождение не найдено (0 совпадений). Проверь точный текст через fs_read — "
-                "пробелы/табуляция/кавычки должны совпадать байт в байт.")
-    if n > 1:
-        pos, start = [], 0
-        for _ in range(min(n, 5)):
-            i = text.index(old, start)
-            pos.append(f"строка {text[:i].count(chr(10)) + 1}")
-            start = i + 1
-        return (f"Неоднозначно: {n} совпадений (первые: {', '.join(pos)}). Расширь old "
-                "несколькими строками контекста вокруг нужного места, чтобы вхождение "
-                "стало уникальным.")
-    p.write_text(text.replace(old, new, 1), encoding="utf-8")
-    log.info("fs_edit %s (-%d +%d симв.)%s", path, len(old), len(new),
-             f" [proposal {proposal_id}]" if proposal_id else "")
-    return f"Поправила {path}: 1 вхождение заменено."
-
-
-def code_outline(path: str) -> str:
-    """Скелет python-файла: классы/функции со строками. Дешёвая ориентация вместо
-    чтения 2000 строк ради одной функции (PASS 16.5). Бинарь — если собран, иначе ast."""
-    r = hands.outline(path, base=BASE)
-    if r is not None and r.get("ok"):
-        items = r.get("items") or []
-        if not items:
-            return f"{path}: ни одного класса или функции."
-        rows = ["  " * (int(i.get("indent", 0)) // 4) + f"{i['kind']} {i['name']}  · строка {i['line']}"
-                for i in items]
-        return f"{path} — скелет ({len(items)}):\n" + "\n".join(rows[:400])
-    if r is not None:
-        return r.get("msg") or "Не смотрю."
-
-    import ast
-    p = _resolve_read(path)
-    if p is None or not p.is_file():
-        return f"Нет файла {path} (или он вне дома)."
+        rails.deny("hands_floor", "edit", f"{err}: {str(path)[:100]}")
+        return hands.outcome("refused", f"Не правлю: {err}")
     try:
-        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
-    except SyntaxError as e:
-        return f"{path}: не разбирается как python ({e.msg}, строка {e.lineno})."
-    rows: list[str] = []
+        raw, before = hands.snapshot(p)
+    except OSError as exc:
+        return hands.outcome("refused", f"Не правлю: {path} не читается ({type(exc).__name__}).")
+    if raw is None:
+        return hands.outcome("refused", f"Нет файла {path} — новый файл создаётся edit(action=write).")
+    conflict = hands.version_conflict(expected_sha256, before)
+    if conflict:
+        return hands.outcome("refused", conflict, before)
+    edited, refusal = hands.replace_once(raw, old, new, all=all)
+    if edited is None:
+        return hands.outcome("refused", refusal, before)
+    count = raw.decode("utf-8").count(old) if all else 1
+    count_text = "1 вхождение заменено" if count == 1 else f"{count} вхождений заменено"
+    result = _publish(p, edited, before, path, proposal_id, f"Поправила {path}: {count_text}.")
+    if result["status"] == "confirmed":
+        result["replacements"] = count
+    return result
 
-    def walk(node, depth: int) -> None:
-        for child in getattr(node, "body", []):
-            if isinstance(child, ast.ClassDef):
-                rows.append("  " * depth + f"class {child.name}  · строка {child.lineno}")
-                walk(child, depth + 1)
-            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                kind = "async def" if isinstance(child, ast.AsyncFunctionDef) else "def"
-                rows.append("  " * depth + f"{kind} {child.name}  · строка {child.lineno}")
 
-    walk(tree, 0)
-    if not rows:
+def code_outline(path: str = "", scope: str = "") -> str:
+    """Скелет python-файла: классы/функции со строками. Дешёвая ориентация вместо
+    чтения 2000 строк ради одной функции (PASS 16.5)."""
+    if scope:
+        if path:
+            from catalog_families import PreflightRefusal
+            raise PreflightRefusal("Choose path OR scope")
+        return code_map(scope)
+    if not path:
+        return code_map("self")
+    target = _resolve_read(path)
+    if target is None:
+        return "путь вне дома (BASE/REPO)"
+    if target.is_dir():
+        return _map_for_root(target)
+    r = hands.outline(str(target), base=target.parent)
+    if not r.get("ok"):
+        return r.get("msg") or "Не смотрю."
+    items = r.get("items") or []
+    if not items:
         return f"{path}: ни одного класса или функции."
-    return f"{path} — скелет ({len(rows)}):\n" + "\n".join(rows[:400])
+    rows = ["  " * (int(i.get("indent", 0)) // 4) + f"{i['kind']} {i['name']}  · строка {i['line']}"
+            for i in items]
+    return f"{path} — скелет ({len(items)}):\n" + "\n".join(rows[:400])
 
 
-#: Бюджет файлов компилируемого пола на один вызов `search` (hands/src/main.rs: `budget = 5000`).
-#: Пол собирает не больше стольких файлов под маску и ищет только в них; поле `capped` у него
-#: про совпадения, а не про файлы. Питон обязан назвать это усечение сам.
-FLOOR_FILE_BUDGET = 5000
+#: Бюджет файлов на один вызов `hands.search`. Пол собирает не больше стольких файлов под маску
+#: и ищет только в них; поле `capped` у него про совпадения, а не про файлы. Усечение называем сами.
+FLOOR_FILE_BUDGET = hands.SEARCH_FILE_BUDGET
 #: Прогоны в общий обход дома не входят: 100 тыс. файлов, ищутся только явным `root=memory/runs`.
 _SEARCH_RUNS_REL = "memory/runs"
 _SEARCH_FIRST = ("workspace", "soul", "docs", "skills")
@@ -570,43 +554,64 @@ def _search_roots(base: Path) -> list[str]:
     """Порядок обхода дома для `fs_search` без `root`: сначала её документы, потом память по
     папкам (без прогонов), потом остальные верхние папки. Каждая часть — отдельный вызов пола
     со своим бюджетом файлов, поэтому усечение одной части не прячет другую."""
-    order: list[str] = [name for name in _SEARCH_FIRST if (base / name).is_dir()]
+    order: list[str] = [name for name in _SEARCH_FIRST if (base / name).is_dir() and not (base / name).is_symlink()]
     memory = base / "memory"
-    if memory.is_dir():
+    if memory.is_dir() and not memory.is_symlink():
         order += sorted(f"memory/{c.name}" for c in memory.iterdir()
-                        if c.is_dir() and not c.name.startswith(".") and c.name != "runs")
+                        if c.is_dir() and not c.is_symlink() and not c.name.startswith(".") and c.name != "runs")
     for c in sorted(base.iterdir(), key=lambda x: x.name):
-        if (c.is_dir() and c.name not in _SEARCH_FIRST and c.name != "memory"
+        if (c.is_dir() and not c.is_symlink() and c.name not in _SEARCH_FIRST and c.name != "memory"
                 and not c.name.startswith(".") and c.name not in _SKIP_DIRS):
             order.append(c.name)
     return list(dict.fromkeys(order))
 
 
-def _floor_search_home(pattern: str, glob: str) -> str | None:
-    """Поиск по дому целиком через пол, по частям. None — пол не отвечает, идём питоном."""
+def _floor_limits(r: dict, where: str) -> list[str]:
+    """Что поиск не досмотрел и сам об этом сказал: иначе «ничего не нашла» было бы ложью."""
+    notes: list[str] = []
+    if r.get("out_of_time"):
+        notes.append(f"в {where} не успела за {hands.SEARCH_SECONDS:.0f}с — сузь маску или root")
+    if r.get("too_large"):
+        notes.append(f"в {where} пропустила файлов крупнее "
+                     f"{hands.SEARCH_MAX_FILE_BYTES // (1024 * 1024)} МБ: {r['too_large']}")
+    return notes
+
+
+def _search_silent(where: str) -> str:
+    """Поиск не дал ответа. Читать файлы здесь нельзя: ради этого он и отдельный процесс."""
+    return (f"Не знаю: поиск по {where} не ответил в срок или упал, что там есть, неизвестно. "
+            "Сузь маску или root, упрости выражение.")
+
+
+def _floor_search_home(pattern: str, glob: str) -> str:
+    """Поиск по дому целиком, по частям. Часть без ответа останавливает обход и называется."""
     found: list[str] = []
+    silent = ""
     truncated: list[str] = []
     files_seen = 0
     mask = glob.replace("**/", "", 1)
     skipped: list[str] = []
+    limits: list[str] = []
     recursive = glob.startswith("**/")
     parts = [(rel, glob) for rel in _search_roots(BASE)] if recursive else []
-    if recursive and (BASE / "memory").is_dir():
+    if recursive and (BASE / "memory").is_dir() and not (BASE / "memory").is_symlink():
         # Direct memory files need their own budget, without descending into runs.
         parts.append(("memory", mask))
     # A plain name glob searches BASE only; recursive globs also include its files.
     parts.append((".", mask))
     for rel, part_glob in parts:
         r = hands.search(pattern, glob=part_glob, root=rel, cap=max(1, SEARCH_CAP - len(found)),
-                         base=BASE)
+                         base=BASE, scope_root=BASE.resolve())
         if r is None:
-            return None
+            silent = rel
+            break
         if not r.get("ok"):
-            # отказ пола по одной части (симлинк наружу, права) не роняет весь обход в питон
+            # отказ пола по одной части (симлинк наружу, права) не роняет весь обход
             skipped.append(f"{rel}: {r.get('msg') or 'пол отказал'}")
             continue
         seen = int(r.get("files_seen") or 0)
         files_seen += seen
+        limits += _floor_limits(r, rel)
         if seen >= FLOOR_FILE_BUDGET:
             truncated.append(rel)
         found.extend(hit if rel == "." else f"{rel}/{hit}" for hit in (r.get("hits") or []))
@@ -616,25 +621,42 @@ def _floor_search_home(pattern: str, glob: str) -> str | None:
     if truncated:
         notes.append(f"в {', '.join(truncated)} пол обошёл только первые {FLOOR_FILE_BUDGET} "
                      f"файлов — там сузь маску или дай root")
+    notes += limits
     if skipped:
         notes.append("пропустила " + "; ".join(skipped))
     if recursive and (BASE / _SEARCH_RUNS_REL).is_dir():
         notes.append(f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}")
     if len(found) >= SEARCH_CAP:
         notes.insert(0, f"потолок {SEARCH_CAP} совпадений — сузь паттерн")
+    if silent:
+        notes.insert(0, f"поиск не ответил на {silent}: эта часть и следующие не просмотрены")
     tail = f"\n… ({'; '.join(notes)})" if notes else ""
     if not found:
+        if silent:
+            return f"Не знаю, просмотрела не всё ({files_seen} файлов по {glob}).{tail}"
         return f"Ничего не нашла ({files_seen} файлов по {glob}).{tail}"
     return "\n".join(found[:SEARCH_CAP]) + tail
 
 
 def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
+    # 10.11: the journal gets this search's outcome. A finished (also empty or truncated) walk
+    # is ok, because its text names any truncation; a refused query or a silent walker is not.
+    out, outcome = _fs_search(pattern, glob, root)
+    tool_report.note(outcome=outcome, target=str(root or "."))
+    return out
+
+
+def _fs_search(pattern: str, glob: str, root: str) -> tuple[str, str]:
     try:
-        rx = re.compile(pattern)
+        re.compile(pattern)
     except re.error as e:
-        return f"Плохой regex: {e}"
-    # 16.3+: чистый литерал (без regex-метасимволов) ищет бинарь — рельсы и расписка его.
-    # Его диалект маски: `**/имя` или просто `имя`; поддиректорию в маске оставляем питону.
+        return f"Плохой regex: {e}", "refused"
+    # All routes select the same resolved BASE/REPO root before dispatch.
+    selected = _resolve_read(root) if root else BASE.resolve()
+    if selected is None or not selected.is_dir():
+        return "Не ищу: плохой корень поиска.", "refused"
+    # Чистый литерал (без regex-метасимволов) ищет отдельный процесс с бюджетом файлов.
+    # Его диалект маски: `**/имя` или просто `имя`; поддиректорию в маске оставляем обходу ниже.
     mask = glob.replace("**/", "", 1)
     if (pattern and not _REGEX_META.search(pattern) and not pattern.startswith("-")
             and "/" not in mask and "\\" not in mask):
@@ -642,76 +664,58 @@ def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
             # 13.09: дом = 17 ГБ, 233 тыс. файлов, из них .md — 29 928, а пол за вызов смотрит
             # 5 000 и молчал об этом: «Ничего не нашла (5000 файлов по **/*.md)» за 0,3 с при
             # лежащей в workspace/inbox записке. Без root ищем по частям и называем усечения.
-            out = _floor_search_home(pattern, glob)
-            if out is not None:
-                return out
-        else:
-            r = hands.search(pattern, glob=glob, root=root, cap=SEARCH_CAP, base=BASE)
-            if r is not None and r.get("ok"):
-                hits = r.get("hits") or []
-                seen = int(r.get("files_seen") or 0)
-                cut = (f"\n… (пол обошёл только первые {FLOOR_FILE_BUDGET} файлов под {root} — "
-                       f"сузь маску или root)" if seen >= FLOOR_FILE_BUDGET else "")
-                if not hits:
-                    return f"Ничего не нашла ({seen} файлов по {glob}).{cut}"
-                return "\n".join(hits) + (f"\n… (потолок {SEARCH_CAP} — сузь паттерн)"
-                                          if r.get("capped") else "") + cut
-    base = _resolve_read(root) if root else BASE
+            return _floor_search_home(pattern, glob), "ok"
+        r = hands.search(pattern, glob=glob, root=".", cap=SEARCH_CAP, base=selected)
+        if r is None:
+            return _search_silent(root), "failed"
+        if r.get("ok"):
+            hits = r.get("hits") or []
+            seen = int(r.get("files_seen") or 0)
+            cut = (f"\n… (пол обошёл только первые {FLOOR_FILE_BUDGET} файлов под {root} — "
+                   f"сузь маску или root)" if seen >= FLOOR_FILE_BUDGET else "")
+            cut += "".join(f"\n… ({note})" for note in _floor_limits(r, root))
+            if not hits:
+                return f"Ничего не нашла ({seen} файлов по {glob}).{cut}", "ok"
+            return "\n".join(hits) + (f"\n… (потолок {SEARCH_CAP} — сузь паттерн)"
+                                      if r.get("capped") else "") + cut, "ok"
+    base = selected
     if base is None or not base.is_dir():
-        return "Не ищу: плохой корень поиска."
-    # Обход ЛЕНИВЫЙ и ограниченный. Прежде здесь стоял `sorted(base.glob(glob))`: он
-    # материализует и сортирует всё дерево ДО первого чтения — на memory с гигабайтами
-    # прогонов это часы и гигабайты ОЗУ ещё до того, как найдётся первое совпадение.
-    # Порядок выдачи сохранён: сортируем НАЙДЕННОЕ, а не всё дерево.
-    found: list[tuple] = []
-    files_seen = scanned = 0
-    stop = ""
-    deadline = (time.monotonic() + SEARCH_SECONDS) if SEARCH_SECONDS > 0 else None
-    for p in base.glob(glob):
-        scanned += 1
-        if SEARCH_SCAN_CAP > 0 and scanned > SEARCH_SCAN_CAP:
-            stop = f"обошла {SEARCH_SCAN_CAP} путей и остановилась"
-            break
-        # Часы спрашиваем не на каждом пути: сам вызов дороже проверки маски.
-        if deadline is not None and not scanned % 256 and time.monotonic() > deadline:
-            stop = f"искала {SEARCH_SECONDS:.0f}с и остановилась"
-            break
-        if not p.is_file() or _is_secret(p):
-            continue
-        if any(part in _SKIP_DIRS for part in p.parts):
-            continue
-        # без root прогоны не читаем (100 тыс. файлов): они ищутся явным root=memory/runs
-        if not root and p.relative_to(base).parts[:2] == ("memory", "runs"):
-            continue
-        files_seen += 1
-        try:
-            for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                if rx.search(line):
-                    found.append((str(p.relative_to(base)), i, line.strip()[:180]))
-        except OSError:
-            continue
-        if len(found) >= SEARCH_CAP:
-            stop = stop or f"потолок {SEARCH_CAP} совпадений"
-            break
-    found.sort(key=lambda row: (row[0], row[1]))
+        return "Не ищу: плохой корень поиска.", "refused"
+    # Регулярка и составная маска — тот же отдельный процесс: тяжёлое выражение держало бы GIL
+    # основного процесса, и прервать его изнутри нечем. Обход там ЛЕНИВЫЙ и ограниченный:
+    # 04.08 `sorted(base.glob(glob))` материализовал всё дерево до первого чтения, и поиск
+    # не вернулся 4.5 часа. Порядок выдачи сохранён: сортируем НАЙДЕННОЕ, а не всё дерево.
+    r = hands.walk(pattern, glob, base, cap=SEARCH_CAP, scan_cap=SEARCH_SCAN_CAP,
+                   seconds=SEARCH_SECONDS, skip_runs=not root, base=BASE)
+    if r is None:
+        return _search_silent(root or "дому"), "failed"
+    if not r.get("ok"):
+        return f"Не ищу: {r.get('msg')}.", "refused"
+    found = sorted(r["rows"], key=lambda row: (row[0], row[1]))
+    files_seen, scanned = r["files_seen"], r["scanned"]
     hits = [f"{rel}:{i}: {text}" for rel, i, text in found[:SEARCH_CAP]]
+    stop = {"scan": f"обошла {SEARCH_SCAN_CAP} путей и остановилась",
+            "time": f"искала {SEARCH_SECONDS:.0f}с и остановилась",
+            "cap": f"потолок {SEARCH_CAP} совпадений"}.get(r["stop"], "")
+    for limit in _floor_limits(r, root or "доме"):
+        stop = (stop + "; " if stop else "") + limit
     if not root and (base / _SEARCH_RUNS_REL).is_dir():
         stop = (stop + "; " if stop else "") + f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}"
     if not hits:
         tail = f" — {stop}" if stop else ""
-        return f"Ничего не нашла ({files_seen} файлов по {glob}, путей обошла {scanned}{tail})."
-    if len(found) > SEARCH_CAP:
-        stop = stop or f"потолок {SEARCH_CAP} совпадений"
+        return f"Ничего не нашла ({files_seen} файлов по {glob}, путей обошла {scanned}{tail}).", "ok"
     # Усечение НАЗЫВАЕТСЯ. Молчаливое «ничего не нашла» после обрыва обхода — это ложь:
     # она бы решила, что искомого нет, а мы просто не дошли.
     return "\n".join(hits) + (f"\n… ({stop}; путей обошла {scanned}, файлов прочла "
-                              f"{files_seen} — сузь маску или корень)" if stop else "")
+                              f"{files_seen} — сузь маску или корень)" if stop else ""), "ok"
 
 
 def fs_ls(path: str = "") -> str:
     p = _resolve_read(path or str(BASE))
     if p is None or not p.is_dir():
+        tool_report.note(outcome="refused", target=str(path))
         return "Нет такой директории (или вне дома)."
+    tool_report.note(outcome="ok", target=str(p))
     out = []
     for c in sorted(p.iterdir()):
         if _is_secret(c):
@@ -734,31 +738,26 @@ def _venv_python(d: Path) -> Path | None:
     return None
 
 
-def run(cmd: str, project: str, timeout: int = RUN_TIMEOUT) -> str:
-    """Запуск в проекте мастерской. PASS 16.3: при собранном полу — через бинарь
-    (тайм-аут, джейл cwd, потолок вывода и расписка зашиты в нём)."""
+def run(command: str, project: str, timeout: int = RUN_TIMEOUT) -> str:
+    """Запуск в проекте мастерской: тайм-аут, джейл cwd, потолок вывода и расписка в hands."""
     d = _project_dir(project)
     if d is None:
-        return f"Нет проекта {_slug(project)} — run работает в проектах мастерской."
+        return f"Нет проекта {_slug(project)} — для проекта используй shell/python с cwd его каталога."
     timeout = max(1, min(int(timeout or RUN_TIMEOUT), 600))
-    log.info("workshop run [%s] $ %s", d.name, cmd[:120])
-    r = hands.execute(cmd, cwd=str(d), timeout=timeout, cap=RUN_OUT_CAP, base=BASE)
-    if r is not None and ("out" in r or r.get("msg")):
-        if "out" in r:
-            out = (r.get("out") or "").strip() or "(пустой вывод)"
-            code = int(r.get("code", 0))
-            return out + (f"\n[exit {code}]" if code != 0 and not r.get("killed") else "")
+    log.info("workshop run [%s] $ %s", d.name, command[:120])
+    tool_report.note(target=d.name)
+    r = hands.execute(command, cwd=str(d), timeout=timeout, cap=RUN_OUT_CAP, base=BASE)
+    receipt = {"kind": "process", "argv": ["bash", "-lc", command], "cwd": str(d)}
+    if "out" not in r:
+        tool_report.execution({**receipt, "status": "launch_failed", "error": str(r.get("msg"))[:200]})
+        tool_report.note(outcome="failed")
         return f"[ошибка запуска] {r.get('msg')}"
-    try:
-        r2 = subprocess.run(cmd, shell=True, cwd=str(d), capture_output=True, text=True,
-                            timeout=timeout)
-        out = (r2.stdout or "") + (r2.stderr or "")
-        tail = f"\n[exit {r2.returncode}]" if r2.returncode != 0 else ""
-    except subprocess.TimeoutExpired:
-        return f"[прервано по тайм-ауту {timeout}с]"
-    except Exception as e:
-        return f"[ошибка запуска] {type(e).__name__}: {e}"
-    return (_cap_output(out.strip()) or "(пустой вывод)") + tail
+    tool_report.execution({**receipt, "status": "timed_out" if r.get("killed") else "returned",
+                           "exit_code": int(r.get("code", 0))})
+    tool_report.note(outcome="ok" if int(r.get("code", 0)) == 0 and not r.get("killed") else "failed")
+    out = (r.get("out") or "").strip() or "(пустой вывод)"
+    code = int(r.get("code", 0))
+    return out + (f"\n[exit {code}]" if code != 0 and not r.get("killed") else "")
 
 
 def run_tests(project: str = "self") -> str:
@@ -767,7 +766,7 @@ def run_tests(project: str = "self") -> str:
         open_props = [t for t in selfdev.all_items(50) if t.get("status") == "building"]
         if not open_props:
             return ("Нет открытого предложения: тесты ядра гоняются в его worktree "
-                    "(start_proposal → правки → run_tests(\"self\") → submit_proposal).")
+                    "(proposal(action=start) → правки → proposal(action=test) → proposal(action=submit)).")
         pid = open_props[-1]["id"]
         res = selfdev.run_tests(pid)
         return f"[предложение {pid}] {res['summary']}"
@@ -794,7 +793,7 @@ _PKG_RE = re.compile(r"^[A-Za-z0-9_.\[\]=<>!,~-]+$")
 def pip_install(project: str, packages: str) -> str:
     d = _project_dir(project)
     if d is None:
-        return f"Нет проекта {_slug(project)} — сначала project_create."
+        return f"Нет проекта {_slug(project)} — сначала project(action=create)."
     pkgs = [p for p in str(packages or "").split() if p]
     if not pkgs:
         return "Скажи, что ставить: pip_install(project, \"requests rich\")."
@@ -906,6 +905,10 @@ def code_map(scope: str = "self") -> str:
         if d is None:
             return f"Нет проекта {_slug(scope)} (для своего кода — scope=\"self\")."
         root = d
+    return _map_for_root(root)
+
+
+def _map_for_root(root: Path) -> str:
     fp = _map_fingerprint(root)
     if _MAP_CACHE["key"] == fp and _MAP_CACHE["text"]:
         return _MAP_CACHE["text"]
@@ -948,27 +951,111 @@ def mutation_lock():
                     timeout=10.0)
 
 
-def _serialized_write(path,proposal_id,operation):
+def _serialized_write(path,proposal_id,operation) -> dict:
     import forge
     import forge_roots
     target,error=_resolve_write(path,proposal_id)
-    if target is None:return 'Не пишу: '+str(error)
+    if target is None:return hands.outcome('refused','Не пишу: '+str(error))
+    result=None
     try:
         # Same order as Forge: physical root -> short workshop transaction.
         with forge_roots.transaction(target.parent,forge.STATE_DIR,10):
             reason=forge_roots.foreign_writer_reason(forge,'',root=target.parent)
-            if reason:return 'Write not admitted while Forge owns this root: '+reason
+            if reason:return hands.outcome('refused','Write not admitted while Forge owns this root: '+reason)
             with mutation_lock() as lock:
                 result=operation()
-            if lock.lost_to_takeover:return 'Write outcome unknown: transaction ownership changed; inspect before retry.'
+            if lock.lost_to_takeover:return hands.outcome('in_doubt','Write outcome unknown: transaction ownership changed; inspect before retry.')
             return result
     except (TimeoutError,OSError) as exc:
-        return f'Write not admitted: {type(exc).__name__}: {exc}'
+        # Refusal means "nothing was done": only true while the operation has not run.
+        if result is not None:return hands.after_release_failure(result,exc)
+        return hands.outcome('refused',f'Write not admitted: {type(exc).__name__}: {exc}')
 
 
-def fs_write(path: str,content: str,proposal_id: str='',overwrite: bool=False,force: bool=False) -> str:
-    return _serialized_write(path,proposal_id,lambda:_fs_write_unlocked(path,content,proposal_id,overwrite,force))
+def _reported(op: str, path: str, result: dict) -> str:
+    """Текст для неё: сказанное действие подтверждено распиской, а не самим возвратом вызова."""
+    confirmed = result["status"] == "confirmed"
+    hands.receipt(op, confirmed, path, f"{result['status']}: {result['message']}", base=BASE)
+    tool_report.note(outcome=result["status"], target=str(path))
+    return f"{result['message']} [confirmed sha256={result['after_sha256']}]" if confirmed else result["message"]
 
 
-def fs_edit(path: str,old: str,new: str,proposal_id: str='') -> str:
-    return _serialized_write(path,proposal_id,lambda:_fs_edit_unlocked(path,old,new,proposal_id))
+def fs_write_result(path: str,content: str,proposal_id: str='',overwrite: bool=False,force: bool=False,expected_sha256: str='') -> dict:
+    return _serialized_write(path,proposal_id,lambda:_fs_write_unlocked(path,content,proposal_id,overwrite,force,expected_sha256))
+
+
+def fs_write(path: str,content: str,proposal_id: str='',overwrite: bool=False,force: bool=False,expected_sha256: str='') -> str:
+    return _reported('write',path,fs_write_result(path,content,proposal_id,overwrite,force,expected_sha256))
+
+
+def fs_edit_result(path: str='', old: str='', new: str='', proposal_id: str='', expected_sha256: str='',
+                   files=None, mode: str='snapshot', *, all: bool=False) -> dict:
+    if files is not None:
+        if path or old or new or expected_sha256 or all:
+            import edit_batch
+            return edit_batch.refused(files, 'Do not combine files with single-file arguments.')
+        return _serialized_batch(files, proposal_id, mode)
+    if mode != 'snapshot':
+        return hands.outcome('refused', 'mode applies only to files batches.')
+    return _serialized_write(path,proposal_id,lambda:_fs_edit_unlocked(path,old,new,proposal_id,expected_sha256,all=all))
+
+
+def fs_edit(path: str='', old: str='', new: str='', proposal_id: str='', expected_sha256: str='',
+            files=None, mode: str='snapshot', *, all: bool=False) -> str:
+    value = fs_edit_result(path, old, new, proposal_id, expected_sha256, files, mode, all=all)
+    if files is not None:
+        import edit_batch
+        for row in value['files']:
+            hands.receipt('edit', row['status'] == 'confirmed', row['path'], row['status'], base=BASE)
+        tool_report.note(outcome=value['status'], target=', '.join(str(r['path']) for r in value['files']))
+        return edit_batch.render(value)
+    return _reported('edit', path, value)
+
+
+def _serialized_batch(files, proposal_id, mode):
+    import edit_batch
+    import forge
+    import forge_roots
+    if not isinstance(files, list) or not files:
+        return edit_batch.refused(files, 'files must be a nonempty list.')
+    targets = []
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not item['path']:
+            return edit_batch.refused(files, 'Each file needs a path.')
+        target, error = _resolve_write(item['path'], proposal_id)
+        if target is None:
+            return edit_batch.refused(files, str(error))
+        targets.append(target)
+    value = None
+    try:
+        # One enclosing physical-root lock avoids self-deadlock on overlapping parents.
+        common = Path(os.path.commonpath([str(p.parent) for p in targets]))
+        with forge_roots.transaction(common, forge.STATE_DIR, 10):
+            for target in targets:
+                reason = forge_roots.foreign_writer_reason(forge, '', root=target.parent)
+                if reason:
+                    return edit_batch.refused(files, 'Write not admitted while Forge owns this root: '+reason)
+            with mutation_lock() as lock:
+                value = edit_batch.apply(files, lambda path: _resolve_write(path, proposal_id), mode)
+            if lock.lost_to_takeover:
+                return edit_batch.uncertain(value, 'Transaction ownership changed; inspect before retry.')
+            return value
+    except (OSError, ValueError) as exc:
+        if value is not None:
+            return edit_batch.uncertain(value, f'Lock release failed: {type(exc).__name__}.')
+        return edit_batch.refused(files, f'Write not admitted: {type(exc).__name__}.')
+
+
+def fs_read_result(path: str) -> dict:
+    """Точный текст и версия файла для скрипта: те же границы дома, что у fs_read."""
+    p = _resolve_read(path)
+    if p is None:
+        return {"status": "refused", "message": "Не читаю: путь вне дома."}
+    if not p.is_file():
+        return {"status": "refused", "message": f"Нет файла {path}."}
+    raw = p.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"status": "refused", "message": f"Файл {path} не в UTF-8."}
+    return {"status": "ok", "text": text, "sha256": hashlib.sha256(raw).hexdigest()}

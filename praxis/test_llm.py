@@ -444,17 +444,17 @@ class TestTranslation(Base):
         действием с дефолтами: намерение модели исчезало без следа.
         """
         tc = types.SimpleNamespace(id="c1", function=types.SimpleNamespace(
-            name="say", arguments='{"text": "привет'))
+            name="preview_reply", arguments='{"text": "привет'))
         blocks = llm.blocks_from_openai(
             types.SimpleNamespace(content=None, tool_calls=[tc]))
         self.assertEqual(blocks[0]["input"],
                          {llm.MALFORMED_JSON_KEY: '{"text": "привет'})
         self.assertTrue(llm.is_malformed_json_input(blocks[0]["input"]))
-        self.assertEqual(blocks[0]["name"], "say", "имя руки обязано выжить")
+        self.assertEqual(blocks[0]["name"], "preview_reply", "имя руки обязано выжить")
 
     def test_the_mark_keeps_only_a_diagnostic_head_of_the_raw_arguments(self):
         long_tc = types.SimpleNamespace(id="c2", function=types.SimpleNamespace(
-            name="say", arguments='{"text": "' + "я" * 5000))
+            name="preview_reply", arguments='{"text": "' + "я" * 5000))
         blocks = llm.blocks_from_openai(
             types.SimpleNamespace(content=None, tool_calls=[long_tc]))
         self.assertEqual(len(blocks[0]["input"][llm.MALFORMED_JSON_KEY]),

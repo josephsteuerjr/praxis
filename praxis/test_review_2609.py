@@ -1,9 +1,7 @@
 """26.09 — адверсарное ревью после правок 25.09 (W1 prod-live, W2/W3 в её коде).
 
-Что здесь прибито:
-* пол приватных записей знает то, что РЕАЛЬНО ушло в модель: замороженная эпоха комнаты,
-  досье, поправленное после заморозки, результат руки, возобновлённый ход (W1 S1);
-* пол не обходится знаком препинания, «ё» и маркером списка (W1 S2);
+Что здесь прибито (пол приватных записей W1 S1/S2 снят 10.11 словом Егора «сними» —
+его тесты удалены вместе с полом, история в git):
 * тёзки — по всей подходящей части книги, не по восьмёрке лучших (W1 S3);
 * личка с третьим человеком в recall называется личкой, а не «комнатой» (W1 S4);
 * раннер собрал ленту прежним окном — сборщик кадра не подаёт эпоху (W1 S6);
@@ -21,7 +19,6 @@ import os
 import tempfile
 import types
 import unittest
-from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -36,91 +33,6 @@ import telegram_contacts
 import turns
 
 from test_frame_epoch_1509 import LEVER, ROOM_ID, frame_for, room_ctx
-
-RECORD = "- [private] развелась в марте, просила никому не говорить"
-
-
-def _room(owner: bool = False) -> agent.ChannelContext:
-    return agent.ChannelContext(chat_id="-1001", room_id="-1001", is_dm=False, owner=owner,
-                                known=True, principal_id="42")
-
-
-class PrivateFloorSeesTheRealFrame(unittest.TestCase):
-    def setUp(self) -> None:
-        self.channel = agent._TURN_CHANNEL.set(_room())
-        self.private = agent._PRIVATE_IN_FRAME.set(())
-        self.addCleanup(agent._PRIVATE_IN_FRAME.reset, self.private)
-        self.addCleanup(agent._TURN_CHANNEL.reset, self.channel)
-
-    def test_frozen_epoch_record_in_the_first_message_arms_the_floor(self):
-        """Эпоха едет первым сообщением кадра; хозяин записи уже не в окне присутствия."""
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "<praxis_epoch n=1>\n### Мои досье на людей\n"
-                                     f"## Гость\n{RECORD}\n</praxis_epoch>"}]}]
-        self.assertEqual(agent.private_record_floor("она развелась в марте, просила никому"), "")
-        agent._arm_private_floor("system без приватного", messages)
-        self.assertTrue(agent.private_record_floor(
-            "Кстати, она развелась в марте, просила никому не говорить."))
-
-    def test_tool_result_read_during_the_turn_arms_the_floor(self):
-        messages = [{"role": "user", "content": "привет"}]
-        armed = agent._arm_private_floor("system", messages)
-        messages.append({"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1",
-             "content": [{"type": "text", "text": f"memory/people/guest.md:\n{RECORD}"}]}]})
-        agent._arm_private_floor("system", messages, armed)
-        self.assertTrue(agent.private_record_floor("развелась в марте, просила никому не говорить"))
-
-    def test_prose_mention_of_the_mark_is_not_a_record(self):
-        agent._arm_private_floor(
-            "Здесь не owner-контур; записи с пометкой [private] оставлены в кадре как моё "
-            "внутреннее знание (решение владельца, 25.09) — вслух в этой комнате не цитирую.", [])
-        self.assertEqual(agent._PRIVATE_IN_FRAME.get(), ())
-
-    def test_owner_audience_and_dms_do_not_arm(self):
-        for ctx in (_room(owner=True),
-                    agent.ChannelContext(chat_id="42", is_dm=True, owner=False, principal_id="42")):
-            token = agent._TURN_CHANNEL.set(ctx)
-            try:
-                if ctx.is_dm or ctx.owner_audience:
-                    agent._arm_private_floor(f"### Досье\n{RECORD}", [])
-                    self.assertEqual(agent._PRIVATE_IN_FRAME.get(), ())
-            finally:
-                agent._TURN_CHANNEL.reset(token)
-
-    def test_resume_bind_carries_the_floor_from_the_loop_to_the_delivery_guard(self):
-        """Цикл и гард доставки возобновлённого хода идут в разных bind()."""
-        ctxobj = types.SimpleNamespace(status="running", to_dict=lambda: {"run": "r"})
-        runtime = object.__new__(agent._AgentResumeRuntime)
-        runtime._validate_current_authority = lambda: None
-        runtime.manager = types.SimpleNamespace(context=lambda run_id: ctxobj)
-        runtime.plan = types.SimpleNamespace(run_id="r", context=ctxobj)
-        runtime.channel, runtime.snapshot = _room(), {}
-        runtime.outbound, runtime.guard_notes = None, []
-        with mock.patch.object(agent.run_context, "bind_run", lambda current: nullcontext()):
-            with runtime.bind():
-                agent._arm_private_floor(f"### Досье\n{RECORD}", [])
-            self.assertEqual(agent._PRIVATE_IN_FRAME.get(), (), "вне подъёма пол не течёт наружу")
-            with runtime.bind():
-                self.assertTrue(agent.private_record_floor(
-                    "развелась в марте — просила никому не говорить"))
-
-
-class PrivateFloorBlindSpots(unittest.TestCase):
-    def setUp(self) -> None:
-        token = agent._PRIVATE_IN_FRAME.set((RECORD,))
-        self.addCleanup(agent._PRIVATE_IN_FRAME.reset, token)
-
-    def test_punctuation_yo_and_list_marker_do_not_hide_verbatim_pieces(self):
-        for text in ("Вика развелась в марте — просила никому не говорить",
-                     "развелась в марте. Просила никому не говорить",
-                     "развелась в марте, просила",          # 26 знаков дословно
-                     "Она РАЗВЕЛАСЬ в марте, просила ещё"):
-            self.assertTrue(agent.private_record_floor(text), text)
-
-    def test_retelling_in_own_words_passes(self):
-        self.assertEqual(agent.private_record_floor(
-            "у неё весной были перемены в личной жизни, подробности не мои"), "")
 
 
 def _contacts(rows: dict) -> dict:

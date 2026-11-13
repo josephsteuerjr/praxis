@@ -26,7 +26,7 @@ TOOLS = [
          'text': {'type': 'string', 'description': 'Speech script; optional inline Fish performance cues are not spoken words.'},
          'delivery': {'type': 'string', 'description': 'Optional free-form direction for the performance, separate from spoken words. No fixed emotion list.'},
      }, 'required': ['text']}},
-    {'name': 'voice_generation',
+    {'name': 'voice_job',
      'description': (
          'Inspect a background speech generation, read its saved result, or request cancellation by generation ID. '
          'Inspection returns the currently known state without waiting for completion. States distinguish queued, '
@@ -47,7 +47,7 @@ TOOLS = [
          'Telegram publishes the voice-note message after upload is finalized. Sending is confirmed separately '
          'by Telegram accepting the message; queued, ready, and uploaded do not mean sent. '
          'A late result event returns to the originating chat context, where this action is available. '
-         'Use send_media on a saved ready result for a deliberate delivery to another recipient.'),
+         'Use send_file(kind="audio", voice_note=true) on a saved ready result for a deliberate delivery to another recipient.'),
      'input_schema': {'type': 'object', 'properties': {
          'generation_id': {'type': 'string', 'description': 'Generation whose audio to send.'},
          'caption': {'type': 'string', 'description': 'Optional caption accompanying the voice note.'},

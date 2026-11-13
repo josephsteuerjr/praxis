@@ -45,7 +45,6 @@ class AuthorityContextTests(unittest.TestCase):
         token = agent._TURN_CHANNEL.set(agent.ChannelContext(owner=True, is_dm=True))
         try:
             self.assertFalse(agent._is_human_owner())
-            self.assertIn("только владелец", agent.tool_admit("Маша", id="202"))
         finally:
             agent._TURN_CHANNEL.reset(token)
 
@@ -58,21 +57,19 @@ class AuthorityContextTests(unittest.TestCase):
         finally:
             agent._TURN_CHANNEL.reset(token)
 
-    def test_delegating_trust_stays_with_the_human_owner(self):
-        """Решение Егора 26.07, вариант 1: в её ходе действует ОНА, кто бы ни заговорил. «Она и сама уже сейчас откажет, если там бред.» За Егором остались только admit и computer_access — раздача ЕГО доверия другим людям, а не её способности.
-
-        Раздать доверие — не её способность, а его: `admit` делает человека доверенным,
-        `computer_access` выдаёт кому-то доступ к его машине. Действует при этом она
-        сама (`_computer_actor` = praxis:self), и это правильно: руки её.
-        """
+    def test_any_speaker_leaves_her_every_right_including_the_computer(self):
+        """Решение Егора 26.07: в её ходе действует ОНА, кто бы ни заговорил. 10.11: «ВЕЗДЕ
+        ВСЕ ПРАВА» — пары владельца (admit/computer_access, остатки старого мини-аппа) больше
+        нет, а управление ноутом «должно быть и было у всех»."""
         token = agent._TURN_CHANNEL.set(self._channel(202))
         try:
             self.assertFalse(agent._is_human_owner())
-            self.assertIn("только владелец", agent.tool_admit("Друг", id="303"))
-            result = agent.tool_computer_access("list")
-            self.assertIn("только владелец", result.lower())
+            self.assertTrue(agent._is_sovereign_actor())
             self.assertEqual(agent._computer_actor(), agent.PRAXIS_SELF_PRINCIPAL,
                              "в её ходе действует она, а не заговоривший человек")
+            for scope in ("computer.read", "computer.files", "computer.process", "computer.apps"):
+                self.assertTrue(agent._computer_allowed(scope), scope)
+            self.assertFalse({"admit", "computer_access"} & set(agent.TOOL_IMPL))
         finally:
             agent._TURN_CHANNEL.reset(token)
 
@@ -88,7 +85,7 @@ class AuthorityContextTests(unittest.TestCase):
             finally:
                 agent._TURN_CHANNEL.reset(token)
 
-    def test_praxis_self_has_full_hands_but_cannot_delegate_human_trust(self):
+    def test_praxis_self_has_the_full_hand_set(self):
         internal = agent.ChannelContext(
             principal_id=agent.PRAXIS_SELF_PRINCIPAL, owner=False, known=True,
             _scope_override="owner",
@@ -104,7 +101,7 @@ class AuthorityContextTests(unittest.TestCase):
                 {"shell", "send_message", "manage_room", "telegram_account", "computer"}
                 .issubset(names)
             )
-            self.assertTrue({"admit", "computer_access"}.isdisjoint(names))
+            self.assertEqual(names, {str(tool.get("name") or "") for tool in agent.OWNER_TOOLS})
             self.assertEqual(agent._computer_actor(), agent.PRAXIS_SELF_PRINCIPAL)
             self.assertTrue(agent._computer_allowed("computer.process"))
             self.assertFalse(agent._computer_allowed("computer.unknown"))
@@ -198,7 +195,7 @@ class AuthorityContextTests(unittest.TestCase):
         ):
             owner = agent._TURN_CHANNEL.set(self._channel(101, owner=True))
             try:
-                agent.tool_freeze_chat(True, chat_id="-1001")
+                agent.tool_freeze_chat("freeze", chat_id="-1001")
             finally:
                 agent._TURN_CHANNEL.reset(owner)
 
@@ -207,8 +204,8 @@ class AuthorityContextTests(unittest.TestCase):
                 _scope_override="owner",
             ))
             try:
-                agent.tool_freeze_chat(True, chat_id="-1002")
-                agent.tool_freeze_chat(False, chat_id="-1002")
+                agent.tool_freeze_chat("freeze", chat_id="-1002")
+                agent.tool_freeze_chat("unfreeze", chat_id="-1002")
             finally:
                 agent._TURN_CHANNEL.reset(internal)
 
@@ -218,7 +215,7 @@ class AuthorityContextTests(unittest.TestCase):
             # set_by='praxis', а не 'owner' — решила она, а не Егор.
             trusted = agent._TURN_CHANNEL.set(self._channel(202))
             try:
-                self.assertNotIn("Отказ", agent.tool_freeze_chat(True, chat_id="-1003"))
+                self.assertNotIn("Отказ", agent.tool_freeze_chat("freeze", chat_id="-1003"))
             finally:
                 agent._TURN_CHANNEL.reset(trusted)
 

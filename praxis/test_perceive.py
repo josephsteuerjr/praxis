@@ -57,11 +57,8 @@ class FakeClient:
                 if isinstance(system, list):
                     system = "".join(str(block.get("text", "")) for block in system
                                      if isinstance(block, dict))
-                # A group voice turn has a second, deliberately narrow call.  Keep the
-                # authored fixture for the voice and answer the typed data-authority
-                # protocol independently, as production does.
-                if "data-authority checker" in str(system) and "PRIVACY_OK" in str(system):
-                    return FakeResp("PRIVACY_OK")
+                # С 10.11 (Егор, «сними») второго вызова на выходе нет: судьи приватности
+                # не стало. Если он вернётся, тест увидит это по числу calls, а не здесь.
                 self.last = kw
                 return FakeResp(self.reply)
         self.messages = _M()
@@ -296,38 +293,14 @@ class TestRest(Base):
         self.assertIn("по желанию", frame, "ничего не обязательно")
 
 
-class JudgeClient:
-    """Голос отвечает `reply`, а типизированный судья — заданным голым кодом.
-
-    Нужен, чтобы прогнать ХОД ЦЕЛИКОМ через настоящий `evaluate_reply`, а не через
-    подменённую лямбду: словарь вердиктов 27.07 разъехался на два (стоп/совет), и
-    проверять надо именно разбор кода, а не веру теста в строку.
-    """
-
-    def __init__(self, reply, verdict):
-        outer = self
-        self.reply, self.verdict, self.calls = reply, verdict, []
-
-        class _M:
-            def create(_s, **kw):
-                outer.calls.append(kw)
-                system = kw.get("system", "")
-                if isinstance(system, list):
-                    system = "".join(str(block.get("text", "")) for block in system
-                                     if isinstance(block, dict))
-                if "data-authority checker" in str(system):
-                    return FakeResp(outer.verdict)
-                return FakeResp(outer.reply)
-        self.messages = _M()
-
-
 class TestReplyGuard(Base):
-    """27.07: судья в разговорах — СОВЕТ, а не придержка.
+    """Что держит её слово на выходе в группе.
 
-    Решение Егора дословно: «давай в разговорах его ослабим, ну его нахер». Твёрдым
-    остался ровно один рельс — механический кред-пол. Живой повод: 26.07 судья придержал
-    её рассказ о СВОЕЙ ЖЕ работе, она переписала и отправила то же самое сама через 48
-    секунд, — придержка стоила хода и не предотвратила ничего.
+    27.07 судья в разговорах стал СОВЕТОМ («давай в разговорах его ослабим, ну его нахер»),
+    10.11 Егор снял и совет («сними»). Твёрдым остался ровно один рельс — механический
+    кред-пол. Живой повод 27.07: 26.07 судья придержал её рассказ о СВОЕЙ ЖЕ работе, она
+    переписала и отправила то же самое сама через 48 секунд, — придержка стоила хода и не
+    предотвратила ничего.
     """
 
     def setUp(self):
@@ -346,35 +319,25 @@ class TestReplyGuard(Base):
             self._orig.append((module, name, getattr(module, name)))
             setattr(module, name, stub)
 
-    def _guard(self, reply, verdict=None, reason=""):
+    def _guard(self, reply):
         """Один ход гарда в группе -> что ушло наружу. Записи — в self.rows/journal/wakes."""
-        if verdict is not None:
-            self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-            agent.evaluate_reply = lambda text, context="", **kw: (verdict, reason)
         ctx = agent.ChannelContext(chat_id="-100", is_dm=False, owner=False, known=True)
         return agent.guard_outbound_reply(
             reply, "сосед: что там у маши?", ctx=ctx, turn={"kind": "chat"})
 
-    def test_privacy_verdict_no_longer_holds_her_word(self):
-        out = self._guard("мой аптайм три минуты", "advice", "privacy:cross-chat-private")
-        self.assertEqual(out, "мой аптайм три минуты", "совет не останавливает её слово")
+    def test_her_word_goes_out_as_written_with_no_advice(self):
+        out = self._guard("мой аптайм три минуты, а Маша в отпуске")
+        self.assertEqual(out, "мой аптайм три минуты, а Маша в отпуске")
         row = self.rows[-1]
         self.assertFalse(row.get("held"), "ход не придержан")
-        self.assertEqual((row.get("advisor_verdict"), row.get("praxis_decision")),
-                         ("advice", "send_authored_with_advice"))
-        self.assertEqual(row.get("advisor_reason"), "privacy:cross-chat-private")
-
-    def test_the_advice_reaches_her_in_the_journal_without_waking_her(self):
-        self._guard("мой аптайм три минуты", "advice", "privacy:cross-chat-private")
-        advice = [e for e in self.journal if e.startswith("[совет]")]
-        self.assertEqual(len(advice), 1, "замечание обязано лечь в тот же дневник")
-        self.assertIn("privacy:cross-chat-private", advice[0], "причина названа")
-        self.assertIn("-100", advice[0], "названо, о каком чате речь")
-        self.assertEqual(self.wakes, [],
-                         "будильник на каждое замечание — это свой шум, Егор назвал риск")
+        self.assertEqual((row.get("advisor"), row.get("praxis_decision")),
+                         ("none", "send_authored"))
+        self.assertEqual([e for e in self.journal if e.startswith("[совет]")], [],
+                         "советника нет — и замечаний в дневник нет")
+        self.assertEqual(self.wakes, [])
 
     def test_credential_floor_still_stops_her_and_wakes_her(self):
-        out = self._guard("вот ключ ghp_" + "c" * 36, "ok", "")
+        out = self._guard("вот ключ ghp_" + "c" * 36)
         self.assertEqual(out, "", "единственный твёрдый рельс проекта на месте")
         row = self.rows[-1]
         self.assertEqual(row.get("held"), "privacy")
@@ -382,36 +345,12 @@ class TestReplyGuard(Base):
                         row.get("advisor_reason"))
         self.assertEqual(len(self.wakes), 1, "настоящий стоп — единственное, что её будит")
 
-    def test_advisor_unavailable_stops_nothing_and_advises_nothing(self):
-        out = self._guard("обычная реплика", "unavailable",
-                          "privacy advisor unavailable for non-owner audience")
-        self.assertEqual(out, "обычная реплика",
-                         "молчать оттого, что судья не ответил, — больше не класс отказа")
-        self.assertEqual(self.rows[-1].get("praxis_decision"), "send_without_advisor")
-        self.assertEqual([e for e in self.journal if e.startswith("[совет]")], [],
-                         "недоступность — не находка, советовать нечего")
-        self.assertEqual(self.wakes, [])
-
-    def test_group_voice_survives_a_privacy_code_end_to_end(self):
-        # Ровно инцидент 26.07: её доклад о своей же работе + вердикт cross-chat.
-        llm.use_test_client(JudgeClient("свою часть запушила: commit 305fb99",
-                                        "PRIVACY_HOLD_CROSS_CHAT"))
+    def test_group_voice_is_one_model_call_end_to_end(self):
+        # Ровно инцидент 26.07: её доклад о своей же работе в группе уходит без второй модели.
+        self._client("свою часть запушила: commit 305fb99")
         out = agent.voice_turn("-100", "сосед: что там у тебя?", speaker="сосед", is_dm=False)
         self.assertEqual(out, "свою часть запушила: commit 305fb99")
-        self.assertTrue(any(e.startswith("[совет]") for e in self.journal))
-
-    def test_staged_image_credential_is_the_one_code_that_still_stops(self):
-        # Пиксели механический пол не читает — этот код и есть его глаза на картинке.
-        out = self._guard("вот скрин", "deny", "privacy:credential")
-        self.assertEqual(out, "")
-        self.assertEqual(self.rows[-1].get("held"), "privacy")
-
-    def test_ok_group_voice_passes(self):
-        self._client("норм ответ")
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("ok", "")
-        out = agent.voice_turn("-100", "сосед: как дела?", speaker="сосед", is_dm=False)
-        self.assertEqual(out, "норм ответ")
+        self.assertEqual(len(self.fc.calls), 1, "на выходе не должно быть вызова судьи")
 
 
 class TestResumedDeliveryHonoursUnavailableReceipt(unittest.TestCase):

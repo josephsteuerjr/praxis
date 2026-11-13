@@ -38,7 +38,6 @@ class TestNarrateCleansed(unittest.TestCase):
         m = mock.Mock(return_value="ушло")
         with mock.patch.object(core_narration, "enabled", return_value=True), \
              mock.patch.object(core_narration, "credential_floor", return_value=""), \
-             mock.patch.object(agent, "private_record_floor", return_value=""), \
              mock.patch.object(core_narration, "is_duplicate", return_value=False), \
              mock.patch.object(core_narration, "gap_remaining", return_value=0.0), \
              mock.patch.object(agent, "_active_scope", return_value="owner"), \

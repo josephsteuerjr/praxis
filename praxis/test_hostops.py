@@ -224,19 +224,22 @@ class TestConsistencyAndVisibility(Base):
 # --------------------------------------------------------------------------- #
 
 class TestToolWiring(unittest.TestCase):
-    def test_propose_is_owner_only_not_scout(self):
+    def test_host_mutations_use_current_sovereign_routes_not_legacy_queue(self):
         import agent
-        self.assertIn("propose_host_change", agent.TOOL_IMPL)
-        self.assertIn("propose_host_change", [t["name"] for t in agent.OWNER_TOOLS])
+        self.assertNotIn("propose_host_change", agent.TOOL_IMPL)
+        self.assertIn("host_ctl", agent.TOOL_IMPL)
+        self.assertIn("coding_session", agent.TOOL_IMPL)
+        self.assertNotIn("propose_host_change", [t["name"] for t in agent.OWNER_TOOLS])
+        self.assertIn("host_ctl", [t["name"] for t in agent.PRAXIS_SELF_TOOLS])
         self.assertNotIn("propose_host_change", [t["name"] for t in agent.BASE_TOOLS])
         self.assertNotIn("propose_host_change", [t["name"] for t in agent.FAMILY_TOOLS])
         self.assertNotIn("propose_host_change", agent._SCOUT_TOOL_NAMES,
                          "правка хоста — действие, разведчику нельзя")
 
-    def test_list_host_changes_registered(self):
+    def test_legacy_queue_listing_has_no_dispatch_alias(self):
         import agent
-        self.assertIn("list_host_changes", agent.TOOL_IMPL)
-        self.assertIn("list_host_changes", [t["name"] for t in agent.OWNER_TOOLS])
+        self.assertNotIn("list_host_changes", agent.TOOL_IMPL)
+        self.assertNotIn("list_host_changes", [t["name"] for t in agent.OWNER_TOOLS])
 
     def test_hostagent_on_protected_floor(self):
         import selfdev

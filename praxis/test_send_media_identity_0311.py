@@ -95,7 +95,9 @@ class AddressedMediaIdentity(unittest.TestCase):
         entry = self.outbox.get(self.key)
         self.assertEqual(entry['state'], 'accepted', result)
         self.assertEqual(entry['purpose'], 'tool:send_file')
-        self.assertNotIn('media_kind', agent._direct_outbox_identity(entry, verify_file=True)['payload'])
+        proof = agent._direct_outbox_identity(entry, verify_file=True)['payload']
+        self.assertEqual(proof['media_kind'], 'document')
+        self.assertFalse(proof['voice_note'])
 
     def test_addressed_photo_keeps_photo_type(self):
         self.start(kind='photo', voice=True)

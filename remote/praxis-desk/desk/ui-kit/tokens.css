@@ -1,0 +1,130 @@
+/* Frame — общие токены установщика и программы. Светлая тема — основная и
+   самая светлая из набора (слово владельца 02.09): почти белая тёплая бумага,
+   воздух, один тёплый акцент. Тёмная — тёплый уголь. */
+
+:root {
+  color-scheme: light;
+  --ground: #fdfcfa;
+  --surface: #ffffff;
+  --surface-2: #f8f6f2;
+  --ink: #262320;
+  --ink-2: #4f4a43;
+  --ink-3: #7a7369;
+  --muted: #a39b8c;
+  --line: rgba(38, 35, 32, 0.1);
+  --line-strong: rgba(38, 35, 32, 0.18);
+  --accent: #b9651e;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(185, 101, 30, 0.1);
+  --ok: #5e805b;
+  --warn: #a67727;
+  --err: #b8432f;
+  --gust: rgba(38, 35, 32, 0.045);
+  --ctrl-hover: rgba(38, 35, 32, 0.06);
+  --close-hover: #c8412f;
+  --shadow: 0 1px 2px rgba(38, 35, 32, 0.04), 0 10px 30px rgba(38, 35, 32, 0.05);
+  /* Парящее — меню, всплывающее, прилипшая полоса. Отдельно от --shadow:
+     тот лежит под композером и под листом, и схлопывать его нельзя. */
+  --shadow-pop: 0 2px 8px rgba(38, 35, 32, 0.05), 0 18px 44px rgba(38, 35, 32, 0.11);
+  --shadow-knob: 0 1px 2px rgba(38, 35, 32, 0.22);
+  --shadow-sheet: 0 -10px 40px rgba(38, 35, 32, 0.16);
+  /* Стекло — ТОЛЬКО над неподвижной подложкой (меню над статикой). Над бегущим
+     контентом backdrop-filter пересчитывается каждый кадр. */
+  --glass: color-mix(in srgb, var(--surface) 82%, transparent);
+  --glass-blur: 14px;
+  --veil: color-mix(in srgb, var(--ink) 38%, transparent);
+  --err-soft: rgba(184, 67, 47, 0.12);
+  --qr-paper: #ffffff;       /* камера не читает QR с тёплой бумаги — белый в ОБЕИХ темах */
+  /* Панель хода. ⚠ 17.09: соседний --rail снят — его не звал никто, а комментарий
+     обещал «полка на полтона темнее»: полка стоит на --ground и всегда стояла. */
+  --panel: #faf8f4;
+
+  /* ── Движение. Одна шкала на все поверхности: окно, телефон, установщик. ──
+     До 17.09 каждый писал своё: в окне шестнадцать рукописных «0.12s ease», в
+     установщике девятнадцать «0.15s ease» на восьми строках, на телефоне пять
+     длительностей на четыре объекта. Кривые здесь НЕ дублируются в тёмных блоках:
+     время темы не имеет. */
+  --dur-1: 90ms;             /* отклик под курсором и пальцем */
+  --dur-2: 140ms;            /* смена страницы, появление */
+  --dur-3: 220ms;            /* лист, крупное появление */
+  --dur-panel: 240ms;        /* сворачивание боковых панелей окна */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-panel: cubic-bezier(0.32, 0.72, 0, 1);
+  --page-lift: 4px;          /* насколько страница приподнимается на входе */
+  /* Колонки чтения — были дважды написаны цифрой в app.css */
+  --col-read: 800px;
+  --col-wide: 1400px;
+  --radius: 12px;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "Golos Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "PT Mono", Consolas, "Courier New", monospace;
+  /* почерк агента: только его имя над его комнатой и подпись (06.09) */
+  --hand: "Shantell Sans", "Segoe Print", "Comic Sans MS", cursive;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #1a1815;
+    --surface: #221f1b;
+    --surface-2: #29251f;
+    --ink: #efe9df;
+    --ink-2: #c9c0b2;
+    --ink-3: #9b9286;
+    --muted: #6f675c;
+    --line: rgba(239, 233, 223, 0.1);
+    --line-strong: rgba(239, 233, 223, 0.2);
+    --accent: #e2a25e;
+    --accent-ink: #1a1815;
+    --accent-soft: rgba(226, 162, 94, 0.14);
+    --ok: #8fb08b;
+    --warn: #d4a256;
+    --err: #e07b68;
+    --gust: rgba(255, 238, 215, 0.05);
+    --ctrl-hover: rgba(239, 233, 223, 0.08);
+    --close-hover: #e0685a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+    --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.3), 0 18px 44px rgba(0, 0, 0, 0.45);
+    --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 40px rgba(0, 0, 0, 0.5);
+    --glass: color-mix(in srgb, var(--surface) 82%, transparent);
+    --glass-blur: 14px;
+    --veil: color-mix(in srgb, var(--ink) 20%, transparent);
+    --err-soft: rgba(224, 123, 104, 0.16);
+    --qr-paper: #ffffff;
+    --panel: #1c1a17;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #1a1815;
+  --surface: #221f1b;
+  --surface-2: #29251f;
+  --ink: #efe9df;
+  --ink-2: #c9c0b2;
+  --ink-3: #9b9286;
+  --muted: #6f675c;
+  --line: rgba(239, 233, 223, 0.1);
+  --line-strong: rgba(239, 233, 223, 0.2);
+  --accent: #e2a25e;
+  --accent-ink: #1a1815;
+  --accent-soft: rgba(226, 162, 94, 0.14);
+  --ok: #8fb08b;
+  --warn: #d4a256;
+  --err: #e07b68;
+  --gust: rgba(255, 238, 215, 0.05);
+  --ctrl-hover: rgba(239, 233, 223, 0.08);
+  --close-hover: #e0685a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.3), 0 18px 44px rgba(0, 0, 0, 0.45);
+  --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-sheet: 0 -10px 40px rgba(0, 0, 0, 0.5);
+  --glass: color-mix(in srgb, var(--surface) 82%, transparent);
+  --glass-blur: 14px;
+  --veil: color-mix(in srgb, var(--ink) 20%, transparent);
+  --err-soft: rgba(224, 123, 104, 0.16);
+  --qr-paper: #ffffff;
+  --panel: #1c1a17;
+}

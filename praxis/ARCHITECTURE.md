@@ -96,7 +96,7 @@ prepare и unrelated fold не считают их покрытыми и не с
 `generate_image` — одна серверная рука для любой основной модели, включая GLM.
 Она вызывает standalone `/images/generations` или `/images/edits` через настроенный
 `frameworks.openai`, а отдельный блок `images` задаёт включение, image model,
-качество, размер и фон. Изменение этого блока не меняет voice/evaluator и их fallback.
+качество, размер и фон. Изменение этого блока не меняет voice и его fallback.
 
 Реле использует существующий Codex subscription login. Unknown outcome не повторяется
 автоматически; image quota не объявляет исчерпанной текстовую подписку. Praxis проверяет
@@ -134,27 +134,29 @@ delivery address и message ids во всё дальнейшее исполне�
 восстанавливает authority из process-global переменных.
 
 - Praxis herself свободно использует документы, код, Forge/host, Windows interactive/SYSTEM,
-  комнаты, join/leave и noncritical/raw Telegram account RPC установленной schema. Verification,
-  provenance, receipts и rollback дают ей наблюдаемость и восстановление, а не право внешнего veto.
-- Только human owner через публичный `computer_access`/trust tool или API выдаёт и отзывает права
-  другим людям. Trusted principal получает только выданные owner capability, не делегирует их
-  дальше и не получает raw Telegram account RPC или Windows SYSTEM.
-- Полный self shell/root технически может изменять реализацию этих правил. Поэтому owner-rooted
-  human delegation — явный governance-инвариант и проверяемый audit contract, не криптографическая
-  sandbox-граница между Praxis и её собственными руками.
-- Account-critical auth/session/destructive constructor может инициировать Praxis или owner. Он
-  fail-closed до exact-фразы в **новом** owner-DM update; один и тот же ход не подтверждает себя.
-  Receipt сохраняет отдельные `requested_by` и `confirmed_by`. Полные параметры находятся только в
-  зашифрованном TTL-bound secret spool; append-only JSONL и durable run evidence содержат redacted
-  schema marker, digest и opaque reference, но не raw argument/result/error payload.
+  комнаты, join/leave и raw Telegram account RPC установленной schema, включая account-critical.
+  Verification, provenance, receipts и rollback дают ей наблюдаемость и восстановление, а не право
+  внешнего veto.
+- С 10.11 (слово Егора «ВЕЗДЕ ВСЕ ПРАВА») рук только для владельца нет: `admit` и
+  `computer_access`, остатки старого мини-аппа, удалены из её каталога. Её набор рук один и тот же
+  в любом ходе, включая `computer`. Гранты `computer_access.py` остаются только для зрителей
+  старого `praxis_app`; сам другой человек не получает raw Telegram account RPC или Windows SYSTEM.
+- Account-critical auth/session/destructive constructor (включая удаление аккаунта, смену номера,
+  платежи) Praxis и owner исполняют напрямую: отдельного подтверждения из owner-DM нет с 10.11.2026
+  (Егор, «Снять целиком»). Receipt, append-only JSONL и durable run evidence содержат redacted schema
+  marker и process-keyed commitment, но не raw argument/result/error payload; после restart такой
+  вызов не воспроизводится из run log.
 - Root room является границей допуска и политики. Topic id не может сменить root peer или расширить
   права.
 - Scope описывает аудиторию будущего выхода, а не actor authority и не урезанную внутреннюю память.
   Поэтому собственный проактивный ход Praxis может иметь `scope=owner`, `owner=false`: выход адресован
   в owner DM, но human-owner полномочия не подделаны. Соседний сырой чат не подмешивается автоматически
   и читается только явным инструментом.
-- Текст и staged media проходят единый audience-aware outbound guard. При недоступном guard
-  non-owner публикация чувствительного контента закрывается, но owner DM остаётся обслуживаемым.
+- Текст и staged media проходят один outbound guard. В owner-аудитории он ничего не проверяет,
+  кроме точного `[молчу]`. К не-owner аудитории держит только механический кред-пол: секрет в тексте
+  или в байтах staged-документа. Privacy-судьи второй моделью и пола дословных `[private]`-записей
+  нет с 10.11.2026 (Егор, «сними»); изображения на креды не проверяются — судья, который это делал,
+  работал только при `PRAXIS_OUTBOUND_ADVISOR=on`, а вживую был выключен.
 
 ## Поток Telegram-хода
 
@@ -674,7 +676,7 @@ coverage; native perception cooldown_addressed is an independent hot setting
 
 `generate_voice(text)` сохраняет отдельное задание в `xtts_generations`: точные слова, model/profile IDs, исходные run/call, чат и область. Немедленное подтверждение означает постановку в работу. Эта операция не создаёт Telegram send intent, не загружает байты в Telegram и не публикует сообщение. Producer живёт вне ONE_MIND и не привязан к завершению исходного когнитивного хода. Можно продолжать разговор, отдельно вызвать `reply` или закончить ход. Общего срока жизни и автоматического удаления результата нет.
 
-`voice_generation(status|result|cancel, generation_id)` возвращает известное состояние без ожидания. Cancel requested отличается от подтверждённого отсутствия активного запроса в capability. После потери исполнителя исход неизвестен; он не объявляется успехом или отменой и не повторяется автоматически. Сохранённое аудио доступно по ID в исходной области. Поколение inference-попытки фиксируется отдельно от постоянного ID задания.
+`voice_job(status|result|cancel, generation_id)` возвращает известное состояние без ожидания. Cancel requested отличается от подтверждённого отсутствия активного запроса в capability. После потери исполнителя исход неизвестен; он не объявляется успехом или отменой и не повторяется автоматически. Сохранённое аудио доступно по ID в исходной области. Поколение inference-попытки фиксируется отдельно от постоянного ID задания.
 
 Поздний `voice_generation_result` — best-effort типизированное событие `core.events`, связанное с исходными run/call/generation. Оно может прийти после закрытия хода или не дойти. Событие открывает отдельный ход в исходной аудитории с actor `praxis:self`; кадр прямо называет его результатом инструмента. Новый человек/Telegram update не фабрикуется. Для группы используется уже допущенный epoch anchor; отсутствие anchor не разрешает пересборку контекста. Обязательного текстового ответа, ожидания и непрерывного опроса нет. Генерация и delivery receipt — независимые факты: отдельная отправка могла быть запрошена ранее.
 
@@ -706,5 +708,197 @@ The main context accumulation implementation is retained: continuation_mode=lega
 Frozen review qualification: verification_plan exports immutable source identity to a separate task; the coordinator chooses an isolated executor. bind_verification requires the entire canonical plan, actual passing non-deduplicated checks and complete exact logs. A subsequent fresh review includes those logs only for the same composition. Passing commands do not prove container isolation. Linux commands use a per-command subreaper; detached descendants keep ownership until ECHILD settlement, and a lost helper leaves custody unknown.
 
 Independent-review corrections: Finish uses the same unresolved-root/job predicate as admission. Direct selected-agent Stop includes all branch-owned command/check units and retains unknown exit. Foreground commands publish a starting intent first, create a suspended/gated private custodian, persist its exact identity, then explicitly admit the executable; a dead custodian before admission cannot start the command. Linux helper settlement evidence is retained in the unit directory.
-Forge worker provider calls explicitly opt into llm.single_provider_attempt: SDK retries, adapter empty retries and automatic fallback are disabled only in that context. A transport response or uncertain admission is retained, never replayed; only a typed proof of non-admission can use the existing outer retry allowance. Main voice/evaluator callers retain their prior policy. This is an explicit worker custody contract, not a new API cache field or main context policy.
+Forge worker provider calls explicitly opt into llm.single_provider_attempt: SDK retries, adapter empty retries and automatic fallback are disabled only in that context. A transport response or uncertain admission is retained, never replayed; only a typed proof of non-admission can use the existing outer retry allowance. Main voice callers retain their prior policy. This is an explicit worker custody contract, not a new API cache field or main context policy.
 Review/merger starts reserve once under the coordinator lock using a fresh record, and admission updates cannot overwrite another record revision. Battery status rechecks producer digests and archived report/log bytes; fresh critic subjects lose qualification when that evidence changes. Owner projections include agents, processes and verifications, with unknown exit and pending root release visible; records and log references remain private. Control parsing errors retain original bytes with an unknown receipt and do not suppress unrelated durable wake delivery.
+
+### Scoped search and outline (R4 candidate; not a host sandbox)
+
+`fs_search` uses one resolved root across literal, regex and composite-glob routes.
+An explicit `root` is resolved like `_resolve_read`: relative to BASE, allowed if
+its resolved target is within BASE **or REPO** (these coincide in production).
+Without `root`, the search scope is BASE, not the union with REPO. Literal home
+search partitions that scope for budgets; regex uses one traversal. Existing
+priority, budgets, memory/runs default exclusion, timeout/partial reporting and
+128 MiB per-file stat-before-read threshold remain; this is not an RSS bound.
+Results are named relative to the selected root (home partitions restore prefixes).
+
+A glob is a relative selector within that root: absolute masks, backslashes and
+any `..` component are rejected, including a `..` that would end back in-root.
+File symlinks are included only when their resolved target is in the selected
+search root, not merely somewhere in BASE/REPO. Broken/cyclic/out-of-scope links
+are skipped. Implicit directory symlinks are **never traversed**, even when they
+point in-root: this excludes cycles and duplicate trees, including explicit glob
+components such as `link/*.py`, and applies also to home partition discovery.
+An explicitly selected root may itself be a symlink or contain symlink components:
+its resolved target must pass BASE/REPO resolution, and becomes the search scope.
+Thus selecting `root=link` deliberately differs from implicit traversal of `link`.
+Direct `hands.search` resolves within its supplied home (no separate REPO authority)
+and accepts composite globs rather than silently discarding directory components.
+Its optional `scope_root` keeps a shared scope across budget partitions for every
+mask route; it must resolve within that home and contain the traversal root.
+Directory-name exclusions apply only below the selected traversal root, never to
+its ancestors or the selected root itself, and do not exclude matching filenames.
+
+`code_outline` resolves the individual file with the same BASE/REPO read semantics;
+it has no narrower search-root selector. Valid in-home/in-REPO file links and path
+components are supported; out-of-home targets are refused. Direct `hands.outline`
+uses only its supplied home. Outline is line-based, not AST-based (text resembling
+`def` in multiline strings may appear). All these scope statements describe stable
+filesystem resolution, **not** a race-proof sandbox against concurrent namespace
+replacement. No restrictions are added to independent sovereign host/root/shell
+capabilities; `execute`'s existing cwd contract is unchanged. Search file content
+is still read only in the isolated child; silence never triggers a parent fallback.
+
+## Пакетная правка файлов — 10.11.2026
+
+`edit(action="batch", files=[...])` — общий редактор модели и воркера.
+`praxis_hands.edit(files=[...])` выводит batch из наличия files. Каждый элемент содержит
+`path`, `expected_sha256` прочитанного файла и `edits=[{"old": "...", "new": "..."}]`.
+Пакет не смешивается с одиночными аргументами. Один путь указывается один раз.
+
+По умолчанию `mode="snapshot"`: все old ищутся независимо в первоначальном UTF-8
+снимке. Каждая строка должна встречаться ровно один раз, включая перекрывающиеся
+вхождения; пересечение диапазонов разных замен отклоняет пакет. Явный
+`mode="sequential"` разрешает последующей замене видеть предыдущую. В обоих
+режимах все замены одного файла вычисляются до его единственной публикации.
+CRLF и байты вне замен сохраняются.
+
+До первой записи проверяются все пути, версии и замены. Несовпадение означает
+отказ всему пакету без записи. Затем файлы публикуются и перечитываются по очереди
+под общими блокировками. Это не транзакция нескольких файлов: первая ошибка
+останавливает дальнейшие записи, автоматического отката нет. Каждый файл имеет
+`confirmed`, `refused` или `in_doubt`, исходный и наблюдённый итоговый SHA.
+Общий `partial` означает смесь подтверждённых и отказанных; `in_doubt` имеет
+приоритет. Следующие файлы явно помечаются как не начатые. Восстановление — отдельная
+правка после чтения текущих версий. Внешний shell-писатель не участвует в замке;
+обычный rename не устраняет гонку с ним между последней проверкой и публикацией.
+
+Python-пример:
+
+```python
+import praxis_hands as h
+text, version = h.read("workspace/example.py")
+receipt = h.edit(files=[{
+    "path": "workspace/example.py", "expected_sha256": version,
+    "edits": [{"old": "before", "new": "after"},
+              {"old": "second", "new": "replacement"}]
+}])
+```
+
+Успешный пакет возвращает расписку с `files`. `Refused`, `Partial`, `InDoubt`
+содержат ту же расписку в `.result`; исключение нельзя трактовать как откат.
+Локальная одиночная replace/write возвращает новый SHA. В удалённых Forge-задачах
+host/Windows пакет пока честно отказывает до вызова удалённого редактора:
+серверный backend не реализует пакетную предпроверку. Одиночные правки остаются
+доступны. `continuation_mode=legacy` и выключенный pointer mode не меняются.
+
+Восстановление владения старого локального процесса принимает прежний формат
+request без `root`, только если `cwd` точно равен корню его задачи. По-прежнему
+обязательны явная аттестация хоста, точное событие запуска до наблюдаемой
+перезагрузки и отсутствие живого связанного supervisor. Это отдельная операторская
+процедура `forge_recovery.reconcile_unit`, не автоматическое снятие `lost`.
+Исходные request/state/result сохраняются; новая расписка освобождает владение,
+не объявляя историческую команду успешной.
+
+
+## Единый редактор — 10.11.2026
+
+Публичная рука `edit(action="replace|write|patch|batch", ...)` заменяет прежние
+fs_edit/coding_edit без алиасов. Без task_id адресует дом, сохраняя зоны записи,
+proposal_id для ядра, overwrite/force для полной перезаписи. С task_id использует
+корень и исполнитель Forge; patch (git apply --check/apply) требует задачи.
+Отдельного fs_write и алиасов больше нет. Ответ edit: JSON: status/message/before_sha256/after_sha256;
+пакет дополнительно содержит files. Patch возвращает ok без обещания SHA-readback.
+Модель и воркер используют общий редактор со своими описаниями; воркер получает task_id/parent от runtime.
+
+Локальный foreground coding_run/run передаёт Python-скрипту контекст своей команды.
+h.read/h.edit/h.write/h.search наследуют задачу; явный конфликтующий task_id запрещён.
+Редактор сверяет nonce с хешем в durable request, PID с birth identity и реальное
+происхождение вызывающего процесса от custodian через Linux /proc. Только после
+этого собственный process unit не считается конкурентом; чужие задачи/процессы,
+воркеры, проверки, родительская цепь и Stop/Pause сохраняют все прежние запреты.
+Это кооперативный custody-протокол, не sandbox от намеренно злонамеренного shell
+с тем же UID и доступом к state. Контекст не логируется и не передаётся в argv.
+Внешний Python может назвать task_id явно, но не получает исключения из владения.
+Наследование гарантировано только для Linux local foreground commands; background,
+remote и Windows не получают обещания этого режима. Без связанной задачи h.search ищет дома с root. Ошибки редактора Refused/Partial/InDoubt несут полный .result.
+
+
+Удалённые одиночные операции передают структурированный ответ serverd/body до
+его превращения в текст. Успех исполнителя возвращает ok (без местного SHA/readback
+обещания), неокончательные/потерянные ответы и неоднозначные ошибки — in_doubt.
+Известное отсутствие исполнителя до отправки — refused. Детали и request/operation
+identity сохраняются в backend_result. Удалённый batch по-прежнему не отправляется.
+
+
+## Каталог и живой Python — 10.11.2026
+
+После слияний A/Б полный канонический owner-каталог содержит 78 схем (101 исходная,
+минус 8 удалённых и 16 объединённых, плюс python). Исполняемых алиасов удалённых
+имён нет; исторические записи и backend helpers сохранены. `catalog_tools_for`
+собирает полномочия текущего хода, `_bind_tool_catalog` сохраняет этот полный набор.
+Явный override специального хода остаётся узким. Каталог одинаков для любого
+говорящего (Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА»; admit/computer_access удалены — 76 схем).
+Раскрытие приватного по-прежнему проверяется на выходе.
+
+Егор 10.11: `h.hand` — инструмент скриптов, а не экономия. При выключенных старых
+указателях `offered_tools_for` отдаёт все схемы каталога родными; Python-хвоста нет.
+Дополнительные reply/end_turn/task_control и provider tools зависят от вида хода. K
+содержит карту семейств, общий словарь исходов и договор `h.hand` для скриптов;
+`h.describe(name)['content']` возвращает точную схему текущего каталога. Старый pointer
+mode, continuation_mode=legacy и авторское описание computer не меняются.
+
+`python(code,cwd,timeout,task_id)` передаёт код через stdin интерпретатору без bash;
+строки traceback соответствуют коду, h подключён заранее. `command_execution`
+объединяет запуск shell/python/coding_run, сохраняя Forge admission и custody.
+Git-наблюдение начинается после admission и возвращает [command]/[changes]/[exit].
+Changes — наблюдаемая разница byte/mode/HEAD рабочего Git, без утверждения об
+авторстве одновременных изменений или наблюдении внешних эффектов. Домашние фоновые
+потомки переживают нормальное завершение; timeout закрывает обычную группу.
+Удалённый task python пока явно отказывается до исполнения.
+
+`hand_bridge.py` даёт foreground-команде приватный Unix socket (каталог 0700,
+socket 0600), token только в окружении ребёнка и проверку SO_PEERCRED/UID/происхождения.
+Вызов возвращается в настоящий родительский RunContext и ChannelContext; дочерний
+Python не импортирует agent. `_AgentHandRuntime` использует тот же durable executor:
+права и Stop, tool_started, стабильный ключ доставки, tool_report, result_ref и
+paused/in_doubt. Вложенный hand_requested связывает вызов с внешним call_id;
+critical-параметры и их digest проходят существующую redacted-проекцию.
+
+```python
+r = h.hand('proposal', action='list')
+print(r['content'])
+print(h.describe('proposal')['content'])
+```
+
+Ответ содержит status/outcome/content/result_ref/call_id/image_count. completed означает
+полученную расписку; outcome — исход самой руки из её tool_result (confirmed/refused/
+in_doubt/partial/ok/failed, unknown, если рука его не сообщает). Картинки попадают в
+родительский кадр и immutable run artifacts; resume проверяет путь, SHA и размер.
+end_turn, silence и ожидание доставки используют настоящее состояние родительского хода.
+Когда скрипт перестал ждать (его timeout или выход), `Bridge.drain` отказывает новым
+запросам и дожидается уже начатых, пока ран running без pause/cancel; их расписки
+дописываются после [exit N] строкой `[late hand …]`. Ceiling внешней руки, pause или
+cancel закрывают канал: pending становится in_doubt. Background survivors и отдельные
+workers не получают живого диспетчера.
+При повторе потерянного ответа внутри той же команды `_request_id` должен быть
+тем же с точными аргументами: один effect, повтор cached receipt; иной intent
+отказывается. Автоматических сетевых повторов и слепого replay эффектов нет.
+Это кооперативный протокол того же UID, а не sandbox от sovereign shell/root.
+
+Файловые руки h.hand наследуют nonce/custodian проверенной локальной задачи через
+реальный PID Unix peer; чужой task_id отказывается. `fs_read(paths=[...])` даёт
+пофайловые версии/ошибки/картинки; fs_read/fs_ls/fs_search принимают task_id.
+Native coding_inspect больше не принимает read/list/search; приватный worker
+inspect сохраняется. Чтения, списки, поиск и coding_inspect пишут исход в tool_report:
+`forge.inspect` возвращает `InspectReply` (str с outcome), отказы помечены там, где
+возвращаются, ответ удалённого backend остаётся unknown; пакет fs_read даёт один
+итог ok/partial/refused/failed. `all=true` заменяет все непересекающиеся вхождения, confirmed
+называет точное число. Его after_sha256 подходит для следующего expected_sha256.
+
+Serverd договаривается о edit_all_v1 до all-запроса. Неизвестный/старый backend и
+Windows явно отказываются, а не игнорируют параметр. Broker replace строго читает
+UTF-8, сохраняет CRLF и сверяет текущие байты до записи. stage=preflight означает
+доказанный отказ до публикации; apply/after_error или неокончательный ответ не
+превращаются в refused. Remote ok остаётся подтверждением backend, без местной
+readback-гарантии. Remote batch по-прежнему не отправляется.

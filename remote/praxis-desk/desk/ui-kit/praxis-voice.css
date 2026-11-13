@@ -1,0 +1,20 @@
+#praxis-voice-group{margin-top:22px;font:inherit;color:inherit}
+#praxis-voice-group .xtts-body{padding:0 14px}
+#praxis-voice-group .xtts-body>p{font-size:13px;line-height:1.45}
+#praxis-voice-group .xtts-status{font-size:13px;margin:10px 0}
+#praxis-voice-group label{display:block;font-size:12px;margin:12px 0 6px}
+#praxis-voice-group input:not([type=file]),#praxis-voice-group textarea{display:block;width:100%;box-sizing:border-box;max-width:100%;margin-top:5px;padding:9px 10px;font:inherit;color:inherit;background:transparent;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:8px}
+#praxis-voice-group textarea{resize:vertical;min-height:66px}
+#praxis-voice-group .actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+#praxis-voice-group .chip{font:inherit;font-size:12px;white-space:normal;max-width:100%}
+#praxis-voice-group .chip:disabled{opacity:.45;cursor:default}
+#praxis-voice-group .xtts-voices{max-height:430px;overflow:auto;overscroll-behavior:contain;margin:8px 0 20px}
+#praxis-voice-group .xtts-voice{padding:11px 14px;border-bottom:1px solid color-mix(in srgb,currentColor 12%,transparent);min-width:0}
+#praxis-voice-group .xtts-voice b{overflow-wrap:anywhere}
+#praxis-voice-group .xtts-active{border-left:3px solid currentColor;padding-left:11px}
+#praxis-voice-group .task-head .muted{font-size:11px}
+#praxis-voice-group audio{width:100%;margin:8px 0}
+#praxis-voice-group .xtts-note{min-height:1.5em}
+#praxis-voice-group .xtts-clone{padding-bottom:26px}
+#praxis-voice-group h3{font-size:16px;margin:14px 0 8px}
+#praxis-voice-group [hidden]{display:none!important}

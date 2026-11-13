@@ -20,7 +20,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# 12.09: руки указателями — этот стенд меряет ПОЛНЫЙ манифест как список `tools`; семантика указателей — test_tool_pointers. Рычаг снимается в tearDownModule.
+# Old call/describe pointers are off; native tools and the full Python catalogue are distinct.
 def setUpModule():
     os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
 
@@ -59,6 +59,7 @@ class FakeClient:
         class _M:
             def create(_s, **kw):
                 self.last = kw
+                self.last_catalog = dict(agent._catalog_for_turn())
                 return FakeResp(self.reply)
 
         self.messages = _M()
@@ -220,24 +221,27 @@ class TestManageRoom(Base):
         self.assertNotIn("-100600", rooms.allowed_chats())
 
     def test_room_management_is_hers_in_every_turn(self):
-        """Решение Егора 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я»; «она и сама уже сейчас откажет, если там бред». За Егором остались только admit и computer_access — раздача ЕГО доверия другим людям."""
-        names = _tools_for(False)
+        """Решение Егора 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
+        names = _tools_for(False, full=True)
         self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Егора")
-        self.assertNotIn("admit", names, "но впустить нового человека решает он")
+        self.assertIn("manage_room", _tools_for(False), "схема родная, не через h.hand")
+        self.assertIn("python", _tools_for(False))
+        self.assertEqual(set(names), set(_tools_for(True, full=True)))
 
     def test_in_tools_for_owner(self):
-        names = _tools_for(True)
+        names = _tools_for(True, full=True)
         self.assertIn("manage_room", names)
-        self.assertIn("admit", names)
+        self.assertNotIn("admit", names)
         self.assertIn("shell", names)
 
     def test_praxis_can_freeze_current_non_owner_chat_without_approval(self):
         agent._CURRENT_CHAT = "777"
         agent._CURRENT_SCOPE = "unknown"
-        out = agent.tool_freeze_contact("спам и давление")
+        out = agent.TOOL_IMPL["freeze_chat"](action="boundary", reason="спам и давление")
         self.assertIn("Заморозила", out)
         self.assertTrue(rooms.is_frozen("777"))
-        self.assertIn("freeze_contact", _tools_for(False))
+        self.assertIn("freeze_chat", _tools_for(False))
+        self.assertNotIn("freeze_contact", _tools_for(False))
 
 
 class TestSocial(Base):
@@ -247,23 +251,6 @@ class TestSocial(Base):
         self.assertEqual(social.category(123), "unknown")
         social.add_known("123", "Гость")
         self.assertEqual(social.category(123), "known")
-
-    def test_admit_creates_person_and_known(self):
-        with self.owner_turn():
-            out = agent.tool_admit("Маша", "12345")
-        self.assertIn("Маша", out)
-        self.assertEqual(social.category("12345"), "known")
-        self.assertTrue((agent.PEOPLE_DIR / "маша.md").exists())
-
-    def test_admit_needs_id(self):
-        with self.owner_turn():
-            self.assertIn("id", agent.tool_admit("Безымянный").lower())
-
-    def test_admit_refuses_owner(self):
-        with self.owner_turn():
-            out = agent.tool_admit("Я сам", "123456789")
-            self.assertIn("ты сам", out.lower())
-            self.assertEqual(social.category("123456789"), "owner")
 
     def test_owner_id_read_lazily(self):
         # регрессия env-бага: owner распознаётся, даже если env выставлен ПОСЛЕ импорта модуля
@@ -320,9 +307,10 @@ def _tool_use(tid, name, inp):
 
 class TestIntegration(Base):
     def test_owner_join_through_respond(self):
-        """respond ставит _CURRENT_CHAT из chat_id; ReAct-цикл диспатчит manage_room."""
+        """respond -> real Python child -> parent manage_room retains the exact room."""
         steps = [
-            _tool_use("t1", "manage_room", {"action": "join"}),
+            _tool_use("t1", "python", {"code": "print(h.hand('manage_room', action='join')['content'])",
+                                        "cwd": str(self.tmp)}),
             FakeResp("впустила, готово"),
         ]
         llm.use_test_client(ScriptedClient(steps))
@@ -340,14 +328,14 @@ class TestIntegration(Base):
         self.assertTrue((agent.ROOMS_DIR / "-100900.md").exists())
 
 
-def _tools_for(is_owner: bool) -> list[str]:
+def _tools_for(is_owner: bool, *, full=False) -> list[str]:
     fc = FakeClient()
     llm.use_test_client(fc)
     try:
         agent.respond("привет", [], "Гость", force_voice=True, is_owner=is_owner)
     finally:
         llm.clear_test_clients()
-    return [t["name"] for t in fc.last.get("tools", [])]
+    return list(fc.last_catalog) if full else [t["name"] for t in fc.last.get("tools", [])]
 
 
 class TheRoomKeepsItsRealName(unittest.TestCase):

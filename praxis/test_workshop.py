@@ -128,7 +128,7 @@ class TestRunAndQuota(Base):
         self.assertIn("вырезано", out)
 
     def test_run_timeout(self):
-        # PASS 16.3: тайм-аут исполняет компилируемый пол («прервано по тайм-ауту»),
+        # тайм-аут исполняет hands.execute («прервано по тайм-ауту»),
         # а без бинаря — питон («прервано по таймауту»). Факт один, формулировки разные.
         slug = self._proj()
         cmd = f'"{sys.executable}" -c "import time; time.sleep(5)"'
@@ -278,14 +278,14 @@ class TestCodingWindow(unittest.TestCase):
         self.assertNotIn("Telegram remains online", calls["extra"])
         self.assertIsNone(calls["iters"], "PASS 24: обычное окно больше не имеет скрытого потолка")
 
-    def test_workshop_tools_registered_owner_only(self):
-        for name in ("project_create", "fs_edit", "run_tests", "send_file", "code_map"):
+    def test_workshop_families_registered_for_owner_and_praxis(self):
+        for name in ("project", "edit", "proposal", "send_file", "code_outline"):
             self.assertIn(name, agent.TOOL_IMPL)
         owner = {t["name"] for t in agent.OWNER_TOOLS}
-        base = {t.get("name") for t in agent.BASE_TOOLS}
-        for name in ("fs_edit", "send_file", "run", "pip_install"):
+        sovereign = {t.get("name") for t in agent.PRAXIS_SELF_TOOLS}
+        for name in ("edit", "send_file", "project", "python"):
             self.assertIn(name, owner)
-            self.assertNotIn(name, base, f"{name} не должен быть виден не-владельцу")
+            self.assertIn(name, sovereign, f"{name} belongs to Praxis in every audience")
 
 
 if __name__ == "__main__":

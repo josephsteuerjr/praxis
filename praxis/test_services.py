@@ -69,7 +69,7 @@ class TestReach(Base):
         ok, msg = services.request_restart("relay", "завис")
         self.assertFalse(ok)
         self.assertIn("чужой процесс", msg)
-        self.assertIn("server_logs", msg)
+        self.assertIn("read_log с unit", msg)
         self.assertIsNone(services.SERVICES["relay"].flag)
 
     def test_self_restart_is_a_different_lever(self):
@@ -114,7 +114,7 @@ class TestRails(Base):
         ok, msg = services.request_restart("serverapp", "ещё разок")
         self.assertFalse(ok, "четвёртый рестарт за час — это петля")
         self.assertIn("петля", msg)
-        self.assertIn("server_logs", msg)
+        self.assertIn("read_log с unit", msg)
 
     def test_quota_is_per_unit(self):
         for i in range(services.RESTARTS_PER_HOUR):
@@ -209,10 +209,12 @@ class TestToolWiring(unittest.TestCase):
         self.assertNotIn("manage_service", agent._SCOUT_TOOL_NAMES,
                          "разведчик ничего не меняет — это его определение")
 
-    def test_server_logs_is_readable_by_the_scout(self):
+    def test_service_logs_are_readable_through_the_unified_scout_hand(self):
         import agent
-        self.assertIn("server_logs", agent._SCOUT_TOOL_NAMES)
-        self.assertIn("server_logs", [t["name"] for t in agent.OWNER_TOOLS])
+        self.assertIn("read_log", agent._SCOUT_TOOL_NAMES)
+        self.assertNotIn("server_logs", agent._SCOUT_TOOL_NAMES)
+        spec = next(t for t in agent.OWNER_TOOLS if t["name"] == "read_log")
+        self.assertIn("unit", spec["input_schema"]["properties"])
         self.assertNotIn("server_logs", [t["name"] for t in agent.BASE_TOOLS])
 
     def test_restart_mailbot_still_works_through_the_registry(self):

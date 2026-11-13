@@ -99,6 +99,19 @@ _EVIDENCE_FILE_CACHE: dict[
     dict[str, tuple[tuple[str, int, int, int, str],
                     tuple[dict[str, int], dict[str, dict[str, Any]]]]],
 ] = {}
+# Текущие ревизии Telegram по всем файлам ленты, КРОМЕ последнего (08.11, Claude):
+# корень -> (пути и отпечатки файлов префикса, дубли, отбор по ключу линии, готовые id).
+# Файлы прошлых дней не меняются, а сегодняшний меняет каждая дозапись — и прежде
+# каждая дозапись сбрасывала весь `claim_evidence_index` в пересчёт текущих ревизий
+# по всем 128 тыс. событиям: ~4 с CPU под GIL на любой вызов после нового сообщения
+# (пересборка места, refresh_debt, досье, identity, recall). Теперь префикс считается
+# раз в день, хвост — на каждый вызов. Ответ тот же: см. `_current_event_ids_incremental`.
+_CURRENT_PREFIX_CACHE: dict[
+    str,
+    tuple[tuple[tuple[str, Any], ...], frozenset[str],
+          dict[tuple[str, int], tuple[tuple[int, float, int, int, float], str]],
+          frozenset[str]],
+] = {}
 _EVIDENCE_TAIL_BYTES = 64 * 1024
 # ⚠ 21.09.2026. Отпечаток по хвосту считался у КАЖДОГО файла жизни на КАЖДЫЙ вызов
 # `claim_evidence_index`, а зовут его сборка кадра каждого хода, свёртка, formation,
@@ -300,6 +313,36 @@ def _event_epoch(value: Any) -> float:
         return 0.0
 
 
+_REVISION_PRIORITY = {"original": 0, "edit": 1, "delete": 2}
+
+
+def _revision_rank(row: dict[str, Any]) -> tuple[
+        tuple[str, int], tuple[int, float, int, int, float]] | None:
+    """Ключ линии Telegram и ранг ревизии БЕЗ позиции во входе; None — не сообщение Telegram.
+
+    Единственное определение порядка ревизий: им пользуются и
+    `current_conversation_events` (добавляя позицию последним полем), и инкрементальный
+    отбор индекса доказательств. Два определения разошлись бы молча.
+    """
+    key = telegram_message_key(row)
+    if key is None:
+        return None
+    kind = telegram_revision_kind(row)
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    revision_order = meta.get("revision_order")
+    try:
+        revision_order = int(revision_order)
+    except (TypeError, ValueError):
+        revision_order = 0
+    return key, (
+        1 if kind == "delete" else 0,
+        _event_epoch(row.get("ts")),
+        _REVISION_PRIORITY.get(kind, 0),
+        revision_order,
+        _event_epoch(meta.get("observed_at")),
+    )
+
+
 def current_conversation_events(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Materialise current Telegram revisions while preserving immutable raw events.
 
@@ -314,31 +357,15 @@ def current_conversation_events(rows: Iterable[dict[str, Any]]) -> list[dict[str
     selected: dict[
         tuple[str, int], tuple[tuple[int, float, int, int, float, int], dict[str, Any]]
     ] = {}
-    passthrough: list[tuple[int, dict[str, Any]]] = []
-    priority = {"original": 0, "edit": 1, "delete": 2}
     for index, row in enumerate(items):
-        key = telegram_message_key(row)
-        if key is None:
-            passthrough.append((index, row))
+        revision = _revision_rank(row)
+        if revision is None:
             continue
-        kind = telegram_revision_kind(row)
-        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-        revision_order = meta.get("revision_order")
-        try:
-            revision_order = int(revision_order)
-        except (TypeError, ValueError):
-            revision_order = 0
-        rank = (
-            1 if kind == "delete" else 0,
-            _event_epoch(row.get("ts")),
-            priority.get(kind, 0),
-            revision_order,
-            _event_epoch(meta.get("observed_at")),
-            index,
-        )
+        key, rank = revision
+        ranked = (*rank, index)
         previous = selected.get(key)
-        if previous is None or rank >= previous[0]:
-            selected[key] = (rank, row)
+        if previous is None or ranked >= previous[0]:
+            selected[key] = (ranked, row)
     current_ids = {id(row) for _rank, row in selected.values()}
     return [
         row for row in items
@@ -365,6 +392,83 @@ def current_conversation_event_ids(rows: Iterable[dict[str, Any]]) -> frozenset[
         and (telegram_message_key(row) is None
              or str(row.get("id")) in current_telegram_ids)
     )
+
+
+def _fold_revisions(rows: Iterable[Any],
+                    selected: dict[tuple[str, int], tuple[tuple[int, float, int, int, float], str]],
+                    plain: set[str]) -> None:
+    """Свернуть строки В ПОРЯДКЕ ВХОДА в отбор по линии и множество не-Telegram id.
+
+    `>=` при равном ранге отдаёт победу более поздней строке — ровно то же, что делает
+    позиция последним полем ранга в `current_conversation_events`.
+    """
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        event_id = str(row.get("id") or "")
+        revision = _revision_rank(row)
+        if revision is None:
+            if event_id:
+                plain.add(event_id)
+            continue
+        key, rank = revision
+        previous = selected.get(key)
+        if previous is None or rank >= previous[0]:
+            selected[key] = (rank, event_id)
+
+
+def _current_event_ids_incremental(
+        cache_key: str,
+        per_file: list[tuple[str, Any, dict[str, dict[str, Any]]]],
+        duplicates: set[str]) -> frozenset[str]:
+    """`current_conversation_event_ids(events.values())` без пересчёта прошлых дней.
+
+    `per_file` — вклад файлов в индекс в ТОМ ЖЕ порядке, в каком `_event_index` собирает
+    `events`: (путь, отпечаток, кандидаты файла). События индекса — это кандидаты всех
+    файлов подряд без дублей, поэтому их порядок = порядок файлов, затем порядок строк.
+    Значит отбор по линии раскладывается на префикс (все файлы, кроме последнего) и
+    хвост: победитель линии — хвостовой, если его ранг >= префиксного, иначе
+    префиксный. Префикс кэшируется по путям+отпечаткам своих файлов и множеству дублей
+    (новый дубль меняет состав событий префикса); любое расхождение — полный пересчёт.
+
+    Id событий индекса уникальны (ключ словаря — сам `row["id"]`), поэтому итог =
+    не-Telegram id ∪ id победителей линий, как у полного пути.
+    """
+    dup = frozenset(duplicates)
+    head, tail = per_file[:-1], per_file[-1:]
+    head_key = tuple((path, signature) for path, signature, _candidates in head)
+    cacheable = all(signature is not None for _path, signature in head_key)
+    cached = _CURRENT_PREFIX_CACHE.get(cache_key)
+    if cacheable and cached is not None and cached[0] == head_key and cached[1] == dup:
+        head_selected, head_ids = cached[2], cached[3]
+    else:
+        head_selected = {}
+        head_plain: set[str] = set()
+        for _path, _signature, candidates in head:
+            _fold_revisions((row for event_id, row in candidates.items() if event_id not in dup),
+                            head_selected, head_plain)
+        head_ids = frozenset(head_plain.union(
+            event_id for _rank, event_id in head_selected.values() if event_id))
+        if cacheable:
+            _CURRENT_PREFIX_CACHE[cache_key] = (head_key, dup, head_selected, head_ids)
+        else:
+            _CURRENT_PREFIX_CACHE.pop(cache_key, None)
+    tail_selected: dict[tuple[str, int], tuple[tuple[int, float, int, int, float], str]] = {}
+    added: set[str] = set()
+    for _path, _signature, candidates in tail:
+        _fold_revisions((row for event_id, row in candidates.items() if event_id not in dup),
+                        tail_selected, added)
+    removed: set[str] = set()
+    for key, (rank, event_id) in tail_selected.items():
+        previous = head_selected.get(key)
+        if previous is None or rank >= previous[0]:
+            if previous is not None and previous[1]:
+                removed.add(previous[1])
+            if event_id:
+                added.add(event_id)
+    if not removed and not added:
+        return head_ids
+    return (head_ids - removed) | added
 
 
 def _nonempty_string(value: Any, *, limit: int = 20_000) -> bool:
@@ -606,7 +710,7 @@ def _event_file_index(path: Path) -> tuple[dict[str, int], dict[str, dict[str, A
     return counts, candidates
 
 
-def _event_index(memory_dir: Path, *, file_cache=None, signatures=None,
+def _event_index(memory_dir: Path, *, file_cache=None, signatures=None, per_file=None,
                  ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     candidates: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
@@ -619,6 +723,9 @@ def _event_index(memory_dir: Path, *, file_cache=None, signatures=None,
         for event_id, count in file_counts.items():
             counts[event_id] = counts.get(event_id, 0) + count
         candidates.update(file_candidates)
+        if per_file is not None:
+            key = path.as_posix()
+            per_file.append((key, (signatures or {}).get(key), file_candidates))
     duplicates = {event_id for event_id, count in counts.items() if count != 1}
     return ({key: value for key, value in candidates.items() if key not in duplicates}, duplicates)
 
@@ -759,9 +866,10 @@ def claim_evidence_index(memory_dir: str | Path) -> dict[str, Any]:
         if cached and cached[0] == frozen:
             return cached[1]
         file_cache = _EVIDENCE_FILE_CACHE.setdefault(key, {})
+        per_file: list[tuple[str, Any, dict[str, dict[str, Any]]]] = []
         events, duplicate_events = _event_index(
-            root, file_cache=file_cache, signatures=signatures)
-        current_event_ids = current_conversation_event_ids(events.values())
+            root, file_cache=file_cache, signatures=signatures, per_file=per_file)
+        current_event_ids = _current_event_ids_incremental(key, per_file, duplicate_events)
         compacts, duplicate_compacts = _compact_index(
             root, file_cache=file_cache, signatures=signatures)
         for stale in set(file_cache) - set(signatures):

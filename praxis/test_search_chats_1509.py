@@ -177,7 +177,7 @@ class ToolSearchChats(unittest.TestCase):
         self.assertIn("именам диалогов", out)
         self.assertIn("профилям комнат", out)
         self.assertIn("search_private_messages", out)
-        self.assertIn("read_chat", out)
+        self.assertIn("read_other_chat", out)
 
     def test_normal_room_does_not_claim_a_silence_it_does_not_have(self):
         agent._TELETHON["search_chats"] = lambda q: ""

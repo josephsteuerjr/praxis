@@ -6,9 +6,9 @@ accepts an injected async caller/entity resolver.  Consequently it can be tested
 without a Telegram session and cannot quietly create a second client or brain.
 
 The generic ``raw`` path is available only to sovereign principals: the human owner
-and Praxis herself.  Account-critical/auth/session constructors additionally require
-a separately issued, request-and-parameters-bound owner confirmation proof checked by
-an injected verifier.  Transport wrapper requests are
+and Praxis herself.  Account-critical/auth/session constructors are dispatched the same
+way (Egor 10.11 removed the separate owner-confirmation gate); they stay *sensitive*:
+their parameters and results are never echoed into receipts.  Transport wrapper requests are
 visible in the registry (schema completeness) but are never dispatchable: accepting
 ``InvokeWith*`` would let a nested request bypass the policy applied here.
 """
@@ -43,16 +43,13 @@ SCOPES = (
 _MISSING = object()
 # Deliberately process-ephemeral.  Account-critical arguments may contain a
 # password or login code, so a durable/model-visible plain digest would be an
-# offline verifier for a small secret.  The commitment can correlate one live
-# confirmation flow, but becomes unverifiable after process restart; recovery
-# obtains the exact arguments only from the authenticated encrypted spool.
+# offline verifier for a small secret.  The commitment correlates one live dispatch
+# in its receipt and becomes unverifiable after process restart.
 _PARAMETER_COMMITMENT_KEY = os.urandom(32)
 _SAFE_ERROR_TYPE_RE = re.compile(
     r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure)"
 )
-_SAFE_CRITICAL_POLICY_TYPES = frozenset({
-    "ConfirmationRequired", "ConfirmationRejected", "PermissionDenied",
-})
+_SAFE_CRITICAL_POLICY_TYPES = frozenset({"PermissionDenied"})
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
 _ENTITY_TYPES = {
     "InputPeer",
@@ -132,7 +129,8 @@ class RequestDescriptor:
         return self.risk != "transport_internal"
 
     @property
-    def requires_confirmation(self) -> bool:
+    def sensitive(self) -> bool:
+        """Auth/session/2FA/destructive account state: parameters and results stay unechoed."""
         return self.risk == "account_critical"
 
     @property
@@ -172,41 +170,13 @@ class RequestDescriptor:
             "risk": self.risk,
             "callable": self.callable,
             "raw_sovereign_only": True,
-            "requires_confirmation": self.requires_confirmation,
+            "sensitive_parameters": self.sensitive,
             "policy_reason": self.policy_reason,
         }
         if detailed:
             result["parameters"] = [parameter.to_dict() for parameter in self.parameters]
             result["schema"] = self.schema
         return result
-
-
-@dataclass(frozen=True)
-class ConfirmationBinding:
-    request_name: str
-    parameter_commitment: str
-    principal: str
-    scope: str
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "request_name": self.request_name,
-            "binding_id": self.parameter_commitment,
-            "principal": self.principal,
-            "scope": self.scope,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class CriticalConfirmation:
-    """Opaque proof issued by a separate owner-confirmation workflow.
-
-    Merely constructing this value is insufficient.  The dispatcher only accepts it
-    when its injected verifier validates and consumes ``token`` against the current
-    process-local binding.  No parameter verifier is carried in the proof itself.
-    """
-
-    token: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -338,7 +308,7 @@ def classify_request(name: str) -> tuple[str, str, str]:
         return (
             "telegram.account",
             "account_critical",
-            "destroying an auth key/session requires separate owner confirmation",
+            "destroying an auth key/session: sensitive, parameters and results are never echoed",
         )
     if namespace == "core":
         return (
@@ -458,7 +428,7 @@ def classify_request(name: str) -> tuple[str, str, str]:
         return (
             scope,
             "account_critical",
-            "auth/session/2FA or destructive account state requires separate owner confirmation",
+            "auth/session/2FA or destructive account state: sensitive, parameters and results are never echoed",
         )
     return scope, "standard", "scope-classified installed TL constructor"
 
@@ -750,14 +720,6 @@ class TelegramCapabilityRegistry:
                 raise ParameterValidationError(f"{descriptor.name}.{name_}: {exc}") from exc
         return result
 
-    def parameters_commitment(
-        self, name: str, parameters: Mapping[str, Any] | None
-    ) -> str:
-        """Return a process-local keyed commitment, never a plain secret verifier."""
-
-        validated = self.validate(name, parameters)
-        return _json_commitment(validated)
-
     def _coerce_value(self, value: Any, annotation: Any, *, path: str, allow_none: bool = False) -> Any:
         if value is None:
             atoms = _annotation_atoms(annotation)
@@ -1037,10 +999,6 @@ class TelegramAccountDispatcher:
         entity_resolver: EntityResolver | None,
         owner_id: str | int,
         registry: TelegramCapabilityRegistry | None = None,
-        confirmation_verifier: Callable[
-            [CriticalConfirmation, ConfirmationBinding], bool | Awaitable[bool]
-        ]
-        | None = None,
         typed_allowlist: Iterable[str] = (),
         sovereign_principals: Iterable[str] = (),
     ) -> None:
@@ -1056,21 +1014,8 @@ class TelegramAccountDispatcher:
                 *(str(item).strip() for item in sovereign_principals),
             } if value
         )
-        self.confirmation_verifier = confirmation_verifier
         self.typed_allowlist = frozenset(
             self.registry.get(name).name for name in typed_allowlist
-        )
-
-    def confirmation_binding(
-        self, name: str, parameters: Mapping[str, Any] | None, *, principal: str | int
-    ) -> ConfirmationBinding:
-        descriptor = self.registry.get(name)
-        commitment = self.registry.parameters_commitment(descriptor.name, parameters)
-        return ConfirmationBinding(
-            request_name=descriptor.name,
-            parameter_commitment=commitment,
-            principal=str(principal),
-            scope=descriptor.scope,
         )
 
     async def dispatch(
@@ -1081,7 +1026,6 @@ class TelegramAccountDispatcher:
         principal: str | int,
         granted_scopes: Iterable[str] = (),
         mode: str = "raw",
-        confirmation: CriticalConfirmation | None = None,
         delivery_context: Any = None,
     ) -> DispatchReceipt:
         started_wall = _utc_now()
@@ -1091,7 +1035,6 @@ class TelegramAccountDispatcher:
         submitted = to_jsonable(parameters or {})
         descriptor: RequestDescriptor | None = None
         commitment: str | None = None
-        confirmation_policy: dict[str, Any] = {"verified": False}
 
         def finish(
             status: str,
@@ -1102,7 +1045,7 @@ class TelegramAccountDispatcher:
             result: Any = None,
         ) -> DispatchReceipt:
             result_json = to_jsonable(result) if result is not None else None
-            critical = bool(descriptor is not None and descriptor.requires_confirmation)
+            critical = bool(descriptor is not None and descriptor.sensitive)
             # Account-critical constructors can carry passwords, login codes,
             # auth tokens and equally sensitive result objects.  A receipt is a
             # model/durable surface, so retain only status/provenance plus the
@@ -1153,7 +1096,6 @@ class TelegramAccountDispatcher:
                     "raw_sovereign_only": True,
                     "owner": principal_text == self.owner_id,
                     "sovereign": principal_text in self.sovereign_principals,
-                    "confirmation": confirmation_policy,
                     "risk": descriptor.risk if descriptor else None,
                 },
                 delivery_context=to_jsonable(delivery_context),
@@ -1220,44 +1162,6 @@ class TelegramAccountDispatcher:
                 },
             )
 
-        if descriptor.requires_confirmation:
-            binding = ConfirmationBinding(
-                descriptor.name, commitment, principal_text, descriptor.scope
-            )
-            if confirmation is None or self.confirmation_verifier is None:
-                return finish(
-                    "denied",
-                    error={
-                        "type": "ConfirmationRequired",
-                        "message": "account-critical request requires separate owner confirmation",
-                        "binding": binding.to_dict(),
-                    },
-                )
-            bound = bool(confirmation.token)
-            verified = False
-            if bound:
-                try:
-                    verified = bool(
-                        await _await_if_needed(
-                            self.confirmation_verifier(confirmation, binding)
-                        )
-                    )
-                except Exception:
-                    verified = False
-            confirmation_policy = {
-                "verified": verified,
-                "bound": bound,
-            }
-            if not verified:
-                return finish(
-                    "denied",
-                    error={
-                        "type": "ConfirmationRejected",
-                        "message": "separate confirmation was absent, mismatched, expired or consumed",
-                        "binding": binding.to_dict(),
-                    },
-                )
-
         try:
             resolved = await self._resolve_parameters(descriptor, validated)
             request = descriptor.request_class(**resolved)
@@ -1284,7 +1188,6 @@ class TelegramAccountDispatcher:
         *,
         principal: str | int,
         granted_scopes: Iterable[str] = (),
-        confirmation: CriticalConfirmation | None = None,
         delivery_context: Any = None,
     ) -> dict[str, Any]:
         """Implement the compact ``telegram_account`` list/search/describe/call surface."""
@@ -1330,7 +1233,6 @@ class TelegramAccountDispatcher:
                 principal=principal,
                 granted_scopes=granted_scopes,
                 mode=str(arguments.get("mode", "raw")),
-                confirmation=confirmation,
                 delivery_context=delivery_context,
             )
             return {"action": action, "receipt": receipt.to_dict()}
@@ -1422,8 +1324,6 @@ class TelegramAccountDispatcher:
 
 __all__ = [
     "SCOPES",
-    "ConfirmationBinding",
-    "CriticalConfirmation",
     "DispatchReceipt",
     "ParameterDescriptor",
     "ParameterValidationError",

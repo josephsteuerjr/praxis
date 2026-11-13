@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import hands_search
 import workshop
 from run_context import RunContext
 from run_manager import InvalidTransition, RunManager
@@ -52,7 +53,9 @@ class TheLiteralTestSurvivesASpace(SearchBase):
     def test_a_space_no_longer_disqualifies_the_bounded_binary_path(self):
         seen = {}
 
-        def fake_search(pattern, glob="", root="", cap=0, base=None):
+        def fake_search(pattern, glob="", root="", cap=0, base=None, scope_root=None):
+            self.assertEqual(base, self.tmp)
+            self.assertEqual(scope_root, self.tmp.resolve())
             seen["pattern"] = pattern
             return {"ok": True, "hits": ["a.txt:1: 10 млн"], "files_seen": 1, "capped": False}
 
@@ -95,12 +98,10 @@ class TheWalkHasCeilings(SearchBase):
         # Файлы БЕЗ искомого: иначе потолок совпадений оборвал бы обход раньше часов,
         # и тест проверял бы не то, что назван проверять.
         self.make_tree(900, needle="сено")
-        ticks = iter([0.0] + [999.0] * 4000)
-        with mock.patch.object(workshop, "SEARCH_SECONDS", 5.0), \
-             mock.patch.object(workshop, "SEARCH_SCAN_CAP", 0), \
-             mock.patch.object(workshop.time, "monotonic", lambda: next(ticks)):
+        with mock.patch.object(workshop, "SEARCH_SECONDS", 1e-6), \
+             mock.patch.object(workshop, "SEARCH_SCAN_CAP", 0):
             out = workshop.fs_search(r"игол\w+", glob="**/*.txt")
-        self.assertIn("искала 5с", out, "часы не остановили обход")
+        self.assertIn("искала 0с", out, "часы не остановили обход")
         self.assertIn("Ничего не нашла", out)
 
     def test_an_interrupted_walk_never_reports_nothing_found(self):
@@ -131,10 +132,10 @@ class TheWalkHasCeilings(SearchBase):
             materialised.append(gen)
             return gen
 
-        with mock.patch.object(Path, "glob", spy), \
-             mock.patch.object(workshop, "SEARCH_SCAN_CAP", 5), \
-             mock.patch.object(workshop, "SEARCH_SECONDS", 0.0):
-            workshop.fs_search(r"игол\w+", glob="**/*.txt")
+        with mock.patch.object(Path, "glob", spy):
+            hands_search.walk({"root": str(self.tmp), "pattern": r"игол\w+", "glob": "**/*.txt", "cap": 60,
+                               "scan_cap": 5, "max_bytes": 1 << 20, "seconds": 0.0, "skip_dirs": [],
+                               "skip_runs": True})
         self.assertTrue(materialised)
         for gen in materialised:
             self.assertFalse(isinstance(gen, (list, tuple)),

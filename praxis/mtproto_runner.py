@@ -46,7 +46,6 @@ import rooms
 import social
 import social_pulse
 import telegram_contacts
-import telegram_confirmation
 import telegram_followups
 import telegram_membership
 import telegram_admin
@@ -185,8 +184,6 @@ _self_id = None
 # (он на настоящем лупе). В свежем клиенте (проба) те же вызовы шли за 0.2с.
 _LOOP: asyncio.AbstractEventLoop | None = None
 _TELEGRAM_DISPATCHER: telegram_registry.TelegramAccountDispatcher | None = None
-_TELEGRAM_CONFIRMATIONS: telegram_confirmation.ConfirmationStore | None = None
-_TELEGRAM_CRITICAL_CHALLENGES: telegram_confirmation.CriticalChallengeStore | None = None
 
 
 def _main_loop() -> asyncio.AbstractEventLoop:
@@ -5065,7 +5062,7 @@ async def _direct_outbox_once() -> None:
             continue
         await _reconcile_direct_outbox_entry(accepted)
 
-    accepted_rows = await asyncio.to_thread(outbox.accepted, verify_files=False)
+    accepted_rows = await asyncio.to_thread(outbox.accepted, verify_files=False, exclude_keys=frozenset(_DIRECT_OUTBOX_RECONCILED))
     for entry in accepted_rows:
         if str(entry.get("key") or "") in _DIRECT_OUTBOX_RECONCILED:
             continue
@@ -7064,26 +7061,13 @@ async def _telegram_registry_entity_resolver(value, expected_type: str,
 
 def _install_telegram_dispatcher() -> telegram_registry.TelegramAccountDispatcher:
     """Bind installed TL schema dispatch to the already-connected account client."""
-    global _TELEGRAM_DISPATCHER, _TELEGRAM_CONFIRMATIONS, _TELEGRAM_CRITICAL_CHALLENGES
-    try:
-        confirmation_ttl = max(
-            30, min(900, int(os.getenv("PRAXIS_TELEGRAM_CONFIRM_TTL_SEC", "300"))),
-        )
-    except ValueError:
-        confirmation_ttl = 300
-    _TELEGRAM_CONFIRMATIONS = telegram_confirmation.ConfirmationStore(
-        owner_id=OWNER_ID, ttl_seconds=confirmation_ttl,
-        confirmable_principals=(agent.PRAXIS_SELF_PRINCIPAL,),
-    )
-    _TELEGRAM_CRITICAL_CHALLENGES = telegram_confirmation.CriticalChallengeStore(
-        owner_id=OWNER_ID, ttl_seconds=confirmation_ttl,
-        initiator_principals=(agent.PRAXIS_SELF_PRINCIPAL,),
-    )
+    global _TELEGRAM_DISPATCHER
+    # Егор 10.11 («снять целиком»): подтверждения фразой из лички владельца нет — account-
+    # critical запросы идут тем же путём, их параметры и результаты не эхом в расписки.
     _TELEGRAM_DISPATCHER = telegram_registry.TelegramAccountDispatcher(
         caller=client,
         entity_resolver=_telegram_registry_entity_resolver,
         owner_id=OWNER_ID,
-        confirmation_verifier=_TELEGRAM_CONFIRMATIONS.verify_and_consume,
         sovereign_principals=(agent.PRAXIS_SELF_PRINCIPAL,),
     )
     meta = _TELEGRAM_DISPATCHER.registry.metadata
@@ -7097,7 +7081,6 @@ def _install_telegram_dispatcher() -> telegram_registry.TelegramAccountDispatche
 
 async def _telegram_account_async(*, action: str, target: str = "", query: str = "",
                                   request: str = "", params: dict | None = None,
-                                  confirm: str = "", challenge_id: str = "",
                                   scope: str = "",
                                   namespace: str = "", risk: str = "",
                                   offset: int = 0, limit: int = 25,
@@ -7112,104 +7095,6 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
         raise PermissionError("raw MTProto dispatcher доступен только владельцу или самой Praxis")
     action = str(action or "").strip().lower()
 
-    def owner_origin() -> telegram_confirmation.OwnerOrigin:
-        if str(_principal) != str(OWNER_ID):
-            raise PermissionError(
-                "account-critical подтверждение даёт только владелец из личного Telegram-чата"
-            )
-        try:
-            origin = telegram_confirmation.OwnerOrigin.from_mapping(_origin or {})
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise PermissionError(
-                "для account-critical действия нет точного immutable origin owner-сообщения"
-            ) from exc
-        if (origin.principal_id != str(OWNER_ID)
-                or origin.chat_id != str(OWNER_ID) or not origin.is_dm):
-            raise PermissionError(
-                "account-critical действие разрешено только владельцу из личного Telegram-чата"
-            )
-        return origin
-
-    critical_store = _TELEGRAM_CRITICAL_CHALLENGES
-    proof_store = _TELEGRAM_CONFIRMATIONS
-    if action in {"confirm", "pending_confirmations", "cancel_confirmation"}:
-        if critical_store is None or proof_store is None:
-            raise RuntimeError("Telegram critical confirmation stores не инициализированы")
-        selector = str(challenge_id or target or request or "").strip()
-        if action == "pending_confirmations":
-            active = [
-                item for item in critical_store.list()
-                if item.get("status") in {"pending", "in_doubt"}
-                and (
-                    str(_principal) == str(OWNER_ID)
-                    or item.get("requested_by") == agent.PRAXIS_SELF_PRINCIPAL
-                )
-            ]
-            return {"action": action, "items": active, "count": len(active)}
-        origin = owner_origin()
-        if not selector:
-            raise ValueError(f"telegram_account {action}: challenge_id обязателен")
-        if action == "cancel_confirmation":
-            cancelled = critical_store.cancel(selector, origin=origin)
-            return {
-                "action": action, "challenge_id": selector,
-                "cancelled": bool(cancelled),
-            }
-
-        # The model sees only the challenge id.  The exact phrase is compared with
-        # immutable raw Telegram text captured by the runner, never with a tool arg.
-        claimed = critical_store.claim(selector, origin=origin)
-        # Recompute the keyed binding from the authenticated envelope in this
-        # process.  The commitment key is deliberately not durable, so a plain
-        # verifier for a password/code can never be recovered from the ledger.
-        binding = dispatcher.confirmation_binding(
-            str(claimed["request_name"]), dict(claimed["parameters"]),
-            principal=str(claimed["principal"]),
-        )
-        try:
-            proof = proof_store.issue(binding, principal=_principal)
-        except Exception as exc:
-            critical_store.finish(
-                selector, error=f"proof issue failed: {type(exc).__name__}: {exc}",
-            )
-            raise
-        try:
-            receipt = await dispatcher.handle(
-                "call",
-                {
-                    "name": binding.request_name,
-                    "parameters": dict(claimed["parameters"]),
-                    "mode": "raw",
-                },
-                principal=claimed["principal"],
-                confirmation=proof,
-                delivery_context={
-                    "chat_id": origin.chat_id,
-                    "run_id": origin.run_id,
-                    "origin_message_id": origin.message_id,
-                    "challenge_id": selector,
-                    "requested_by": claimed["principal"],
-                    "confirmed_by": str(_principal),
-                    "request_origin": claimed.get("origin"),
-                },
-            )
-        except Exception:
-            # Claim is already fsynced.  We cannot know whether an unexpected crash
-            # happened before or after Telethon accepted the mutation, so it remains
-            # in_doubt and can never be replayed automatically.
-            raise
-        challenge = critical_store.finish(selector, receipt=receipt)
-        safe_receipt = dict((challenge.get("terminal") or {}).get("receipt") or {})
-        return {
-            "action": action,
-            "requested_by": claimed["principal"],
-            "confirmed_by": str(_principal),
-            "challenge": challenge,
-            # Never feed submitted/serialized auth parameters back into the durable
-            # model/run log.  The challenge ledger exposes only opaque receipt identity.
-            "receipt": {"action": "call", "receipt": safe_receipt},
-        }
-
     mapped = {
         "registry_list": "list",
         "registry_search": "search",
@@ -7220,8 +7105,7 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
     }.get(action)
     if mapped is None:
         raise ValueError(
-            "registry action должен быть list | search | describe | call | confirm | "
-            "pending_confirmations | cancel_confirmation"
+            "registry action должен быть list | search | describe | call"
         )
 
     arguments: dict = {}
@@ -7245,59 +7129,6 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
             "parameters": dict(params or {}),
             "mode": "raw",
         }
-
-        # `confirm` is a legacy model-controlled field.  It is intentionally ignored.
-        # Critical dispatch is split into two durable runs and proof never crosses the
-        # model boundary.
-        try:
-            descriptor = dispatcher.registry.get(arguments["name"])
-        except Exception:
-            descriptor = None
-        if descriptor is not None and descriptor.requires_confirmation:
-            if critical_store is None or proof_store is None:
-                raise RuntimeError("Telegram critical confirmation stores не инициализированы")
-            execution = dict(_execution or {})
-            execution_run = str(execution.get("run_id") or "").strip()
-            call_id = str(execution.get("call_id") or "").strip()
-            if (not execution_run or not call_id
-                    or execution.get("tool") != "telegram_account"):
-                raise PermissionError(
-                    "account-critical вызов не связан с точным durable tool intent"
-                )
-            if str(_principal) == agent.PRAXIS_SELF_PRINCIPAL:
-                intent_origin = telegram_confirmation.CriticalIntentOrigin.background(
-                    run_id=execution_run,
-                    call_id=call_id,
-                    principal_id=agent.PRAXIS_SELF_PRINCIPAL,
-                    confirmation_owner_id=str(OWNER_ID),
-                )
-            else:
-                origin = owner_origin()
-                if execution_run != origin.run_id:
-                    raise PermissionError(
-                        "account-critical owner-вызов не связан с точным durable run"
-                    )
-                intent_origin = telegram_confirmation.CriticalIntentOrigin.from_owner(
-                    origin, call_id=call_id,
-                )
-            stable_key = str(execution.get("idempotency_key") or "").strip()
-            if not stable_key:
-                stable_key = f"telegram-critical:{execution_run}:tool:{call_id}"
-            binding = dispatcher.confirmation_binding(
-                descriptor.name, arguments["parameters"], principal=_principal,
-            )
-            challenge = critical_store.prepare(
-                binding, arguments["parameters"], origin=intent_origin,
-                idempotency_key=stable_key,
-            )
-            return {
-                "action": "challenge",
-                "challenge": challenge,
-                "instruction": (
-                    "Владелец должен прислать exact_phrase отдельным новым сообщением "
-                    "в личный чат; затем можно вызвать action=confirm с challenge_id."
-                ),
-            }
 
     current = agent.run_context.current_run()
     origin_chat_id = (_origin or {}).get("chat_id") if isinstance(_origin, dict) else None
@@ -8410,7 +8241,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
                 # отсутствуют в memory/groups/*/archive.jsonl, тогда как у голоса там 591.
                 # То есть её собственное слово выпадало из истории комнаты целиком — его
                 # не видели ни линза group_context, ни recall: она смотрит комнату и не
-                # находит там себя. `read_chat` показывает 25 последних сообщений, и
+                # находит там себя. `read_other_chat` показывает 25 последних сообщений, и
                 # 26.07 её реплика уже была за этим окном.
                 group_context.observe_message(
                     peer_id=route.peer_id, topic_id=route.topic_id,
@@ -8778,7 +8609,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
     ⚑ ЭТО НЕ ВТОРОЙ ШОВ, А ПЕРЕЕХАВШИЙ ПЕРВЫЙ. Под поднятым рычагом
     `PRAXIS_CHAT_REPLY_HAND` исходящая граница хода текста больше не носит: реплику
     уносит рука, и уносит вот отсюда. Два шва одновременно здесь были бы ровно тем, чего
-    вслух боится докстринг `say`, — повторами, которых она не совершала.
+    вслух боится докстринг `preview_reply`, — повторами, которых она не совершала.
 
     Почему очередь та же, что у `send_message`, а учёт другой: очередь даёт покалловый
     exact-once (`telegram-outbox:{run}:tool:{call_id}`), то есть несколько ответов в одном
@@ -11724,11 +11555,11 @@ async def main() -> None:
     me = await client.get_me()
     _self_id = me.id
     _install_telegram_dispatcher()
-    agent._TELETHON["get_id"] = _sync_get_id
+    agent._TELETHON["find_telegram_id"] = _sync_get_id
     agent._TELETHON["resolve_entity"] = _sync_resolve_id  # PASS 12.0.b: единый резолвер постановки=отправки
     agent._TELETHON["search_chats"] = _sync_search_chats
     agent._TELETHON["search_private_messages"] = _sync_search_private_messages
-    agent._TELETHON["read_chat"] = _sync_read_chat
+    agent._TELETHON["read_other_chat"] = _sync_read_chat
     agent._TELETHON["fetch_context"] = _sync_fetch_context
     agent._TELETHON["send_message"] = _sync_send_message
     agent._TELETHON["reply"] = _sync_reply

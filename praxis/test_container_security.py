@@ -15,7 +15,7 @@ CHECKER = ROOT / "scripts/check-system-security-versions.sh"
 class ContainerManifestTests(unittest.TestCase):
     def test_runtime_suite_and_guard_wired_after_install(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
-        self.assertIn("FROM rust:1.85-slim-bookworm AS hands-builder", dockerfile)
+        self.assertNotIn("FROM rust", dockerfile)
         self.assertIn("FROM python:3.12-slim-trixie\n", dockerfile)
         self.assertIn(
             "COPY scripts/check-system-security-versions.sh "

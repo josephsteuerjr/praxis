@@ -18,7 +18,6 @@ os.environ.setdefault(
 from telethon.tl import functions, types  # noqa: E402
 
 import mtproto_runner as runner  # noqa: E402
-import telegram_confirmation  # noqa: E402
 
 
 class FakeLiveClient:
@@ -47,8 +46,6 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
             "client": runner.client,
             "owner_id": runner.OWNER_ID,
             "dispatcher": runner._TELEGRAM_DISPATCHER,
-            "confirmations": runner._TELEGRAM_CONFIRMATIONS,
-            "challenges": runner._TELEGRAM_CRITICAL_CHALLENGES,
             "threadsafe": runner._threadsafe_result,
             "scope": runner.agent._CURRENT_SCOPE,
             "hook": runner.agent._TELETHON.get("telegram_account"),
@@ -64,22 +61,6 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         runner.agent._CURRENT_SCOPE = "owner"
         runner._threadsafe_result = lambda factory, timeout: asyncio.run(factory())
         dispatcher = runner._install_telegram_dispatcher()
-        self.temp = tempfile.TemporaryDirectory(prefix="praxis-registry-live-")
-        self.addCleanup(self.temp.cleanup)
-        state = Path(self.temp.name)
-        runner._TELEGRAM_CONFIRMATIONS = telegram_confirmation.ConfirmationStore(
-            owner_id=42, path=state / "proofs.jsonl", ttl_seconds=300,
-            confirmable_principals=(runner.agent.PRAXIS_SELF_PRINCIPAL,),
-        )
-        runner._TELEGRAM_CRITICAL_CHALLENGES = (
-            telegram_confirmation.CriticalChallengeStore(
-                owner_id=42, path=state / "challenges.jsonl", ttl_seconds=300,
-                initiator_principals=(runner.agent.PRAXIS_SELF_PRINCIPAL,),
-            )
-        )
-        dispatcher.confirmation_verifier = (
-            runner._TELEGRAM_CONFIRMATIONS.verify_and_consume
-        )
         runner.agent._TELETHON["telegram_account"] = runner._sync_telegram_account
         self.origin = {
             "run_id": "run-owner-one", "chat_id": "42", "message_id": 100,
@@ -106,8 +87,6 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         runner.client = self.saved["client"]
         runner.OWNER_ID = self.saved["owner_id"]
         runner._TELEGRAM_DISPATCHER = self.saved["dispatcher"]
-        runner._TELEGRAM_CONFIRMATIONS = self.saved["confirmations"]
-        runner._TELEGRAM_CRITICAL_CHALLENGES = self.saved["challenges"]
         runner._threadsafe_result = self.saved["threadsafe"]
         runner.agent._CURRENT_SCOPE = self.saved["scope"]
         if self.saved["hook"] is None:
@@ -124,17 +103,6 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
 
     def tool(self, action, **kwargs):
         return runner.agent.tool_telegram_account(action, **kwargs)
-
-    def new_owner_message(self, text: str, *, run_id: str = "run-owner-two",
-                          message_id: int = 101, call_id: str = "tool-two"):
-        self.origin = {
-            "run_id": run_id, "chat_id": "42", "message_id": message_id,
-            "principal_id": "42", "is_dm": True, "raw_text": text,
-        }
-        self.execution = {
-            "run_id": run_id, "call_id": call_id, "tool": "telegram_account",
-            "args": {}, "side_effect": True, "idempotency_key": "",
-        }
 
     def test_tool_lists_searches_describes_and_calls_installed_schema(self):
         listed = json.loads(self.tool("list", limit=1))
@@ -178,7 +146,7 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         self.assertIsInstance(self.fake.calls[1], functions.channels.GetFullChannelRequest)
         self.assertIsInstance(self.fake.calls[1].channel, types.InputChannel)
 
-    def test_raw_alias_and_account_critical_calls_use_fresh_owner_challenge(self):
+    def test_raw_alias_is_denied_without_echoing_login_secrets(self):
         alias = json.loads(
             self.tool(
                 "call",
@@ -190,9 +158,7 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         self.assertIn("exact constructor name", alias["receipt"]["error"]["message"])
 
         # Account-critical aliases resolve to the canonical descriptor before
-        # dispatch, so they cannot fall through into a denied receipt carrying
-        # the submitted login parameters.
-        self.execution["call_id"] = "tool-critical-alias"
+        # dispatch, so even the denied receipt carries no submitted login parameters.
         login_secret = "otp-731946"
         critical_alias_raw = self.tool(
             "call", request="auth.SignInRequest",
@@ -203,79 +169,34 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
             }),
         )
         critical_alias = json.loads(critical_alias_raw)
-        self.assertEqual(critical_alias["action"], "challenge")
-        self.assertEqual(
-            critical_alias["challenge"]["request_name"],
-            "functions.auth.SignInRequest",
-        )
+        self.assertEqual(critical_alias["receipt"]["status"], "denied")
+        self.assertEqual(critical_alias["receipt"]["request_name"],
+                         "functions.auth.SignInRequest")
         self.assertNotIn(login_secret, critical_alias_raw)
-        for path in Path(self.temp.name).rglob("*"):
-            if path.is_file():
-                self.assertNotIn(login_secret.encode("utf-8"), path.read_bytes(), str(path))
-
-        self.execution["call_id"] = "tool-one"
-
-        critical_raw = self.tool("call", request="functions.auth.LogOutRequest")
-        critical = json.loads(critical_raw)
-        self.assertEqual(critical["action"], "challenge")
-        challenge = critical["challenge"]
-        self.assertEqual(challenge["status"], "pending")
-        self.assertEqual(challenge["request_name"], "functions.auth.LogOutRequest")
-        self.assertIn(challenge["challenge_id"], challenge["exact_phrase"])
         self.assertEqual(self.fake.calls, [])
 
-        # A model-controlled confirm string is not forwarded and cannot become a
-        # dispatcher proof.  The same durable tool intent gets the same challenge.
-        fake_proof = json.loads(self.tool(
-            "call", request="functions.auth.LogOutRequest", confirm="yes-really"
-        ))
-        self.assertEqual(
-            fake_proof["challenge"]["challenge_id"], challenge["challenge_id"]
-        )
-        self.assertEqual(self.fake.calls, [])
-
-        # Even exact text cannot self-confirm inside the originating run/message.
-        self.origin["raw_text"] = challenge["exact_phrase"]
-        same_run = self.tool("confirm", challenge_id=challenge["challenge_id"])
-        self.assertIn("new owner message", same_run)
-        self.assertEqual(self.fake.calls, [])
-
-        self.new_owner_message("almost " + challenge["exact_phrase"])
-        wrong_text = self.tool("confirm", challenge_id=challenge["challenge_id"])
-        self.assertIn("does not exactly match", wrong_text)
-        self.assertEqual(self.fake.calls, [])
-
-        self.new_owner_message(challenge["exact_phrase"], message_id=102)
-        confirmed_raw = self.tool("confirm", challenge_id=challenge["challenge_id"])
-        confirmed = json.loads(confirmed_raw)
-        self.assertEqual(confirmed["receipt"]["receipt"]["status"], "ok")
-        self.assertEqual(confirmed["challenge"]["status"], "completed")
+    def test_account_critical_call_runs_directly_and_echoes_nothing(self):
+        # Егор 10.11 («Снять целиком»): ни челленджа, ни exact-фразы из новой лички —
+        # account-critical вызов исполняется сразу. Остаётся только редактирование:
+        # параметры и результат в квитанцию не попадают.
+        raw = self.tool("call", request="functions.auth.LogOutRequest")
+        called = json.loads(raw)
+        receipt = called["receipt"]
+        self.assertEqual(receipt["status"], "ok", receipt)
+        self.assertEqual(receipt["policy"]["risk"], "account_critical")
+        self.assertIsNone(receipt.get("submitted_parameters"))
+        self.assertIsNone(receipt.get("result"))
         self.assertEqual(len(self.fake.calls), 1)
         self.assertIsInstance(self.fake.calls[0], functions.auth.LogOutRequest)
-        self.assertNotIn("token_urlsafe", confirmed_raw)
-        self.assertNotIn("CriticalConfirmation", confirmed_raw)
+        self.assertNotIn("message_id", raw, "результат критичного вызова не эхоится")
 
-        replay = self.tool("confirm", challenge_id=challenge["challenge_id"])
-        self.assertIn("cannot be replayed", replay)
-        self.assertEqual(len(self.fake.calls), 1)
-
-    def test_pending_and_cancel_confirmation_are_owner_dm_operations(self):
-        created = json.loads(
-            self.tool("call", request="functions.auth.LogOutRequest")
-        )["challenge"]
-        pending = json.loads(self.tool("pending_confirmations"))
-        self.assertEqual(pending["count"], 1)
-        self.assertEqual(pending["items"][0]["challenge_id"], created["challenge_id"])
-
-        cancelled = json.loads(self.tool(
-            "cancel_confirmation", challenge_id=created["challenge_id"],
-        ))
-        self.assertTrue(cancelled["cancelled"])
-        after = json.loads(self.tool("pending_confirmations"))
-        self.assertEqual(after["items"], [])
+    def test_old_confirmation_actions_are_gone(self):
+        for action in ("confirm", "pending_confirmations", "cancel_confirmation"):
+            answer = self.tool(action)
+            self.assertIn("list | search | describe | call", answer, action)
         self.assertEqual(self.fake.calls, [])
 
-    def test_praxis_self_is_sovereign_but_human_gate_is_repeated(self):
+    def test_praxis_self_is_sovereign(self):
         internal = runner.agent.ChannelContext(
             principal_id=runner.agent.PRAXIS_SELF_PRINCIPAL,
             is_dm=True, owner=False, known=True, _scope_override="owner",
@@ -324,46 +245,26 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         self.assertIn("только владелец", denied_wrong_principal)
         self.assertEqual(len(self.fake.calls), 1)
 
-    def test_praxis_self_requests_critical_action_and_owner_confirms_exact_intent(self):
+    def test_praxis_self_runs_a_critical_action_herself(self):
         internal = runner.agent.ChannelContext(
             principal_id=runner.agent.PRAXIS_SELF_PRINCIPAL,
             is_dm=True, owner=False, known=True, _scope_override="owner",
         )
         token = runner.agent._TURN_CHANNEL.set(internal)
         try:
-            self.execution = {
-                "run_id": "run-praxis-self", "call_id": "tool-self-critical",
-                "tool": "telegram_account", "args": {}, "side_effect": True,
-                "idempotency_key": "telegram-critical-self-one",
-            }
-            created = json.loads(self.tool(
+            called = json.loads(self.tool(
                 "call", request="functions.auth.LogOutRequest",
             ))
-            pending = json.loads(self.tool("pending_confirmations"))
         finally:
             runner.agent._TURN_CHANNEL.reset(token)
 
-        challenge = created["challenge"]
-        self.assertEqual(created["action"], "challenge")
-        self.assertEqual(challenge["requested_by"], runner.agent.PRAXIS_SELF_PRINCIPAL)
-        self.assertEqual(pending["count"], 1)
-        self.assertEqual(self.fake.calls, [])
-
-        self.new_owner_message(challenge["exact_phrase"], message_id=120)
-        confirmed = json.loads(self.tool(
-            "confirm", challenge_id=challenge["challenge_id"],
-        ))
-        self.assertEqual(confirmed["requested_by"], runner.agent.PRAXIS_SELF_PRINCIPAL)
-        self.assertEqual(confirmed["confirmed_by"], "42")
-        receipt = confirmed["receipt"]["receipt"]
+        receipt = called["receipt"]
+        self.assertEqual(receipt["status"], "ok", receipt)
         self.assertEqual(receipt["principal"], runner.agent.PRAXIS_SELF_PRINCIPAL)
-        self.assertEqual(receipt["requested_by"], runner.agent.PRAXIS_SELF_PRINCIPAL)
-        self.assertEqual(receipt["confirmed_by"], "42")
         self.assertTrue(receipt["receipt_id"])
-        self.assertNotIn("receipt_sha256", receipt)
-        self.assertNotIn("submitted_parameters", receipt)
-        self.assertNotIn("serialized_parameters", receipt)
-        self.assertNotIn("result", receipt)
+        self.assertIsNone(receipt.get("submitted_parameters"))
+        self.assertIsNone(receipt.get("serialized_parameters"))
+        self.assertIsNone(receipt.get("result"))
         self.assertEqual(len(self.fake.calls), 1)
         self.assertIsInstance(self.fake.calls[0], functions.auth.LogOutRequest)
 

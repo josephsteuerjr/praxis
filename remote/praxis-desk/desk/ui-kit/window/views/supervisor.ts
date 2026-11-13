@@ -1,0 +1,596 @@
+// Управление харнессом и его журналы — та часть экрана «Система», которая не
+// рассказывает, а ДЕЙСТВУЕТ.
+//
+// Зачем отдельный файл. Окно к серверу было смотрелкой: видно переписку, ходы и
+// кадр, а упавший раннер или неподнявшееся реле чинились только через ssh.
+// Здесь — вторая сторона файлового протокола `deskd/control.py`: канал кладёт
+// просьбу, надзор (`server/serverboot.py`) исполняет и отвечает распиской.
+//
+// ⚠ Две вещи, которых здесь намеренно НЕТ.
+//   * Обещания «перезапускаю…» без надзора. Просьба, положенная в дерево, где
+//     надзора нет, пролежит вечно; канал это знает и отвечает отказом с
+//     причиной, а окно показывает причину, а не крутилку.
+//   * Кнопки «обновить ядро» у самого контейнера. Контейнер не пересобирает сам
+//     себя. Обновляет исполнитель РЯДОМ (`server/updater`, 27.09) — его раздел
+//     рисует `update-card.ts`, и там «Подтвердить» есть только у плана, который он
+//     уже сверил и показал. Нет исполнителя — команды названы словами.
+import { api, post } from "../api";
+import { esc, fmtTime } from "../lib";
+import { updateActive, updateCardHTML, type UpdateState } from "./update-card";
+import { mountAutonomy, type AutonomyState } from "../../autonomy";
+import { cfg } from "../api";
+
+export interface SupervisorChild {
+  id: string;
+  name: string;
+  alive: boolean;
+  pid: number | null;
+  since_utc: string;
+  falls: number;
+  halted: string;
+}
+
+export interface Receipt {
+  id: string;
+  action: string;
+  target: string;
+  done: boolean;
+  note: string;
+  done_utc: string;
+}
+
+export interface Supervisor {
+  kind: string;
+  alive: boolean;
+  beat_age: number | null;
+  started_utc: string;
+  in_container: boolean;
+  children: SupervisorChild[];
+  targets: Array<{ id: string; title: string }>;
+  receipt: Receipt | null;
+  pending: { target?: string } | null;
+  control: { available: boolean; why: string };
+}
+
+export interface LogRow {
+  id: string;
+  title: string;
+  exists: boolean;
+  size?: number;
+  changed_utc?: string;
+}
+
+function size(bytes: number | undefined): string {
+  if (!bytes) return "пусто";
+  if (bytes < 1024) return bytes + " Б";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " КБ";
+  return (bytes / 1024 / 1024).toFixed(1) + " МБ";
+}
+
+function childRow(c: SupervisorChild): string {
+  const state = c.halted
+    ? `<span class="receipt err">остановлен: ${esc(c.halted)}</span>`
+    : c.alive
+      ? `<span class="mono">жив, pid ${c.pid ?? "?"}</span>`
+      : '<span class="receipt err">не поднят</span>';
+  return `<tr><td><b>${esc(c.name)}</b></td><td>${state}</td>
+    <td class="muted">${c.since_utc ? esc(fmtTime(c.since_utc)) : ""}</td>
+    <td class="muted">${c.falls ? esc(String(c.falls)) + " падений за час" : ""}</td></tr>`;
+}
+
+/** Панель управления: кто держит харнесс, что поднято, чем можно тряхнуть. */
+export function supervisorHTML(s: Supervisor | null): string {
+  if (!s) return '<p class="muted">Харнесс о себе ничего не сказал.</p>';
+  if (!s.kind) {
+    // Записки нет вовсе: харнесс поднят не надзором. На Windows это оболочка, и
+    // у неё своя кнопка — врать про удалённый перезапуск здесь нечем.
+    return `<p class="muted">${esc(s.control.why)}.</p>`;
+  }
+  const beat = s.alive
+    ? `бьётся ${s.beat_age ?? "?"} с назад`
+    : `<span class="receipt err">${esc(s.control.why)}</span>`;
+  const head = `<p class="muted">Надзор: <b>${esc(s.kind)}</b>${s.in_container ? " в контейнере" : ""} ·
+    поднят ${esc(fmtTime(s.started_utc))} · ${beat}</p>`;
+  const table = s.children.length
+    ? `<table class="grid">${s.children.map(childRow).join("")}</table>`
+    : '<p class="muted">Детей в записке нет.</p>';
+  const buttons = s.control.available
+    ? `<div class="actions" style="margin-top:10px">${s.targets
+        .map(
+          (t) =>
+            `<button class="btn quiet" data-restart="${esc(t.id)}">Перезапустить ${esc(t.title)}</button>`,
+        )
+        .join("")}<span class="receipt" id="sv-note"></span></div>
+       <p class="muted">«Перезапустить весь код агента» ${
+         s.in_container
+           ? "гасит надзор — контейнер поднимает его заново; окно на несколько секунд потеряет связь"
+           : "перезапускает детей на месте: надзор запущен не в контейнере, выходить ему некуда"
+       }.</p>`
+    : `<p class="muted">Перезапуск отсюда недоступен: ${esc(s.control.why)}.</p>`;
+  const receipt = s.receipt
+    ? `<p class="${s.receipt.done ? "receipt ok" : "receipt err"}">Последняя просьба (${esc(
+        fmtTime(s.receipt.done_utc),
+      )}): ${esc(s.receipt.note)}</p>`
+    : "";
+  const pending = s.pending
+    ? `<p class="receipt">Просьба лежит и ещё не взята: ${esc(String(s.pending.target || ""))}</p>`
+    : "";
+  // Обновление — отдельный раздел ниже (`update-card.ts`): канал с доступом к докеру
+  // хоста был бы не обновлением, а отмычкой, поэтому обновляет сосед снаружи.
+  return head + table + buttons + pending + receipt;
+}
+
+/** Что уже нарисовано в коробке обновления — чтобы опрос не менял её без нужды. */
+const drawnUpdate = new WeakMap<HTMLElement, string>();
+/** Последний ответ канала — его и показываем, пока канал молчит (по панели: коробку
+ *  раздела перерисовка панели заменяет). */
+const lastUpdate = new WeakMap<HTMLElement, UpdateState>();
+
+/**
+ * Раздел «Обновление» в свою коробку: её опрос перерисовывает только её.
+ *
+ * ⚠ И только когда ответ ИЗМЕНИЛСЯ. Пока план ждёт «да», опрос идёт каждые четыре
+ * секунды, и перерисовка того же самого подменяла кнопку под курсором новой: нажатие
+ * посреди подмены терялось, а строка ответа под кнопками стиралась (найдено на
+ * стенде 27.09 — «Подтвердить» оказывался устаревшим элементом).
+ *
+ * ⚠ Канал молчит — это не «исполнителя нет». Посреди подмены агент остановлен, и канал
+ * (он живёт в том же контейнере) не отвечает минуты; прежде карточка в это время
+ * советовала распаковать поставку руками и поднять исполнителя — ровно то, что ломает
+ * идущую подмену (ревью 27.09). Теперь остаётся последнее, что было известно, с
+ * пометкой, без кнопок; ветка «исполнителя нет» — только по ответу канала.
+ * -> ответ канала и молчит ли он.
+ */
+async function drawUpdate(
+  box: HTMLElement,
+  inContainer: boolean,
+): Promise<{ state: UpdateState | null; offline: boolean }> {
+  const slot = box.querySelector<HTMLElement>("#update-box");
+  let state: UpdateState | null = null;
+  let offline = false;
+  try {
+    state = await api<UpdateState>("/api/update");
+    lastUpdate.set(box, state);
+  } catch {
+    offline = true;
+    state = lastUpdate.get(box) || null;
+  }
+  const html = updateCardHTML(state, { inContainer, fmt: fmtTime, offline });
+  if (slot && drawnUpdate.get(slot) !== html) {
+    slot.innerHTML = html;
+    drawnUpdate.set(slot, html);
+  }
+  return { state, offline };
+}
+
+export interface ContainerRow {
+  name: string;
+  known: boolean;
+  up: boolean;
+  status: string;
+  image: string;
+  since: string;
+}
+
+export interface Containers {
+  available: boolean;
+  why: string;
+  containers: ContainerRow[];
+  allowed?: string[];
+}
+
+export interface Brain {
+  ok: boolean;
+  note?: string;
+  why?: string;
+  path?: string;
+  writable?: boolean;
+  roles?: Record<string, Record<string, string | number>>;
+  frameworks?: Record<string, { base_url: string; key_present: boolean }>;
+}
+
+export interface BrainModels {
+  ok: boolean;
+  why?: string;
+  by_framework?: Record<string, { ok: boolean; models?: string[]; why?: string; url?: string }>;
+}
+
+/**
+ * Контейнеры рядом с агентом: живы ли, и кнопка поднять.
+ *
+ * ⚠ Почему это отдельно от надзора выше. Файловый протокол просит АГЕНТА
+ * перезапустить своих детей — и он бесполезен ровно тогда, когда нужнее всего:
+ * если агент лёг, просьбу со стола некому взять. Здесь просьба идёт мимо него,
+ * в службу рядом (`server/deskctl.py`), и потому работает над мёртвым агентом.
+ * Что ей позволено трогать, решает её закрытый список, а не это окно.
+ */
+export function containersHTML(state: Containers | null): string {
+  if (!state || !state.available) {
+    const why = state?.why || "служба управления контейнерами рядом с этим каналом не объявлена";
+    return `<h3 class="section-title">Контейнеры</h3><p class="muted">${esc(why)}.</p>`;
+  }
+  const rows = state.containers
+    .map(
+      (c) => `<tr><td><b>${esc(c.name)}</b></td>
+        <td>${c.up ? `<span class="mono">${esc(c.status)}</span>` : `<span class="receipt err">${esc(c.status)}</span>`}</td>
+        <td class="muted">${esc(c.image)}</td>
+        <td class="actions">
+          <button class="btn quiet" data-restart-container="${esc(c.name)}">Перезапустить</button>
+          <button class="btn quiet" data-clog="${esc(c.name)}">Журнал</button>
+          <button class="btn quiet" data-clog="${esc(c.name)}" data-errors="1">Ошибки</button>
+        </td></tr>`,
+    )
+    .join("");
+  return `<h3 class="section-title">Контейнеры</h3>
+    <p class="muted">Идёт мимо агента: перезапуск нужен ровно тогда, когда он не отвечает.
+      Список закрыт службой на сервере — чужие контейнеры ей не видны.</p>
+    <table class="grid">${rows}</table>
+    <p class="receipt" id="cnt-note"></p>
+    <pre class="mono" id="clog-view" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:8px" hidden></pre>`;
+}
+
+/** Мозг: какая модель у какой роли и чем её заменить, если эта замолчала. */
+export function brainHTML(state: Brain | null, models: BrainModels | null): string {
+  if (!state || !state.ok) {
+    const why = state?.note || state?.why || "мозг отсюда не читается";
+    return `<h3 class="section-title">Мозг</h3><p class="muted">${esc(why)}.</p>`;
+  }
+  const live: string[] = [];
+  for (const spec of Object.values(models?.by_framework || {})) {
+    if (spec.ok && spec.models) live.push(...spec.models);
+  }
+  const options = (current: string) => {
+    const seen = new Set<string>([current, ...live].filter(Boolean));
+    return [...seen]
+      .map((m) => `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(m)}</option>`)
+      .join("");
+  };
+  // 12.09: у роли четыре свои ручки (модель, фреймворк, запасная и её фреймворк) плюс
+  // усилие; раньше отсюда менялась только основная модель. Уезжает только изменённое.
+  void options;
+  const frameworks = Object.keys(state.frameworks || {});
+  const efforts = ["", "low", "medium", "high", "xhigh"];
+  const choice = (values: string[], current: string) =>
+    [...new Set([current, ...values])]
+      .map((v) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v || "—")}</option>`)
+      .join("");
+  const datalist = `<datalist id="brain-models">${[...new Set(live)].map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist>`;
+  const rows = Object.entries(state.roles || {})
+    .map(([role, spec]) => {
+      const f = (k: string) => String(spec[k] ?? "");
+      const input = (k: string, placeholder = "") =>
+        `<input class="field-input" list="brain-models" data-f="${k}" data-was="${esc(f(k))}" value="${esc(f(k))}" placeholder="${esc(placeholder)}" spellcheck="false">`;
+      const select = (k: string, values: string[]) =>
+        `<select class="field-input" data-f="${k}" data-was="${esc(f(k))}">${choice(values, f(k))}</select>`;
+      return `<tr data-brain-form="${esc(role)}"><td><b>${esc(role)}</b><div class="muted">${esc(f("framework"))} · ${esc(f("model"))}</div></td>
+      <td>
+        <label class="field"><span class="muted">Модель</span>${input("model")}</label>
+        <label class="field"><span class="muted">Фреймворк</span>${select("framework", frameworks)}</label>
+        <label class="field"><span class="muted">Запасная модель</span>${input("fallback_model", "пусто — без запасной")}</label>
+        <label class="field"><span class="muted">Фреймворк запасной</span>${select("fallback_framework", ["", ...frameworks])}</label>
+        <label class="field"><span class="muted">Усилие</span>${select("reasoning_effort", efforts)}</label>
+      </td>
+      <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Применить</button></td></tr>`;
+    })
+    .join("");
+  const liveNote = live.length
+    ? `Список моделей — живой ответ мозга (${live.length}), а не наш перечень.`
+    : "Живой список моделей получить не удалось, поэтому в выборе только то, что уже стоит.";
+  return `<h3 class="section-title">Мозг</h3>
+    <p class="muted">${esc(liveNote)} Смена пишется в его конфиг и применяется, когда агент перечитает мозг —
+      перезапусти его выше, если нужно сейчас. Ключи провайдеров сюда не отдаются вовсе.</p>
+    ${datalist}<table class="grid">${rows}</table>
+    <p class="receipt" id="brain-note"></p>`;
+}
+
+
+/** Прерывание живого хода (12.09): просьба в memory/.control, раннер снимает ход на тике. */
+export function interruptHTML(): string {
+  return `<h3 class="section-title">Пауза агента</h3><div class="actions" data-autonomy-box></div>
+    <p class="muted">На паузе Telegram продолжает сохраняться, а новые ответы и фоновые ходы остановлены. После продолжения накопившиеся упоминания не запускают отдельные ответы. Текущий ход останавливается на безопасной границе; совершённые действия остаются.</p>`;
+}
+
+/** Журналы: что есть, насколько свежо, и место под хвост выбранного. */
+export function logsHTML(rows: LogRow[] | null): string {
+  if (!rows || !rows.length) return "";
+  const buttons = rows
+    .map(
+      (r) =>
+        `<button class="btn quiet" data-log="${esc(r.id)}"${r.exists ? "" : " disabled"}>${esc(r.title)} <span class="muted">${
+          r.exists ? esc(size(r.size)) : "нет"
+        }</span></button>`,
+    )
+    .join("");
+  return `<h3 class="section-title">Журналы</h3>
+    <p class="muted">Хвост журнала — то же, что <code>docker logs</code>, только без ssh. Показывается последние 300 строк.</p>
+    <div class="actions">${buttons}<button class="btn quiet" data-log-again hidden>Обновить</button></div>
+    <pre class="mono" id="log-view" style="max-height:340px;overflow:auto;white-space:pre-wrap;margin-top:10px" hidden></pre>`;
+}
+
+/** Перерисовать панель свежим ответом канала. Обработчики при этом не трогаются. */
+async function draw(box: HTMLElement): Promise<void> {
+  const [sR, lR, cR, bR, mR] = await Promise.allSettled([
+    api<Supervisor>("/api/supervisor"),
+    api<LogRow[]>("/api/logs"),
+    api<Containers>("/api/containers"),
+    api<Brain>("/api/brain"),
+    api<BrainModels>("/api/brain-models"),
+  ]);
+  const state = sR.status === "fulfilled" ? sR.value : null;
+  const logs = lR.status === "fulfilled" ? lR.value : null;
+  const boxes = cR.status === "fulfilled" ? cR.value : null;
+  const brain = bR.status === "fulfilled" ? bR.value : null;
+  const models = mR.status === "fulfilled" ? mR.value : null;
+  // Контейнеры и мозг рисуются, только когда служба рядом объявлена: у окна
+  // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
+  const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
+  box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
+  mountAutonomy(box.querySelector<HTMLElement>("[data-autonomy-box]")!, {
+    read: () => api<AutonomyState>("/api/autonomy"), write: action => post("/api/autonomy", { action }),
+    identity: () => cfg.base + "\n" + cfg.key,
+  });
+  // Канал молчит — «в контейнере ли мы» помним с прошлого ответа: иначе посреди подмены
+  // раздел обновления пропал бы целиком.
+  if (state) box.dataset.inContainer = state.in_container ? "1" : "";
+  await drawUpdate(box, box.dataset.inContainer === "1");
+}
+
+/**
+ * Нарисовать панель и оживить кнопки. Возвращается, когда нарисовано; дальше
+ * живёт на обработчиках.
+ *
+ * ⚠ Обработчик вешается ОДИН раз и на сам `box`, а не на кнопки: перерисовка
+ * меняет только его внутренности. Иначе после каждого перезапуска слушателей
+ * становилось бы на один больше, и третье нажатие слало бы три просьбы.
+ */
+export async function mountSupervisor(box: HTMLElement): Promise<void> {
+  await draw(box);
+
+  // Обновление: пока оно идёт (сверка, ожидание «да», подмена), раздел перерисовывается
+  // сам раз в четыре секунды; кончилось — опрос засыпает до следующей кнопки. Пропавшая
+  // связь посреди подмены — ожидаема (канал живёт в том самом контейнере): ждём дальше.
+  // `grace` — сколько опросов сделать даже без активного плана: после кнопки исполнитель
+  // берёт файл не мгновенно, и первый ответ ещё может показывать прежний итог.
+  let polling = false;
+  const pollUpdate = async (grace = 0) => {
+    if (polling) return;
+    polling = true;
+    let wasActive = false;
+    try {
+      while (box.isConnected) {
+        const got = await drawUpdate(box, box.dataset.inContainer === "1");
+        // Молчащий канал — ждём его дальше: раздел дорисуется, когда он вернётся.
+        wasActive = got.offline || updateActive(got.state);
+        if (!wasActive && grace-- <= 0) break;
+        await new Promise((done) => setTimeout(done, 4000));
+      }
+    } finally {
+      polling = false;
+    }
+  };
+  void pollUpdate();
+
+  let shown = "";
+
+  // Узлы ищутся заново на каждый показ: перерисовка панели (`draw`) заменяет
+  // её внутренности целиком, и запомненная ссылка указывала бы в оторванный
+  // от страницы кусок — текст ложился бы в никуда.
+  const showLog = async (id: string) => {
+    const view = box.querySelector<HTMLPreElement>("#log-view");
+    const again = box.querySelector<HTMLButtonElement>("[data-log-again]");
+    if (!view) return;
+    shown = id;
+    view.hidden = false;
+    if (again) again.hidden = false;
+    view.textContent = "читаю…";
+    try {
+      const got = await api<{ ok: boolean; title: string; text: string; note?: string; exists: boolean }>(
+        `/api/log/${encodeURIComponent(id)}?lines=300`,
+      );
+      view.textContent = got.exists ? got.text || "(пусто)" : got.note || "журнала нет";
+    } catch (e) {
+      view.textContent = "не прочиталось: " + String(e);
+    }
+  };
+
+  const showContainerLog = async (name: string, onlyErrors: boolean) => {
+    const view = box.querySelector<HTMLPreElement>("#clog-view");
+    if (!view) return;
+    view.hidden = false;
+    view.textContent = "читаю…";
+    try {
+      const got = await api<{ ok: boolean; text?: string; note?: string; lines?: number }>(
+        `/api/container-log/${encodeURIComponent(name)}?lines=200${onlyErrors ? "&errors=1" : ""}`,
+      );
+      view.textContent = got.ok
+        ? got.text || (onlyErrors ? "ошибок в хвосте журнала нет" : "(пусто)")
+        : got.note || "журнал не прочитался";
+    } catch (e) {
+      view.textContent = "не прочиталось: " + String(e);
+    }
+  };
+
+  box.addEventListener("click", async (ev) => {
+    const upd = (ev.target as HTMLElement).closest<HTMLButtonElement>(
+      "[data-update-plan],[data-update-confirm],[data-update-verdict]");
+    if (upd) {
+      const version = upd.getAttribute("data-update-plan");
+      const verdict = upd.getAttribute("data-update-verdict");
+      const note = box.querySelector<HTMLElement>(version ? "#update-plan-note" : "#update-note");
+      const say = (cls: string, text: string) => {
+        if (note) {
+          note.className = cls;
+          note.textContent = text;
+        }
+      };
+      upd.disabled = true;
+      say("receipt", version ? "начинаю…" : "передаю…");
+      try {
+        const answer = version
+          ? await post<{ ok: boolean; note: string }>("/api/update/plan", {
+              version,
+              backup: upd.getAttribute("data-backup") || "full",
+            })
+          : verdict
+            ? await post<{ ok: boolean; note: string }>("/api/update/verdict", {
+                id: upd.getAttribute("data-id") || "",
+                key: upd.getAttribute("data-key") || "",
+                verdict,
+              })
+            : await post<{ ok: boolean; note: string }>("/api/update/confirm", {
+                id: upd.getAttribute("data-id") || "",
+                nonce: upd.getAttribute("data-nonce") || "",
+                decision: upd.getAttribute("data-update-confirm") || "",
+              });
+        say(answer.ok ? "receipt ok" : "receipt err", answer.note);
+        if (answer.ok) {
+          // Исполнитель берёт файл раз в три секунды — даём ему взять и перерисовываем.
+          await new Promise((done) => setTimeout(done, 3500));
+          void pollUpdate(4);
+        } else {
+          upd.disabled = false;
+        }
+      } catch (e) {
+        say("receipt err", "не дошло: " + String(e));
+        upd.disabled = false;
+      }
+      return;
+    }
+    const spot = (ev.target as HTMLElement).closest<HTMLElement>(
+      "[data-clog],[data-restart-container],[data-brain-apply],[data-interrupt]");
+    if (spot) {
+      const note = box.querySelector<HTMLElement>(
+        spot.hasAttribute("data-brain-apply") ? "#brain-note" : "#cnt-note");
+      const clog = spot.getAttribute("data-clog");
+      if (clog) {
+        await showContainerLog(clog, spot.hasAttribute("data-errors"));
+        return;
+      }
+      if (spot.hasAttribute("data-interrupt")) {
+        const inote = box.querySelector<HTMLElement>("#interrupt-note");
+        if (inote) {
+          inote.className = "receipt";
+          inote.textContent = "прошу остановить ход…";
+        }
+        try {
+          const answer = await post<{ ok: boolean; note: string }>("/api/interrupt", {
+            scope: spot.getAttribute("data-interrupt") || "all" });
+          if (inote) {
+            inote.className = answer.ok ? "receipt ok" : "receipt err";
+            inote.textContent = answer.note;
+          }
+        } catch (e) {
+          if (inote) {
+            inote.className = "receipt err";
+            inote.textContent = "не дошло: " + String(e);
+          }
+        }
+        return;
+      }
+      const restartName = spot.getAttribute("data-restart-container");
+      if (restartName) {
+        if (note) {
+          note.className = "receipt";
+          note.textContent = `перезапускаю ${restartName}…`;
+        }
+        try {
+          const answer = await post<{ ok: boolean; note: string }>("/api/containers/restart", { name: restartName });
+          if (note) {
+            note.className = answer.ok ? "receipt ok" : "receipt err";
+            note.textContent = answer.note;
+          }
+          if (answer.ok) {
+            await new Promise((done) => setTimeout(done, 3000));
+            await draw(box);
+          }
+        } catch (e) {
+          if (note) {
+            note.className = "receipt err";
+            note.textContent = "не дошло: " + String(e);
+          }
+        }
+        return;
+      }
+      const role = spot.getAttribute("data-brain-apply");
+      if (role) {
+        const form = box.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
+        const fields: Record<string, string> = {};
+        form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
+          const key = el.getAttribute("data-f") || "";
+          if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
+        });
+        if (!Object.keys(fields).length) {
+          if (note) {
+            note.className = "receipt";
+            note.textContent = "ничего не изменено";
+          }
+          return;
+        }
+        if (note) {
+          note.className = "receipt";
+          note.textContent = `меняю роль ${role}: ${Object.keys(fields).join(", ")}…`;
+        }
+        try {
+          const answer = await post<{ ok: boolean; note?: string; now?: Record<string, string> }>(
+            "/api/brain", { role, fields });
+          if (note) {
+            note.className = answer.ok ? "receipt ok" : "receipt err";
+            note.textContent = answer.ok
+              ? `роль ${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
+              : answer.note || "не вышло";
+          }
+          if (answer.ok) {
+            await new Promise((done) => setTimeout(done, 1500));
+            await draw(box);
+          }
+        } catch (e) {
+          if (note) {
+            note.className = "receipt err";
+            note.textContent = "не дошло: " + String(e);
+          }
+        }
+        return;
+      }
+    }
+    const target = (ev.target as HTMLElement).closest<HTMLElement>("[data-log],[data-restart],[data-log-again]");
+    if (!target) return;
+    if (target.hasAttribute("data-log-again")) {
+      if (shown) await showLog(shown);
+      return;
+    }
+    const log = target.getAttribute("data-log");
+    if (log) {
+      await showLog(log);
+      return;
+    }
+    const restart = target.getAttribute("data-restart");
+    if (!restart) return;
+    const note = box.querySelector<HTMLElement>("#sv-note");
+    const buttons = box.querySelectorAll<HTMLButtonElement>("[data-restart]");
+    buttons.forEach((b) => (b.disabled = true));
+    if (note) {
+      note.className = "receipt";
+      note.textContent = "прошу…";
+    }
+    try {
+      const answer = await post<{ ok: boolean; note: string }>("/api/supervisor/restart", { target: restart });
+      if (note) {
+        note.className = answer.ok ? "receipt" : "receipt err";
+        note.textContent = answer.note;
+      }
+      if (answer.ok) {
+        // Надзор берёт просьбу со стола раз в три секунды: ждём расписку, а
+        // потом перерисовываем панель целиком — с новыми pid.
+        await new Promise((done) => setTimeout(done, 4000));
+        await draw(box);
+        return;
+      }
+    } catch (e) {
+      if (note) {
+        note.className = "receipt err";
+        note.textContent = "не дошло: " + String(e);
+      }
+    }
+    buttons.forEach((b) => (b.disabled = false));
+  });
+}

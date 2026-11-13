@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 
 EVENT_SCHEMA = "praxis.telegram.outbox.event.v1"
@@ -1142,6 +1142,16 @@ class TelegramOutbox:
                         and current >= max(state["not_before"],
                                            float(state["next_attempt_at"])))
 
+    def _entry_paths(self) -> list[Path]:
+        """Файлы записей журнала по имени.
+
+        08.11 (Claude): было `sorted(glob)` — сортировка Path сравнивает разобранные
+        части пути и на ~8,6 тыс. записей была крупнейшей статьёй периодики
+        `_direct_outbox_once` (раз в 15 с, под замком журнала). Каталог один, поэтому
+        порядок по имени тот же; вызывающие всё равно пересортировывают свой итог по
+        времени и id."""
+        return sorted(self.entries_dir.glob("*.jsonl"), key=lambda path: path.name)
+
     def pending(
         self, *, due_only: bool = False, now: float | None = None,
         verify_files: bool = True,
@@ -1149,7 +1159,7 @@ class TelegramOutbox:
         current = _finite_number(self.clock() if now is None else now, "pending time")
         with self._guard():
             states: list[dict[str, Any]] = []
-            for path in sorted(self.entries_dir.glob("*.jsonl")):
+            for path in self._entry_paths():
                 state = self._state_cached_locked(path)
                 if state is None or state["state"] not in {"pending", "retry"}:
                     continue
@@ -1161,20 +1171,27 @@ class TelegramOutbox:
     def dead_letters(self, *, verify_files: bool = False) -> tuple[dict[str, Any], ...]:
         with self._guard():
             states = []
-            for path in sorted(self.entries_dir.glob("*.jsonl")):
+            for path in self._entry_paths():
                 state = self._state_cached_locked(path)
                 if state is not None and state["state"] == "dead_letter":
                     states.append(self._public(state, verify_file=verify_files))
         return tuple(sorted(states, key=lambda row: (row["updated_at"], row["id"])))
 
-    def accepted(self, *, verify_files: bool = False) -> tuple[dict[str, Any], ...]:
-        """Enumerate durable network receipts for cross-ledger reconciliation."""
+    def accepted(self, *, verify_files: bool = False,
+                 exclude_keys: Iterable[str] = ()) -> tuple[dict[str, Any], ...]:
+        """Enumerate durable network receipts for cross-ledger reconciliation.
 
+        `exclude_keys` — записи, которые вызывающий уже сверил: им не нужна публичная
+        копия (`_public` — полный JSON-круг на каждую). 08.11: периодика раз в 15 с
+        копировала все ~8,5 тыс. принятых записей, чтобы тут же их пропустить."""
+
+        skip = frozenset(str(key) for key in exclude_keys)
         with self._guard():
             states = []
-            for path in sorted(self.entries_dir.glob("*.jsonl")):
+            for path in self._entry_paths():
                 state = self._state_cached_locked(path)
-                if state is not None and state["state"] == "accepted":
+                if (state is not None and state["state"] == "accepted"
+                        and not (skip and str(state.get("key") or "") in skip)):
                     states.append(self._public(state, verify_file=verify_files))
         return tuple(sorted(states, key=lambda row: (row["updated_at"], row["id"])))
 

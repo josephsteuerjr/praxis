@@ -151,7 +151,7 @@ class TestReadTools(Base):
         self.assertIn("недоступно", agent.tool_read_chat("Маша").lower())
 
     def test_read_chat_delegates(self):
-        agent._TELETHON["read_chat"] = lambda ref, limit: f"got {ref} {limit}"
+        agent._TELETHON["read_other_chat"] = lambda ref, limit: f"got {ref} {limit}"
         out = agent.tool_read_chat("Маша", 10)
         self.assertIn("PRIVATE CROSS-CHAT READ", out)
         self.assertIn("got Маша 10", out)
@@ -164,15 +164,16 @@ class TestReadTools(Base):
         self.assertEqual(agent.tool_read_context(20), "ctx 777 20")
 
     def test_read_tools_are_shared_perception_not_owner_shell(self):
-        self.assertIn("read_chat", agent.TOOL_IMPL)
-        self.assertIn("read_context", agent.TOOL_IMPL)
+        self.assertIn("read_other_chat", agent.TOOL_IMPL)
+        self.assertIn("reread_this_chat", agent.TOOL_IMPL)
         shared = {t.get("name") for t in agent.SHARED_CONTEXT_TOOLS}
-        self.assertIn("read_chat", shared)
-        self.assertIn("read_context", shared)
+        self.assertIn("read_other_chat", shared)
+        self.assertIn("reread_this_chat", shared)
         self.assertIn("search_private_messages", shared)
-        self.assertIn("inbox_read", shared)
+        self.assertNotIn("inbox_read", shared)
+        self.assertIn("fs_read", {t["name"] for t in agent.PRAXIS_SELF_TOOLS})
         owner = {t.get("name") for t in agent.OWNER_TOOLS}
-        self.assertNotIn("read_chat", owner, "shared tool must not be duplicated in API schema")
+        self.assertNotIn("read_other_chat", owner, "shared tool must not be duplicated in API schema")
         self.assertNotIn("shell", shared)
 
     def test_private_message_search_delegates(self):

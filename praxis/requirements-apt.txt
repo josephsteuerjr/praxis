@@ -20,3 +20,18 @@ fonts-noto-core
 fonts-noto-color-emoji
 fonts-crosextra-carlito
 fonts-crosextra-caladea
+
+# Рабочий набор shell (09.11): поиск, json, сеть, архивы, патчи, сборка, диагностика, медиа.
+ripgrep
+jq
+curl
+wget
+unzip
+zip
+patch
+file
+tree
+lsof
+sqlite3
+ffmpeg
+make

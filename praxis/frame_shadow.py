@@ -924,7 +924,7 @@ def _block_address_book(ctx, audience: str = "other",
         lines.append("- мест в реестре нет" if audience == "owner"
                      else "- это место в реестре комнат ещё не заведено")
     lines.append("[из: memory/rooms/ (профили) + архивы мест · зачем: карта «где я "
-                 "живу» и границ переноса; тела разговоров — рукой read_chat]"
+                 "живу» и границ переноса; тела разговоров — рукой read_other_chat]"
                  if audience == "owner" else
                  "[из: memory/rooms/ (профиль этого места) · зачем: границы переноса "
                  "здесь; карта остальных мест живёт только в owner-потоке]")

@@ -30,9 +30,14 @@ frame must not know the local cards, Praxis must not import them, and whatever d
 between the two the frame asks for instead of deciding. The Praxis bundle is 158 kB against
 Hélène's 200 kB — the local agent's cards are not merely hidden there, they are absent.
 
-**This folder holds no code, and that is deliberate.** Both applications are built from the
-same repository: the same shell with a different product name and icon set
+**The desktop window keeps no code here, and that is deliberate.** Both applications are
+built from the same repository: the same shell with a different product name and icon set
 (`desk/shell/build-praxis.ps1`, `desk/installer/build_dist.py --variant praxis`), the same
 channel, the same package. Praxis is an application built from `desk/`, not a separate
 codebase, and pretending otherwise would mean copying the channel and the shell to keep a
 folder from looking empty.
+
+The one exception is her server application. Since November 2026 the `praxis-desk`
+backend and its MiniApp/PWA have run on their own line, with voice controls and step views
+that `desk/` does not have in the same form. Its exact deployed source is kept in
+[`praxis-desk/`](praxis-desk) until it is folded back into `desk/`.

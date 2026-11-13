@@ -67,8 +67,8 @@ EXPECTED_RAILS = {
     "core_edit_check",    # PRAXIS_CORE_EDIT_CHECK
     "host_scope",         # optional explicit PRAXIS_PROTECTED_ROOTS
     "bootguard_panic",    # bootguard + .panic
-    "hands_floor",        # Rust-пол / джейл / shrink-guard
-    "evaluator_mirror",   # privacy-only destination authority
+    "hands_floor",        # джейл / shrink-guard / сверка версии
+    "outbound_privacy",   # 10.11: проверки чужого приватного на выходе нет («сними»)
     "mode_and_silence",   # РЕЖИМ / [молчу]
     # 15.08: чем именно её реплика доходит до человека — возвратом хода или рукой `reply`.
     # Механизм, который держит её РЕЧЬ, а рычага `PRAXIS_CHAT_REPLY_HAND` в rails.py не

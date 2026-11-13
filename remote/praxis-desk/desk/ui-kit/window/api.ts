@@ -1,0 +1,256 @@
+// Связь с харнессом: канал frame.desk.v1 (WebSocket: запросы + живые события)
+// с HTTP-фолбэком, и мост к нативной оболочке (Tauri) там, где она есть.
+
+export interface Cfg {
+  base: string;
+  key: string;
+  agent?: string;
+  /** Имя продукта для подписи и заголовка (хостинг издания к серверу — «Praxis»). */
+  product?: string;
+  /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
+  needs_remote?: boolean;
+  needs_local_setup?: boolean;
+  needs_subscription_login?: boolean;
+  local_agent?: boolean;
+  discover_server?: boolean;
+}
+
+declare global {
+  interface Window {
+    DESK_CONFIG_OVERRIDE?: Cfg;
+    DESK_CONFIG?: Cfg | null;
+  }
+}
+
+// Приоритет: локальный конфиг оболочки (helene.json → init-скрипт) выше
+// вшитого сборкой config.js; в вебе — same-origin.
+//
+// ⚠ 17.09, ЖИВОЙ СЛУЧАЙ. Окно получало 403 на КАЖДЫЙ запрос и вечно показывало «не на
+// связи» — при живом харнессе, который тем же ключом отвечал 200 из командной строки.
+// Корень оказался не здесь, а в кэше: WebView2 держал СТАРЫЙ index.html (страница
+// отдавалась с `no-cache`, а перепроверить его было нечем), и старая страница тянула
+// старый бандл. То есть в обновлённой программе работал код прошлой версии. Починено
+// в оболочке — `no-store` на странице (`serve_static`).
+//
+// Ключ остаётся с двумя путями, и это не обход: адрес — запасная нога на случай, когда
+// init-скрипта нет (тем же `?key=` оболочка стучится в занятый порт, и так же ключ
+// приезжает на телефон). Адресной строки у окна нет (`decorations(false)`), в журнал
+// канала ключ не попадает — он там маскируется. Порядок: что дал init-скрипт, то и
+// главное; адрес — только если он ничего не дал.
+function keyFromUrl(): string {
+  try {
+    return new URLSearchParams(location.search).get("key") || "";
+  } catch {
+    return "";
+  }
+}
+
+const shellCfg = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG;
+export const cfg: Cfg = shellCfg
+  ? { ...shellCfg, key: shellCfg.key || keyFromUrl() }
+  : { base: "", key: keyFromUrl() };
+/** Мост оболочки на Electron (28.09, desk/electron/src/preload.ts). */
+export interface ElectronBridge {
+  shell: "electron" | "python";
+  platform: string;
+  invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
+  win(action: "minimize" | "maximize" | "close"): void;
+  /** Тон бумаги — оболочке, чтобы окно открывалось уже нужного цвета (look.ts). */
+  look?(paper: { day: string; night: string }): void;
+}
+export const electron: ElectronBridge | undefined = (window as unknown as { __HELENE__?: ElectronBridge }).__HELENE__;
+/**
+ * Окно — в оболочке программы, а не веб-версия за каналом. Имя историческое: с 28.09
+ * оболочка — Electron (`electron`), прежние выпуски — Tauri; для окна разницы нет.
+ */
+export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
+
+export function channelURL(path: string): string {
+  const full = (cfg.base || "") + path;
+  if (!cfg.key) return full;
+  return full + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(cfg.key);
+}
+const url = channelURL;
+
+/**
+ * Отказ трубы вместе с КОДОМ, а не только словами.
+ *
+ * Без него окно не могло отличить «файл изменился под тобой» (409, code
+ * `conflict`) от любой другой неудачи записи и молча затирало правку агента —
+ * серверная защита стояла, а читателя у неё не было.
+ */
+/**
+ * Адрес вложения для тега `<audio>`/`<img>`: тот же канал и тот же ключ.
+ *
+ * Отдельная функция, а не `url()`: та частная и добавляет ключ к ЛЮБОМУ пути, а
+ * здесь важно, что путь вложения — не наш, он приехал строкой ленты, и его
+ * надо экранировать как параметр, а не приклеивать к адресу.
+ */
+export function mediaURL(rel: string): string {
+  const base = (cfg.base || "") + "/api/media?path=" + encodeURIComponent(rel);
+  return cfg.key ? base + "&key=" + encodeURIComponent(cfg.key) : base;
+}
+
+export function artifactURL(rel: string, preview = false): string {
+  return url("/api/artifact?path=" + encodeURIComponent(rel) + (preview ? "&preview=1" : ""));
+}
+
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+  constructor(message: string, status?: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export type LiveEvent = { t: string; [k: string]: unknown };
+type Waiter = { res: (v: unknown) => void; rej: (e: Error) => void };
+
+let sock: WebSocket | null = null;
+let ready = false;
+let seq = 1;
+const waiting = new Map<number, Waiter>();
+const eventHandlers = new Set<(ev: LiveEvent) => void>();
+const connHandlers = new Set<(ok: boolean) => void>();
+
+export function onEvent(fn: (ev: LiveEvent) => void) {
+  eventHandlers.add(fn);
+}
+
+export function onConnection(fn: (ok: boolean) => void) {
+  connHandlers.add(fn);
+}
+
+function tunnelURL(): string {
+  const base = cfg.base || location.origin;
+  const ws = base.replace(/^http/, "ws") + "/tunnel";
+  return cfg.key ? ws + "?key=" + encodeURIComponent(cfg.key) : ws;
+}
+
+let discovery:Promise<void>|null=null;
+let originVerified=false;
+async function discover() {
+  if(!cfg.discover_server||originVerified)return;
+  if(!discovery)discovery=(async()=>{
+    const result=await shell<{ok:boolean;base?:string;message?:string}>("server_transfer",{action:"locate",request:"{}"});
+    if(!result.ok||!result.base)throw new Error(result.message||"Сервер ещё не ответил. Повторяю подключение.");
+    cfg.base=result.base;originVerified=true;
+  })().finally(()=>{discovery=null;});
+  return discovery;
+}
+
+export async function connect() {
+  try{await discover();}catch{for(const fn of connHandlers)fn(false);setTimeout(connect,4000);return;}
+  let s: WebSocket;
+  try {
+    s = new WebSocket(tunnelURL());
+  } catch {
+    for (const fn of connHandlers) fn(false);
+    setTimeout(connect, 4000);
+    return;
+  }
+  sock = s;
+  s.onopen = () => {
+    ready = true;
+  };
+  s.onmessage = (m) => {
+    let d: { hello?: string; event?: LiveEvent; id?: number; status?: number; body?: unknown; error?: string; code?: string };
+    try {
+      d = JSON.parse(m.data);
+    } catch {
+      return;
+    }
+    if (d.hello) {
+      for (const fn of connHandlers) fn(true);
+      return;
+    }
+    if (d.event) {
+      for (const fn of eventHandlers) fn(d.event);
+      return;
+    }
+    const w = waiting.get(d.id ?? -1);
+    if (w) {
+      waiting.delete(d.id ?? -1);
+      if (d.status && d.status < 400) w.res(d.body);
+      // Ответ без поля status давал владельцу литеральное « (undefined)».
+      // Код отказа несём отдельным полем: по нему окно отличает конфликт
+      // правок от любой другой неудачи.
+      else w.rej(new ApiError((d.error || "канал ответил отказом") + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
+    }
+  };
+  s.onclose = s.onerror = () => {
+    if (sock !== s) return;
+    originVerified=false;
+    sock = null;
+    ready = false;
+    for (const fn of connHandlers) fn(false);
+    for (const w of waiting.values()) w.rej(new Error("связь оборвалась"));
+    waiting.clear();
+    setTimeout(connect, 4000);
+  };
+}
+
+function tunnelCall<T>(path: string, method: string, body: unknown): Promise<T> {
+  return new Promise<T>((res, rej) => {
+    const id = seq++;
+    waiting.set(id, { res: res as (v: unknown) => void, rej });
+    try {
+      sock!.send(JSON.stringify({ id, path, method, body }));
+    } catch (e) {
+      waiting.delete(id);
+      rej(e as Error);
+      return;
+    }
+    setTimeout(() => {
+      if (waiting.delete(id)) rej(new Error(path + ": нет ответа"));
+    }, 25000);
+  });
+}
+
+export async function api<T = any>(path: string): Promise<T> {
+  await discover();
+  if (ready && sock) {
+    try {
+      return await tunnelCall<T>(path, "GET", null);
+    } catch (e) {
+      if (ready) throw e;
+    }
+  }
+  const r = await fetch(url(path));
+  if (!r.ok) throw new Error(path + ": " + r.status);
+  return r.json();
+}
+
+export async function post<T = any>(path: string, body: unknown): Promise<T> {
+  return request<T>("POST", path, body);
+}
+
+/** DELETE — комнаты (КОНТРАКТ-B→A §1). По каналу тем же конвертом, что POST. */
+export async function del<T = any>(path: string): Promise<T> {
+  return request<T>("DELETE", path, null);
+}
+
+async function request<T>(method: string, path: string, body: unknown): Promise<T> {
+  await discover();
+  // Files use HTTP's bounded body reader instead of the small event socket.
+  const hasFiles = body != null && typeof body === "object" && Array.isArray((body as { attachments?: unknown }).attachments) && (body as { attachments: unknown[] }).attachments.length > 0;
+  if (ready && sock && !hasFiles) return tunnelCall<T>(path, method, body);
+  const r = await fetch(url(path), {
+    method,
+    headers: body == null ? {} : { "Content-Type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  // HTTP-половина кода не несёт — его заменяет статус: 409 у канала означает
+  // ровно конфликт правок (deskapp.api_md_write → HTTPConflict).
+  if (!r.ok) throw new ApiError(await r.text(), r.status, r.status === 409 ? "conflict" : undefined);
+  return r.json();
+}
+
+/** Python/Electron bridge; a plain browser has no desktop command surface. */
+export async function shell<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!electron) throw new Error("доступно только в приложении Hélène");
+  return electron.invoke(cmd, args) as Promise<T>;
+}

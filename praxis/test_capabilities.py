@@ -173,11 +173,16 @@ class TestScopeHonesty(Base):
     def test_group_channel_honest(self):
         t = capabilities.describe("group")
         self.assertIn("всей своей внутренней памяти", t)
-        self.assertIn("outbound-советник", t)
+        # 10.11 (Егор, «сними»): советника на голосе нет — граница названа её суждением.
+        self.assertIn("только кред-пол", t)
+        self.assertNotIn("outbound-советник", t)
         tools_line = next(l for l in t.splitlines() if "тулы канала" in l)
-        self.assertNotIn("shell", tools_line, "owner-тулы не в списке доступного в группе")
+        self.assertIn("shell", tools_line, "Praxis keeps her sovereign hands in every audience")
+        self.assertNotIn("computer_access", tools_line)
+        self.assertNotIn("admit", tools_line)
         self.assertIn("search_private_messages", tools_line)
-        self.assertIn("inbox_read", tools_line)
+        self.assertIn("fs_read", tools_line)
+        self.assertNotIn("inbox_read", tools_line)
         self.assertNotIn("мозг:", t, "внутренности мозга не для группы")
         self.assertNotIn("glm", t.lower(), "имена моделей не для группы")
         # ⚠ Здесь стоял assertIn("нет произвольного shell/Forge/root") — и он закреплял
@@ -199,7 +204,10 @@ class TestScopeHonesty(Base):
     def test_tool_is_scope_aware(self):
         agent._CURRENT_SCOPE = "group"
         try:
-            self.assertIn("outbound-советник", agent.tool_my_capabilities())
+            text = agent.tool_my_capabilities()
+            self.assertIn("решаю я сама", text)
+            self.assertIn("только кред-пол", text)
+            self.assertNotIn("outbound-советник", text)
         finally:
             agent._CURRENT_SCOPE = "owner"
         self.assertIn("мозг:", agent.tool_my_capabilities())

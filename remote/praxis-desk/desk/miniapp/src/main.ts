@@ -1,0 +1,109 @@
+// Мини-апп Telegram: то же приложение, что телефон (ui-kit/phone.ts), со
+// входом по initData Telegram. Открывается из старого служебного бота
+// владельца; подпись initData проверяет канал (`POST /pair/telegram`,
+// КОНТРАКТ-B→A §6) и выдаёт ключ устройства той же природы, что у QR.
+import "./styles.css";
+import { setAudioPlayer } from '../../ui-kit/paper-audio';
+setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
+import { setAnimationPlayer } from '../../ui-kit/paper-media';
+setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
+import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
+import { applyTheme, type Theme } from "../../ui-kit/dom";
+import { watchShellVersion } from "../../ui-kit/version";
+
+import { mountTelegramShell, type TelegramWebApp } from "./telegram-shell";
+
+declare global {
+  interface Window {
+    Telegram?: { WebApp?: TelegramWebApp };
+    DESK_CONFIG_OVERRIDE?: import('../../ui-kit/window/api').Cfg;
+    DESK_CONFIG?: import('../../ui-kit/window/api').Cfg | null;
+  }
+}
+
+const tg = window.Telegram?.WebApp;
+const params = new URLSearchParams(location.search);
+// Приоритет: подстановка dev-сервера, потом config.js хостинга.
+const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
+const base = override?.base || "";
+const STORAGE = "frame.tg.device";
+
+// Ключ прямо в адресе — только для проверки из браузера (?key=…).
+const directKey = params.get("key") || override?.key || "";
+if (directKey) remember(STORAGE, directKey);
+
+// WKWebView Telegram держит старую сборку по адресу кнопки — страница сама
+// сверяет сборку с сервером и перезагружается на новую.
+watchShellVersion();
+
+mountTelegramShell(tg);
+
+// Тема — от Telegram: пользователь выбирает её там, а не у нас.
+const theme = (): Theme => (tg ? (tg.colorScheme === "dark" ? "dark" : "light") : "system");
+tg?.onEvent("themeChanged", () => applyTheme(theme()));
+
+async function redeem(): Promise<{ result: Redeem; key?: string; agent?: string }> {
+  const initData = tg?.initData || "";
+  if (!initData) return { result: "none" };
+  let r: Response;
+  try {
+    r = await fetch(base + "/pair/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+  } catch {
+    return { result: "offline" };
+  }
+  if (r.status === 404 || r.status === 405) return { result: "foreign" }; // канал ещё не умеет
+  if (r.status === 403) return { result: "closed" };
+  if (!r.ok) return { result: "broke" };
+  let d: { key?: string; agent?: string };
+  try {
+    d = (await r.json()) as { key?: string; agent?: string };
+  } catch {
+    return { result: "broke" };
+  }
+  if (!d.key) return { result: "broke" };
+  return { result: "ok", key: d.key, agent: d.agent };
+}
+
+function pairScreen(pair: Redeem | null): { title: string; text: string; retry: boolean } {
+  switch (pair) {
+    case "foreign":
+      return { title: "Кнопка ведёт на прежний канал", text: "На компьютере открой Знакомство → Телефон и Telegram и проверь подключение. После обновления HTTPS-адреса бот получит новую кнопку миниаппа.", retry: true };
+    case "closed":
+      return { title: "Это не твой агент", text: "Мини-апп открывает переписку только владельцу: канал сверил подпись Telegram и id — и не совпало.", retry: false };
+    case "offline":
+      return { title: "Нет связи", text: "Канал агента не отвечает. Попробуй через минуту.", retry: true };
+    case "broke":
+      return { title: "Канал ответил ошибкой", text: "Вход не удался на стороне канала. Попробуй ещё раз; если повторится — смотри журнал канала.", retry: true };
+    case "none":
+      return { title: "Открой из Telegram", text: "Эта страница ждёт данных Telegram Web App: открой её кнопкой в боте Праксис, а не по ссылке в браузере.", retry: true };
+    default:
+      return { title: "Нужен ключ", text: "Открой мини-апп из бота: Telegram подпишет вход, канал выдаст ключ.", retry: true };
+  }
+}
+
+const app = mountPhone(document.getElementById("app")!, {
+  platform: "telegram",
+  base,
+  agentFallback: override?.agent || "Праксис",
+  sign: "Праксис",
+  theme: tg ? theme : undefined,
+  onSheet: (open) => {
+    if (!tg) return;
+    if (open) tg.BackButton.show();
+    else tg.BackButton.hide();
+  },
+  auth: {
+    storageKey: STORAGE,
+    hasCredential: () => !!tg?.initData && !directKey,
+    redeem,
+    pairScreen,
+  },
+});
+
+tg?.BackButton.onClick(() => app.back());
+
+import { installLegacyVoiceGroup } from "../../ui-kit/praxis-voice";
+import "../../ui-kit/praxis-voice.css";
+installLegacyVoiceGroup();
+import { installXTTSServiceControls } from '../../ui-kit/praxis-service';
+installXTTSServiceControls();

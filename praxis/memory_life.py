@@ -233,10 +233,20 @@ _WRITE_LOCK = threading.RLock()
 # 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
 _EVENTS_CACHE: dict[str, tuple[tuple[int, ...], list[dict]]] = {}
 _EVENTS_CACHE_GUARD = threading.Lock()
-# ⚠ Потолок считает БАЙТЫ ФАЙЛОВ, а в памяти разобранные записи весят в 2,5–3 раза больше
-# (ревью W1 S5, 26.09: 8 МБ ленты держат 22,9 МБ). Умолчание 128 МБ файлов — это ~350 МБ
-# памяти процесса; прежние 512 МБ означали до ~1,4 ГБ на коробке, которая уже свопит.
-_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "128") or 128)) * 1024 * 1024
+# ⚠ Потолок считает БАЙТЫ ФАЙЛОВ, а в памяти разобранные записи весят в 2,5–3,5 раза больше
+# (ревью W1 S5, 26.09: 8 МБ ленты держат 22,9 МБ; замер 07.11 на проде: 47,3 МБ → 164 МБ).
+# ⚠ 07.11: умолчание 128 МБ стало обрывом. Лента перевалила 128 МБ 09.10 (174 МБ к 07.11),
+# кэш заполняется от старых дней к новым — и месяц самые свежие 30 файлов дня (47 МБ,
+# 37 тыс. записей) разбирались заново на КАЖДЫЙ `_lookup_events`/`iter_events`: дедуп
+# входящего 1,2–6 с, пересборка места 1,3–2,6 с, сборка кадра до 78 с, и ни строки в логе.
+# С потолком 1024 (владелец, 07.11) — 35–120 мс и 7–26 мс. Коробка теперь 16 ГБ без свопа;
+# 1024 МБ файлов — это до ~3,5 ГБ памяти, при нынешнем росте ~1,5–2 МБ/день — больше года.
+# Переполнение больше не молчит: `_note_events_cache_overflow`.
+# Читается при импорте — РАНЬШЕ `load_dotenv` раннера и agent.py: рычаг работает только из
+# окружения контейнера (compose), строка в .env до него не доходит.
+_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "1024") or 1024)) * 1024 * 1024
+_EVENTS_CACHE_OVERFLOW_EVERY_SEC = 600.0
+_EVENTS_CACHE_OVERFLOW_AT: float | None = None
 _REFRESH_LOCKS_LOCK = threading.Lock()
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_LOCK = threading.Lock()
@@ -754,6 +764,23 @@ def events_cache_enabled() -> bool:
     return raw not in ("off", "0", "false", "no")
 
 
+def _note_events_cache_overflow(path: Path, *, held: int, size: int, cache: str) -> None:
+    """Файл дня не влез под потолок — сказать вслух (не чаще раза в 10 минут на процесс).
+
+    Это не ошибка и не отказ: файл честно разбирается как раньше, просто на каждый вызов.
+    Но 09.10–07.11 ровно так месяц тихо стоила каждая запись входящего секунды (см.
+    `_EVENTS_CACHE_LIMIT`). Строка в логе — единственный способ заметить обрыв до жалобы."""
+    global _EVENTS_CACHE_OVERFLOW_AT
+    now = time.monotonic()
+    last = _EVENTS_CACHE_OVERFLOW_AT
+    if last is not None and now - last < _EVENTS_CACHE_OVERFLOW_EVERY_SEC:
+        return
+    _EVENTS_CACHE_OVERFLOW_AT = now
+    log.warning("events cache overflow [%s]: %s (%d B) не помещается — в кэше %d B, потолок "
+                "%d B (PRAXIS_EVENTS_CACHE_MB); этот файл разбирается заново на каждый вызов",
+                cache, path.name, size, held, _EVENTS_CACHE_LIMIT)
+
+
 def _event_file_records(path: Path) -> list[dict]:
     """Записи одного файла ленты — из кэша, если файл не менялся."""
     try:
@@ -788,12 +815,16 @@ def _event_file_records(path: Path) -> list[dict]:
     stable = signature == (current.st_size, current.st_mtime_ns, current.st_ino,
                            current.st_ctime_ns, current.st_dev)
     if enabled and stable:
+        overflow = None
         with _EVENTS_CACHE_GUARD:
             held = sum(sig[0] for name, (sig, _rows) in _EVENTS_CACHE.items() if name != key)
             if held + stat.st_size <= _EVENTS_CACHE_LIMIT:
                 _EVENTS_CACHE[key] = (signature, records)
             else:
                 _EVENTS_CACHE.pop(key, None)
+                overflow = held
+        if overflow is not None:
+            _note_events_cache_overflow(path, held=overflow, size=stat.st_size, cache="records")
     return records
 
 
@@ -892,6 +923,9 @@ def _lookup_events(*, event_id=None, dedupe_key=None, native_id=None) -> list[di
                     _EVENT_LOOKUPS[key] = cached
                 else:
                     _EVENT_LOOKUPS.pop(key, None)
+                    if stable and events_cache_enabled():
+                        _note_events_cache_overflow(path, held=held, size=st.st_size,
+                                                    cache="lookups")
             index, value = ((cached[1], str(event_id)) if event_id is not None else
                             (cached[2], str(dedupe_key)) if dedupe_key is not None else
                             (cached[3], int(native_id)))

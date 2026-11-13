@@ -1,0 +1,27 @@
+{
+  "_": "Константы продукта в ОДНОМ месте (ревью 06.09, решение 2 / задача A п. 1.12). Читают все три языка: Python (tests/t_contract.py сверяет modes.py, body.py, deskapp.py, deskd/readers.py), Rust (тесты в shell/svc/setup через include_str!) и TypeScript (окно, установщик, телефон — подключает B). Менять число здесь = менять его везде; тесты падают, пока копии не сведены.",
+  "v": 1,
+  "ports": {
+    "desk": 8094,
+    "relay": 5011,
+    "body": 9480
+  },
+  "computer_scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"],
+  "protocol": "frame.desk.v1",
+  "config_name": "helene.json",
+  "platforms": ["windows", "macos", "linux"],
+  "platforms_": "Системы, под которые собирается продукт: это же слово отдают `app_info` оболочки и `defaults` установщика полем `platform` (std::env::consts::OS), по нему окно и визард прячут то, чего на системе нет (служба, тело, брандмауэр). Порт 0.7.1 на macOS — 19.09.",
+  "agents": {
+    "_": "Несколько агентов в одной установке (11.09). Корневой helene.json — агент `main`; каждая папка agents/<id>/ со своим helene.json — ещё один. Порт по умолчанию: ports.desk + место в списке. Читают: localharness/agents.py, common/agents.rs, окно.",
+    "dir": "agents",
+    "base_id": "main",
+    "id_pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+  },
+  "rooms": {
+    "_legacy": "До 10.09.2026 комната окна писалась ключом `pult`. Сегодня его не пишет НИКТО — но он лежит в данных: в манифестах прогонов и в реестрах комнат, собранных до той даты. Читатели обязаны его понимать, иначе старые ходы теряют комнату. Слово выкорчевано из кода 18.09.2026; здесь оно остаётся одной строкой — надгробием, а не именем. Новым кодом не пользоваться.",
+    "default": "window",
+    "legacy": "pult",
+    "pattern": "^window-[0-9a-f]{8}$",
+    "archive_dir": "memory/groups/archive"
+  }
+}

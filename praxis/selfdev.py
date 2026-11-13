@@ -416,7 +416,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     override_reason — тоже. forge.finish подставляет вердикт гнома из леджера задачи сам."""
     t = get(pid)
     if not t:
-        return f"Не вижу предложения {pid} — начни с start_proposal."
+        return f"Не вижу предложения {pid} — начни с proposal(action=start)."
     if t["status"] not in ("building", "proposed"):
         return f"Предложение {pid} уже {t['status']} — оно закрыто."
     wt = worktree_path(pid)
@@ -426,7 +426,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     if problem:
         _deny("proposal_review", "submit", f"{pid}: ревью {problem}")
         return (f"Не отправляю: ревью {problem}. Прочитай свой дифф глазами — "
-                f"proposal_diff(id=\"{pid}\") — и передай review=: что меняется, чем рискует, "
+                f"proposal(action=\"diff\", id=\"{pid}\") — и передай review=: что меняется, чем рискует, "
                 "почему это правильно. Твой код ревьюишь ты сама, никто за тебя.")
     main = _main_branch()
 
@@ -502,7 +502,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
         return (f"Предложение {pid} «{title.strip()}» НЕ смёржено: тесты не уложились в "
                 f"{TEST_TIMEOUT} с, проверки нет. Правка, из-за которой тест виснет, даёт ровно "
                 "такой исход, поэтому вслепую не вливаю. Посмотри, что грузит машину "
-                "(долгие счёты, параллельные прогоны), и повтори submit_proposal(id="
+                "(долгие счёты, параллельные прогоны), и повтори proposal(action=\"submit\", id="
                 f"\"{pid}\", …) с тем же ревью — гейт прогонится заново.")
 
     if should_automerge(zone):

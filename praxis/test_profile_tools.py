@@ -11,21 +11,22 @@ import agent
 
 
 class ProfileToolsOffered(unittest.TestCase):
-    def test_three_tools_are_in_her_own_toolset(self):
+    def test_profile_and_reactions_are_in_her_own_toolset(self):
         names = {t["name"] for t in agent.PRAXIS_SELF_TOOLS}
-        self.assertIn("set_avatar", names)
+        self.assertNotIn("set_avatar", names)
         self.assertIn("update_profile", names)
         self.assertIn("react", names)
 
     def test_tools_are_registered_in_impl(self):
-        for name in ("set_avatar", "update_profile", "react"):
+        self.assertNotIn("set_avatar", agent.TOOL_IMPL)
+        for name in ("update_profile", "react"):
             self.assertIn(name, agent.TOOL_IMPL)
             self.assertTrue(callable(agent.TOOL_IMPL[name]))
 
     def test_schemas_declare_required_fields(self):
         by_name = {t["name"]: t for t in
-                   (agent.SET_AVATAR_TOOL, agent.UPDATE_PROFILE_TOOL, agent.REACT_TOOL)}
-        self.assertEqual(by_name["set_avatar"]["input_schema"]["required"], ["path"])
+                   (agent.UPDATE_PROFILE_TOOL, agent.REACT_TOOL)}
+        self.assertEqual(by_name["update_profile"]["input_schema"]["properties"]["avatar"]["type"], "string")
         self.assertEqual(by_name["update_profile"]["input_schema"]["required"], [])
         self.assertEqual(set(by_name["react"]["input_schema"]["required"]),
                          {"emoji", "message_id"})
@@ -42,7 +43,7 @@ class ProfileImplCallsBridge(unittest.TestCase):
     def test_set_avatar_routes_to_bridge(self):
         seen = {}
         agent._TELETHON["set_profile_photo"] = lambda path: (seen.update(path=path), "ok-photo")[1]
-        self.assertEqual(agent.tool_set_avatar("workspace/me.png"), "ok-photo")
+        self.assertEqual(agent.TOOL_IMPL["update_profile"](avatar="workspace/me.png"), "avatar: ok-photo")
         self.assertEqual(seen["path"], "workspace/me.png")
 
     def test_update_profile_needs_a_field(self):

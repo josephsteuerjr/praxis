@@ -473,7 +473,7 @@ class RunnerTests(SpoolCase):
 
     def test_new_frames_expose_voice_message_and_old_checkpoint_dispatch_survives(self):
         names=[tool['name'] for tool in self.agent.TOOLS]
-        self.assertTrue({'generate_voice', 'voice_generation', 'send_voice'} <= set(names))
+        self.assertTrue({'generate_voice', 'voice_job', 'send_voice'} <= set(names))
         self.assertNotIn('voice_message', names)
         self.assertNotIn('speak',names)
         self.assertIs(self.agent.TOOL_IMPL['speak'],self.agent.TOOL_IMPL['voice_message'])

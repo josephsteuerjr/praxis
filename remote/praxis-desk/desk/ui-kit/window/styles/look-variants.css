@@ -1,0 +1,17 @@
+/* Optional compositions; changing a preset never changes content or identity. */
+:root[data-look-style="studio"] #main { margin:12px;border:1px solid var(--line);border-radius:18px;background:var(--paper);box-shadow:0 8px 36px #0000000c; }
+:root[data-look-style="studio"] #rail { padding-inline:12px; }
+:root[data-look-style="glass"] #main { margin:12px;border:1px solid var(--line);border-radius:28px;background:color-mix(in srgb,var(--paper) 80%,transparent);backdrop-filter:blur(20px); }
+:root[data-look-style="glass"] :is(.card,.msg,.voice-draft) { background:color-mix(in srgb,var(--surface) 80%,transparent);box-shadow:0 8px 30px #0000000a; }
+:root[data-look-style="terminal"] { --grain:0;--hand:Consolas,"Liberation Mono",monospace;--serif:Consolas,"Liberation Mono",monospace; }
+:root[data-look-style="terminal"] :is(.card,.msg,#composer,.btn,button) { border-radius:0;box-shadow:none; }
+:root[data-look-style="terminal"] .card { border:1px solid var(--line-strong); }
+:root[data-look-font="sans"] { --hand:"Golos Text","Segoe UI",sans-serif;--serif:"Golos Text","Segoe UI",sans-serif; }
+:root[data-look-font="serif"] { --hand:Georgia,"Times New Roman",serif;--serif:Georgia,"Times New Roman",serif; }
+:root[data-look-font="mono"] { --hand:Consolas,"Liberation Mono",monospace;--serif:Consolas,"Liberation Mono",monospace; }
+:root[data-look-font="serif"] body,:root[data-look-font="mono"] body { font-family:var(--serif); }
+:root[data-look-shape="round"] :is(.card,.msg,.voice-draft,#composer,.lrn-start-cards article) { border-radius:26px; }
+:root[data-look-shape="square"] :is(.card,.msg,.voice-draft,#composer,.lrn-start-cards article,.btn) { border-radius:0; }
+:root[data-look-backdrop="grid"] #app { background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:28px 28px; }
+:root[data-look-backdrop="glow"] #app { background-image:radial-gradient(ellipse at 10% 15%,var(--accent-soft),transparent 60%),radial-gradient(ellipse at 90% 85%,color-mix(in srgb,var(--terra) 20%,transparent),transparent 60%); }
+@media(max-width:760px){:root[data-look-style] #main{margin:0;border-radius:0;border:0}}

@@ -45,24 +45,17 @@ class CachePrefixStability(unittest.TestCase):
             {f"praxis:gpt-5.6-terra:room:{ROOM_ID}"},
         )
 
-    def test_owner_only_tools_are_after_the_shared_schema_prefix(self):
-        # 12.09: при указателях в `tools` едут родные + describe/call; порядок и шов
-        # полного набора живут в `catalog_tools_for` — его и меряем.
+    def test_every_speaker_gets_the_identical_tool_schemas(self):
+        # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — owner-пары больше нет, поэтому схемы рук в комнате
+        # совпадают байт-в-байт при любом говорящем, и кэш не делится на говорящих.
         owner = agent.catalog_tools_for(room_ctx(owner=True))
-        other = agent.catalog_tools_for(room_ctx(owner=False))
-        owner_names = list(tool_offerings.offered_names(owner))
-        other_names = list(tool_offerings.offered_names(other))
-        shared = [name for name in owner_names if name in set(other_names)]
-
-        self.assertGreaterEqual(first_seam(owner_names, other_names), len(shared) - 1)
-        owner_only = [name for name in owner_names if name not in set(other_names)]
-        self.assertEqual(owner_only, ["admit", "computer_access"])
-
-        wire = lambda tools: json.dumps(llm.tools_to_openai(tools), ensure_ascii=False)
-        owner_wire, other_wire = wire(owner), wire(other)
-        common = next((i for i, pair in enumerate(zip(owner_wire, other_wire))
-                       if pair[0] != pair[1]), min(len(owner_wire), len(other_wire)))
-        self.assertGreater(common / len(owner_wire), 0.95)
+        for other in (agent.catalog_tools_for(room_ctx(owner=False)),
+                      agent.catalog_tools_for(room_ctx(owner=False, known=False))):
+            self.assertEqual(list(tool_offerings.offered_names(owner)),
+                             list(tool_offerings.offered_names(other)))
+            wire = lambda tools: json.dumps(llm.tools_to_openai(tools), ensure_ascii=False)
+            self.assertEqual(wire(owner), wire(other))
+        self.assertFalse({"admit", "computer_access"} & set(tool_offerings.offered_names(owner)))
 
 
 if __name__ == "__main__":

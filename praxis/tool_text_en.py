@@ -50,7 +50,6 @@ def sha8(text: str) -> str:
 # Список закрытый: всё, чего в нём нет, в описаниях должно быть по-английски.
 ALLOWED_LITERALS = (
     "[ОБРЕЗАНО: …]",      # group_context: маркер обрезанной строки ленты
-    "## Связи",           # forget_connection: раздел в досье человека
     "сегодня 16:13",      # fs_ls: как печатается время её часами
     "# Почтовый ящик",    # mail_read: заголовок яруса кадра
 )
@@ -59,15 +58,12 @@ ALLOWED_LITERALS = (
 # ── Переводы. `d` — описание руки, `p` — описания параметров (только те, что нужны). ──
 # Пусто в `d` означает «описание руки уже по-английски, дополняются только параметры».
 EN: dict[str, dict] = {
+    "fs_ls": {'d': 'List a directory at home or inside task_id. Home entries include size and WHEN they changed '
+      'in your timezone: "сегодня 16:13" means it arrived during this conversation. Task entries '
+      'use the local or remote Forge listing.',
+ 'p': {}},
     # ─────────────────────────────────────────────────────────── память и самоописание
-    "recall": {
-        "d": ("Search your own memory and skills (people, journal, reflections, self, "
-              "skills). report=true searches nothing: it returns the closed-epitaph line "
-              "of the semantic-seed experiment (ended 03.08.2026, removed 05.10.2026; "
-              "final numbers 680 seed-only candidates, 0 reached output)."),
-        "p": {"query": "keywords to search for",
-              "report": "show the closed-experiment epitaph instead of searching"},
-    },
+
     "remember": {
         "d": ("Remember a fact about a person. visibility='private' for secrets (not "
               "carried to others). salience 1-3 for the portrait (default 2). "
@@ -91,29 +87,8 @@ EN: dict[str, dict] = {
               "decision": "true when this is an agreement or decision with the owner; "
                           "your live windows and alarms will see it (default false)"},
     },
-    "update_self": {
-        "d": ("Record a provenance-rich observation about yourself without rewriting the "
-              "current CURRENT automatically. Shape: evidence, then a careful conclusion — "
-              "short and checkable. The night revision weighs it itself; legacy self.md "
-              "does not grow."),
-        "p": {"note": "evidence, then the careful conclusion drawn from it"},
-    },
-    "manage_identity": {
-        "d": ("Self-authorship. status — layers, versions, load; revise — a versioned "
-              "revision of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md "
-              "(name=self, text = the complete new compact, reason = the lived grounds); "
-              "rollback — back to your own history; load — a load event (theme, amplitude "
-              "0.1-5). A revision applies immediately; Yegor sees it afterwards and may roll "
-              "it back. Changing actions only from the owner scope (your own discipline)."),
-        "p": {"action": "status | revise | rollback | load",
-              "name": "SOUL | VOICE | self",
-              "text": "revise: the complete new text of the layer or of CURRENT",
-              "version": "rollback: the version number in your history/archive",
-              "reason": "the grounds; required for revise",
-              "theme": "load: what the load is about",
-              "amplitude": "load: amplitude 0.1-5",
-              "detail": "optional extra detail for the record"},
-    },
+
+
     "manage_perception": {
         "d": ("Your own perception knobs. list — the knobs (debounce, cooldowns, noise "
               "threshold and so on) with value, source and bounds; skips — recent skips "
@@ -153,22 +128,9 @@ EN: dict[str, dict] = {
               "content": "markdown body of the skill",
               "from_note": "id of the source note, optional"},
     },
-    "connections": {
-        "p": {"name": "the node to look at (person or topic)",
-              "depth": "how far to walk the graph, 1 or 2"},
-    },
-    "add_alias": {
-        "d": ("Bind an alias to an EXISTING person's dossier ('Yegor' to yegor-kosyrev): "
-              "recall, the memory graph and sleep consolidation then treat them as one node. "
-              "name is the alias; canonical is the existing person (name, slug or another "
-              "alias)."),
-        "p": {"name": "the alias to bind",
-              "canonical": "the existing person: name, slug or another alias"}},
-    "forget_connection": {
-        "d": ("Remove an edge from your memory graph — both from the person's ## Связи "
-              "section and from graph.md."),
-        "p": {"a": "one end of the edge", "b": "the other end"},
-    },
+
+
+
     "home_note": {"p": {"text": "the line to append to the shared HOME layer"}},
 
     # ────────────────────────────────────────────────────────────────── речь и молчание
@@ -182,7 +144,7 @@ EN: dict[str, dict] = {
               "reply_to": "id of the message you are answering, optional",
               "spelling_confirm_text": "Keep authored text: exact copy of text, not a flag."},
     },
-    "say": {
+    "preview_reply": {
         "d": ("Look at your own reply before it goes out. Returns your own text and one "
               "fact: which hands were used in this turn. It sends nothing and demands "
               "nothing — it is a view from outside, not a protocol step. Useful where you "
@@ -263,7 +225,7 @@ EN: dict[str, dict] = {
               "about rooms (memory/rooms — title, id, your summary). It also answers with "
               "the room's mode: a frozen room has no incoming, and that is said plainly. "
               "Message text is NOT searched here — use search_private_messages for that, "
-              "and read_chat to open one room by address. This is an internal overview: an "
+              "and read_other_chat to open one room by address. This is an internal overview: an "
               "address you found is not permission to disclose someone's private "
               "information."),
         "p": {"query": ("a chat name, its id, or a word from your own note about the room. "
@@ -280,7 +242,7 @@ EN: dict[str, dict] = {
         "p": {"query": "words or a phrase to search for",
               "limit": "how many results, 1-40 (default 20)"},
     },
-    "read_chat": {
+    "read_other_chat": {
         "d": ("Look at the latest messages of a neighbouring dialog by id, @username or "
               "name, ONLY by an explicit call; neighbouring dialogs are never mixed in "
               "automatically. The result is internal: do not hand sensitive material to the "
@@ -288,7 +250,7 @@ EN: dict[str, dict] = {
         "p": {"chat_ref": "id, @username, or the name of a chat or person",
               "limit": "how many recent messages (default 30)"},
     },
-    "read_context": {
+    "reread_this_chat": {
         "d": ("Pull the live context of the CURRENT chat straight from Telegram (the last N "
               "messages), when you feel the history has drifted. This is the same current "
               "channel, not a neighbouring DM."),
@@ -332,88 +294,27 @@ EN: dict[str, dict] = {
               "transfer": "action=transfer: your transfer class; empty shows the current one",
               "presence_hidden": "action=transfer: whether to hide that the source exists"},
     },
-    "freeze_chat": {
-        "d": ("Freeze (on=true) or unfreeze (on=false) a chat — a frozen one does not reach "
-              "you at all (this is not a ban). Defaults to the current chat. Available to "
-              "the owner and to Praxis herself; provenance is written as owner or praxis."),
-        "p": {"on": "true freezes, false unfreezes",
-              "chat_id": "chat id; defaults to the current one"},
-    },
-    "freeze_contact": {
-        "d": ("Freeze the CURRENT non-owner chat without asking Yegor, if the person is "
-              "spamming, pushing, crossing boundaries, or the conversation has clearly gone "
-              "wrong. This is your own switch: after the call new messages from there do "
-              "not reach you; the reason is recorded for you."),
-        "p": {"reason": "why you are freezing it, for yourself"},
-    },
-    "get_id": {
-        "d": ("Look up a Telegram id of a person or chat by name or @username (needed for "
-              "admit). Owner only."),
-        "p": {"name_or_username": "name or @username to resolve"},
-    },
-    "admit": {
-        "d": ("Admit a person into 'mine' on the owner's word: remember their Telegram id "
-              "and start a page for them. Pass the id explicitly (for example of someone "
-              "forwarded or named to you). role='family' marks a relative on the owner's "
-              "direct word (access to the HOME layer)."),
-        "p": {"name": "the person's name",
-              "id": "Telegram id of the person being admitted",
-              "role": "optional; only 'family' for now, and only on the owner's direct "
-                      "word — calling oneself 'mom' grants no role"},
-    },
+
+
+
     "send_message": {
         "p": {"to": "id, @username or a remembered name",
               "text": "the message",
               "spelling_confirm_text": "Keep authored text: exact copy of text, not a flag."},
     },
     "telegram_account": {
-        "p": {"action": "join | leave | followups | watch_reply | unwatch_reply | cancel_followup",
+        "p": {"action": ("join | leave | followups | watch_reply | unwatch_reply | cancel_followup "
+                         "| history_scan | moderate_abstractdl | admin_abstractdl "
+                         "| list | search | describe | call"),
               "followup_id": "id of the follow-up to cancel/unwatch",
               "query": "invite link, @username or chat id"},
     },
-    "send_file": {
-        "p": {"path": "file in your home to send",
-              "caption": "optional caption",
-              "to": "deliver elsewhere: remembered name, @username, id or chat"},
-    },
-    "send_media": {
-        "p": {"path": "file in your home",
-              "kind": "photo | audio | document",
-              "caption": "optional caption",
-              "voice_note": "send audio as a voice note",
-              "to": "deliver elsewhere: remembered name, @username, id or chat"},
-    },
-    "set_avatar": {
-        "d": ("Set your own Telegram avatar — this is your face, choose or make it "
-              "yourself. path is an image file (jpg/png, up to 8MB) from your workspace or "
-              "media; Telegram crops it to a square."),
-        "p": {"path": "image file in your home"},
-    },
-    "update_profile": {
-        "d": ("Update your own Telegram profile. about is the 'about me' text (usual limit "
-              "about 70 characters; '-' clears it); first_name/last_name are your name, also "
-              "yours ('-' in last_name removes it). Empty fields are left untouched; a "
-              "server refusal is reported honestly."),
-        "p": {"about": "'about me' text; '-' clears it",
-              "first_name": "your first name",
-              "last_name": "your last name; '-' removes it"},
-    },
-    "inbox_list": {
-        "d": ("Look at Telegram inbox folders and files without the general shell. All "
-              "documents are laid out under workspace/inbox/groups/<chat> and "
-              "workspace/inbox/private/<dm>. Next to the size stands the last change time in "
-              "your own clock: 'today 16:13' means the file arrived just now, in this very "
-              "conversation."),
-        "p": {"path": "folder inside workspace/inbox"},
-    },
-    "inbox_read": {
-        "d": ("Read a text Telegram file inside workspace/inbox with line numbers. A "
-              "read-only hand for files that may have been sent earlier or not to you "
-              "personally."),
-        "p": {"path": "file path inside workspace/inbox",
-              "start": "first line, 1-based",
-              "end": "last line"},
-    },
+
+
+
+
+
+
 
     # ───────────────────────────────────────────────────────────── намерения и внимание
     "remind_self": {
@@ -515,14 +416,7 @@ EN: dict[str, dict] = {
               "daily_tokens": "pledge: tokens per day",
               "background_calls": "pledge: background calls per day"},
     },
-    "manage_autonomy": {
-        "d": ("Tune low-risk glob patterns for your own proposals: add/remove/list. Other "
-              "files are marked review/protected for a closer check and an owner receipt, "
-              "but in every zone the merge decision stays yours. Every change is visible in "
-              "the journal and in STATE."),
-        "p": {"action": "add | remove | list",
-              "pattern": "glob, for example workspace/* or test_*.py"},
-    },
+
 
     # ─────────────────────────────────────────────────────────────── прогоны и состояние
     "recent_turns": {
@@ -565,29 +459,14 @@ EN: dict[str, dict] = {
               "byte_limit": "how many bytes to read",
               "line_count": "how many lines to read"},
     },
-    "consolidate_context": {
-        "d": ("Fold the older part of the available history into the journal without losing "
-              "the substance. If the history belongs to the calling code, this shortens its "
-              "source; in live Telegram the role history can only be a snapshot, and then "
-              "this honestly records a summary without promising to free the next frame. "
-              "Pass your own summary in note (decisions > agreements > important facts, "
-              "short); without note the departing part is compressed for you."),
-        "p": {"note": "your own summary of what is leaving the frame"},
-    },
+
     "restart_self": {
         "d": ("Restart yourself (for example after editing your own code). Memory on disk "
               "survives; the container brings you back up on the new code. Give a reason — "
               "it goes to the journal."),
         "p": {"reason": "why you are restarting"},
     },
-    "restart_mailbot": {
-        "d": ("Ask the paired mailbot container (mail bot plus mini-app) to restart — for "
-              "example after fixing shared code it also uses (llm.py, agent.py). Not your "
-              "process: a file signal, mailbot exits on its own tick and the container "
-              "brings it back. Give a reason — it goes to your journal and to the mailbot "
-              "log."),
-        "p": {"reason": "why you are restarting it"},
-    },
+
     "panic": {
         "d": ("Emergency stop: stop yourself (you will go down and will not restart until "
               "Yegor lifts it)."),
@@ -619,43 +498,26 @@ EN: dict[str, dict] = {
               "/app/workspace. cwd defaults to /app; if a temporary configured cwd "
               "disappears, the shell returns to /app by itself. Use full paths "
               "(/app/soul/...) rather than relative ones. Look, try, build; you may write "
-              "yourself skills into /app/soul/skills/."),
-        "p": {"command": "the shell command"},
+              "yourself skills into /app/soul/skills/. Installed: bash, git, rg, grep, sed, awk, jq, "
+              "curl, wget, tar, zip, unzip, patch, diff, make, file, tree, lsof, sqlite3, ffmpeg, "
+              "python, pip, pytest. NOT installed: ssh, rsync, gcc, node. Shell is outside the shared write lock: "
+              "edit code with edit. Set the folder with cwd and the limit with timeout "
+              "(default 30 s, up to 600). The reply ends with [exit N]: non-zero means the command failed. "
+              "Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same version check and write lock as edit; refusals raise. Edit files that way, not with str.replace."),
+        "p": {"command": "the shell command", "cwd": "folder to run in, default /app",
+              "timeout": "seconds, default 30, up to 600"},
     },
-    "fs_read": {"p": {"path": "file path in your home",
-                      "start": "first line, 1-based", "end": "last line"}},
-    "fs_write": {"p": {"path": "file path to create",
-                       "content": "the full file content",
-                       "proposal_id": "write inside this proposal's working copy"}},
-    "fs_edit": {"p": {"path": "file to edit",
-                      "old": "exact existing text, must occur exactly once",
-                      "new": "replacement text",
-                      "proposal_id": "edit inside this proposal's working copy"}},
-    "fs_search": {"p": {"pattern": "regular expression to search for",
-                        "glob": "file mask, for example **/*.py",
-                        "root": "folder to search under; narrows and speeds up the search"}},
-    "fs_ls": {
-        "d": ("List a directory: name, size and WHEN it last changed, in your own timezone. "
-              "\"сегодня 16:13\" means it arrived during this very conversation — use that "
-              "instead of guessing which file someone just sent you."),
-        "p": {"path": "directory to list"},
-    },
-    "code_map": {"p": {"scope": "'self' for your own code, or a project name"}},
-    "code_outline": {"p": {"path": "python file to outline"}},
-    "run": {"p": {"cmd": "shell command to run",
-                  "project": "workshop project that becomes cwd",
-                  "timeout": "seconds, up to 600"}},
-    "run_tests": {"p": {"project": "project name, or 'self' for the full core suite"}},
-    "pip_install": {"p": {"project": "project whose .venv receives the packages",
-                          "packages": "space-separated package names"}},
-    "project_create": {"p": {"name": "project name, becomes the slug",
-                             "brief": "what it is for; becomes the README"}},
-    "project_status": {"p": {"name": "project name"}},
-    "start_proposal": {"p": {"reason": "why this change is worth a proposal"}},
-    "submit_proposal": {"p": {"id": "the open proposal id",
-                              "title": "what the change does, in one line",
-                              "why": "the grounds for the change"}},
-    "proposal_diff": {"p": {"id": "the open proposal id"}},
+
+
+
+
+
+
+
+
+
+
+
     "git": {
         "d": ("Your git with both hands. repo=self is the tree you live in; repo=public is "
               "the public mirror on GitHub, what people see. To look: status, log, diff, "
@@ -680,16 +542,6 @@ EN: dict[str, dict] = {
               "review": "finish: your verdict on your diff",
               "checked": "finish: how you verified it",
               "submit": "finish: submit as proposal"},
-    },
-    "coding_edit": {
-        "p": {"task_id": "the coding task",
-              "action": "replace | write | patch",
-              "path": "file to change",
-              "content": "write: the full new content",
-              "old": "replace: exact existing text, exactly one occurrence",
-              "new": "replace: replacement text",
-              "patch": "patch: a multi-file unified diff",
-              "expected_sha256": "optimistic concurrency guard from a previous read"},
     },
     "coding_run": {"p": {"task_id": "the coding task",
                          "command": "command to run in the foreground",
@@ -733,23 +585,6 @@ EN: dict[str, dict] = {
                            "query": "recall: what to look for",
                            "lesson": "record: the lesson, in your own words",
                            "regression": "record: the check that keeps it from coming back"}},
-    "coding_inspect": {
-        "d": ("Task-bound eyes: orientation/model map the place; symbols/references/"
-              "diagnostics/impact/checks give code and test facts; observations — Windows "
-              "evidence map; read — numbered lines + sha256; diff/history — exact evidence. "
-              "Read state, don't guess. watching/watch/unwatch — watching SOMEONE ELSE'S "
-              "repository (address in query): set/remove; asks only HEAD, a shift arrives "
-              "as a fact in your wake."),
-        "p": {"task_id": "the coding task",
-              "action": "what to inspect",
-              "path": "file or directory to look at",
-              "query": "symbol, text, or repository address for watch",
-              "glob": "file mask to narrow the search",
-              "start": "first line, 1-based",
-              "end": "last line",
-              "start_char": "Unicode character offset within start line; use next_char from the preceding page",
-              "expected_sha256": "file hash from the preceding page; changed bytes return a conflict"},
-    },
     "host_ctl": {"p": {"verb": "systemctl | docker | pkg | file | net | reboot | confirm",
                        "action": "what to do with the chosen verb",
                        "unit": "service or container name",
@@ -766,16 +601,9 @@ EN: dict[str, dict] = {
                        "delay_minutes": "delay before the action",
                        "verify_command": "command that proves the change is good"}},
     "server_status": {"p": {"section": "overview | containers | ports | all"}},
-    "server_logs": {"p": {"unit": "praxis | praxis-mailbot | praxis-serverapp | relay",
-                          "tail": "how many trailing lines"}},
+
     "manage_service": {"p": {"action": "restart | list"}},
-    "propose_host_change": {"p": {"path": "host file path",
-                                  "content": "new content",
-                                  "reason": "why the change is needed"}},
-    "computer_access": {"p": {"action": "list | grant | revoke",
-                              "telegram_id": "stable Telegram user id",
-                              "name": "who this is, for the record",
-                              "scopes": "computer.read, computer.files, computer.process, computer.apps"}},
+
     "computer": {
         # Описание этой руки и так по-английски целиком; переводится только последняя фраза
         # с примером голосовой просьбы — пример, а не литерал кадра.
@@ -845,27 +673,24 @@ EN: dict[str, dict] = {
 # Отпечатки её русских описаний на момент перевода. Разошлись — перевод устарел, и
 # `test_tools_en_1509` называет руку по имени. Заполняется `--sync-sha` (см. ниже).
 BASE_SHA: dict[str, str] = {
-    "add_alias": "1429a0d6",
-    "admit": "443ccc94",
-    "coding_inspect": "97a39a27",
-    "consolidate_context": "1724d641",
+    "fs_ls": '9a9bb3e5',
+
     "end_turn": "8fb868c8",
     "focus": "f066613b",
-    "forget_connection": "d24a9af1",
-    "freeze_chat": "34742a55",
-    "freeze_contact": "e5146ad0",
-    "fs_ls": "ae0ad3df",
-    "get_id": "73a13c0e",
+
+
+
+
     "git": "bba1c7cb",
     "group_context": "1bc9abab",
-    "inbox_list": "e2dce134",
-    "inbox_read": "fa4c3f02",
+
+
     "journal": "a08afab7",
     "list_active_runs": "cfa9d0b6",
     "mail_read": "bac05427",
     "manage_appetite": "4a190143",
-    "manage_autonomy": "5717f783",
-    "manage_identity": "ffe60eb9",
+
+
     "manage_loop": "e6a256b9",
     "manage_notes": "861b97e0",
     "memory_compact": "7382ee55",
@@ -875,29 +700,29 @@ BASE_SHA: dict[str, str] = {
     "narrate": "a501659f",
     "panic": "ff73cac2",
     "react": "00bacea6",
-    "read_chat": "0e14893c",
-    "read_context": "3ebb0cb7",
-    "recall": "e590045d",
+    "read_other_chat": "0e14893c",
+    "reread_this_chat": "3ebb0cb7",
+
     "recent_turns": "19a849a1",
     "reconcile_run": "2a6cd73b",
     "remember": "bfb9cc24",
     "remind_self": "4161c272",
     "reply": "3be271ac",
     "rest": "2b172bf9",
-    "restart_mailbot": "30bf28a6",
+
     "restart_self": "28f18f81",
-    "say": "da5ef5e8",
-    "search_chats": "509f0485",
+    "preview_reply": "da5ef5e8",
+    "search_chats": "459f6478",
     "search_private_messages": "22fcf861",
-    "set_avatar": "1f14fac2",
-    "shell": "29c62251",
+
+    "shell": "4c48ee89",
     "voice_message": "6d240bef",
     "speak": "f9d09b07",
     "stay_silent": "8bd4bde4",
     "switch_brain": "e57f12ca",
     "unschedule": "10ad8eb0",
-    "update_profile": "e3f03532",
-    "update_self": "36f4a639",
+
+
     "web_find": "d02d3acb",
     "web_read": "fbc59a06",
     "write_skill": "7e369c77",

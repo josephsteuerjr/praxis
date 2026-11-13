@@ -41,9 +41,9 @@ import workshop  # noqa: E402
 
 
 class TheHandNowHasAnAddress(unittest.TestCase):
-    def test_send_media_declares_to_in_its_schema(self):
+    def test_send_file_declares_to_and_media_kind_in_its_schema(self):
         """Без параметра в схеме рука не существует для неё, сколько бы кода ни лежало."""
-        spec = next(t for t in agent.WORKSHOP_TOOLS if t["name"] == "send_media")
+        spec = next(t for t in agent.WORKSHOP_TOOLS if t["name"] == "send_file")
         self.assertIn("to", spec["input_schema"]["properties"])
 
     def test_an_addressed_photo_reaches_the_typed_durable_bridge(self):

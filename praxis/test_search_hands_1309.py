@@ -39,16 +39,10 @@ class Base(unittest.TestCase):
         workshop.BASE = workshop.REPO = self.tmp
         workshop.PROJECTS = self.tmp / "workspace" / "projects"
         workshop.INBOX = self.tmp / "workspace" / "inbox"
-        self._env = os.environ.get("PRAXIS_HANDS")
-        os.environ["PRAXIS_HANDS"] = "off"  # питоновый пол; бинарь подменяем моком где нужен
 
     def tearDown(self):
         for m, k, v in self._orig:
             setattr(m, k, v)
-        if self._env is None:
-            os.environ.pop("PRAXIS_HANDS", None)
-        else:
-            os.environ["PRAXIS_HANDS"] = self._env
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
@@ -110,8 +104,14 @@ class _FakeFloor:
         self.default = default
         self.calls: list[dict] = []
 
-    def __call__(self, literal, glob="**/*.py", root="", cap=60, ignore_case=False, base=None):
-        self.calls.append({"literal": literal, "glob": glob, "root": root, "cap": cap})
+    def __call__(self, literal, glob="**/*.py", root="", cap=60, ignore_case=False,
+                 base=None, scope_root=None):
+        # Partition dispatch keeps the authorized home; explicit dispatch rebases
+        # base to the selected directory and uses root="." with default scope.
+        if scope_root is not None and Path(scope_root) != Path(base).resolve():
+            raise AssertionError("partition scope must be the authorized home")
+        self.calls.append({"literal": literal, "glob": glob, "root": root, "cap": cap,
+                           "base": base, "scope_root": scope_root})
         if root in self.answers:
             return self.answers[root]
         return self.default
@@ -130,6 +130,9 @@ class TestFloorSearchHome(Base):
         self.assertIn("workspace", out.split("…")[-1], "усечённая часть названа")
         self.assertIn("5000", out)
         self.assertIn("memory/runs не искала", out)
+        for call in floor.calls:
+            self.assertEqual(call["base"], self.tmp)
+            self.assertEqual(call["scope_root"], self.tmp.resolve())
         roots = [c["root"] for c in floor.calls]
         self.assertEqual(roots[0], "workspace")
         self.assertIn("memory/dossiers", roots)
@@ -148,24 +151,36 @@ class TestFloorSearchHome(Base):
         self.assertIn("workspace", out)
         self.assertIn("сузь маску или дай root", out)
 
-    def test_floor_silence_falls_back_to_python(self):
+    def test_floor_silence_is_named_and_reads_nothing_here(self):
         floor = _FakeFloor({}, default=None)
+        with mock.patch.object(workshop.hands, "search", floor), \
+             mock.patch.object(Path, "read_text", side_effect=AssertionError("основной процесс читает файлы поиска")):
+            out = workshop.fs_search("иголка", glob="**/*.md").replace("\\", "/")
+        self.assertTrue(out.startswith("Не знаю"), out)
+        self.assertIn("поиск не ответил на workspace", out)
+        self.assertEqual(len(floor.calls), 1, "молчащая часть останавливает обход")
+
+    def test_part_that_goes_silent_keeps_what_was_found(self):
+        floor = _FakeFloor(
+            {"workspace": {"ok": True, "files_seen": 2, "capped": False, "hits": ["a.md:1: иголка"]}},
+            default=None)
         with mock.patch.object(workshop.hands, "search", floor):
             out = workshop.fs_search("иголка", glob="**/*.md").replace("\\", "/")
-        self.assertIn("soul/HOME.md:1", out)
-        self.assertIn("memory/dossiers/егор.md:1", out)
-        self.assertNotIn("run-1", out, "прогоны без root не читаются")
-        self.assertIn("memory/runs не искала", out)
+        self.assertIn("workspace/a.md:1", out)
+        self.assertIn("поиск не ответил на ", out)
+        self.assertNotIn("Не знаю", out)
 
     def test_explicit_root_reports_floor_budget(self):
         floor = _FakeFloor(
-            {"memory/runs": {"ok": True, "files_seen": 5000, "capped": False,
+            {".": {"ok": True, "files_seen": 5000, "capped": False,
                              "hits": ["run-1/manifest.md:1: иголка в прогоне"]}})
         with mock.patch.object(workshop.hands, "search", floor):
             out = workshop.fs_search("иголка", glob="**/*.md", root="memory/runs")
         self.assertIn("run-1/manifest.md:1", out)
         self.assertIn("первые 5000 файлов под memory/runs", out)
-        self.assertEqual([c["root"] for c in floor.calls], ["memory/runs"])
+        self.assertEqual([c["root"] for c in floor.calls], ["."])
+        self.assertEqual(floor.calls[0]["base"], self.tmp / "memory/runs")
+        self.assertIsNone(floor.calls[0]["scope_root"])
 
     def test_refused_part_is_skipped_not_fatal(self):
         floor = _FakeFloor(
@@ -202,11 +217,17 @@ class TestSearchCoverage(Base):
             (self.tmp / rel).write_text("coverage needle\n", encoding="utf-8")
         self.calls = []
         self.visited = []
+        self.dispatches = []
 
     def floor(self, literal, glob="**/*.py", root="", cap=60, **kwargs):
         import fnmatch
-        self.calls.append((root, glob))
         base = Path(kwargs["base"]) / root
+        self.dispatches.append((root, Path(kwargs["base"]), kwargs.get("scope_root")))
+        selected = base.relative_to(self.tmp).as_posix()
+        self.calls.append((selected, glob))
+        if kwargs.get("scope_root") is not None:
+            self.assertEqual(Path(kwargs["scope_root"]), self.tmp.resolve())
+            self.assertEqual(Path(kwargs["base"]), self.tmp)
         recursive = glob.startswith("**/")
         mask = glob[3:] if recursive else glob
         files = []
@@ -214,7 +235,7 @@ class TestSearchCoverage(Base):
         def walk(directory):
             self.visited.append(directory.relative_to(self.tmp).as_posix())
             # Catch accidental broad recursion, not just filtering its returned hits.
-            if root != "memory/runs":
+            if selected != "memory/runs":
                 self.assertNotIn("memory/runs", self.visited[-1])
             for child in directory.iterdir():
                 if child.is_dir():
@@ -238,11 +259,11 @@ class TestSearchCoverage(Base):
     def check_backends(self, glob, expected, root=""):
         with mock.patch.object(workshop.hands, "search", self.floor):
             floor_out = workshop.fs_search("coverage needle", glob=glob, root=root)
-        with mock.patch.object(workshop.hands, "search", return_value=None):
-            fallback_out = workshop.fs_search("coverage needle", glob=glob, root=root)
+        # Метасимвол уводит запрос в полный обход: набор файлов у обоих путей обязан совпасть.
+        walk_out = workshop.fs_search("coverage.needle", glob=glob, root=root)
         expected_hits = {f"{rel}:1: coverage needle" for rel in expected}
         self.assertEqual(self.hits(floor_out), expected_hits, floor_out)
-        self.assertEqual(self.hits(fallback_out), expected_hits, fallback_out)
+        self.assertEqual(self.hits(walk_out), expected_hits, walk_out)
 
     def test_plain_glob_searches_only_base_immediate_files(self):
         self.check_backends("*.md", {"ROOT.md"})
@@ -263,11 +284,13 @@ class TestSearchCoverage(Base):
         self.check_backends("*.md", {"CHILD.md"}, root="workspace")
         self.assertEqual(self.calls, [("workspace", "*.md")])
         self.assertEqual(self.visited, ["workspace"])
+        self.assertEqual(self.dispatches, [(".", self.tmp / "workspace", None)])
 
     def test_explicit_runs_root_is_searchable_in_both_backends(self):
         self.check_backends("**/*.md", {"run-1/hidden.md"}, root="memory/runs")
         self.assertEqual(self.calls, [("memory/runs", "**/*.md")])
         self.assertIn("memory/runs/run-1", self.visited)
+        self.assertEqual(self.dispatches, [(".", self.tmp / "memory/runs", None)])
 
 
 class TestPythonWalk(Base):

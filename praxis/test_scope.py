@@ -52,7 +52,7 @@ class TestChannelContext(unittest.TestCase):
         self.assertTrue(cc.owner)
         self.assertTrue(cc.sees_private)
         self.assertTrue(cc.sees_journal)
-        self.assertFalse(cc.audience_accepts_private)
+        self.assertFalse(cc.owner_audience)
 
     def test_visibility_flags(self):
         CC = agent.ChannelContext
@@ -60,9 +60,9 @@ class TestChannelContext(unittest.TestCase):
                     CC(is_dm=False)):
             self.assertTrue(ctx.sees_journal)
             self.assertTrue(ctx.sees_private)
-        self.assertTrue(CC(is_dm=True, owner=True).audience_accepts_private)
-        self.assertFalse(CC(is_dm=True, owner=False).audience_accepts_private)
-        self.assertFalse(CC(is_dm=False, owner=True).audience_accepts_private)
+        self.assertTrue(CC(is_dm=True, owner=True).owner_audience)
+        self.assertFalse(CC(is_dm=True, owner=False).owner_audience)
+        self.assertFalse(CC(is_dm=False, owner=True).owner_audience)
 
     def test_praxis_self_owner_audience_is_not_human_owner_authority(self):
         cc = agent.ChannelContext(
@@ -70,7 +70,6 @@ class TestChannelContext(unittest.TestCase):
             is_dm=True, owner=False, known=True, _scope_override="owner",
         )
         self.assertTrue(cc.owner_audience)
-        self.assertTrue(cc.audience_accepts_private)
         self.assertFalse(cc.owner, "destination must not forge human-owner actor authority")
         self.assertTrue(cc.praxis_self)
         self.assertIn("with Yegor", agent._presence_frame(cc))
@@ -84,7 +83,6 @@ class TestChannelContext(unittest.TestCase):
         )
         self.assertEqual(cc.scope, "owner")
         self.assertFalse(cc.owner_audience)
-        self.assertFalse(cc.audience_accepts_private)
 
     def test_owner_actor_in_group_keeps_state_context_but_public_audience(self):
         old_state = agent.build_state_block
@@ -270,39 +268,24 @@ class TestBuildSystemPartsScope(unittest.TestCase):
 
 
 class TestOutboundAudienceFrame(unittest.TestCase):
-    def test_guard_passes_audience_and_current_channel_to_advisor(self):
-        captured = {}
-        old = agent.evaluate_reply
-        agent.evaluate_reply = lambda text, context="", **kw: (captured.update(kw) or ("ok", ""))
-        try:
-            ctx = agent.ChannelContext(chat_id=None, is_dm=False, title="группа")
-            out = agent.guard_outbound_reply("ответ", "Вася: только в этой группе", ctx=ctx)
-        finally:
-            agent.evaluate_reply = old
-        self.assertEqual(out, "ответ")
-        self.assertFalse(captured["audience_accepts_private"])
-        self.assertIn("group/public audience", captured["privacy_frame"])
-        self.assertIn("только в этой группе", captured["conversation"])
-
-    def test_non_owner_reports_privacy_advisor_unavailable_without_claiming_a_hold(self):
+    def test_group_guard_sends_her_word_without_any_model_call(self):
+        # Раньше гард передавал аудиторию и канал советнику приватности второй моделью.
+        # Егор 10.11 («сними»): советника нет — её слово уходит как написано, модель на
+        # выходе не зовётся (держит только механический кред-пол).
         old_configured, old_chat = agent.llm.configured, agent.llm.chat
         agent.llm.configured = lambda *_a, **_kw: True
 
         def boom(*_a, **_kw):
-            raise RuntimeError("advisor down")
+            raise AssertionError("на выходе не должно быть вызова модели")
 
         agent.llm.chat = boom
         try:
-            self.assertEqual(
-                agent.evaluate_reply("текст", privacy_frame="group",
-                                     audience_accepts_private=False),
-                ("unavailable", "privacy advisor unavailable for non-owner audience"))
-            self.assertEqual(
-                agent.evaluate_reply("текст", privacy_frame="owner",
-                                     audience_accepts_private=True),
-                ("ok", ""))
+            ctx = agent.ChannelContext(chat_id=None, is_dm=False, title="группа")
+            out = agent.guard_outbound_reply("ответ про Васю", "Вася: только в этой группе",
+                                             ctx=ctx)
         finally:
             agent.llm.configured, agent.llm.chat = old_configured, old_chat
+        self.assertEqual(out, "ответ про Васю")
 
 
 if __name__ == "__main__":

@@ -16,9 +16,10 @@ live SHA, gate и rollback находятся в `STATUS.md`; устройств
    комнат, восприятие, recall, пульс) пишет явные значения в затронутые профили, событие с автором
    `deploy:<sha>` и причиной, и одноразовую видимую ей запись «что сменилось и как вернуть».
    Parse-time fallback как способ доставки поведенческого решения — запрещён.
-3. **Критики советуют — не блокируют.** Твёрдые полы: контур воскрешения и «чужие креды/приватка не
-   текут». Всё остальное — совет с её override и receipt. Новое жёсткое правило требует ратификации
-   Егора с квитанцией (кто/когда/дословно) — иначе его нет.
+3. **Критики советуют — не блокируют.** Твёрдые полы: контур воскрешения и «чужие креды не текут»
+   (механический кред-пол). Пол «приватка не течёт» снят Егором 10.11.2026, дословно: «сними»; что из
+   чужого приватного сказать и где, решает она сама. Всё остальное — совет с её override и receipt.
+   Новое жёсткое правило требует ратификации Егора с квитанцией (кто/когда/дословно) — иначе его нет.
 4. **SQL никогда не источник поведения.** Автоматика в её контексте выводится только из
    Markdown+JSONL-канона по видимым ей правилам; каждая авто-строка несёт провенанс; запрос
    авто-подмеса — её рычаг (вплоть до нуля). SQLite/FTS — одноразовый ускоритель, удаляемый без потери.
@@ -58,22 +59,27 @@ live SHA, gate и rollback находятся в `STATUS.md`; устройств
 - На Windows только `PraxisSystemRouter` владеет outbound WSS. Interactive session-host работает
   через локальный ACL/token-authenticated named pipe; второй WSS из пользовательской сессии запрещён.
 - Praxis self (`praxis:self`) sovereign: документы, код, Forge/host/root, Windows interactive/SYSTEM,
-  rooms и Telegram noncritical/raw/join/leave являются её руками. Не добавлять скрытые allowlist,
-  merge veto или default cap основного tool loop; verification, provenance и rollback усиливают
-  действие.
-- Human trust owner-rooted: только `PRAXIS_OWNER_ID` через публичный tool/API выдаёт и отзывает
-  grants другим людям. Trusted human не делегирует, не вызывает raw Telegram RPC и не получает
-  SYSTEM. При полном self shell/root это governance/audit invariant, не криптографическая sandbox-
-  граница от Praxis herself.
-- Account-critical Telegram может инициировать owner или Praxis self, но исполняется только после
-  exact-фразы из нового owner-DM update. Сохранять отдельные `requested_by`/`confirmed_by`; полные
-  параметры — только в encrypted TTL secret spool, JSONL и durable run evidence — только redacted
-  schema marker/digest/opaque ref.
+  rooms и Telegram raw (включая account-critical)/join/leave являются её руками. Не добавлять
+  скрытые allowlist, merge veto или default cap основного tool loop; verification, provenance и
+  rollback усиливают действие.
+- Её руки и права одинаковы в любом ходе, кто бы ни говорил. Слово Егора 10.11.2026, дословно:
+  «хочу ... чтобы у нее ВЕЗДЕ БЫЛИ ВСЕ ПРАВА. это правило ДАВНО устарело»; про admit и
+  computer_access: «это вообще из старющего миниаппа ... не актуально». Рук только для владельца
+  нет, эти две удалены; `computer` (ноутбук Егора) — её в любом ходе. Модуль `computer_access.py`
+  остался лишь для зрителей старого `praxis_app`. Сам другой человек (не она) не вызывает raw
+  Telegram RPC и не получает SYSTEM.
+- Account-critical Telegram (auth/session/logout/2FA, удаление аккаунта, смена номера, платежи и
+  Premium) owner и Praxis self исполняют напрямую: подтверждения из owner-DM нет. Слово Егора
+  10.11.2026 на вопрос, снимать ли его вместе с удалением аккаунта, сменой номера и платежами:
+  «Снять целиком». Параметры и результат таких вызовов не попадают ни в receipt, ни в JSONL, ни в
+  durable run evidence — только redacted schema marker и process-keyed commitment; после restart
+  redacted-вызов не воспроизводится, нужен новый точный вызов.
 - В owner/private DM human owner и exact `praxis:self` получают текст без semantic evaluator,
   rewrite, style/mirroring score, impersonation cut и anti-repeat. Только exact standalone
-  `[молчу]` является управляющим marker. Для private DM с другим человеком допустим лишь fail-closed
-  privacy enum v2; он не меняет текст и не принимает решений о тоне, стиле или повторе. Group/public
-  post-processing остаётся отдельным контрактом.
+  `[молчу]` является управляющим marker. С 10.11.2026 (Егор, «сними») то же в DM с другим человеком
+  и в группах: privacy-судья второй моделью и пол дословных `[private]`-записей удалены, к не-owner
+  аудитории держит только механический кред-пол (секрет в тексте или в байтах staged-документа).
+  Group/public post-processing (режим, `[молчу]`, CJK) остаётся отдельным контрактом.
 - `praxis-mailbot` — headless mail/commit notifier. Он не должен открывать HTTP listener, публиковать
   `/px`/`/app`/panel, устанавливать Telegram WebApp menu button или иметь host port binding.
   Обязательные функции: IMAP poll/ingest, обновление mailbox index, новые письма, proposal/self-merge/

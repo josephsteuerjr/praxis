@@ -107,9 +107,12 @@ class TheToolSaysSoInItsOwnDescription(unittest.TestCase):
         spec = next(t for t in agent.WORKSHOP_TOOLS if t["name"] == "fs_ls")
         self.assertIn("WHEN", spec["description"])
 
-    def test_inbox_list_description_mentions_it(self):
+    def test_shared_listing_replaces_inbox_listing_without_losing_dates(self):
         import agent
-        self.assertIn("сегодня", agent.INBOX_LIST_TOOL["description"])
+        spec = next(t for t in agent.WORKSHOP_TOOLS if t["name"] == "fs_ls")
+        self.assertIn("WHEN", spec["description"])
+        self.assertIn("path", spec["input_schema"]["properties"])
+        self.assertNotIn("inbox_list", agent.TOOL_IMPL)
 
 
 if __name__ == "__main__":

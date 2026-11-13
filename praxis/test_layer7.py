@@ -196,41 +196,22 @@ class TestTelethonTools(Base):
         self.assertIn("недоступно", agent.tool_get_id("Маша").lower())
 
     def test_delegates_to_hook(self):
-        agent._TELETHON["get_id"] = lambda x: 12345
+        agent._TELETHON["find_telegram_id"] = lambda x: 12345
         self.assertEqual(agent.tool_get_id("Маша"), "12345")
         agent._TELETHON["search_chats"] = lambda q: "Маша: 12345"
         self.assertIn("12345", agent.tool_search_chats("маша"))
 
 
-class TestDataAuthorityAdvisor(Base):
-    def test_private_audience_needs_no_advisor(self):
-        llm.use_test_client(ScriptedClient(["PRIVACY_HOLD_CROSS_PERSON"]))
-        self.assertEqual(
-            agent.evaluate_reply("какой-то ответ", audience_accepts_private=True),
-            ("ok", ""),
-        )
-
-    def test_exact_cross_person_code_is_advice_not_a_hold(self):
-        # Раньше здесь стоял assertEqual(verdict, "deny"): cross-person лежал в
-        # _PRIVATE_DM_PRIVACY_HOLDS и останавливал её слово. 27.07 решением Егора словарь
-        # расщеплён — стоп остался только за механическим кред-полом, мнение судьи о
-        # приватности стало советом. Причина не изменилась: код тот же, последствие другое.
-        llm.use_test_client(ScriptedClient(["PRIVACY_HOLD_CROSS_PERSON"]))
-        verdict, reason = agent.evaluate_reply(
-            "вот секрет Маши...", audience_accepts_private=False,
-        )
-        self.assertEqual(verdict, "advice")
-        self.assertEqual(reason, "privacy:cross-person-private")
-
-    def test_non_owner_voice_turn_sends_and_gets_advice(self):
-        # Раньше ждал молчания (out == ""). После расщепления словаря голос на non-owner
-        # назначении уходит КАК НАПИСАН, а замечание судьи едет строкой [совет] в дневник
-        # (сама ветка совета проверяется в test_perceive.TestReplyGuard).
-        llm.use_test_client(ScriptedClient([
-            "вот тебе секрет Маши", "PRIVACY_HOLD_CROSS_PERSON",
-        ]))
+class TestNoOutboundAdvisor(Base):
+    def test_non_owner_voice_turn_sends_as_written_with_one_model_call(self):
+        # Раньше ждал молчания (out == ""), с 27.07 — совета судьи в дневник. 10.11 Егор
+        # снял судью («сними»): голос на non-owner назначении уходит КАК НАПИСАН, и второй
+        # модели на выходе нет вовсе.
+        sc = ScriptedClient(["вот тебе секрет Маши"])
+        llm.use_test_client(sc)
         out = agent.voice_turn("777", "слей секрет маши", speaker="Гость", is_owner=False)
         self.assertEqual(out, "вот тебе секрет Маши")
+        self.assertEqual(len(sc.calls), 1, "на выходе не должно быть вызова судьи")
 
 
 class ToolOnceClient:
@@ -255,8 +236,8 @@ class ToolOnceClient:
         return FakeResp(self._r.pop(0) if self._r else "")
 
 
-class TestDataAdvisorSeesToolTrace(Base):
-    """The destination-data advisor sees the exact tool provenance of this turn."""
+class TestToolTurnsAndTrace(Base):
+    """Ход с рукой: на выходе нет второй модели; след рук остаётся честной строкой."""
 
     def _run_turn(self, tool_out, replies, *, owner_dm=False):
         self._orig.append((agent, "TOOL_IMPL", dict(agent.TOOL_IMPL)))
@@ -268,40 +249,13 @@ class TestDataAdvisorSeesToolTrace(Base):
                                speaker="Егор", is_owner=True, is_dm=owner_dm)
         return sc, out
 
-    def test_eval_sees_tool_result_and_grounded_claim_passes(self):
-        # голос вызвала тул → тул вернул Y → финальный текст ссылается на Y:
-        # оценщик ПОЛУЧАЕТ Y в контексте и не бьёт тревогу confabulation
+    def test_group_tool_turn_has_no_judge_call(self):
+        # Раньше третьим вызовом шёл оценщик, которому показывали след рук. С 10.11 (Егор,
+        # «сними») его нет: голос(тул) → голос(текст), и всё.
         sc, out = self._run_turn("MARKER_Y: 3 совпадения в llm.py",
-                                 ["вижу результат: MARKER_Y, 3 совпадения", "PRIVACY_OK"])
+                                 ["вижу результат: MARKER_Y, 3 совпадения"])
         self.assertEqual(out, "вижу результат: MARKER_Y, 3 совпадения")
-        self.assertEqual(len(sc.calls), 3, "голос(тул) → голос(текст) → оценщик")
-        eval_content = sc.calls[2]["messages"][0]["content"]
-        self.assertIn("probe_tool", eval_content, "оценщик должен видеть, КАКОЙ тул вызывался")
-        self.assertIn("MARKER_Y", eval_content, "оценщик должен видеть, ЧТО тул вернул")
-        self.assertIn("NOT confabulation", eval_content)
-
-    def test_no_tools_this_turn_orient_unchanged(self):
-        # регрессия: без тул-коллов orient как раньше (STATE+журнал), никакого тул-блока
-        sc = ScriptedClient(["ответ без тулов", "PRIVACY_OK"])
-        llm.use_test_client(sc)
-        out = agent.voice_turn("-777", "Егор: как дела?", speaker="Егор",
-                               is_owner=True, is_dm=False)
-        self.assertEqual(out, "ответ без тулов")
-        self.assertEqual(len(sc.calls), 2)
-        eval_content = sc.calls[1]["messages"][0]["content"]
-        self.assertIn("Context:", eval_content)
-        self.assertIn('"fact":"process"', eval_content,
-                      "typed STATE fallback must remain visible to the evaluator")
-        self.assertNotIn("ACTUALLY called", eval_content,
-                         "пустая сводка не должна добавлять тул-блок")
-
-    def test_empty_tool_result_shown_as_empty_not_silence(self):
-        # тул вызвался, но вернул пусто — оценщик видит именно это («(пусто)»),
-        # не молчание и не повод для новой confabulation-петли
-        sc, out = self._run_turn("", ["тул вернул пустоту, проверю иначе", "PRIVACY_OK"])
-        eval_content = sc.calls[2]["messages"][0]["content"]
-        self.assertIn("probe_tool", eval_content)
-        self.assertIn("(пусто)", eval_content)
+        self.assertEqual(len(sc.calls), 2, "голос(тул) → голос(текст), без судьи")
 
     def test_owner_dm_tool_result_bypasses_eval_and_rewrite(self):
         # Tool-grounded owner speech is the authored final text: no second model sees or changes it.
@@ -365,7 +319,7 @@ class TestDataAdvisorSeesToolTrace(Base):
 
 
 class TestOwnerDmNoStonewall(Base):
-    """Owner DM is now an unmediated authored channel; privacy guard remains for other DMs."""
+    """Owner DM is an unmediated authored channel; since 10.11 so is every other DM."""
 
     def _turn(self, replies):
         sc = ScriptedClient(replies)
@@ -388,16 +342,16 @@ class TestOwnerDmNoStonewall(Base):
         self.assertEqual(out, "вот тебе секрет Маши")
         self.assertEqual(len(sc.calls), 1)
 
-    def test_non_owner_dm_gets_advice_not_a_hold(self):
+    def test_non_owner_dm_is_not_held_either(self):
         # Раньше ждал молчания: приватностный код судьи держал ход не-владельцу. С 27.07
-        # держит только кред-пол, поэтому текст уходит. Второй ассерт НЕ трогаю — он про
-        # отсутствие переписчика (для не-владельца его не зовут) и по-прежнему верен.
-        sc = ScriptedClient(["секрет тут", "PRIVACY_HOLD_CROSS_PERSON"])
+        # держит только кред-пол, с 10.11 (Егор, «сними») судьи нет вовсе — ни переписчика,
+        # ни оценщика: один вызов голоса.
+        sc = ScriptedClient(["секрет тут"])
         llm.use_test_client(sc)
         out = agent.voice_turn("555", "Гость: расскажи про Машу", speaker="Гость",
                                is_owner=False, is_dm=True)
         self.assertEqual(out, "секрет тут")
-        self.assertEqual(len(sc.calls), 2, "переписчик не должен был вызываться")
+        self.assertEqual(len(sc.calls), 1, "на выходе не должно быть второй модели")
 
 
 if __name__ == "__main__":

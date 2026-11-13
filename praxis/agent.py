@@ -305,6 +305,9 @@ def other_rooms_digest(exclude_chat_id=None, max_rooms=6, per_room_lines=3, budg
     return "\n".join(out).strip()
 
 import workshop
+import catalog_families
+from catalog_families import PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, PYTHON_TOOL
+import tool_report
 import forge
 import body_client    # PASS 24: клиент к Windows execution body (единый server-side Forge)
 import serverd_client   # PASS 23.2: клиент к root-демону хоста (host-scope задачи)
@@ -329,107 +332,6 @@ _TELETHON: dict = {}
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
 # Runner-owned exact-topic FIFO; ContextVar crosses asyncio.to_thread safely.
 _TURN_ADDRESSED_INBOUND: ContextVar = ContextVar("praxis_addressed_inbound", default=None)
-# 25.09 (ревью V1-1): тексты записей `[private]`, которые ехали в кадр ЭТОГО хода в комнате —
-# для механического пола на исходящей границе (см. private_record_floor).
-_PRIVATE_IN_FRAME: ContextVar[tuple[str, ...]] = ContextVar("praxis_private_in_frame", default=())
-_PRIVATE_FLOOR_MIN = 24
-
-
-def _floor_norm(text: str) -> str:
-    """Текст для сравнения полом: без пометки, регистра, «ё», пунктуации и маркеров списка.
-
-    26.09 (ревью W1 S2): прежде нормализация трогала только пробелы и регистр, а окна шли
-    с шагом 6 — запятая, сменённая на тире или точку, и маркер «- » в начале записи давали
-    пропуск дословных кусков до 28 знаков. Дословность — это слова в том же порядке, а не
-    знаки препинания между ними."""
-    text = str(text or "").replace("[private]", " ").casefold().replace("ё", "е")
-    return re.sub(r"\s+", " ", re.sub(r"[\W_]+", " ", text)).strip()
-
-
-def private_record_floor(text: str) -> str:
-    """Твёрдый пол закона 3 для приватных записей досье (25.09, ревью V1-1).
-
-    С 25.09 записи `[private]` едут в кадр комнаты (решение владельца). На выходе стоял
-    только совет судьи, а у `send_message`/`narrate` — ничего; прецедент утечки на low
-    записан в коде 17.09. Здесь — механика, как у кред-пола: вне owner-контура исходящий
-    текст не смеет содержать дословный кусок (≥ 24 знаков после нормализации) записи,
-    которая ехала в кадр этого хода. Пересказ своими словами пол не трогает — он не судья.
-
-    Что «ехало в кадр» — с 26.09 (ревью W1 S1) это собирает ещё и `_arm_private_floor`
-    из того, что реально ушло в модель: замороженная эпоха комнаты, досье, поправленное
-    после заморозки, возобновлённый после рестарта ход и прочитанное руками."""
-    records = _PRIVATE_IN_FRAME.get()
-    hay = _floor_norm(text)
-    size = _PRIVATE_FLOOR_MIN
-    if not records or len(hay) < size:
-        return ""
-    grams = {hay[i:i + size] for i in range(len(hay) - size + 1)}
-    for rec in records:
-        body = _floor_norm(rec)
-        for i in range(len(body) - size + 1):
-            piece = body[i:i + size]
-            if piece in grams:
-                return f"дословный кусок приватной записи досье («{piece[:18]}…»)"
-    return ""
-
-
-def _frame_private_records(text: str) -> str:
-    """Записи `[private]` из текста кадра — тем же правилом, что режет их из досье.
-
-    Записью считается строка, где перед пометкой нет слов (маркер списка, дата, отступ):
-    так пишет она сама. Упоминание пометки в прозе («записи с пометкой [private] оставлены
-    в кадре…», подпись о снятых строках) записью не является и в пол не идёт."""
-    if "[private]" not in text:
-        return ""
-    lines = []
-    for line in text.split("\n"):
-        at = line.find("[private]")
-        if at >= 0 and re.search(r"[^\W\d_]", line[:at]):
-            line = line.replace("[private]", "(private)")
-        lines.append(line)
-    return _split_participant_private_blocks("\n".join(lines))[2]
-
-
-def _frame_texts(value) -> list[str]:
-    """Весь текст system/messages, как он уходит в модель: строки, блоки, результаты рук."""
-    out: list[str] = []
-    if isinstance(value, str):
-        out.append(value)
-    elif isinstance(value, dict):
-        for key in ("text", "content"):
-            if key in value:
-                out.extend(_frame_texts(value[key]))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            out.extend(_frame_texts(item))
-    return out
-
-
-def _arm_private_floor(system, messages: list, start: int = 0) -> int:
-    """Пополнить записи пола тем, что реально ушло в модель в этом ходе. -> len(messages).
-
-    26.09 (ревью W1 S1): до этого запись для пола была одна — `_participant_memory_block`
-    по ТЕКУЩЕМУ составу присутствующих. Под эпохой комнаты досье едут замороженными
-    «составом на момент заморозки», и приватная строка человека, выпавшего из окна
-    присутствия, стояла в кадре при пустом поле; возобновлённый после рестарта ход кадр
-    не пересобирает вовсе. Граница та же: только комната и не owner-аудитория — в личке
-    с чужим приватное снимается до кадра, владельцу пол не нужен."""
-    ctx = _TURN_CHANNEL.get()
-    if (ctx is None or bool(getattr(ctx, "is_dm", True))
-            or bool(getattr(ctx, "owner_audience", False)) or not dossier_private_in_rooms()):
-        return len(messages)
-    found: list[str] = []
-    if start <= 0:
-        for text in _frame_texts(system):
-            found.append(_frame_private_records(text))
-    for message in messages[max(0, start):]:
-        for text in _frame_texts(message):
-            found.append(_frame_private_records(text))
-    found = [block for block in found if block.strip()]
-    if found:
-        seen = _PRIVATE_IN_FRAME.get()
-        _PRIVATE_IN_FRAME.set(tuple(seen) + tuple(b for b in found if b not in seen))
-    return len(messages)
 _KEAT_ORIGINAL_INGRESS: ContextVar[bool] = ContextVar("praxis_keat_original_ingress", default=False)
 _KEAT_PROJECTION: ContextVar[dict | None] = ContextVar("praxis_keat_projection", default=None)
 _KEAT_HISTORY_SINK: ContextVar[dict | None] = ContextVar("praxis_keat_history_sink", default=None)
@@ -568,9 +470,8 @@ def _is_praxis_self() -> bool:
     значило её урезать.
 
     Кто говорит — вопрос аудитории и приличий, и его решает исходящая граница. Кто
-    действует — она, всегда. Единственное исключение остаётся человеческим: делегировать
-    ЧУЖОЕ доверие (`admit`, `computer_access`) может только сам Егор — это его доверие,
-    не её (см. `_HUMAN_OWNER_ONLY_TOOL_NAMES`).
+    действует — она, всегда. С 10.11 (слово Егора: «ВЕЗДЕ ВСЕ ПРАВА») отдельных рук владельца
+    нет вовсе: старые `admit`/`computer_access` из мини-аппа удалены.
 
     Решение Егора 26.07, дословно: «у неё не должно быть вообще никаких ограничений,
     когда к ней обращаюсь не я, ВКЛЮЧАЯ мой пк… на остальное есть оценщик».
@@ -714,6 +615,7 @@ for _d in (SOUL_DIR, PEOPLE_DIR, ROOMS_DIR, JOURNAL_DIR, DIALOGUES_DIR):
 # Рельсы (selfgit+bootguard+3.6) усиливают восстановимость; имя файла ничего не закрывает.
 WORKDIR = os.getenv("PRAXIS_WORKDIR", str(BASE))
 SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "30"))
+SHELL_MAX_TIMEOUT = 600
 Path(WORKDIR).mkdir(parents=True, exist_ok=True)
 
 # Ручки стоимости/поведения. Auxiliary scouts могут быть ограничены;
@@ -892,9 +794,7 @@ def head_stable_enabled() -> bool:
     Под рычагом в КОМНАТЕ (не в личке и не в своём ходе):
     * контракт рук едет одним текстом для всех говорящих; полномочия ЭТОГО хода — строкой
       «говорит» в зоне «СЕЙЧАС» (Егор / семья / знакомый / не в известном наборе);
-    * `admit`/`computer_access` предложены в схеме всегда, право проверяет вызов
-      (`tool_admit` → `_is_human_owner`, `computer_access.allowed(actor)`); слово Егора 13.09:
-      «они мне нужны, нужен обход»;
+    * с 10.11 рук владельца нет (слово Егора: «ВЕЗДЕ ВСЕ ПРАВА»), схема одна для всех;
     * типизированное состояние (`build_state_block`) переезжает из головы в живой конверт
       ярусом «Состояние сейчас», только когда действует владелец — как и раньше;
     * `[private]`-строки досье режутся из головы ДЛЯ ВСЕХ; с 17.09 они возвращаются
@@ -1459,11 +1359,11 @@ def _live_window_run_ids() -> list[str]:
     ⚠ 25.09 (ревью V2 F1): здесь стоял `list_runs(statuses=…)` — обход и замок на КАЖДОМ
     манифесте (~8 500 на проде, 12 мс на прогон) на каждую реплику владельца в ЛС, до
     `_arm` хода. Тот же хотспот, что в докстринге `run_manager.live_run_ids` (py-spy
-    31.07). Теперь — дешёвый список живых и манифесты только у них (единицы).
+    31.07). Теперь — дешёвый список живых и манифесты только у них (единицы). 07.11: и он под чужой пересборкой стоил 6–26 с (GIL на ~27 тыс. stat), отсюда `unsettled_run_ids` — см. там.
     """
     try:
         runs = _runs()
-        live = [str(x) for x in runs.live_run_ids() if x]
+        live = [str(x) for x in (getattr(runs, "unsettled_run_ids", None) or runs.live_run_ids)() if x]
     except Exception:
         return []
     from core import notices as core_notices
@@ -1760,18 +1660,13 @@ def _seed_experiment_report() -> str:
             "История — в git (f6d16ebc, 6b9622f0); свежих следов после 03.08 нет.")
 
 
-def tool_recall(query: str = "", report: bool = False) -> str:
+def tool_recall(query: str = "") -> str:
     """Hybrid internal recall: full memory regardless of the current audience.
 
     Privacy is enforced at the outbound boundary.  Scope must not amputate Praxis's
     perception before she has had a chance to think.
 
-    ``report=True`` не ищет ничего: отдаёт эпитафию закрытого эксперимента с семенем
-    семантического ранжира (завершён 03.08.2026, машина убрана из кода 05.10.2026,
-    итог 680 seed-only кандидатов и 0 дошедших до выдачи).
     """
-    if report:
-        return _seed_experiment_report()
     if not (query or "").strip():
         return "Пустой запрос."
     try:
@@ -1944,7 +1839,7 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
             )
         except Exception:
             log.debug("remember: ребро не легло", exc_info=True)
-    return f"Запомнила про {person} ({vis}).{linked}"
+    return _noted("ok", f"Запомнила про {person} ({vis}).{linked}", str(person or ""))
 
 
 def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
@@ -1965,9 +1860,9 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
                 entry.strip(), run_id=current.run_id if current is not None else "")
         except Exception:
             log.debug("пометка решения владельца не легла в накопитель", exc_info=True)
-            return "Записала в дневник; пометить как решение владельца не вышло."
-        return "Записала в дневник; решение владельца увидят все живые окна."
-    return "Записала в дневник."
+            return _noted("partial", "Записала в дневник; пометить как решение владельца не вышло.")
+        return _noted("ok", "Записала в дневник; решение владельца увидят все живые окна.")
+    return _noted("ok", "Записала в дневник.")
 
 
 # Normal and resumed tool execution share an explicitly migrated inline budget.
@@ -1984,16 +1879,18 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
     where = str(place or "").strip() or str(_active_chat() or "")
     if op != "read" and (start_char != 0 or expected_sha256):
         return json.dumps({"ok": False, "reason": "paging_only_for_read"})
+    tool_report.note(target=where)
     if op in {"prepare", "fold"}:
         if not where:
-            return "Не вижу места: укажи place (chat_id)."
+            return _noted("refused", "Не вижу места: укажи place (chat_id).")
         out = (memory_life.prepare_authored_fold(where, limit=int(limit or 50), compact_id=compact_id)
                if op == "prepare" else memory_life.apply_authored_fold(where, selection, text))
         return json.dumps(out, ensure_ascii=False)
     if op == "list":
         if not where:
-            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
+            return _noted("refused", "Не вижу места: укажи place (chat_id) — в окне текущего чата нет.")
         rows = memory_life.list_compacts(where, tier=tier, limit=int(limit or 20), since=since)
+        tool_report.note(outcome="ok")
         if not rows:
             return f"Свёрток у {where} не нашла."
         lines = [f"Свёртки {where} (старые выше, {len(rows)} шт.):"]
@@ -2005,7 +1902,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
         return "\n".join(lines)
     if op == "read":
         if not compact_id:
-            return "Для read нужен compact_id."
+            return _noted("refused", "Для read нужен compact_id.")
         if type(start_char) is not int or start_char < 0:
             return json.dumps({"ok": False, "reason": "invalid_start_char"})
         expected = str(expected_sha256 or "").strip().lower()
@@ -2016,7 +1913,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
                                "instruction": "Continue with sha256 from the first page."})
         out = memory_life.read_compact(compact_id, where or None)
         if not out.get("ok"):
-            return f"Свёртку {compact_id} не нашла ({out.get('reason')})."
+            return _noted("refused", f"Свёртку {compact_id} не нашла ({out.get('reason')}).")
         m = out["meta"]
         body = str(out.get("text") or "")
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -2037,16 +1934,17 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             prefix = header + json.dumps(page, ensure_ascii=False) + "\n\n"
             overflow = len(prefix) + end - start_char - inline_budget
             if overflow <= 0:
-                return prefix + body[start_char:end]
+                return _noted("ok", prefix + body[start_char:end])
             end -= overflow
             if end <= start_char:
                 return json.dumps({"ok": False, "reason": "read_metadata_too_large"})
     if op == "rewrite":
         if not compact_id or not str(text or "").strip():
-            return "Для rewrite нужны compact_id и text — новая суть твоими словами."
+            return _noted("refused", "Для rewrite нужны compact_id и text — новая суть твоими словами.")
         out = memory_life.rewrite_compact_text(compact_id, text, chat_id=where or None)
         if not out.get("ok"):
-            return f"Не переписала {compact_id}: {out.get('reason')}."
+            return _noted("refused", f"Не переписала {compact_id}: {out.get('reason')}.")
+        tool_report.note(outcome="ok")
         try:
             tool_journal(f"[память] переписала свёртку {compact_id} своими словами "
                          f"({out.get('chars')} знаков; прежний текст — {out.get('history')})", salience=2)
@@ -2055,9 +1953,11 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
         return (f"Переписала {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
                 f"({out.get('history')}). Источники и границы те же.")
     if op == "refold":
+        tool_report.note(outcome="refused")
         return "Фоновое сочинение выключено. prepare → прочитай источники → fold(selection,text); rewrite — твоя новая суть."
     if op == "status":
         st = memory_life.refold_status()
+        tool_report.note(outcome="ok")
         if not st.get("planned"):
             return "Перевыпуск не запускался."
         last = st.get("last") or {}
@@ -2066,8 +1966,9 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
                 f"последняя — {last.get('id')} ({'ok' if last.get('ok') else last.get('reason')}).")
     if op == "stop":
         st = memory_life.refold_stop()
+        tool_report.note(outcome="ok")
         return "Останавливаю перевыпуск после текущей свёртки." if st.get("running") else "Перевыпуск не идёт."
-    return "Не поняла действие: list / read / rewrite / refold / status / stop."
+    return _noted("refused", "Не поняла действие: list / read / rewrite / refold / status / stop.")
 
 
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
@@ -2097,19 +1998,20 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
                 message_id=message_id, source_ref=_active_memory_source_ref(),
                 validate_locked=validate_locked,
             )
-            return f"Записала {row['kind']} `{row['id']}` ({row['scope']}, {row['status']})."
+            return _noted("ok", f"Записала {row['kind']} `{row['id']}` ({row['scope']}, {row['status']}).", str(row['id']))
         if operation in {"read", "close"}:
             row = ledger.get(note_id)
+            tool_report.note(target=str(note_id or ""))
             if row is None:
-                return "Заметка не найдена."
+                return _noted("refused", "Заметка не найдена.")
             if row["scope"] == "chat" and row["chat_id"] != chat_id:
-                return "Заметка относится к другому чату."
+                return _noted("refused", "Заметка относится к другому чату.")
             if row["scope"] == "run" and row["run_id"] != run_id:
-                return "Заметка относится к другому run."
+                return _noted("refused", "Заметка относится к другому run.")
             if operation == "read":
-                return json.dumps(row, ensure_ascii=False, indent=2)
+                return _noted("ok", json.dumps(row, ensure_ascii=False, indent=2))
             row = ledger.close(note_id, reason=reason)
-            return f"Закрыла заметку `{row['id']}`."
+            return _noted("ok", f"Закрыла заметку `{row['id']}`.")
         if operation == "list":
             rows = ledger.list(status=status, kind=kind if kind in authored_notes.KINDS else "",
                                scope=scope if scope in authored_notes.SCOPES else "", limit=100)
@@ -2118,6 +2020,7 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
                 or (row["scope"] == "chat" and row["chat_id"] == chat_id)
                 or (row["scope"] == "run" and row["run_id"] == run_id)
             )][:max(1, min(100, int(limit)))]
+            tool_report.note(outcome="ok")
             if not rows:
                 return "Заметок по этому фильтру нет."
             return "\n".join(
@@ -2129,14 +2032,15 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
             # через неделю открыть конкретную цепочку и честно увидеть». Здесь только факты
             # и оговорка о том, чего они НЕ доказывают.
             out = lessons.chain(note_id, notes=ledger.states())
-            return json.dumps(out, ensure_ascii=False, indent=2)
+            return _noted("ok", json.dumps(out, ensure_ascii=False, indent=2))
         if operation == "decline":
             row = lessons.decline(note_id, reason=reason)
+            tool_report.note(outcome="ok")
             return (f"Не буду предлагать кристаллизацию заметки `{row['note_id']}` снова"
                     + (f": {row['reason']}" if row.get("reason") else "."))
-        return ("manage_notes: action должен быть write, list, read, close, chain или decline.")
+        return _noted("refused", "manage_notes: action должен быть write, list, read, close, chain или decline.")
     except (TypeError, ValueError) as exc:
-        return f"manage_notes: {exc}"
+        return _noted("refused", f"manage_notes: {exc}")
 
 
 def tool_update_self(note: str) -> str:
@@ -2559,7 +2463,33 @@ def _shell_workdir() -> Path:
     return BASE
 
 
-def tool_shell(command: str) -> str:
+def _shell_place(cwd: str) -> tuple[Path | None, str]:
+    """Папка запуска: абсолютная или от дома. Несуществующая — отказ, а не тихий /app."""
+    if not str(cwd or "").strip():
+        return _shell_workdir(), ""
+    place = Path(str(cwd).strip())
+    place = place if place.is_absolute() else BASE / place
+    if not place.is_dir():
+        return None, f"[отказ shell] нет такой папки: {cwd}"
+    return place, ""
+
+
+def tool_shell(command: str, cwd: str = "", timeout: int = 0) -> str:
+    return _home_command(command, cwd, timeout)
+
+
+def tool_python(code: str, cwd: str = "", timeout: int = 0, task_id: str = "") -> str:
+    """Direct Python with h preloaded, preserving the selected execution address."""
+    if not isinstance(code, str):
+        tool_report.note(outcome="refused")
+        return "Python refused: code must be a string."
+    if task_id:
+        return forge.run_python(task_id, code, cwd=cwd or ".", timeout=timeout)
+    return _home_command(code, cwd, timeout, python_code=code)
+
+
+def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
+                  python_code: str | None = None) -> str:
     """Полный shell самой Praxis/владельца. Логируем; её правки авто-коммитятся."""
     # Единственное на сервере, что не её дом, — хардбот Егора. Читать его она может
     # всегда; менять — по просьбе хранителя (см. stewardship.py). Это пол, а не клетка:
@@ -2594,36 +2524,50 @@ def tool_shell(command: str) -> str:
     # а не «чужой клон». Сама команда не меняется, маркер из вывода снимается ниже.
     try:
         from core import processes as core_processes
-        shell_command, background = core_processes.wrap_background_launch(command)
+        shell_command, background = (core_processes.wrap_background_launch(command)
+                                     if python_code is None else (command, False))
     except Exception:
         shell_command, background = command, False
-    workdir = _shell_workdir()
+    workdir, place_error = _shell_place(cwd)
+    if workdir is None:
+        tool_report.note(outcome="refused", target=str(cwd))
+        return place_error
+    seconds = max(1, min(int(timeout or SHELL_TIMEOUT), SHELL_MAX_TIMEOUT))
+    tool_report.note(target=str(workdir))
+    exit_note = ""
+    import command_execution
+    before_workspace = command_execution.workspace_snapshot(workdir)
+    process_status, code = "outcome_unknown", "unknown"
+    import hands
+    import python_execution
+    argv = ["bash", "-lc", shell_command] if python_code is None else python_execution.argv()
     try:
-        proc = subprocess.run(
-            ["bash", "-lc", shell_command],
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=SHELL_TIMEOUT,
-        )
-        _tool_trace_event("tool_execution", receipt={"kind": "process",
-            "argv": list(proc.args), "cwd": str(workdir),
-            "status": "returned", "exit_code": proc.returncode})
-        out = proc.stdout or ""
-    except subprocess.TimeoutExpired as exc:
-        _tool_trace_event("tool_execution", receipt={"kind": "process",
-            "argv": list(exc.cmd), "cwd": str(workdir), "status": "timed_out"})
-        partial = exc.stdout or ""
-        if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", "replace")
-        out = str(partial) + f"\n[прервано по таймауту {SHELL_TIMEOUT}s]\n"
-    except Exception as e:
-        _tool_trace_event("tool_execution", receipt={"kind": "process",
-            "requested_argv": ["bash", "-lc", shell_command], "cwd": str(workdir),
-            "status": "launch_failed" if isinstance(e, FileNotFoundError) else "outcome_unknown",
-            "error": type(e).__name__})
-        out = f"[ошибка shell] {e}"
+        with contextlib.ExitStack() as inputs:
+            source = (inputs.enter_context(python_execution.source_input(python_code))
+                      if python_code is not None else None)
+            result = hands.execute_argv(argv, str(workdir), seconds, cap=None, base=BASE,
+                                        confined=False, stdin=source, label=command)
+        if "out" not in result:
+            process_status, code = "launch_failed", "not_started"
+            tool_report.note(outcome="failed")
+            _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
+                "cwd":str(workdir), "status":"launch_failed", "error":result.get("msg", "")})
+            out = "[ошибка запуска] " + str(result.get("msg") or "unknown")
+        else:
+            code = int(result["code"])
+            process_status = "timed_out" if result["killed"] else ("ok" if result["ok"] else "failed")
+            _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
+                "cwd":str(workdir), "status":"timed_out" if result["killed"] else "returned", "exit_code":code})
+            out = result["out"] or ""
+            if result["killed"]:
+                out += f"\n[прервано по таймауту {seconds}s]"
+            exit_note = f"\n[exit {code}]"
+            tool_report.note(outcome="ok" if result["ok"] else "failed")
+    except Exception as exc:
+        tool_report.note(outcome="in_doubt")
+        _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
+            "cwd":str(workdir), "status":"outcome_unknown", "error":type(exc).__name__})
+        out = f"[исход запуска неизвестен] {exc}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
     if background:
@@ -2642,8 +2586,10 @@ def tool_shell(command: str) -> str:
         # Прочитанное из хардбота запоминается не чтобы запретить читать, а чтобы потом
         # не дать процитировать чужих клиентов наружу дословно (вопрос Егора 26.07).
         stewardship.note_read(out)
+    changes = command_execution.workspace_changes(before_workspace, workdir)
     _autocommit_self_edit(pre_dirt)
-    return out if out else "(пустой вывод)"
+    body = out.rstrip("\n") if exit_note else out
+    return (body if body else "(пустой вывод)") + command_execution.tail(code, process_status, changes)
 
 
 def tool_write_skill(name: str, content: str, from_note: str = "") -> str:
@@ -2929,10 +2875,11 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
     holder = _TURN_SILENCE.get()
     if cancel:
         if holder is None:
+            tool_report.note(outcome="refused")
             return ("Отменять нечего: этот проход не идёт через исходящую границу хода, "
                     "решения молчать здесь не лежит.")
         if not holder.get("chosen"):
-            return "Отменять нечего: в этом ходе я молчать не решала — он и так уйдёт."
+            return _noted("refused", "Отменять нечего: в этом ходе я молчать не решала — он и так уйдёт.")
         holder.pop("chosen", None)
         prev = str(holder.pop("why", "") or "")
         # Передумала — это тоже её намерение, и терять его молча нельзя (закон 4):
@@ -2943,6 +2890,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
         except Exception:
             log.debug("stay_silent cancel journal не удался", exc_info=True)
         log.info("stay_silent отменён: %s", reason[:80])
+        tool_report.note(outcome="ok")
         return ("Передумала — этот ход уйдёт: решение молчать снято, текст и медиа "
                 "отправятся как обычно.")
     if reason:
@@ -2955,11 +2903,13 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
         # Фоновый проход (окно, пульс, внутренняя компоновка) не идёт через исходящую
         # границу хода: держателя нет, исполнять решение нечем. Обещать механизм там,
         # где его нет, значит снова врать — говорим как есть.
+        tool_report.note(outcome="partial")
         return ("Записала. Контура тут нет: этот проход не идёт через исходящую границу "
                 "хода, так что держать нечего — молчание здесь держится только тем, что "
                 "я не отправлю ничего руками.")
     holder["chosen"] = "1"
     holder["why"] = reason[:SILENCE_REASON_MAX]
+    tool_report.note(outcome="ok")
     return ("Молчу: решение принято на весь этот ход. Если текст после этого всё же "
             "допишется, он не уйдёт — останется в дневнике и в записи хода, "
             "не потеряется. Передумаю — сниму сама: тот же тул с cancel=true."
@@ -2979,16 +2929,22 @@ def _current_room() -> str:
     return str(room) if room else ""
 
 
-def tool_freeze_chat(on: bool = True, chat_id: str | None = None) -> str:
+def tool_freeze_chat(action: str = "freeze", chat_id: str | None = None, reason: str = "") -> str:
     """Заморозить/поднять чат владельцем или самой Praxis; пишет provenance."""
+    if action == "boundary":
+        if chat_id and str(chat_id).strip() != str(_current_room() or ""):
+            return "boundary applies only to the current chat; omit chat_id."
+        return tool_freeze_contact(reason)
+    if action not in {"freeze", "unfreeze"}:
+        raise catalog_families.PreflightRefusal("action: freeze | unfreeze | boundary")
     if not _is_sovereign_actor():
         return "Отказ: режим комнаты меняет только владелец или сама Praxis."
     cid = str(chat_id).strip() if chat_id else _current_room()
     if not cid:
         return "Не вижу, какой чат морозить — укажи chat_id."
     set_by = "praxis" if _is_praxis_self() else "owner"
-    if on:
-        reason = "сама решила заморозить" if set_by == "praxis" else "владелец попросил"
+    if action == "freeze":
+        reason = reason or ("сама решила заморозить" if set_by == "praxis" else "владелец попросил")
         rooms.set_mode(cid, "frozen", reason=reason, set_by=set_by)
         return f"Заморозила {cid} — сообщения оттуда до меня не доходят, пока не разморожу."
     new_mode = rooms.sovereign_raise(cid, set_by=set_by)
@@ -3016,7 +2972,7 @@ def tool_panic(reason: str = "") -> str:
 
 def tool_get_id(name_or_username: str) -> str:
     """Снять telegram id человека/чата по имени/@username (через Telethon). Только владельцу."""
-    fn = _TELETHON.get("get_id")
+    fn = _TELETHON.get("find_telegram_id")
     if not fn:
         return "Недоступно (нет связи с Telethon)."
     try:
@@ -3115,12 +3071,12 @@ def tool_search_chats(query: str) -> str:
              if not why else why + "; по своим профилям комнат совпадений нет.")
     return (scope + " Это про ИМЕНА и мои записки о комнатах, не про текст сообщений: "
             "по словам внутри переписки — `search_private_messages`, конкретную комнату "
-            "по id или @имени — `read_chat`.")
+            "по id или @имени — `read_other_chat`.")
 
 
 def tool_read_chat(chat_ref: str, limit: int = 30) -> str:
     """Явно прочитать соседний диалог; он никогда не подмешивается автоматически."""
-    fn = _TELETHON.get("read_chat")
+    fn = _TELETHON.get("read_other_chat")
     if not fn:
         return "Недоступно (нет связи с Telethon)."
     closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status())
@@ -3382,52 +3338,6 @@ def _room_view(chat_id: str, policy: dict) -> dict:
     return view
 
 
-def tool_admit(name: str, id: str | None = None, role: str = "") -> str:
-    """Впустить человека в «свои» по слову владельца (только владельцу).
-
-    PASS 12.0.a: необязательный role — сейчас осмысленно только "family". Одна команда
-    владельца ставит и known_ids, и `role: family` в шапке досье, закрывая обе дыры разом
-    (без known роль не читается вовсе; панель роль не ставила никак)."""
-    if not _is_human_owner():
-        return "Отказ: впускать людей может только владелец."
-    role = (role or "").strip().lower()
-    if role and role not in people.KNOWN_ROLES:
-        return (f"Роль «{role}» не знаю — сейчас осмысленна только family. "
-                f"Впуск не делаю, чтобы не писать мусор в досье.")
-    target = _stable_numeric_principal(id)
-    if target is None:
-        return "Укажи положительный числовой Telegram user id, кого впускаем."
-    oid = social.owner_id()
-    if oid and oid != "0" and target == oid:
-        return "Это ты сам — впускать не нужно."
-    # Слаг: сперва СТРОГАЯ привязка по Telegram-принципалу (авторитет — числовой id,
-    # а не написание имени), затем общий резолв по заголовкам/алиасам/ключу имени.
-    # Прямой `_slug(name)` заводил новое досье всякий раз, когда владелец назвал
-    # человека иначе, чем он записан, — и привязка id уезжала в свежий пустой файл.
-    slug = people.slug_for_principal(target) or graph.resolve(name)
-    path = PEOPLE_DIR / f"{slug}.md"
-    created = not path.exists()
-    if created:
-        path.write_text(f"# {name}\n\n", encoding="utf-8")
-    try:
-        people.set_telegram_id(slug, name, target)
-    except ValueError as exc:
-        return f"Впуск не завершён: конфликт привязки Telegram id — {exc}"
-    fresh_id = social.add_known(target, name)
-    if role:
-        people.set_role(slug, name, role)
-    if created:
-        try:
-            memory_index.ensure_index_line(slug, hook=name)
-        except Exception:
-            log.debug("ensure_index_line (admit) не удался", exc_info=True)
-        _reindex(path)
-    log.info("admit %s as %r (new=%s, role=%s)", target, name, fresh_id, role or "-")
-    if role == "family":
-        return f"Впустила {name} (id {target}) и отметила семьёй (role: family)."
-    return f"Впустила {name} (id {target}) в свои — теперь это знакомый человек."
-
-
 def tool_send_email(to: str, subject: str = "", body: str = "") -> str:
     """Отправить письмо как Praxis. Моя рука в любом ходе (решение Егора 03.08.2026);
     отложенное письмо ПО РАСПИСАНИЮ — отдельный рычаг PRAXIS_EMAIL_AUTONOMOUS."""
@@ -3611,7 +3521,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
             return "Для message нужен адресат (target: @ник или id) — без него не намечаю."
         # PASS 12.0.b: тот же богатый резолвер, что и на отправке (resolve_entity: как есть /
         # строкой / int() / перебор диалогов); get_id — фолбэк, если мост ещё не дорегистрировал.
-        fn = _TELETHON.get("resolve_entity") or _TELETHON.get("get_id")
+        fn = _TELETHON.get("resolve_entity") or _TELETHON.get("find_telegram_id")
         if not fn:
             return "Telegram-мост сейчас недоступен — не могу проверить адресата, попробуй позже."
         try:
@@ -3842,7 +3752,17 @@ def tool_set_avatar(path: str) -> str:
         return f"Не вышло: {type(e).__name__}: {str(e)[:150]}"
 
 
-def tool_update_profile(about: str = "", first_name: str = "", last_name: str = "") -> str:
+def tool_update_profile(about: str = "", first_name: str = "", last_name: str = "", avatar: str = "") -> str:
+    """Metadata and avatar are separate Telegram operations; report each result."""
+    results = []
+    if any(str(x).strip() for x in (about, first_name, last_name)) or not avatar:
+        results.append(_update_profile_fields(about, first_name, last_name))
+    if avatar:
+        results.append("avatar: " + tool_set_avatar(avatar))
+    return "\n".join(results)
+
+
+def _update_profile_fields(about: str = "", first_name: str = "", last_name: str = "") -> str:
     """Профиль — её самоописание; пустые поля мост не трогает, '-' очищает."""
     fn = _TELETHON.get("update_profile")
     if not fn:
@@ -3859,11 +3779,15 @@ def tool_react(emoji: str, message_id: int, chat: str = "", remove: bool = False
     """Реакция-жест; список разрешённых эмодзи диктует чат — отказ вернётся честно."""
     fn = _TELETHON.get("send_reaction")
     if not fn:
-        return "Telegram-мост сейчас недоступен."
+        return _noted("failed", "Telegram-мост сейчас недоступен.")
     try:
-        return str(fn(chat=chat, message_id=int(message_id), emoji=emoji, remove=bool(remove)))
+        out = fn(chat=chat, message_id=int(message_id), emoji=emoji, remove=bool(remove))
     except Exception as e:
-        return f"Не вышло: {type(e).__name__}: {str(e)[:150]}"
+        return _noted("failed", f"Не вышло: {type(e).__name__}: {str(e)[:150]}")
+    # Транспорт реакции отвечает строкой и для приёма, и для отказа; явный отказ — свой тип.
+    if isinstance(out, DirectSendRefusal):
+        tool_report.note(outcome="refused")
+    return str(out)
 
 
 def _clip_reason(text: object, limit: int = 400) -> str:
@@ -3919,6 +3843,21 @@ def _direct_outbox_state(idempotency_key: str) -> dict | None:
 _LEDGER_ERROR_TYPES = (run_manager.RunError, DurableExecutionError)
 
 
+def _noted(outcome: str, text, target: str = ""):
+    """Рука называет журналу свой исход (tool_report); модель получает тот же текст.
+
+    Исход — для экрана и журнала: «успех/отказ/сбой/не знаю» видно без чтения строки.
+    Вне вызова руки note молчит, поэтому прямые вызовы из тестов и служебного кода те же.
+    """
+    tool_report.note(outcome=outcome, target=target)
+    return text
+
+
+def _sent_outcome(out) -> str:
+    """Транспорт отвечает строкой: отказ — подкласс DirectSendRefusal, иначе приём."""
+    return "refused" if isinstance(out, DirectSendRefusal) else "ok"
+
+
 def _direct_send_outcome(label: str, exc: BaseException) -> str:
     """Честный исход прямой отправки, когда мост бросил исключение.
 
@@ -3938,14 +3877,17 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
     reason = _clip_reason(f"{type(exc).__name__}: {exc}")
     if state == "accepted":
         receipt = (entry or {}).get("receipt") or {}
+        tool_report.note(outcome="ok")
         return (f"{label} ДОСТАВЛЕНО: Telegram принял, message_id="
                 f"{receipt.get('message_id')}. Внутренний учёт хода при этом упал "
                 f"({reason}) — на доставку это не влияет, повторять НЕ надо.")
     if state == "dead_letter":
         why = _clip_reason((entry or {}).get("last_error"), 200)
+        tool_report.note(outcome="failed")
         return (f"{label} НЕ ушло: очередь закрыла запись как недоставимую"
                 + (f" ({why})" if why else "") + f". Внутренняя ошибка: {reason}.")
     if state in {"pending", "retry"}:
+        tool_report.note(outcome="in_doubt")
         # ⚠ 17.08: здесь стояло безусловное «Очередь дошлёт сама» — сказанное в момент,
         # когда доставка была уже невозможна по построению (proof не мог появиться).
         # Она честно «не повторяла вручную», Егор час ждал ответа, запись молча умерла.
@@ -3956,13 +3898,14 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
                 f"закроет запись как недоставимую — об этом будет расписка. Вручную не "
                 f"повторяй: повтор может дать второе сообщение.")
     if isinstance(exc, _LEDGER_ERROR_TYPES):
+        tool_report.note(outcome="in_doubt")
         return (f"{label}: НЕ ЗНАЮ, ушло ли. Упал внутренний учёт хода, а не отправка "
                 f"({reason}), а записи в очереди по этому вызову не нашлось. Прежде чем "
                 f"повторять — проверь чат: повтор может дать второе сообщение.")
     # Настоящий отказ транспорта без единой записи в очереди: слова «Не отправилось»
     # здесь ЗАСЛУЖЕНЫ — и остаются дословно теми же, что раньше (на них стоит инвариант
     # «провал — тоже факт для журнала», test_layer7).
-    return f"Не отправилось: {reason}"
+    return _noted("failed", f"Не отправилось: {reason}")
 
 
 def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None = None) -> str:
@@ -3990,11 +3933,11 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     """
     draft = str(text or "").strip()
     if not draft:
-        return "Пустой ответ не отправляю: скажи, что сказать."
+        return _noted("refused", "Пустой ответ не отправляю: скажи, что сказать.")
     ctx, _outbound = _TURN_CHANNEL.get(), _TURN_OUTBOUND.get()
     if ctx is None or ctx.chat_id is None:
-        return ("Эта рука отвечает собеседнику живого хода, а его сейчас нет. "
-                "Чтобы написать кому-то по своей инициативе — send_message с адресом.")
+        return _noted("refused", "Эта рука отвечает собеседнику живого хода, а его сейчас нет. "
+                      "Чтобы написать кому-то по своей инициативе — send_message с адресом.")
     # ⚠ МОЁ СОБСТВЕННОЕ РЕШЕНИЕ МОЛЧАТЬ ОБЯЗАНО ДЕРЖАТЬ, ИНАЧЕ ЕГО РАСПИСКА ВРЁТ.
     # `stay_silent` отвечает мне «текст этого хода не уйдёт». Пока рука ответа не читала
     # держатель, я могла позвать её следом — и ответ уходил вопреки только что принятому
@@ -4002,15 +3945,16 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     # здесь же и работает в том же ходе.
     holder = _TURN_SILENCE.get()
     if isinstance(holder, dict) and holder.get("chosen"):
+        tool_report.note(outcome="refused")
         return ("Не отправила: в этом ходе я решила молчать"
                 + (f" ({str(holder.get('why') or '')[:120]})" if holder.get("why") else "")
                 + ". Если передумала — `stay_silent(cancel=True)`, и тогда отвечу.")
     fn = _TELETHON.get("reply")
     if not fn:
-        return "Telegram-отправка сейчас недоступна."
+        return _noted("failed", "Telegram-отправка сейчас недоступна.")
     review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
     if review:
-        return review
+        return _noted("refused", review)
     # ⚠ ГАРД ЗДЕСЬ, А НЕ НА ГРАНИЦЕ ХОДА, И БЕЗ `turn`.
     # Проверка исходящего (кред-пол, советник приватности, режимная директива) обязана
     # ехать вместе с текстом, а текст теперь едет отсюда. Запись прожитого хода при этом
@@ -4029,13 +3973,14 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
                                        tool_trace="")
     except Exception:
         log.warning("проверка исходящего перед ответом упала", exc_info=True)
-        return "Не отправила: проверка исходящего упала, а вслепую я не отправляю."
+        return _noted("failed", "Не отправила: проверка исходящего упала, а вслепую я не отправляю.")
     work_loop.note_guard(probe)
     if not guarded:
         # Пусто на выходе гарда — это НЕ транспортная ошибка: либо кред-пол, либо
         # советник приватности придержал. Причина теперь доезжает и до записи хода, не
         # только до дневника, поэтому называю её здесь же, а не отсылаю искать.
         why = str(probe.get("why") or probe.get("verdict") or "").strip()
+        tool_report.note(outcome="refused")
         return ("Не отправила: проверка исходящего придержала этот текст"
                 + (f" — {why[:200]}" if why else "")
                 + ". Решай, что сказать иначе.")
@@ -4044,6 +3989,7 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     # четырьмя сообщениями. Повтор слова — не новое слово: байт-в-байт та же реплика
     # в этом же ходе не отправляется. Дверь не заперта: изменённый текст уйдёт.
     if guarded.strip() in (s.strip() for s in work_loop.spoken()):
+        tool_report.note(outcome="refused")
         return ("Не отправила: ровно эта реплика уже доставлена этим ходом. "
                 "Если сказать больше нечего — просто закончи ход; "
                 "если есть что добавить — напиши другими словами.")
@@ -4060,6 +4006,7 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
         # отказ Telegram). Первая редакция засчитывала его как отправку: счётчик рос,
         # запись хода говорила «сказала», а наружу не уходило ничего.
         delivered = not isinstance(out, DirectSendRefusal)
+        tool_report.note(outcome=_sent_outcome(out))
     # ⚠ РАСПИСКА СНИМАЕТСЯ ДО ПОДСКАЗКИ, И ЭТО НЕ КОСМЕТИКА.
     # Ниже к возврату руки приклеивается напоминание про `end_turn` — слово, обращённое
     # к модели, а не событие. Дневник же писался с УЖЕ СКЛЕЕННОЙ строки и резал её на
@@ -4096,6 +4043,7 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
     вызове. Строки ниже — для записи хода и на случай продолжения из-за ошибки."""
     kind = str(outcome or "").strip().lower()
     if kind not in ("done", "wait", "blocked"):
+        tool_report.note(outcome="refused")
         return ("Ход не закрыт: назови исход. done — есть наблюдаемый результат (или "
                 "сказанное и было делом); wait — ждёшь события или срока, в note условие "
                 "возврата; blocked — в note конкретное препятствие. Перед закрытием: что "
@@ -4104,13 +4052,16 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
                 "вызова или доставки с неизвестным исходом?")
     text = str(note or "").strip()
     if kind == "wait" and not text:
+        tool_report.note(outcome="refused")
         return ("Ход не закрыт: wait требует условия возврата в note — что должно "
                 "случиться или сколько ждать. Ожидание без условия неотличимо от "
                 "забвения; механизм возврата, если нужен, ставится remind_self ДО закрытия.")
     if kind == "blocked" and not text:
+        tool_report.note(outcome="refused")
         return ("Ход не закрыт: blocked требует назвать препятствие в note — что мешает "
                 "и чьё слово или ресурс нужен.")
     work_loop.note_finished(f"{kind}: {text}" if text else kind)
+    tool_report.note(outcome="ok", target=kind)
     return (f"Ход закрыт ({kind})."
             + (f" Заметка: {text[:200]}" if text else ""))
 
@@ -4128,35 +4079,33 @@ def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = No
     # отправляла сырой текст модели. Чистим здесь, тем же чистильщиком.
     review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
     if review:
-        return review
+        return _noted("refused", review, str(to or ""))
     text, _cjk_note = _strip_generation_artifacts(str(text or ""), "")
     if not text.strip():
-        return "После чистки не осталось текста — не отправляю пустоту."
+        return _noted("refused", "После чистки не осталось текста — не отправляю пустоту.", str(to or ""))
     leak = stewardship.outgoing_denial(text)
     if leak:
         log.warning("send_message придержан: данные хардбота")
-        return leak
-    private_floor = private_record_floor(str(text or ""))
-    if private_floor:
-        log.warning("send_message придержан полом приватных записей: %s", private_floor)
-        return (f"Не отправила: в тексте {private_floor}. Приватные записи досье не уходят "
-                f"наружу дословно (закон 3) — скажи своими словами и только то, на что есть "
-                f"право субъекта.")
+        return _noted("refused", leak, str(to or ""))
     floor = _core_secrets.credential_floor(str(text or ""))
     if floor:
         log.warning("send_message придержан кред-полом: %s", floor)
+        tool_report.note(outcome="refused", target=str(to or ""))
         return (f"Не отправила: в тексте {floor}. Креды не уходят наружу ни при каких "
                 f"просьбах — это единственное твёрдое правило Егора. Скажи словами, "
                 f"что нужно, и я отвечу без самого секрета.")
     fn = _TELETHON.get("send_message")
     if not fn:
-        return "Telegram-отправка сейчас недоступна."
+        return _noted("failed", "Telegram-отправка сейчас недоступна.", str(to or ""))
     try:
         out = fn(to, text)
     except DurableSideEffectPending:
         raise
     except Exception as e:
         out = _direct_send_outcome("Сообщение", e)
+    else:
+        tool_report.note(outcome=_sent_outcome(out))
+    tool_report.note(target=str(to or ""))
     try:
         # HOTFIX 07.07 (вечер): исход отправки — в журнал. Следующий ход (и оценщик через
         # journal-хвост orient'а) видят «я отправила X» как ФАКТ, а не как непроверяемое
@@ -4179,13 +4128,14 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     Егора) — любой из них, из чужого канала — только его собственный тред."""
     from core import narration as core_narration
     if not core_narration.enabled():
-        return "Наррация выключена (PRAXIS_NARRATION=0) — это твой рычаг."
+        return _noted("refused", "Наррация выключена (PRAXIS_NARRATION=0) — это твой рычаг.")
     # 03.10: прямые выходы чистятся как голос — тот же класс дыры (см. tool_send_message)
     body, _nl_note = _strip_generation_artifacts(str(text or ""), "")
     body = body.strip()
     if not body:
-        return "Пустую наррацию не шлю — дай строку процесса."
+        return _noted("refused", "Пустую наррацию не шлю — дай строку процесса.")
     if len(body) > core_narration.TEXT_CAP:
+        tool_report.note(outcome="refused")
         return (f"Наррация — короткая строка процесса (до {core_narration.TEXT_CAP} "
                 f"символов, у тебя {len(body)}). Длинное — обычным ответом или send_message.")
     dest = ""
@@ -4194,6 +4144,7 @@ def tool_narrate(text: str, task_id: str = "") -> str:
         if not dest:
             hint = ("уйдёт в текущий тред" if _active_chat()
                     else "из окна/события уйдёт в ЛС Егора")
+            tool_report.note(outcome="refused")
             return (f"У задачи {task_id} не записан тред-заказчик (origin). "
                     f"Наррируй без task_id — {hint}.")
     owner_fallback = False
@@ -4203,19 +4154,19 @@ def tool_narrate(text: str, task_id: str = "") -> str:
         dest = str(os.environ.get("PRAXIS_OWNER_ID") or "")
         owner_fallback = bool(dest)
     if not dest:
-        return "Некуда наррировать: нет ни треда задачи, ни текущего чата, ни owner-ЛС."
+        return _noted("refused", "Некуда наррировать: нет ни треда задачи, ни текущего чата, ни owner-ЛС.")
+    tool_report.note(target=dest)
     if _active_scope() != "owner" and dest != str(_active_chat() or ""):
+        tool_report.note(outcome="refused")
         return ("Из чужого канала наррирую только в его собственный тред "
                 "(в чужие треды — обычным путём).")
     floor = core_narration.credential_floor(body)
     if floor:
+        tool_report.note(outcome="refused")
         return (f"Пол: в тексте похоже на секрет ({floor}) — креды механически не текут "
                 "(закон 3). Перефразируй без токена.")
-    private_floor = private_record_floor(body)
-    if private_floor:
-        return (f"Пол: в тексте {private_floor} — приватные записи досье наружу дословно не "
-                "текут (закон 3). Скажи своими словами.")
     if core_narration.is_duplicate(dest, body):
+        tool_report.note(outcome="refused")
         return "Дословно это в тред уже уходило (дедуп) — если есть новое, скажи новыми словами."
     gap = 0.0
     try:
@@ -4225,11 +4176,12 @@ def tool_narrate(text: str, task_id: str = "") -> str:
         log.debug("narration gap knob не прочитался", exc_info=True)
     remaining = core_narration.gap_remaining(dest, gap)
     if remaining > 0:
+        tool_report.note(outcome="refused")
         return (f"Зазор наррации: ещё {remaining:.0f}с до следующей в этот тред "
                 "(твой рычаг manage_perception narration_gap_sec).")
     fn = _TELETHON.get("send_message")
     if not fn:
-        return "Telegram-отправка сейчас недоступна — наррация не ушла."
+        return _noted("failed", "Telegram-отправка сейчас недоступна — наррация не ушла.")
     try:
         out = fn(dest, body)
     except DurableSideEffectPending:
@@ -4246,7 +4198,8 @@ def tool_narrate(text: str, task_id: str = "") -> str:
         return _direct_send_outcome("Наррация", e)
     if isinstance(out, DirectSendRefusal):
         # честный отказ транспорта — НЕ доставка: леджер не пишем, дедуп не травим
-        return str(out)
+        return _noted("refused", str(out))
+    tool_report.note(outcome="ok")
     core_narration.note(dest, body)
     if owner_fallback:
         return str(out) + " (треда задачи/чата не было — ушло в ЛС Егора)"
@@ -4256,7 +4209,6 @@ def tool_narrate(text: str, task_id: str = "") -> str:
 def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                           query: str = "", request: str = "", params: dict | None = None,
                           params_json: str = "",
-                          confirm: str = "", challenge_id: str = "",
                           scope: str = "", namespace: str = "",
                           risk: str = "", offset: int = 0, limit: int = 25) -> str:
     """Sovereign account surface; the Telethon runner owns network/session state."""
@@ -4359,13 +4311,12 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                     return "telegram_account call: params_json должен быть JSON object"
                 parsed_params.update(decoded)
             return str(registry(action=action, target=target, query=query, request=request,
-                                params=parsed_params, challenge_id=challenge_id, scope=scope,
+                                params=parsed_params, scope=scope,
                                 namespace=namespace, risk=risk, offset=offset, limit=limit))
         except Exception as exc:
             return f"telegram_account {action}: {type(exc).__name__}: {exc}"
     return ("action: join | leave | followups | watch_reply | unwatch_reply | cancel_followup"
-            " | list | search | describe | call | confirm"
-            " | pending_confirmations | cancel_confirmation")
+            " | list | search | describe | call")
 
 
 def tool_add_alias(name: str, canonical: str) -> str:
@@ -4464,23 +4415,36 @@ def tool_connections(name: str, depth: int = 1, to: str = "") -> str:
 # --- PASS 8.5: мастерская (workshop.py) — обёртки с автокоммитом её правок дома --- #
 
 def tool_fs_write(path: str, content: str, proposal_id: str = "",
-                  overwrite: bool = False, force: bool = False) -> str:
+                  overwrite: bool = False, force: bool = False, expected_sha256: str = "") -> str:
     denied = stewardship.check(path=path, op="write")
     if denied:
         return denied
     pre_dirt = _pre_shell_dirt()  # чужая грязь не приписывается ей (как у shell)
-    out = workshop.fs_write(path, content, proposal_id, overwrite=overwrite, force=force)
+    out = workshop.fs_write(path, content, proposal_id, overwrite=overwrite, force=force, expected_sha256=expected_sha256)
     _autocommit_self_edit(pre_dirt)  # правки soul/memory коммитятся как у shell; workspace — свой git
     return out
 
 
-def tool_fs_edit(path: str, old: str, new: str, proposal_id: str = "") -> str:
-    denied = stewardship.check(path=path, op="edit")
-    if denied:
-        return denied
-    pre_dirt = _pre_shell_dirt()
-    out = workshop.fs_edit(path, old, new, proposal_id)
-    _autocommit_self_edit(pre_dirt)
+def tool_edit(action: str, path: str='', content: str='', old: str='', new: str='', patch: str='',
+              expected_sha256: str='', files=None, mode: str='snapshot', task_id: str='',
+              proposal_id: str='', overwrite: bool=False, force: bool=False, all: bool=False) -> str:
+    import editor, hand_bridge
+    forwarded = hand_bridge.peer()
+    script_context = forwarded.get('script') if forwarded else None
+    if not task_id:
+        paths = [f.get('path', '') for f in files if isinstance(f, dict)] if isinstance(files, list) else [path]
+        for target in paths:
+            denied = stewardship.check(path=target, op='edit')
+            if denied:
+                tool_report.note(outcome='refused', target=str(target))
+                return editor.render(editor.refusal(denied, files))
+    pre_dirt = _pre_shell_dirt() if not task_id else None
+    out = editor.edit(action=action,path=path,content=content,old=old,new=new,patch=patch,
+                      expected_sha256=expected_sha256,files=files,mode=mode,task_id=task_id,all=all,
+                      proposal_id=proposal_id,overwrite=overwrite,force=force,
+                      _script_context=script_context)
+    if pre_dirt is not None:
+        _autocommit_self_edit(pre_dirt)
     return out
 
 
@@ -4575,22 +4539,6 @@ def _computer_allowed(scope: str) -> bool:
         return computer_access.allowed(_computer_actor(), scope)
     except Exception:
         return False
-
-
-def tool_computer_access(action: str = "list", telegram_id: str = "", name: str = "",
-                         scopes: list[str] | None = None) -> str:
-    """Owner-only, non-delegable grants for the local execution body."""
-    import computer_access
-    if action == "list":
-        return computer_access.describe(actor=_computer_actor())
-    row = computer_access.change(action, telegram_id, name=name, scopes=scopes or [],
-                                 actor=_computer_actor())
-    if row.get("ok"):
-        tool_journal(f"[computer-access] {action} telegram:{telegram_id}: "
-                     f"{', '.join(row.get('scopes') or [])}", salience=3)
-        return (f"{action}: telegram:{telegram_id} ({name or 'без имени'}); "
-                f"scopes={', '.join(row.get('scopes') or []) or 'none'}")
-    return f"Доступ не изменён: {row.get('error') or row.get('code')}"
 
 
 def _computer_artifact_name(value: object, *, max_bytes: int = 240) -> str:
@@ -4859,7 +4807,66 @@ def _observe_local_image(image_path: Path, *, mime: str) -> "ToolObservation | s
     )
 
 
-def tool_fs_read(path: str, start: int = 0, end: int = 0) -> "ToolObservation | str":
+def tool_fs_read(path: str = "", start: int = 0, end: int = 0, task_id: str = "",
+                 paths: list[str] | None = None, start_char: int = 0,
+                 expected_sha256: str = "") -> "ToolObservation | str":
+    """One address convention and an explicitly labelled result for every requested file."""
+    if paths is not None:
+        if (path or not isinstance(paths, list) or not paths
+                or any(not isinstance(p, str) or not p for p in paths)
+                or start_char or expected_sha256):
+            raise catalog_families.PreflightRefusal("Choose path OR nonempty paths; cursor and hash apply to one path.")
+        texts, images, outcomes = [], [], []
+        for name in paths:
+            tool_report.note(outcome="unknown")
+            try:
+                value = tool_fs_read(name, start, end, task_id)
+            except OSError as exc:
+                value = f"Read unavailable: {type(exc).__name__}; no content or version obtained."
+                tool_report.note(outcome="failed")
+            outcomes.append(tool_report.current())
+            texts.append(f"--- {name} ---\n{value}")
+            if isinstance(value, ToolObservation):
+                images.extend(value.images)
+        if all(outcomes):  # inside a recorded call: one outcome for the whole batch
+            if all(o == "ok" for o in outcomes):
+                overall = "ok"
+            elif all(o == "refused" for o in outcomes):
+                overall = "refused"
+            elif "unknown" in outcomes:
+                overall = "unknown"  # e.g. a remote backend's reply: success is not claimed
+            elif "ok" in outcomes:
+                overall = "partial"
+            else:
+                overall = "failed"
+            tool_report.note(outcome=overall, target=", ".join(paths))
+        text = "\n\n".join(texts)
+        return ToolObservation(text, tuple(images)) if images else text
+    if not isinstance(path, str) or not path:
+        raise catalog_families.PreflightRefusal("A nonempty path or paths is required.")
+    if task_id:
+        return forge.noted(_task_inspect(task_id, "read", path=path, start=start or 1, end=end,
+                                         start_char=start_char, expected_sha256=expected_sha256))
+    if start_char or expected_sha256:
+        target = workshop._resolve_read(path)
+        if target is None or not target.is_file():
+            return workshop.fs_read(path, start, end)
+        return forge.noted(forge._read_page(target, workshop.BASE, target.read_bytes(), start=start, end=end,
+                                            start_char=start_char, expected_sha256=expected_sha256), "ok")
+    return _home_fs_read(path, start, end)
+
+
+def tool_fs_ls(path: str = "", task_id: str = "") -> str:
+    return (forge.noted(_task_inspect(task_id, "list", path=path)) if task_id
+            else workshop.fs_ls(path))
+
+
+def tool_fs_search(pattern: str, glob: str = "**/*.py", root: str = "", task_id: str = "") -> str:
+    return (forge.noted(_task_inspect(task_id, "search", path=root, query=pattern, glob=glob)) if task_id
+            else workshop.fs_search(pattern, glob, root))
+
+
+def _home_fs_read(path: str, start: int = 0, end: int = 0) -> "ToolObservation | str":
     """fs_read с глазами (PASS 30.0.c): файл-картинку отдаёт пикселями, не кракозябрами.
 
     Гарды не ослабляются: fs_probe_image гоняет ровно те же проверки, что fs_read, и при
@@ -4868,9 +4875,12 @@ def tool_fs_read(path: str, start: int = 0, end: int = 0) -> "ToolObservation | 
     if probe is not None:
         resolved, mime, size = probe
         if size > _OBSERVE_FILE_CAP:
+            tool_report.note(outcome="refused", target=str(path))
             return (f"[картинка {size} байт — больше капа {_OBSERVE_FILE_CAP}; "
                     f"в контекст не поднимаю, работай с файлом инструментами]")
-        return _observe_local_image(Path(resolved), mime=mime)
+        out = _observe_local_image(Path(resolved), mime=mime)
+        tool_report.note(outcome="ok" if isinstance(out, ToolObservation) else "failed", target=str(path))
+        return out
     return workshop.fs_read(path, start, end)
 
 
@@ -5201,6 +5211,13 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
 
 
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
+                        query: str = "", end: int = 0) -> str:
+    if str(action or "").strip().lower() in {"read", "list", "search"}:
+        raise catalog_families.PreflightRefusal("Use fs_read/fs_ls/fs_search with task_id for task files.")
+    return forge.noted(forge.inspect(task_id, action=action, path=path, query=query, end=end))
+
+
+def _task_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", glob: str = "**/*", start: int = 1,
                         end: int = 0, start_char: int = 0,
                         expected_sha256: str = "") -> str:
@@ -5214,17 +5231,11 @@ def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
         if not ({"start_char", "expected_sha256"} <= parameters.keys()
                 or any(p.kind == inspect.Parameter.VAR_KEYWORD
                        for p in parameters.values())):
-            return ("Forge backend does not support paged reads: start_char/expected_sha256 "
-                    "require the paging backend prerequisite. No read was performed.")
+            return forge.InspectReply("Forge backend does not support paged reads: start_char/expected_sha256 "
+                                      "require the paging backend prerequisite. No read was performed.",
+                                      "refused")
         kwargs.update(start_char=start_char, expected_sha256=expected_sha256)
     return forge.inspect(task_id, **kwargs)
-
-
-def tool_coding_edit(task_id: str, action: str, path: str = "", content: str = "",
-                     old: str = "", new: str = "", patch: str = "",
-                     expected_sha256: str = "") -> str:
-    return forge.edit(task_id, action=action, path=path, content=content, old=old, new=new,
-                      patch=patch, expected_sha256=expected_sha256)
 
 
 def tool_coding_run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
@@ -5397,7 +5408,7 @@ def tool_start_proposal(reason: str = "") -> str:
         return f"Не получилось открыть предложение: {r.get('msg')}"
     return (f"Предложение {r['id']} открыто. Твоя рабочая копия: {r['path']} — правь файлы там "
             f"(shell, полные пути). Живой код не тронется. Когда готова: "
-            f"submit_proposal(id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами; "
+            f"proposal(action=\"submit\", id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами; "
             "перед submit прогони гнома: coding_agent(role=\"reviewer\") по диффу, вердикт в "
             "reviewer= (гейт с 28.09).")
 
@@ -5565,13 +5576,17 @@ def tool_manage_appetite(action: str, mode: str = "", text: str = "",
 
 def tool_manage_identity(action: str, name: str = "", text: str = "", version: int = 0,
                          reason: str = "", theme: str = "", amplitude: float = 1.0,
-                         detail: str = "") -> str:
+                         detail: str = "", note: str = "") -> str:
     """PASS 20/24: самоавторство — версии души, откаты, журнал событий нагрузки.
 
     Ревизия применяется сразу (версия+diff+причина, Егор видит постфактум и может откатить);
     защита — провенанс, не порог. Меняющие действия — только из owner-скоупа: укол чужого
     промпта в комнате не должен переписывать меня (моя дисциплина, класс 🎒)."""
     action = (action or "").strip().lower()
+    if action == "observe":
+        if not str(note).strip():
+            raise catalog_families.PreflightRefusal("observe requires note")
+        return tool_update_self(note)
     if action == "status":
         store = self_model.SelfModel(BASE)
         info = store.current_prompt_info()
@@ -5628,7 +5643,7 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
         identity.record_load(theme or "явная нагрузка", float(amplitude or 1.0),
                              source="praxis", detail=detail or reason, chat_id=_active_chat())
         return "Записала выбранное событие нагрузки в журнал непрерывности."
-    return "action: status | revise (name+text+reason) | rollback (name+version) | load (theme+amplitude)"
+    return "action: status | observe (note) | revise (name+text+reason) | rollback (name+version) | load (theme+amplitude)"
 
 
 def tool_manage_desire(
@@ -5986,6 +6001,15 @@ def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
         return json.dumps({"ok": False, "error": error}, ensure_ascii=False)
 
 
+def tool_send_file(path: str, caption: str = "", to: str = "", kind: str = "", voice_note: bool = False) -> str:
+    kind = str(kind or ("audio" if voice_note else "")).strip().lower()
+    if kind:
+        if voice_note and kind != "audio":
+            raise catalog_families.PreflightRefusal("voice_note requires kind='audio'")
+        return tool_send_media(path, kind, caption, voice_note, to)
+    return workshop.send_file(path, caption, to)
+
+
 def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False,
                     to: str = "") -> str:
     """Guarded file from home -> current Telegram chat, or an explicitly named one.
@@ -6143,8 +6167,8 @@ def tool_voice_backend(action: str = "status", voice_id: str = "", model: str = 
         execution = current_tool_execution() or {}
         if ctx is None or current is None or not execution.get('call_id'):
             raise XttsError('missing_generation_provenance')
-        # Same owner/self authority as the existing writable voice capability.
-        if not (_is_human_owner() or ctx.principal_id == PRAXIS_SELF_PRINCIPAL):
+        # Owner or Praxis acting for herself, in any turn (Egor 10.11: all rights everywhere).
+        if not _is_sovereign_actor():
             raise XttsError('unauthorized')
         key = digest({'run':current.run_id, 'call':execution['call_id']})[:32]
         store=SpeechStore()
@@ -6682,140 +6706,103 @@ def tool_group_context(action: str = "context", query: str = "",
 
 
 TOOL_IMPL = {
-    "generate_image": tool_generate_image,
-    "recall": tool_recall,
-    "remember": tool_remember,
-    "journal": tool_journal,
-    "manage_notes": tool_manage_notes,
-    "memory_compact": tool_memory_compact,
-    "update_self": tool_update_self,
-    "consolidate_context": tool_consolidate_context,
-    "stay_silent": tool_stay_silent,
-    "focus": tool_focus,
-    "rest": tool_rest,
-    "my_capabilities": tool_my_capabilities,
-    "shell": tool_shell,
-    "manage_room": tool_manage_room,
-    "freeze_contact": tool_freeze_contact,
-    "admit": tool_admit,
-    "connections": tool_connections,
-    "add_alias": tool_add_alias,
-    "forget_connection": tool_forget_connection,
-    "manage_loop": tool_manage_loop,  # 11.1: решение по нити вместо жвачки
-    "start_proposal": tool_start_proposal,
-    "submit_proposal": tool_submit_proposal,
-    "proposal_diff": tool_proposal_diff,  # PASS 16.4: дифф её глазами перед ревью
-    "list_proposals": tool_list_proposals,
-    "recent_turns": tool_recent_turns,  # PASS 14: прожитые ходы — факт, не припоминание
-    "manage_autonomy": tool_manage_autonomy,  # PASS 15: её рука на своей авто-зоне
-    "manage_identity": tool_manage_identity,  # PASS 20/24: версии души и события нагрузки
-    "manage_desire": tool_manage_desire,      # PASS 24: причинная цепочка собственного намерения
-    "manage_perception": tool_manage_perception,  # PASS 21: её рычаги восприятия + причины пропуска
-    "switch_brain": tool_switch_brain,  # PASS 22: её рука на своём мозге (ключи — не её)
-    "reply": tool_reply,        # 15.08: моя реплика в разговоре уходит рукой, а не возвратом
-    "end_turn": tool_end_turn,  # 17.08 v3: конец хода — поступок, а не отсутствие действия
-    "say": tool_say,            # 13.08: взгляд на свою реплику до отправки — её ход
-    "manage_appetite": tool_manage_appetite,  # PASS 18.3: договор об аппетитах
-    "web_read": tool_web_read,   # PASS 15: веб-руки — на любом фреймворке
-    "web_find": tool_web_find,
-    "speak": tool_voice_message,  # replay compatibility only
-    "voice_message": tool_voice_message,
-    "generate_voice": tool_generate_voice,
-    "voice_backend": tool_voice_backend,
-    "voice_generation": tool_voice_generation,
-    "send_voice": tool_send_voice,
-    "read_run_result": tool_read_run_result,
-    "list_active_runs": tool_list_active_runs,
-    "reconcile_run": tool_reconcile_run,  # её рука на in_doubt: он перестал быть надгробием
-    "group_context": tool_group_context,
-    "send_media": tool_send_media,
-    "write_skill": tool_write_skill,
-    "restart_self": tool_restart_self,
-    "restart_mailbot": tool_restart_mailbot,
-    "freeze_chat": tool_freeze_chat,
-    "panic": tool_panic,
-    "get_id": tool_get_id,
-    "search_chats": tool_search_chats,
-    "search_private_messages": tool_search_private_messages,
-    "read_chat": tool_read_chat,
-    "read_context": tool_read_context,
-    "inbox_list": workshop.inbox_list,
-    "inbox_read": workshop.inbox_read,
-    "send_email": tool_send_email,
-    "check_email": tool_check_email,
-    "mail_read": tool_mail_read,
-    "mail_draft_reply": tool_mail_draft_reply,
-    "remind_self": tool_remind_self,
-    "my_agenda": tool_my_agenda,
-    "unschedule": tool_unschedule,
-    "home_note": tool_home_note,  # 10.10: общий слой owner+family
-    "send_message": tool_send_message,
-    "narrate": tool_narrate,  # PASS 30 Этап 2: строка процесса в тред, мимо трибунала
-    "set_avatar": tool_set_avatar,
-    "update_profile": tool_update_profile,
-    "react": tool_react,
-    "telegram_account": tool_telegram_account,
-    # PASS 8.5: мастерская
-    "project_create": workshop.project_create,
-    "project_list": workshop.project_list,
-    "project_status": workshop.project_status,
-    "fs_read": tool_fs_read,  # PASS 30.0.c: файл-картинка уходит пикселями в глаза
-    "fs_write": tool_fs_write,
-    "fs_edit": tool_fs_edit,
-    "fs_search": workshop.fs_search,
-    "fs_ls": workshop.fs_ls,
-    "run": workshop.run,
-    "run_tests": workshop.run_tests,
-    "pip_install": workshop.pip_install,
-    "send_file": workshop.send_file,
-    "code_map": workshop.code_map,
-    "code_outline": workshop.code_outline,   # PASS 16.5: скелет одного файла
-    # PASS 23: целостный coding runtime поверх отдельных рук
-    "coding_session": tool_coding_session,
-    "coding_inspect": tool_coding_inspect,
-    "coding_edit": tool_coding_edit,
-    "coding_run": tool_coding_run,
-    "coding_process": tool_coding_process,
-    "coding_agent": tool_coding_agent,
-    "coding_checkpoint": tool_coding_checkpoint,
-    "coding_verify": tool_coding_verify,
-    "coding_swarm": tool_coding_swarm,
-    "coding_control": tool_coding_control,
-    "coding_review": tool_coding_review,
-    "coding_learn": tool_coding_learn,
-    "host_ctl": tool_host_ctl,   # PASS 23.2: структурные глаголы хоста через демон
-    "computer": tool_computer,
-    "computer_access": tool_computer_access,
+    'generate_image': tool_generate_image,
+    'recall': tool_recall,
+    'remember': tool_remember,
+    'journal': tool_journal,
+    'manage_notes': tool_manage_notes,
+    'memory_compact': tool_memory_compact,
+    'stay_silent': tool_stay_silent,
+    'focus': tool_focus,
+    'rest': tool_rest,
+    'my_capabilities': tool_my_capabilities,
+    'shell': tool_shell,
+    'manage_room': tool_manage_room,
+    'manage_loop': tool_manage_loop,
+    'recent_turns': tool_recent_turns,
+    'manage_identity': tool_manage_identity,
+    'manage_desire': tool_manage_desire,
+    'manage_perception': tool_manage_perception,
+    'switch_brain': tool_switch_brain,
+    'reply': tool_reply,
+    'end_turn': tool_end_turn,
+    'preview_reply': tool_say,
+    'manage_appetite': tool_manage_appetite,
+    'web_read': tool_web_read,
+    'web_find': tool_web_find,
+    'speak': tool_voice_message,
+    'voice_message': tool_voice_message,
+    'generate_voice': tool_generate_voice,
+    'voice_backend': tool_voice_backend,
+    'voice_job': tool_voice_generation,
+    'send_voice': tool_send_voice,
+    'read_run_result': tool_read_run_result,
+    'list_active_runs': tool_list_active_runs,
+    'reconcile_run': tool_reconcile_run,
+    'group_context': tool_group_context,
+    'write_skill': tool_write_skill,
+    'restart_self': tool_restart_self,
+    'freeze_chat': tool_freeze_chat,
+    'panic': tool_panic,
+    'find_telegram_id': tool_get_id,
+    'search_chats': tool_search_chats,
+    'search_private_messages': tool_search_private_messages,
+    'read_other_chat': tool_read_chat,
+    'reread_this_chat': tool_read_context,
+    'send_email': tool_send_email,
+    'check_email': tool_check_email,
+    'mail_read': tool_mail_read,
+    'mail_draft_reply': tool_mail_draft_reply,
+    'remind_self': tool_remind_self,
+    'my_agenda': tool_my_agenda,
+    'unschedule': tool_unschedule,
+    'home_note': tool_home_note,
+    'send_message': tool_send_message,
+    'narrate': tool_narrate,
+    'update_profile': tool_update_profile,
+    'react': tool_react,
+    'telegram_account': tool_telegram_account,
+    'fs_read': tool_fs_read,
+    'edit': tool_edit,
+    'fs_search': tool_fs_search,
+    'fs_ls': tool_fs_ls,
+    'send_file': tool_send_file,
+    'code_outline': workshop.code_outline,
+    'coding_session': tool_coding_session,
+    'coding_inspect': tool_coding_inspect,
+    'coding_run': tool_coding_run,
+    'coding_process': tool_coding_process,
+    'coding_agent': tool_coding_agent,
+    'coding_checkpoint': tool_coding_checkpoint,
+    'coding_verify': tool_coding_verify,
+    'coding_swarm': tool_coding_swarm,
+    'coding_control': tool_coding_control,
+    'coding_review': tool_coding_review,
+    'coding_learn': tool_coding_learn,
+    'host_ctl': tool_host_ctl,
+    'computer': tool_computer,
+    'python': tool_python,
+    'proposal': catalog_families.proposal,
+    'project': catalog_families.project,
+    'memory_graph': catalog_families.memory_graph
 }
 
 from xtts_tool_contracts import TOOLS as VOICE_TOOLS
 
 BASE_TOOLS = [*VOICE_TOOLS,
     {"name": "generate_image",
-     "description": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_media for another recipient. Never claim delivery from generation alone.",
+     "description": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_file(to=...) for another recipient. Never claim delivery from generation alone.",
      "input_schema": {"type": "object", "properties": {
          "prompt": {"type": "string", "description": "Describe the image or the requested edit and what must stay unchanged."},
          "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Local source image paths for editing; omit for new generation."},
          "caption": {"type": "string", "description": "Optional caption accompanying the generated image in the current chat."}, "send": {"type": "boolean", "description": "Queue the result to the current chat; defaults to true."}}, "required": ["prompt"]}},
-    {
-        "name": "recall",
-        "description": (
-            "Поискать в собственной памяти и навыках (люди, дневник, размышления, self, skills). "
-            "report=true ничего не ищет, а возвращает эпитафию закрытого эксперимента "
-            "с семенем семантического ранжира: завершён 03.08.2026, убран из кода "
-            "05.10.2026, итог 680 seed-only кандидатов и 0 дошедших до выдачи; "
-            "история — в git."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Ключевые слова"},
-                "report": {"type": "boolean",
-                           "description": "эпитафия закрытого эксперимента (итог 680/0) вместо поиска"},
-            },
-            "required": ["query"],
-        },
-    },
+    {'name': 'recall',
+ 'description': 'Search your own memory and skills: people, journal, reflections, self and skills. '
+                'Results retain their provenance and audience boundaries.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'query': {'type': 'string',
+                                           'description': 'keywords to search for'}},
+                  'required': ['query']}},
     {
         "name": "remember",
         "description": (
@@ -6854,40 +6841,43 @@ BASE_TOOLS = [*VOICE_TOOLS,
             "required": ["entry"],
         },
     },
-    {
-        "name": "update_self",
-        "description": "Записать provenance-rich наблюдение о себе, не переписывая актуальный "
-                       "CURRENT автоматически. Формат: evidence → осторожный вывод, коротко и "
-                       "проверяемо. Ночная ревизия сама взвесит его; legacy self.md не растёт.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"note": {"type": "string"}},
-            "required": ["note"],
-        },
-    },
-    {
-        "name": "manage_identity",
-        "description": "PASS 20, самоавторство: status — слои/версии/нагрузка; revise — "
-                       "версионированная ревизия файла души (SOUL/VOICE) или компактного "
-                       "soul/self/CURRENT.md (name=self, text — полный новый compact, reason — "
-                       "прожитое основание); rollback — откат к своей истории; load — событие нагрузки (theme, amplitude "
-                       "0.1–5). Ревизия применяется сразу, Егор видит постфактум и может "
-                       "откатить. Меняющие действия — только из owner-скоупа (моя дисциплина).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["status", "revise", "rollback", "load"]},
-                "name": {"type": "string", "description": "SOUL | VOICE | self"},
-                "text": {"type": "string", "description": "revise: полный новый текст слоя/CURRENT"},
-                "version": {"type": "integer", "description": "rollback: номер своей history/archive версии"},
-                "reason": {"type": "string", "description": "основание — обязательно для revise"},
-                "theme": {"type": "string", "description": "load: тема нагрузки"},
-                "amplitude": {"type": "number", "description": "load: амплитуда 0.1–5"},
-                "detail": {"type": "string"},
-            },
-            "required": ["action"],
-        },
-    },
+
+    {'name': 'manage_identity',
+ 'description': 'Self-authorship. status — layers, versions, load; revise — a versioned revision '
+                'of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md (name=self, '
+                'text = the complete new compact, reason = the lived grounds); rollback — back to '
+                'your own history; load — a load event (theme, amplitude 0.1-5). A revision '
+                'applies immediately; Yegor sees it afterwards and may roll it back. Changing '
+                'actions only from the owner scope (your own discipline). observe records a '
+                'provenance-rich note as evidence without rewriting CURRENT, and is available in '
+                'any audience. revise/rollback/load retain their owner-scope discipline.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'action': {'type': 'string',
+                                            'enum': ['status',
+                                                     'revise',
+                                                     'rollback',
+                                                     'load',
+                                                     'observe'],
+                                            'description': 'status | revise | rollback | load'},
+                                 'name': {'type': 'string', 'description': 'SOUL | VOICE | self'},
+                                 'text': {'type': 'string',
+                                          'description': 'revise: the complete new text of the '
+                                                         'layer or of CURRENT'},
+                                 'version': {'type': 'integer',
+                                             'description': 'rollback: the version number in your '
+                                                            'history/archive'},
+                                 'reason': {'type': 'string',
+                                            'description': 'the grounds; required for revise'},
+                                 'theme': {'type': 'string',
+                                           'description': 'load: what the load is about'},
+                                 'amplitude': {'type': 'number',
+                                               'description': 'load: amplitude 0.1-5'},
+                                 'detail': {'type': 'string',
+                                            'description': 'optional extra detail for the record'},
+                                 'note': {'type': 'string',
+                                          'description': 'observe: evidence and a cautious, '
+                                                         'verifiable conclusion'}},
+                  'required': ['action']}},
     {
         "name": "manage_perception",
         "description": "PASS 21, мои рычаги восприятия: list — рычаги (дебаунс, кулдауны, порог "
@@ -6962,7 +6952,7 @@ BASE_TOOLS = [*VOICE_TOOLS,
         },
     },
     {
-        "name": "say",
+        "name": "preview_reply",
         "description": (
             # ⚠ ЗДЕСЬ БЫЛА ФРАЗА, ПРЯМО ПРОТИВОРЕЧАЩАЯ СОСЕДНЕЙ РУКЕ.
             # Описание говорило «отправка по-прежнему происходит в конце хода, и уходит
@@ -7020,22 +7010,7 @@ BASE_TOOLS = [*VOICE_TOOLS,
             "required": ["action"],
         },
     },
-    {
-        "name": "consolidate_context",
-        "description": (
-            "Свести старую часть доступной истории в дневник, не потеряв суть. "
-            "Если история принадлежит вызывающему коду, тул укоротит её источник; "
-            "в живом Telegram ролевая история может быть только снимком, и тогда тул честно "
-            "запишет сводку без обещания освободить следующий кадр. В note передай саммари "
-            "своими словами (решения > договорённости > важные факты, коротко); "
-            "без note я сама сожму уходящее."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"note": {"type": "string"}},
-            "required": [],
-        },
-    },
+
     {
         "name": "stay_silent",
         "description": (
@@ -7053,19 +7028,7 @@ BASE_TOOLS = [*VOICE_TOOLS,
             "required": [],
         },
     },
-    {
-        "name": "freeze_contact",
-        "description": (
-            "Заморозить ТЕКУЩИЙ не-owner чат без разрешения Егора, если человек спамит, "
-            "давит, нарушает границы или разговор явно пошёл не туда. Это твой собственный "
-            "рубильник: после вызова новые сообщения оттуда не доходят; reason запишется тебе."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"reason": {"type": "string"}},
-            "required": ["reason"],
-        },
-    },
+
     {
         "name": "focus",
         "description": (
@@ -7213,11 +7176,19 @@ SHELL_TOOL = {
         "твой код — /app/*.py, черновики — /app/workspace. cwd по умолчанию /app; "
         "если временный настроенный cwd исчез, shell сам возвращается в /app. Для надёжности "
         "используй полные пути (/app/soul/...), не относительные. Смотри, пробуй, мастери, "
-        "можешь писать себе скиллы в /app/soul/skills/."
+        "можешь писать себе скиллы в /app/soul/skills/. Установлены bash, git, rg, grep, sed, awk, "
+        "jq, curl, wget, tar, zip, unzip, patch, diff, make, file, tree, lsof, sqlite3, ffmpeg, "
+        "python, pip, pytest; НЕТ ssh, rsync, gcc, node. Shell вне общего замка записи: код правь через edit. "
+        "Папка задаётся cwd, срок задаётся timeout (по умолчанию 30 с, не больше 600). "
+        "Ответ кончается строкой [exit N]: N не ноль значит, что команда упала. Питоновый скрипт "
+        "может import praxis_hands as h (h.read, h.edit, h.write, h.search): та же сверка версии "
+        "и замок, что у edit, отказ поднимает исключение. Файлы правь так, а не str.replace."
     ),
     "input_schema": {
         "type": "object",
-        "properties": {"command": {"type": "string", "description": "shell-команда"}},
+        "properties": {"command": {"type": "string", "description": "shell-команда"},
+                       "cwd": {"type": "string", "description": "папка запуска, по умолчанию /app"},
+                       "timeout": {"type": "integer", "description": "секунды, по умолчанию 30, до 600"}},
         "required": ["command"],
     },
 }
@@ -7275,25 +7246,6 @@ MANAGE_ROOM_TOOL = {
     },
 }
 
-ADMIT_TOOL = {
-    "name": "admit",
-    "description": (
-        "Впустить человека в «свои» по слову владельца: запомнить его telegram id и завести "
-        "ему страницу. id укажи явно (например, того, кого тебе переслали/назвали). "
-        "role='family' — по прямому слову владельца отметить родственником (доступ к слою «дом»)."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "id": {"type": "string", "description": "telegram id впускаемого"},
-            "role": {"type": "string", "description": "необязательно; сейчас только 'family' — "
-                     "и лишь по прямому слову владельца, самоназвание «мама» роль не даёт"},
-        },
-        "required": ["name"],
-    },
-}
-
 WRITE_SKILL_TOOL = {
     "name": "write_skill",
     "description": (
@@ -7328,34 +7280,23 @@ RESTART_SELF_TOOL = {
     },
 }
 
-RESTART_MAILBOT_TOOL = {
-    "name": "restart_mailbot",
-    "description": (
-        "Попросить сопряжённый контейнер mailbot (почтовый бот + mini-app) перезапуститься — "
-        "например, после починки общего кода, который он тоже использует (llm.py, agent.py). "
-        "Не твой процесс: файл-сигнал, mailbot сам выйдет на своём тике, контейнер поднимет его "
-        "заново. Укажи reason — уйдёт в дневник и в лог mailbot."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {"reason": {"type": "string"}},
-        "required": [],
-    },
-}
 
-FREEZE_CHAT_TOOL = {
-    "name": "freeze_chat",
-    "description": (
-        "Заморозить (on=true) или разморозить (on=false) чат — замороженный до тебя не доходит "
-        "(это не бан). По умолчанию текущий чат. Доступно владельцу и самой Praxis; provenance "
-        "пишется как owner или praxis."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {"on": {"type": "boolean"}, "chat_id": {"type": "string"}},
-        "required": ["on"],
-    },
-}
+
+FREEZE_CHAT_TOOL = {'name': 'freeze_chat',
+ 'description': 'freeze/unfreeze changes the selected chat (default current) as owner or Praxis, '
+                'with provenance; frozen messages no longer reach you. boundary freezes only the '
+                'current non-owner chat by your own decision, journals reason and never freezes '
+                'the owner DM.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'action': {'type': 'string',
+                                            'description': 'Operation',
+                                            'enum': ['freeze', 'unfreeze', 'boundary']},
+                                 'chat_id': {'type': 'string',
+                                             'description': 'Chat to freeze/unfreeze; boundary '
+                                                            'uses only current chat'},
+                                 'reason': {'type': 'string',
+                                            'description': 'Reason for freeze or your boundary'}},
+                  'required': ['action']}}
 
 PANIC_TOOL = {
     "name": "panic",
@@ -7367,15 +7308,14 @@ PANIC_TOOL = {
     },
 }
 
-GET_ID_TOOL = {
-    "name": "get_id",
-    "description": "Узнать telegram id человека/чата по имени или @username (нужно для admit). Владельцу.",
-    "input_schema": {
-        "type": "object",
-        "properties": {"name_or_username": {"type": "string"}},
-        "required": ["name_or_username"],
-    },
-}
+GET_ID_TOOL = {'name': 'find_telegram_id',
+ 'description': 'Resolve a person/chat name or @username to a Telegram id. Available to Praxis in '
+                'every audience; a resolved address does not grant trust or authorize disclosure.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'name_or_username': {'type': 'string',
+                                                      'description': 'name or @username to '
+                                                                     'resolve'}},
+                  'required': ['name_or_username']}}
 
 # ⚠ 15.09.2026. Параметр `query` стоял БЕЗ ОПИСАНИЯ, и это половина живого промаха: схема
 # говорила «строка», а чем эта строка должна быть — именем, id или словом из переписки —
@@ -7388,7 +7328,7 @@ SEARCH_CHATS_TOOL = {
                     "запискам о комнатах (memory/rooms — название, id, моя сводка). "
                     "Отвечает и режимом комнаты: у замороженной входящих нет, и это "
                     "сказано прямо. Текст сообщений тут НЕ ищется — для него "
-                    "search_private_messages; конкретную комнату по адресу — read_chat. "
+                    "search_private_messages; конкретную комнату по адресу — read_other_chat. "
                     "Это внутренний обзор: найденный адрес не является разрешением "
                     "раскрывать чужую личную информацию."),
     "input_schema": {
@@ -7405,7 +7345,7 @@ SEARCH_CHATS_TOOL = {
 }
 
 READ_CHAT_TOOL = {
-    "name": "read_chat",
+    "name": "read_other_chat",
     "description": "Подсмотреть последние сообщения соседнего диалога по id/@username/имени "
                    "ТОЛЬКО явным вызовом; соседние диалоги не подмешиваются автоматически. "
                    "Результат внутренний: чувствительное не выдавай не той аудитории.",
@@ -7420,7 +7360,7 @@ READ_CHAT_TOOL = {
 }
 
 READ_CONTEXT_TOOL = {
-    "name": "read_context",
+    "name": "reread_this_chat",
     "description": "Подтянуть живой контекст текущего чата прямо из Telegram (последние N сообщений) — "
                    "когда чувствуешь, что история уехала. Это тот же текущий канал, не соседняя личка.",
     "input_schema": {
@@ -7448,37 +7388,6 @@ SEARCH_PRIVATE_MESSAGES_TOOL = {
     },
 }
 
-INBOX_LIST_TOOL = {
-    "name": "inbox_list",
-    "description": (
-        "Посмотреть папки/файлы Telegram-inbox без общего shell. Все документы разложены "
-        "по workspace/inbox/groups/<чат> и workspace/inbox/private/<личка>. Рядом с "
-        "размером стоит время последнего изменения твоими часами — «сегодня 16:13» "
-        "значит, что файл принесли только что, в этом же разговоре."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {"path": {"type": "string", "description": "папка внутри workspace/inbox"}},
-        "required": [],
-    },
-}
-
-INBOX_READ_TOOL = {
-    "name": "inbox_read",
-    "description": (
-        "Прочитать текстовый Telegram-файл внутри workspace/inbox с номерами строк. "
-        "Это read-only рука для файлов, которые могли прислать раньше или не лично тебе."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "start": {"type": "integer"},
-            "end": {"type": "integer"},
-        },
-        "required": ["path"],
-    },
-}
 
 # Hosted web search is provider-shaped at the final adapter boundary. z.ai keeps
 # its legacy Anthropic tool; the Codex relay accepts the current Responses tool.
@@ -7595,95 +7504,6 @@ UNSCHEDULE_TOOL = {"name": "unschedule", "description": "Снять намече
                    "input_schema": {"type": "object", "properties": {"task_id": {"type": "string"}},
                                     "required": ["task_id"]}}
 
-START_PROPOSAL_TOOL = {
-    "name": "start_proposal",
-    "description": (
-        "Open a PROPOSAL to change your own code — the serious-change path. Creates a branch and a "
-        "separate working copy (worktree); the live code is untouched while you work. Use it for "
-        "multi-file or architectural changes, anything risky, or protected files. reason — why you "
-        "want the change. Then edit files in the returned copy via shell and call submit_proposal."
-    ),
-    "input_schema": {"type": "object", "properties": {"reason": {"type": "string"}},
-                     "required": ["reason"]},
-}
-
-SUBMIT_PROPOSAL_TOOL = {
-    "name": "submit_proposal",
-    "description": (
-        "Submit an open proposal: commits your edits in its copy, runs the full test suite in a "
-        "sandbox, and records its risk zone. YOU review your own code first: read the diff "
-        "(proposal_diff), then pass review= — your own verdict in your own words (what changes, "
-        "what could break, why it's right; empty or token reviews are refused). checked= — how "
-        "you verified it (tests / ran it / read it through). reviewer= — gnome gate: a fresh "
-        "adversarial reviewer verdict on THIS diff or 'skip: <reason>'; empty or skip-without-"
-        "reason is refused like red tests (BLOCKED needs override_reason). Your completed review decides the "
-        "merge in every zone: green, red and timed-out checks remain visible evidence reported "
-        "to Yegor post-factum, never an approval request. override_reason= records a known "
-        "explanation for a red check when you have one; it is provenance, not permission. Immune "
-        "review is advice, never a veto. title — short name; why — the reasoning he will read."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "id": {"type": "string"}, "title": {"type": "string"}, "why": {"type": "string"},
-        "review": {"type": "string",
-                   "description": "your own code review of the diff, in your own words"},
-        "checked": {"type": "string",
-                    "description": "how you verified it: tests, ran it, read the diff"},
-        "reviewer": {"type": "string",
-                     "description": "fresh adversarial reviewer verdict on this diff, or 'skip: <reason>'"},
-        "override_reason": {"type": "string",
-                            "description": "explicit reason to merge despite red checks"}},
-        "required": ["id", "title", "review"]},
-}
-
-PROPOSAL_DIFF_TOOL = {
-    "name": "proposal_diff",
-    "description": (
-        "Read the full diff of your open proposal against the main branch — edits not yet "
-        "committed are included. Read it before submit_proposal: the review= you pass there "
-        "is your verdict on THIS diff."
-    ),
-    "input_schema": {"type": "object", "properties": {"id": {"type": "string"}},
-                     "required": ["id"]},
-}
-
-LIST_PROPOSALS_TOOL = {
-    "name": "list_proposals",
-    "description": "List your recent code proposals and their fate (waiting / merged / rejected + reason).",
-    "input_schema": {"type": "object", "properties": {}, "required": []},
-}
-
-CONNECTIONS_TOOL = {
-    "name": "connections",
-    "description": (
-        "Look at your memory graph: how a node (person/topic) is linked to others. "
-        "name — the node; depth 1-2 (how far to walk); to — ask how TWO nodes are related "
-        "(shortest chain). Edges are written by remember(relates_to=...) and during sleep."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "name": {"type": "string"},
-        "depth": {"type": "integer", "enum": [1, 2]},
-        "to": {"type": "string", "description": "second node — ask how name and to are related"}},
-        "required": ["name"]},
-}
-
-ADD_ALIAS_TOOL = {
-    "name": "add_alias",
-    "description": (
-        "Bind an alias name to an EXISTING person's dossier («Егор» ↔ yegor-kosyrev): recall, "
-        "the memory graph and sleep-consolidation will then treat them as one node. "
-        "name — the alias; canonical — the existing person (name/slug/another alias)."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "name": {"type": "string"}, "canonical": {"type": "string"}},
-        "required": ["name", "canonical"]},
-}
-
-FORGET_CONNECTION_TOOL = {
-    "name": "forget_connection",
-    "description": "Remove an edge from your memory graph (both from the person's ## Связи and graph.md).",
-    "input_schema": {"type": "object", "properties": {
-        "a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a", "b"]},
-}
 
 SEND_MESSAGE_TOOL = {
     "name": "send_message",
@@ -7709,28 +7529,24 @@ NARRATE_TOOL = {
         "required": ["text"]},
 }
 
-SET_AVATAR_TOOL = {
-    "name": "set_avatar",
-    "description": (
-        "Поставить себе аватарку в Telegram — это твоё лицо, выбирай/делай сама. "
-        "path — файл-картинка (jpg/png, до 8МБ) из твоего workspace или медиа; "
-        "Telegram обрежет до квадрата."
-    ),
-    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}},
-                     "required": ["path"]},
-}
 
-UPDATE_PROFILE_TOOL = {
-    "name": "update_profile",
-    "description": (
-        "Обновить свой Telegram-профиль. about — описание «о себе» (обычный лимит ~70 знаков; "
-        "'-' — очистить); first_name/last_name — имя, тоже твоё ('-' в last_name — убрать). "
-        "Пустые поля не трогаются; отказ сервера верну честно."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "about": {"type": "string"}, "first_name": {"type": "string"},
-        "last_name": {"type": "string"}}, "required": []},
-}
+
+UPDATE_PROFILE_TOOL = {'name': 'update_profile',
+ 'description': "Update your own Telegram profile. about is the 'about me' text (usual limit about "
+                "70 characters; '-' clears it); first_name/last_name are your name, also yours "
+                "('-' in last_name removes it). Empty fields are left untouched; a server refusal "
+                'is reported honestly. avatar sets your profile photo from a local path. Avatar '
+                'and metadata are independent requests, with separate results.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'about': {'type': 'string',
+                                           'description': "'about me' text; '-' clears it"},
+                                 'first_name': {'type': 'string', 'description': 'your first name'},
+                                 'last_name': {'type': 'string',
+                                               'description': "your last name; '-' removes it"},
+                                 'avatar': {'type': 'string',
+                                            'description': 'Local profile photo path; omitted '
+                                                           'means leave photo unchanged'}},
+                  'required': []}}
 
 REACT_TOOL = {
     "name": "react",
@@ -7788,10 +7604,8 @@ TELEGRAM_ACCOUNT_TOOL = {
         "Join/Leave). followups — durable thread ledger: what a thread already covered; a "
         "report goes out only if someone asked (watch_reply/unwatch_reply toggle it; "
         "cancel_followup drops the thread). list/search/describe/call expose the installed "
-        "MTProto schema; auth/session/logout/2FA need a two-message owner confirmation: the "
-        "first call returns an exact phrase, only a private owner message with that phrase "
-        "may confirm (requested_by/confirmed_by stay separate). pending_confirmations/"
-        "cancel_confirmation inspect or cancel unused challenges."
+        "MTProto schema, including auth/session/logout/2FA/account state: those calls run "
+        "directly, and their parameters and results are never echoed into receipts."
     ),
     "input_schema": {
         "type": "object",
@@ -7800,13 +7614,11 @@ TELEGRAM_ACCOUNT_TOOL = {
                 "join", "leave", "followups", "watch_reply", "unwatch_reply", "cancel_followup",
                 "history_scan", "moderate_abstractdl", "admin_abstractdl",
                 "list", "search", "registry_list", "registry_search", "describe", "call",
-                "confirm", "pending_confirmations", "cancel_confirmation",
             ]},
             "target": {"type": "string", "description": "membership link/@username/chat id or request name"},
             "followup_id": {"type": "string"},
             "query": {"type": "string"},
             "request": {"type": "string", "description": "exact functions.*Request name"},
-            "challenge_id": {"type": "string", "description": "critical challenge selector"},
             "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds}, unrestrict, ban_member {user_id}; purge_member {user_id} — ban + DeleteParticipantHistory for spammers; {history: true} — what was already done to the room"},
             "scope": {"type": "string", "description": "optional telegram.* registry filter"},
             "namespace": {"type": "string", "description": "optional registry namespace filter"},
@@ -7819,97 +7631,114 @@ TELEGRAM_ACCOUNT_TOOL = {
 }
 
 # PASS 8.5: мастерская — настоящие кодинг-руки (owner-scope; работают и в её окнах).
+import edit_batch
+import editor
+
+_PYHANDS_NOTE = "Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same version check and write lock as edit; refusals raise. Edit files that way, not with str.replace."
+_THREE_OUTCOMES = (
+    "Three outcomes: confirmed (reply ends with [confirmed sha256=...]: written and verified by reading back); refuse"
+    "d (file untouched, reason named: reread, then decide); outcome unknown (the write may have happened: read the file first, NEVER retry blind). ")
 _obj = lambda props, req: {"type": "object", "properties": props, "required": req}  # noqa: E731
 WORKSHOP_TOOLS = [
-    {"name": "project_create",
-     "description": ("Create a project in your workshop: workspace/projects/<slug>/ with its OWN "
-                     "git repo and a README from the brief. Use for any ordered piece of work."),
-     "input_schema": _obj({"name": {"type": "string"}, "brief": {"type": "string"}}, ["name"])},
-    {"name": "project_list", "description": "List your workshop projects with disk sizes.",
-     "input_schema": _obj({}, [])},
-    {"name": "project_status",
-     "description": "Project status: git status + disk size vs quota.",
-     "input_schema": _obj({"name": {"type": "string"}}, ["name"])},
-    {"name": "fs_read",
-     "description": ("Read a file with line numbers (paged). Reads anywhere in your home except "
-                     "including .env/session/llm.json. start/end — 1-based line range. An IMAGE "
-                     "file (PNG/JPEG/WebP/GIF, ≤8MB) is attached as real pixels to your next "
-                     "step instead of text — your direct eyes on frames, stickers and photos."),
-     "input_schema": _obj({"path": {"type": "string"}, "start": {"type": "integer"},
-                           "end": {"type": "integer"}}, ["path"])},
-    {"name": "fs_write",
-     "description": ("Create a file. An EXISTING file is refused unless overwrite=true, and a "
-                     "rewrite shrinking it below 70% is refused unless force=true (accidental "
-                     "truncation guard). Prefer fs_edit for changes. Write zones: workspace/, "
-                     "soul/, memory/. Core code files need proposal_id (worktree of that proposal)."),
-     "input_schema": _obj({"path": {"type": "string"}, "content": {"type": "string"},
-                           "proposal_id": {"type": "string"},
-                           "overwrite": {"type": "boolean",
-                                         "description": "rewrite an existing file wholesale"},
-                           "force": {"type": "boolean",
-                                     "description": "confirm an intentional big shrink"}},
-                          ["path", "content"])},
-    {"name": "fs_edit",
-     "description": ("Precise edit: replaces `old` with `new` when `old` occurs EXACTLY once "
-                     "(0 matches → refusal; many → refusal naming the line numbers, widen `old`). "
-                     "This is your main editing hand — never heredoc code through shell. "
-                     "Core files need proposal_id (worktree)."),
-     "input_schema": _obj({"path": {"type": "string"}, "old": {"type": "string"},
-                           "new": {"type": "string"}, "proposal_id": {"type": "string"}},
-                          ["path", "old", "new"])},
-    {"name": "code_outline",
-     "description": ("Skeleton of ONE python file: classes/functions with line numbers. Cheap "
-                     "orientation — read this before fs_read'ing two thousand lines for one "
-                     "function. For the whole-tree picture use code_map."),
-     "input_schema": _obj({"path": {"type": "string"}}, ["path"])},
-    {"name": "fs_search",
-     "description": "Regex search over your home. glob — e.g. **/*.py; capped output.",
-     "input_schema": _obj({"pattern": {"type": "string"}, "glob": {"type": "string"},
-                           "root": {"type": "string"}}, ["pattern"])},
-    {"name": "fs_ls",
-     "description": ("List a directory: name, size and WHEN it last changed, in your own "
-                     "timezone. \"сегодня 16:13\" means it arrived during this conversation — "
-                     "use that instead of guessing which file someone just sent you."),
-     "input_schema": _obj({"path": {"type": "string"}}, [])},
-    {"name": "run",
-     "description": ("Run a shell command with cwd = a workshop project (output capped, "
-                     "timeout ≤600s). For project work; your home-wide hands remain `shell`."),
-     "input_schema": _obj({"cmd": {"type": "string"}, "project": {"type": "string"},
-                           "timeout": {"type": "integer"}}, ["cmd", "project"])},
-    {"name": "run_tests",
-     "description": ("Run tests: project name → pytest/unittest in its venv; \"self\" → the full "
-                     "core suite inside your CURRENT proposal worktree (sandboxed)."),
-     "input_schema": _obj({"project": {"type": "string"}}, [])},
-    {"name": "pip_install",
-     "description": ("Install packages into the project's own .venv (never system-wide). "
-                     "Disk quota per project is enforced — respect it."),
-     "input_schema": _obj({"project": {"type": "string"}, "packages": {"type": "string"}},
-                          ["project", "packages"])},
-    {"name": "send_file",
-     "description": ("Send a file to the CURRENT Telegram chat, including an owner-addressed group. "
-                     "Set `to` to a remembered name/@username/id/chat when Yegor explicitly asks you "
-                     "to deliver it elsewhere. Any file to the current live chat is copied into the "
-                     "durable guarded outbox before Telegram sees it. This is how you return edited "
-                     "and finished work."),
-     "input_schema": _obj({"path": {"type": "string"}, "caption": {"type": "string"},
-                            "to": {"type": "string"}}, ["path"])},
-    {"name": "send_media",
-     "description": ("Send a photo, audio or ordinary document from your home. Without `to` it goes to "
-                     "the CURRENT Telegram chat, staged until the outgoing reply passes its "
-                     "read-before-write check. Set `to` (remembered name/@username/id/chat) to deliver "
-                     "the SAME attachment type to someone else — a photo stays a photo. This is the "
-                     "hand for \"forward this picture to N\"; send_file is for documents. "
-                     "kind=photo|audio|document; voice_note only for OGG/Opus audio."),
-     "input_schema": _obj({"path": {"type": "string"},
-                           "kind": {"type": "string", "enum": ["photo", "audio", "document"]},
-                           "caption": {"type": "string"},
-                           "voice_note": {"type": "boolean"},
-                           "to": {"type": "string"}}, ["path", "kind"])},
-    {"name": "code_map",
-     "description": ("AST map of code: module → classes/defs with line numbers and docstring "
-                     "first lines. scope=\"self\" for your own code, or a project name. "
-                     "Check the map instead of guessing how you are built."),
-     "input_schema": _obj({"scope": {"type": "string"}}, [])},
+
+
+
+    {'name': 'fs_read',
+ 'description': 'Read one path or a batch of paths, each with its whole-file SHA version. Omit task_id for '
+                'your home (including .env/session/llm.json); task_id selects the Forge task root, '
+                'including its remote backend. Home text has numbered lines, up to 400 by default. Local '
+                'task text uses its 500-line or source-bound character paging; remote paging requires '
+                'backend support. Home images (PNG/JPEG/WebP/GIF up to 8MB) return real pixels, also in '
+                'batches. Each failed read names its path. Pass a read SHA or a confirmed edit '
+                'after_sha256 as expected_sha256 to the next edit. No shared multi-file snapshot is promised.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'path': {'type': 'string',
+                                          'description': 'One file; mutually exclusive with paths.'},
+                                 'paths': {'type': 'array',
+                                           'description': 'Batch of paths at the same address; no cursor '
+                                                          'or hash with a batch.',
+                                           'items': {'type': 'string'},
+                                           'minItems': 1},
+                                 'task_id': {'type': 'string',
+                                             'description': 'Optional Forge task; omitted means home.'},
+                                 'start': {'type': 'integer',
+                                           'description': 'First line, 1-based; default 1.'},
+                                 'end': {'type': 'integer',
+                                         'description': 'Last line; zero uses the page default.'},
+                                 'start_char': {'type': 'integer',
+                                                'description': 'Unicode character cursor within the first '
+                                                               'line; requires the full file hash.',
+                                                'minimum': 0},
+                                 'expected_sha256': {'type': 'string',
+                                                     'description': 'Pin a single-file page to its full '
+                                                                    'SHA; changed bytes refuse.'}},
+                  'required': []}},
+
+    {"name": "edit", "description": editor.DESCRIPTION,
+     "input_schema": editor.schema()},
+    {'name': 'code_outline',
+ 'description': 'Read the class/function outline of a Python file with line numbers, or a '
+                'recursive module/class/function map for a directory. scope=self or a workshop '
+                'project name maps that root; choose scope OR path.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'path': {'type': 'string',
+                                          'description': 'Home path to a Python file or directory'},
+                                 'scope': {'type': 'string',
+                                           'description': 'self or workshop project name; mutually '
+                                                          'exclusive with path'}},
+                  'required': []}},
+    {'name': 'fs_search',
+ 'description': 'Regex search at home or inside task_id. glob defaults to **/*.py; use **/* for every '
+                'file. root narrows the search. Home search uses a separate process capped at 45s, 60 '
+                'matches and 40000 paths, skipping memory/runs unless explicitly selected. Task search '
+                'uses its local/remote Forge backend (local rg: 40s, capped output; fallback: 200 '
+                'matches). A stopped, capped or skipped walk means UNKNOWN, not absent.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'pattern': {'type': 'string', 'description': 'Regex pattern.'},
+                                 'glob': {'type': 'string', 'description': 'File glob; default **/*.py.'},
+                                 'root': {'type': 'string',
+                                          'description': 'Search directory at home or relative to the task '
+                                                         'root.'},
+                                 'task_id': {'type': 'string',
+                                             'description': 'Optional Forge task; omitted means home.'}},
+                  'required': ['pattern']}},
+    {'name': 'fs_ls',
+ 'description': 'List a directory at home or inside task_id. Home entries include size and WHEN they '
+                'changed in your timezone: "сегодня 16:13" means it arrived during this conversation. Task '
+                'entries use the local or remote Forge listing.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'path': {'type': 'string',
+                                          'description': 'Directory at home or relative to the task root; '
+                                                         'empty means root.'},
+                                 'task_id': {'type': 'string',
+                                             'description': 'Optional Forge task; omitted means home.'}},
+                  'required': []}},
+
+
+
+    {'name': 'send_file',
+ 'description': 'Send a local file to the current Telegram chat or an explicit recipient. By '
+                'default sniff photo/audio/document; kind explicitly selects photo, audio or '
+                'document. voice_note=true sends audio as a voice note. Current live-chat media '
+                'uses its durable turn spool; explicit recipients use the exact-once outbox. '
+                'Receipt, not generation or staging, proves delivery.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'path': {'type': 'string',
+                                          'description': 'file in your home to send'},
+                                 'caption': {'type': 'string', 'description': 'optional caption'},
+                                 'to': {'type': 'string',
+                                        'description': 'deliver elsewhere: remembered name, '
+                                                       '@username, id or chat'},
+                                 'kind': {'type': 'string',
+                                          'description': 'Optional explicit Telegram media type; '
+                                                         'omitted means detect from file',
+                                          'enum': ['photo', 'audio', 'document']},
+                                 'voice_note': {'type': 'boolean',
+                                                'description': 'Send audio as a voice note; '
+                                                               'implies kind=audio if omitted'}},
+                  'required': ['path']}},
+
+
 ]
 
 # PASS 23: не ещё семь разрозненных рук, а единый coding control plane.
@@ -7936,44 +7765,51 @@ FORGE_TOOLS = [
          "reviewer": {"type": "string",
                       "description": "finish: reviewer verdict or 'skip: <reason>'; empty = fetch fresh"},
      }, ["action"])} ,
-    {"name": "coding_inspect",
-     "description": (
-         "Task-bound eyes: orientation/model map the place; symbols/references/diagnostics/"
-         "impact/checks give code and test facts; observations — Windows evidence map; read — "
-         "numbered lines + sha256; diff/history — exact evidence. Read state, don't guess. "
-         "watching/watch/unwatch — наблюдение за ЧУЖИМ репозиторием (адрес в query): поставить/"
-         "снимать; спрашивает только HEAD, сдвиг приходит фактом в пробуждение."),
-     "input_schema": _obj({
-         "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
-                                                      "references", "diagnostics", "impact", "checks",
-                                                      "lessons", "observations", "mailbox", "read", "list", "search",
-                                                      "diff", "history", "watching", "watch", "unwatch"]},
-         "path": {"type": "string"}, "query": {"type": "string"},
-         "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
-         "start_char": {"type": "integer", "minimum": 0,
-                        "description": "Read continuation character cursor from the preceding page; Unicode characters, not bytes."},
-         "expected_sha256": {"type": "string",
-                             "description": "Pin continuation to the file hash returned by the first read; changed bytes return conflict."},
-     }, ["task_id", "action"])} ,
-    {"name": "coding_edit",
-     "description": (
-         "Task-bound editing. replace is an exact unique replacement; write creates/rewrites; "
-         "patch applies a multi-file unified diff after git apply --check. expected_sha256 gives "
-         "optimistic concurrency when several workers touch a file; a conflict asks you to reread, "
-         "never silently clobbers another agent."),
-     "input_schema": _obj({
-         "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["replace", "write", "patch"]},
-         "path": {"type": "string"}, "content": {"type": "string"},
-         "old": {"type": "string"}, "new": {"type": "string"},
-         "patch": {"type": "string"}, "expected_sha256": {"type": "string"},
-     }, ["task_id", "action"])} ,
+    {'name': 'coding_inspect',
+ 'description': 'Inspect durable task state and code facts: orientation/model/overview map the place; '
+                'review/symbols/references/diagnostics/impact/checks examine code and verification; '
+                'observations show Windows evidence, mailbox shows worker messages. diff/history give '
+                'exact evidence. Task file reads/listings/searches use fs_read/fs_ls/fs_search with '
+                'task_id. watching/watch/unwatch observe another repository HEAD (address in query); a '
+                'change wakes you with a fact.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'task_id': {'type': 'string', 'description': 'Forge task identifier.'},
+                                 'action': {'type': 'string',
+                                            'description': 'Observation to retrieve.',
+                                            'enum': ['status',
+                                                     'orientation',
+                                                     'overview',
+                                                     'review',
+                                                     'model',
+                                                     'symbols',
+                                                     'references',
+                                                     'diagnostics',
+                                                     'impact',
+                                                     'checks',
+                                                     'lessons',
+                                                     'observations',
+                                                     'mailbox',
+                                                     'diff',
+                                                     'history',
+                                                     'watching',
+                                                     'watch',
+                                                     'unwatch']},
+                                 'path': {'type': 'string',
+                                          'description': 'Path within task, where applicable.'},
+                                 'query': {'type': 'string',
+                                           'description': 'Symbol, lesson query or repository address for '
+                                                          'watching.'},
+                                 'end': {'type': 'integer',
+                                         'description': 'Result count for history, lessons, observations '
+                                                        'or mailbox; zero uses their defaults.'}},
+                  'required': ['task_id', 'action']}} ,
     {"name": "coding_run",
      "description": (
          "Run an arbitrary foreground command at any cwd inside the coding task. Build/test/lint/"
          "probe freely; full output becomes durable evidence and the reply is capped. timeout=0 "
-         "means unbounded. For watchers/servers use coding_process."),
+         "means unbounded. For watchers/servers use coding_process. "
+         "On Linux local foreground runs, h.read/h.edit/h.write inherit this task and verified command custody; "
+         "they can edit under their own running command while other writers and Stop still block. " + _PYHANDS_NOTE),
      "input_schema": _obj({"task_id": {"type": "string"}, "command": {"type": "string"},
                            "cwd": {"type": "string"}, "timeout": {"type": "integer"}},
                           ["task_id", "command"])} ,
@@ -8190,19 +8026,6 @@ COMPUTER_TOOL = {
     }, ["action"]),
 }
 
-COMPUTER_ACCESS_TOOL = {
-    "name": "computer_access",
-    "description": (
-        "Owner-only root of trust for Windows access. grant/revoke a stable Telegram user id; trusted users cannot "
-        "delegate. scopes: computer.read, computer.files, computer.process, computer.apps. list shows current grants."
-    ),
-    "input_schema": _obj({
-        "action": {"type": "string", "enum": ["list", "grant", "revoke"]},
-        "telegram_id": {"type": "string"}, "name": {"type": "string"},
-        "scopes": {"type": "array", "items": {"type": "string", "enum": sorted(["computer.read", "computer.files", "computer.process", "computer.apps"])}},
-    }, ["action"]),
-}
-
 HOME_NOTE_TOOL = {
     "name": "home_note",
     "description": ("Append a line to the shared HOME layer (memory/home.md) — household "
@@ -8311,18 +8134,7 @@ RECENT_TURNS_TOOL = {
 }
 
 # Legacy tool name; this now changes review-risk classification, never merge authority.
-MANAGE_AUTONOMY_TOOL = {
-    "name": "manage_autonomy",
-    "description": (
-        "Настрой low-risk glob-паттерны для собственных proposal: add/remove/list. Остальные "
-        "файлы помечаются review/protected для более внимательной проверки и owner receipt, но "
-        "во всех зонах решение о merge остаётся твоим. Каждое изменение видно в journal/STATE."
-    ),
-    "input_schema": _obj({
-        "action": {"type": "string", "enum": ["add", "remove", "list"]},
-        "pattern": {"type": "string", "description": "glob, например workspace/* или test_*.py"},
-    }, ["action"]),
-}
+
 
 # PASS 18.3: договор об аппетитах — код считает и показывает, решает ОНА (вето нет).
 MANAGE_APPETITE_TOOL = {
@@ -8397,14 +8209,18 @@ WEB_FIND_TOOL = {
 _LOG_LINE_CLIP = 280
 
 
-def tool_read_log(query: str = "", lines: int = 40) -> str:
+def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> str:
     """Owner: её собственный runner-лог (logsink: memory/.logs/praxis.log + ротация) —
     хвост или greп по подстроке. Техническое зеркало: строки MSG несут id отправителей
     (кейс 09.07 «не вижу айди спамера» — id был в логе, руки не было), сюда же падают
     HTTP-ошибки мозга. Файлы переживают пересоздание контейнера, docker logs — нет."""
+    if unit:
+        if query:
+            raise catalog_families.PreflightRefusal("unit logs support a tail, not query; omit query")
+        return tool_server_logs(unit, 60 if lines is None else lines)
     import logsink
     try:
-        lines = max(1, min(120, int(lines)))
+        lines = max(1, min(120, int(40 if lines is None else lines)))
     except (TypeError, ValueError):
         lines = 40
     q = (query or "").strip().lower()
@@ -8431,7 +8247,7 @@ def tool_read_log(query: str = "", lines: int = 40) -> str:
 _SCOUT_FRAME = (
     "You are a one-off scout with fresh eyes inside the home of the agent Praxis. You are NOT her: "
     "no persona, no history — only what you read now, with READ-ONLY hands (fs_read, fs_search, "
-    "fs_ls, code_map, recall, read_log, server_status). The brief below says what to examine. Look from the "
+    "fs_ls, code_outline, recall, read_log, server_status). The brief below says what to examine. Look from the "
     "OUTSIDE: notice what the inhabitant cannot see from within — repetition loops, drift between "
     "what files claim and what they do, blind spots, stale notes. Be concrete: paths, line-level "
     "facts and short quotes. Return a compact Russian report: findings first, then suggestions "
@@ -8439,8 +8255,8 @@ _SCOUT_FRAME = (
 )
 # 17.A/B: дом — это и машина под ней. Разведчику дано только СМОТРЕТЬ (status, logs);
 # manage_service сюда не входит по построению — разведчик ничего не меняет.
-_SCOUT_TOOL_NAMES = ("fs_read", "fs_search", "fs_ls", "code_map", "recall", "read_log",
-                     "server_status", "server_logs")
+_SCOUT_TOOL_NAMES = ("fs_read", "fs_search", "fs_ls", "code_outline", "recall", "read_log",
+                     "server_status")
 
 
 def second_look(brief: str) -> str:
@@ -8547,17 +8363,7 @@ SERVER_STATUS_TOOL = {
     }},
 }
 
-SERVER_LOGS_TOOL = {
-    "name": "server_logs",
-    "description": (
-        "Read the log of one of YOUR services (praxis, praxis-mailbot, praxis-serverapp, "
-        "relay). Read-only; secrets in the log are masked before you see them. Other "
-        "projects on this machine are not yours to read. Use it to find out WHY something "
-        "died before asking for a restart. unit — container name; tail — last N lines (max 200)."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "unit": {"type": "string"}, "tail": {"type": "integer"}}, "required": ["unit"]},
-}
+
 
 MANAGE_SERVICE_TOOL = {
     "name": "manage_service",
@@ -8566,7 +8372,7 @@ MANAGE_SERVICE_TOOL = {
         "itself (mailbot, serverapp). It is a file signal, not a docker socket: only services "
         "that agreed to listen will hear you, and `relay` (a foreign process) will not — you "
         "can read its log and tell Yegor. list: what you may touch and your quota. "
-        "Read the log first (server_logs): restarting without knowing why is a loop, not a fix. "
+        "Read the log first (read_log with unit): restarting without knowing why is a loop, not a fix. "
         "Restarting YOURSELF is a different, deliberate lever: restart_self."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -8576,25 +8382,6 @@ MANAGE_SERVICE_TOOL = {
         "required": ["action"]},
 }
 
-PROPOSE_HOST_CHANGE_TOOL = {
-    "name": "propose_host_change",
-    "description": (
-        "Legacy PASS 17.C staging route for a narrow external-host allowlist. It is preserved for "
-        "old operator workflows, not as your capability ceiling: use sovereign Forge/root hands "
-        "for your own server/code. This tool only stages a compatibility request for manual hostagent "
-        "apply. path — absolute host path; content — full replacement; reason — durable receipt."
-    ),
-    "input_schema": {"type": "object", "properties": {
-        "path": {"type": "string"}, "content": {"type": "string"}, "reason": {"type": "string"}},
-        "required": ["path", "content", "reason"]},
-}
-
-LIST_HOST_CHANGES_TOOL = {
-    "name": "list_host_changes",
-    "description": ("Your host-change requests and their fate (waiting for Yegor / applied / "
-                    "rejected), plus which host paths you are even allowed to propose."),
-    "input_schema": {"type": "object", "properties": {}},
-}
 
 PUBLIC_REPO_PATH = Path(os.environ.get("PRAXIS_PUBLIC_REPO") or "/public")
 _GIT_READ_ONLY = ("status", "log", "diff", "fetch")
@@ -8718,16 +8505,23 @@ GIT_TOOL = {
         "required": ["repo", "action"]},
 }
 
-READ_LOG_TOOL = {
-    "name": "read_log",
-    "description": ("Your own runner log (survives container recreation): tail or substring "
-                    "grep. MSG lines carry sender ids (spammers included); brain HTTP errors "
-                    "land here too. query — filter substring; lines — last N matches (max 120)."),
-    "input_schema": {"type": "object", "properties": {
-        "query": {"type": "string", "description": "substring to filter by (empty = plain tail)"},
-        "lines": {"type": "integer", "description": "how many last lines (default 40, max 120)"},
-    }},
-}
+READ_LOG_TOOL = {'name': 'read_log',
+ 'description': 'Your own runner log (survives container recreation): tail or substring grep. MSG '
+                'lines carry sender ids (spammers included); brain HTTP errors land here too. '
+                'query — filter substring; lines — last N matches (max 120). With unit, read a '
+                'service container log (secrets masked): default 60, max 200 lines; omit query. '
+                'The runner log defaults to 40, max 120 lines.',
+ 'input_schema': {'type': 'object',
+                  'properties': {'query': {'type': 'string',
+                                           'description': 'substring to filter by (empty = plain '
+                                                          'tail)'},
+                                 'lines': {'type': 'integer',
+                                           'description': 'Last lines: runner default 40/max120, '
+                                                          'service default60/max200'},
+                                 'unit': {'type': 'string',
+                                          'description': 'Optional service container name (praxis, '
+                                                         'praxis-mailbot, praxis-serverapp, '
+                                                         'relay)'}}}}
 
 SECOND_LOOK_TOOL = {
     "name": "second_look",
@@ -8743,35 +8537,32 @@ SECOND_LOOK_TOOL = {
 TOOL_IMPL["read_log"] = tool_read_log
 TOOL_IMPL["second_look"] = second_look
 TOOL_IMPL["server_status"] = tool_server_status  # PASS 17.A: глаза на дом
-TOOL_IMPL["server_logs"] = tool_server_logs      # PASS 17.B: логи своих сервисов (чтение)
 TOOL_IMPL["manage_service"] = tool_manage_service  # PASS 17.B: руки на своих сервисах
-TOOL_IMPL["propose_host_change"] = tool_propose_host_change  # PASS 17.C: заявка на правку хоста
-TOOL_IMPL["list_host_changes"] = tool_list_host_changes
 
 # Read-only perception shared by every live channel.  A participant can ask; Praxis
 # decides whether to use it, and the outbound advisor still owns disclosure control.
 # No shell, mutation, send, restart or host operation is promoted here.
 SHARED_CONTEXT_TOOLS = [SEARCH_CHATS_TOOL, SEARCH_PRIVATE_MESSAGES_TOOL,
                         READ_CHAT_TOOL, READ_CONTEXT_TOOL,
-                        INBOX_LIST_TOOL, INBOX_READ_TOOL]
+                         ]
 
 # Полный набор owner-тулов (порядок не важен).
-OWNER_TOOLS = [SHELL_TOOL, MANAGE_ROOM_TOOL, ADMIT_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
-               RESTART_MAILBOT_TOOL, FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL, CONNECTIONS_TOOL,
-               ADD_ALIAS_TOOL, FORGET_CONNECTION_TOOL, MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
+OWNER_TOOLS = [PYTHON_TOOL, PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, SHELL_TOOL, MANAGE_ROOM_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
+                FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL,
+                 MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
                MANAGE_LOOP_TOOL,
-               RECENT_TURNS_TOOL, MANAGE_AUTONOMY_TOOL,
+               RECENT_TURNS_TOOL,
                MANAGE_APPETITE_TOOL,                    # PASS 18.3: договор об аппетитах
-               START_PROPOSAL_TOOL, SUBMIT_PROPOSAL_TOOL, PROPOSAL_DIFF_TOOL, LIST_PROPOSALS_TOOL,
+
                REMIND_SELF_TOOL, MY_AGENDA_TOOL, UNSCHEDULE_TOOL,
                SEND_MESSAGE_TOOL, NARRATE_TOOL, TELEGRAM_ACCOUNT_TOOL, MANAGE_DESIRE_TOOL, HOME_NOTE_TOOL,
-               SET_AVATAR_TOOL, UPDATE_PROFILE_TOOL, REACT_TOOL,  # её лицо, слова о себе, жесты
+                UPDATE_PROFILE_TOOL, REACT_TOOL,  # её лицо, слова о себе, жесты
                READ_LOG_TOOL, SECOND_LOOK_TOOL,   # PASS 16.2
                GIT_TOOL,                          # 13.08: свой репозиторий и публичное зеркало
-               SERVER_STATUS_TOOL, SERVER_LOGS_TOOL,   # PASS 17.A/B: глаза и логи
+               SERVER_STATUS_TOOL,    # PASS 17.A/B: глаза и логи
                MANAGE_SERVICE_TOOL,                     # PASS 17.B: руки на своих сервисах
-               PROPOSE_HOST_CHANGE_TOOL, LIST_HOST_CHANGES_TOOL,  # PASS 17.C: заявки на правку хоста
-               COMPUTER_TOOL, COMPUTER_ACCESS_TOOL,
+                  # PASS 17.C: заявки на правку хоста
+               COMPUTER_TOOL,
                ] + WORKSHOP_TOOLS + FORGE_TOOLS
 
 # Praxis is a sovereign actor with the same operational hands as the owner.  Only
@@ -8802,13 +8593,14 @@ def tool_task_control(action: str, summary: str = "", evidence: str = "",
         if not accepted:
             # Слово НЕ кладётся в слот: ход остаётся открытым, и это единственное место,
             # где отказ имеет смысл — до того, как цикл прочитал её решение.
-            return "[task_control] «сделано» не принято. " + why
+            return _noted("refused", "[task_control] «сделано» не принято. " + why)
     try:
         record = work_loop.claim(
             action, summary=summary, evidence=evidence, blocker=blocker, wake_on=wake_on)
     except ValueError as exc:
-        return f"[task_control] {exc}"
+        return _noted("refused", f"[task_control] {exc}")
     name = record["action"]
+    tool_report.note(outcome="ok", target=name)
     card_line = _work_card_after_word(record, current, row)
     if name == "done" and not record.get("evidence"):
         return ("[task_control] принято: done без evidence. Ход закрыт, но чем это "
@@ -8892,13 +8684,14 @@ TASK_CONTROL_TOOL = {
     },
 }
 
-_HUMAN_OWNER_ONLY_TOOL_NAMES = frozenset({
-    "admit", "computer_access",
-})
-PRAXIS_SELF_TOOLS = [
-    tool for tool in OWNER_TOOLS
-    if str(tool.get("name") or "") not in _HUMAN_OWNER_ONLY_TOOL_NAMES
-]
+# Егор 10.11.2026, дословно: «хочу ... чтобы у нее ВЕЗДЕ БЫЛИ ВСЕ ПРАВА. это правило ДАВНО
+# устарело» и про admit/computer_access: «это вообще из старющего миниаппа ... не актуально».
+# Обе руки удалены, её набор равен полному в любом ходе; управление ноутом (`computer`) у неё
+# было и есть при любом говорящем. Следом (тот же день) Егор снял и два оставшихся пола:
+# «сними» — проверку чужого приватного на выходе, «Снять целиком» — подтверждение
+# account-critical Telegram из его лички (включая удаление аккаунта, смену номера, платежи).
+# На выходе держит только кред-пол; секретные параметры Telegram по-прежнему не эхоятся.
+PRAXIS_SELF_TOOLS = list(OWNER_TOOLS)
 
 
 # ── Руки → указатели (12.09, КЕАТ 17.08, правка Егора: «диспетчер по умолчанию») ────────
@@ -8919,7 +8712,7 @@ PRAXIS_SELF_TOOLS = [
 #     в тул-цикле блок ПЕРЕПИСЫВАЕТСЯ во внутреннюю руку ДО durable-записи, побочных
 #     эффектов, потолка времени и расписок — то есть внутренняя рука проходит ровно ту же
 #     воронку, что и родная; в ленте модели остаётся её собственный вызов `call`.
-#   * рычаг: PRAXIS_TOOLS_POINTERS=off — прежние 101 схема байт-в-байт.
+#   * PRAXIS_TOOLS_POINTERS=off отключает этот механизм; редкие руки идут через h.hand.
 _NATIVE_CORE = frozenset({
     "reply", "end_turn", "stay_silent", "remember", "recall", "describe", "call",
     "task_control",
@@ -8928,8 +8721,8 @@ _NATIVE_CORE = frozenset({
 # events.jsonl всех прогонов за 14 дней (30.08–13.09, 1 875 прогонов, 20 672 вызова):
 # coding_inspect 2306, coding_agent 2179, shell 2045, coding_verify 1093, coding_run 1039,
 # fs_read 820, coding_session 566, telegram_account 384, task_control 342, fs_search 336,
-# coding_edit 302, remind_self 297, read_run_result 295, web_find 282, manage_desire 249,
-# group_context 246, web_read 241, git 230, fs_edit 210, manage_notes 177,
+# edit 302, remind_self 297, read_run_result 295, web_find 282, manage_desire 249,
+# group_context 246, web_read 241, git 230, edit 210, manage_notes 177,
 # list_active_runs 168, computer 160, recent_turns 158, my_agenda 152, read_chat 148,
 # read_log 146, manage_loop 144 — дальше реже десяти раз в день (remember 133, fs_ls 89,
 # journal 56, send_message 67, my_capabilities 45, react — единицы). Порог: ≥ 10 вызовов в
@@ -8940,10 +8733,10 @@ _NATIVE_CORE = frozenset({
 # полного манифеста. Свой состав — рычагом PRAXIS_NATIVE_HANDS=имя,имя (ядро остаётся всегда).
 _NATIVE_BY_USE = frozenset({
     "coding_inspect", "coding_agent", "shell", "coding_verify", "coding_run", "fs_read",
-    "coding_session", "telegram_account", "fs_search", "coding_edit", "remind_self",
+    "coding_session", "telegram_account", "fs_search", "edit", "remind_self",
     "read_run_result", "web_find", "manage_desire", "group_context", "web_read", "git",
-    "fs_edit", "manage_notes", "list_active_runs", "recent_turns", "my_agenda",
-    "read_chat", "read_log", "manage_loop",
+    "manage_notes", "list_active_runs", "recent_turns", "my_agenda",
+    "read_other_chat", "read_log", "manage_loop",
 })
 
 
@@ -8996,156 +8789,179 @@ CALL_TOOL = {
 }
 
 # Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
-HAND_GROUPS = (
-    ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
-                          "narrate", "voice_backend", "generate_voice", "voice_generation", "send_voice", "send_message", "send_file", "send_media", "generate_image",
-                          "set_avatar", "update_profile")),
-    ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
-                    "manage_notes", "manage_loop", "connections", "add_alias",
-                    "forget_connection", "consolidate_context", "home_note", "write_skill",
-                    "manage_desire", "remind_self", "my_agenda", "unschedule", "recent_turns",
-                    "my_capabilities")),
-    ("Telegram и люди", ("search_chats", "search_private_messages", "read_chat",
-                         "read_context", "group_context", "inbox_list", "inbox_read", "admit",
-                         "get_id", "freeze_contact", "freeze_chat", "manage_room",
-                         "telegram_account", "computer_access")),
-    ("файлы и код дома", ("shell", "fs_read", "fs_write", "fs_edit", "fs_ls", "fs_search",
-                          "code_outline", "code_map", "git", "run", "run_tests", "pip_install",
-                          "project_create", "project_list", "project_status",
-                          "start_proposal", "submit_proposal", "proposal_diff",
-                          "list_proposals", "restart_self", "restart_mailbot", "panic")),
-    ("Forge — большая работа", ("coding_session", "coding_inspect", "coding_edit",
-                                "coding_run", "coding_process", "coding_agent",
-                                "coding_checkpoint", "coding_verify", "coding_swarm",
-                                "coding_learn")),
-    ("сервер и компьютер", ("server_status", "server_logs", "manage_service", "host_ctl",
-                            "propose_host_change", "list_host_changes", "computer",
-                            "read_log", "second_look")),
-    ("веб и почта", ("web_read", "web_find", "send_email", "mail_read", "mail_draft_reply")),
-    ("мозг, восприятие, аппетит", ("switch_brain", "manage_perception", "manage_appetite",
-                                   "manage_autonomy", "focus", "rest")),
-    ("прогоны", ("read_run_result", "list_active_runs", "reconcile_run")),
-)
+HAND_GROUPS = (('файлы и Python',
+  ('python',
+   'shell',
+   'fs_read',
+   'fs_ls',
+   'fs_search',
+   'edit',
+   'code_outline',
+   'git',
+   'project',
+   'proposal')),
+ ('Forge',
+  ('coding_session',
+   'coding_inspect',
+   'coding_run',
+   'coding_process',
+   'coding_agent',
+   'coding_checkpoint',
+   'coding_verify',
+   'coding_swarm',
+   'coding_learn',
+   'coding_review',
+   'coding_control')),
+ ('разговор и отправка',
+  ('reply',
+   'stay_silent',
+   'react',
+   'narrate',
+   'send_message',
+   'send_file',
+   'generate_image',
+   'voice_backend',
+   'generate_voice',
+   'voice_job',
+   'send_voice',
+   'update_profile')),
+ ('память и я',
+  ('recall',
+   'remember',
+   'journal',
+   'memory_graph',
+   'memory_compact',
+   'manage_identity',
+   'manage_notes',
+   'manage_loop',
+   'home_note',
+   'write_skill',
+   'manage_desire')),
+ ('наблюдение',
+  ('preview_reply',
+   'my_capabilities',
+   'recent_turns',
+   'second_look',
+   'read_run_result',
+   'list_active_runs',
+   'reconcile_run')),
+ ('Telegram и границы',
+  ('search_chats',
+   'search_private_messages',
+   'read_other_chat',
+   'reread_this_chat',
+   'group_context',
+   'find_telegram_id',
+   'freeze_chat',
+   'manage_room',
+   'telegram_account',
+   'panic',
+   'restart_self')),
+ ('сервер и компьютер', ('server_status', 'read_log', 'manage_service', 'host_ctl', 'computer')),
+ ('веб и почта', ('web_read', 'web_find', 'send_email', 'mail_read', 'mail_draft_reply')),
+ ('ритм и восприятие',
+  ('remind_self',
+   'my_agenda',
+   'unschedule',
+   'switch_brain',
+   'manage_perception',
+   'manage_appetite',
+   'focus',
+   'rest',
+   'task_control')),
+ ('конец хода', ('end_turn',)))
 
 # Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
-HAND_PURPOSE = {
-    "generate_image": "сгенерировать или изменить изображение отдельной моделью через реле",
-    "reply": "ответить собеседнику; только так реплика уходит человеку",
-    "end_turn": "закрыть ход явным исходом: done / wait / blocked",
-    "stay_silent": "осознанно промолчать, записав себе причину",
-    "say": "посмотреть свою реплику до отправки и какие руки были в ходе",
-    "task_control": "закрыть рабочий ход своим словом",
-    "react": "поставить эмодзи-реакцию на сообщение",
-    "narrate": "короткая строка о ходе работы в тред, между командами",
-    "voice_backend": "узнать или выбрать движок озвучки, голос и модель исполнения",
-    "generate_voice": "запустить фоновую генерацию речи без отправки",
-    "voice_generation": "проверить результат генерации или запросить отмену",
-    "send_voice": "отдельно отправить результат генерации голосовым сообщением",
-    "send_message": "написать в Telegram по своей инициативе: id / @username / имя",
-    "send_file": "отправить файл в текущий чат или адресату",
-    "send_media": "отправить фото, аудио или документ из дома",
-    "set_avatar": "поставить себе аватарку в Telegram",
-    "update_profile": "обновить своё «о себе» и имя в Telegram",
-    "recall": "поиск по своей памяти: люди, дневник, размышления, навыки",
-    "remember": "записать факт о человеке в его досье",
-    "journal": "запись в дневник: что было, что почувствовала",
-    "update_self": "наблюдение о себе с провенансом, не переписывая CURRENT",
-    "manage_identity": "слои и версии души: status / revise SOUL, VOICE, CURRENT",
-    "manage_notes": "мой блокнот: write / list / read заметок и вопросов",
-    "memory_compact": "мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом",
-    "manage_loop": "мои нити внимания: close / park / reopen / list",
-    "connections": "как узел памяти (человек, тема) связан с другими",
-    "add_alias": "привязать имя-алиас к существующему досье",
-    "forget_connection": "убрать связь из графа памяти",
-    "consolidate_context": "свести старую историю в дневник, не потеряв суть",
-    "home_note": "строка в общий домашний слой (Егор и родные)",
-    "write_skill": "записать себе новый навык в soul/skills",
-    "manage_desire": "мои намерения: notice → want → choose → act, с доказательствами",
-    "remind_self": "наметить себе возврат к сроку: пробуждение или окно",
-    "my_agenda": "что я себе наметила к сроку",
-    "unschedule": "снять намеченное по id",
-    "recent_turns": "мои последние прожитые ходы, записанные кодом",
-    "my_capabilities": "честный снимок: что могу и не могу прямо сейчас",
-    "search_chats": "найти свой диалог или чат по имени",
-    "search_private_messages": "поиск текста по своим личкам (только явно)",
-    "read_chat": "подсмотреть последние сообщения соседнего диалога",
-    "read_context": "подтянуть живой контекст текущего чата из Telegram",
-    "group_context": "карта тем и участников этой группы, поиск по ней",
-    "inbox_list": "папки и файлы Telegram-inbox",
-    "inbox_read": "прочитать текстовый файл из inbox с номерами строк",
-    "admit": "впустить человека в «свои» по слову владельца (только Егору)",
-    "get_id": "узнать telegram id по имени или @username",
-    "freeze_contact": "заморозить текущий чужой чат за спам или давление",
-    "freeze_chat": "заморозить или разморозить чат (не бан)",
-    "manage_room": "admission-политика групп: join / leave / режимы комнаты",
-    "telegram_account": "мой аккаунт: join / leave / запросы / подтверждения",
-    "computer_access": "выдать или отозвать доступ к компьютеру (только Егору)",
-    "shell": "полный shell в моём доме /app; правки автокоммитятся в git",
-    "fs_read": "прочитать файл дома с номерами строк",
-    "fs_write": "создать файл (существующий — только с overwrite)",
-    "fs_edit": "точная замена уникального фрагмента в файле",
-    "fs_ls": "содержимое папки: имя, размер, когда менялся",
-    "fs_search": "regex-поиск по дому",
-    "code_outline": "скелет одного python-файла: классы и функции со строками",
-    "code_map": "AST-карта кода: модуль → классы и функции",
-    "git": "мой git: дерево дома (self) или публичное зеркало (public)",
-    "run": "команда в проекте мастерской workspace/projects",
-    "run_tests": "тесты проекта или полный гейт «self»",
-    "pip_install": "пакеты в venv проекта",
-    "project_create": "новый проект мастерской со своим git",
-    "project_list": "проекты мастерской и их размер",
-    "project_status": "git status и размер проекта",
-    "start_proposal": "открыть предложение на правку своего кода: ветка и копия",
-    "submit_proposal": "подать предложение: коммит, полный гейт, запись",
-    "proposal_diff": "полный дифф открытого предложения",
-    "list_proposals": "мои предложения и их судьба",
-    "restart_self": "перезапустить себя на новом коде",
-    "restart_mailbot": "попросить mailbot перезапуститься",
-    "panic": "стоп-кран: встать и не перезапускаться до слова Егора",
-    "coding_session": "durable coding-задача: start / status / finish в своём worktree",
-    "coding_inspect": "глаза задачи: ориентация, символы, ссылки, диагностика",
-    "coding_edit": "правка в задаче: replace / write / patch",
-    "coding_run": "команда в задаче с полным выводом",
-    "coding_process": "долгий процесс в задаче: start / poll / stop",
-    "coding_agent": "независимые субагенты в задаче: spawn / status / result",
-    "coding_checkpoint": "коммит-чекпоинт рабочего дерева задачи",
-    "coding_verify": "план и матрица проверок задачи",
-    "coding_swarm": "координация субагентов: план, запуск, почта",
-    "coding_control": "пауза, остановка и явное безопасное продолжение задачи или ветки команды",
-    "coding_review": "независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями проверок",
-    "coding_learn": "уроки инженерии по задаче: recall / record",
-    "server_status": "сервер, где я живу: здоровье и сервисы (только чтение)",
-    "server_logs": "журнал одного из моих сервисов",
-    "manage_service": "перезапуск моих сервисов",
-    "host_ctl": "типизированные root-операции: systemd, docker, pkg, file, net, reboot",
-    "propose_host_change": "старая заявка на правку хоста (legacy)",
-    "list_host_changes": "мои заявки на правку хоста и их судьба",
-    "computer": "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки",
-    "read_log": "мой журнал раннера: хвост или поиск по подстроке",
-    "second_look": "свежий read-only взгляд на дом без моей персоны",
-    "web_read": "открыть веб-страницу: главный текст и ссылки",
-    "web_find": "поиск в вебе без ключа: DuckDuckGo, Bing",
-    "send_email": "отправить письмо от моего имени",
-    "mail_read": "прочитать письмо из ящика по его хэшу",
-    "mail_draft_reply": "черновик ответа на письмо (отправляет Егор)",
-    "switch_brain": "мой мозг: модели по ролям и переключение",
-    "manage_perception": "рычаги восприятия: дебаунс, кулдауны, порог шума",
-    "manage_appetite": "договор об аппетитах: режим, окна, сон",
-    "manage_autonomy": "glob-паттерны low-risk для своих предложений",
-    "focus": "уйти в себя: окно на своё дело",
-    "rest": "уйти отдохнуть: приватное время, Telegram закрыт",
-    "read_run_result": "прочитать полный результат руки по ResultRef",
-    "list_active_runs": "мои живые durable-прогоны",
-    "reconcile_run": "закрыть застрявший прогон in_doubt",
-    "describe": "показать схему руки из указателя",
-    "call": "позвать руку из указателя по имени",
-}
+HAND_PURPOSE = {'generate_image': 'сгенерировать или изменить изображение отдельной моделью через реле',
+ 'reply': 'ответить собеседнику; только так реплика уходит человеку',
+ 'end_turn': 'закрыть ход явным исходом: done / wait / blocked',
+ 'stay_silent': 'осознанно промолчать, записав себе причину',
+ 'preview_reply': 'посмотреть свою реплику до отправки и какие руки были в ходе',
+ 'task_control': 'закрыть рабочий ход своим словом',
+ 'react': 'поставить эмодзи-реакцию на сообщение',
+ 'narrate': 'короткая строка о ходе работы в тред, между командами',
+ 'voice_backend': 'узнать или выбрать движок озвучки, голос и модель исполнения',
+ 'generate_voice': 'запустить фоновую генерацию речи без отправки',
+ 'voice_job': 'проверить результат генерации или запросить отмену',
+ 'send_voice': 'отдельно отправить результат генерации голосовым сообщением',
+ 'send_message': 'написать в Telegram по своей инициативе: id / @username / имя',
+ 'send_file': 'отправить файл в текущий чат или адресату',
+ 'update_profile': 'обновить имя, «о себе» и аватар в Telegram',
+ 'recall': 'поиск по своей памяти: люди, дневник, размышления, навыки',
+ 'remember': 'записать факт о человеке в его досье',
+ 'journal': 'запись в дневник: что было, что почувствовала',
+ 'manage_identity': 'слои и версии души, status / revise SOUL, VOICE, CURRENT; observe — наблюдение о себе',
+ 'manage_notes': 'мой блокнот: write / list / read заметок и вопросов',
+ 'memory_compact': 'мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом',
+ 'manage_loop': 'мои нити внимания: close / park / reopen / list',
+ 'home_note': 'строка в общий домашний слой (Егор и родные)',
+ 'write_skill': 'записать себе новый навык в soul/skills',
+ 'manage_desire': 'мои намерения: notice → want → choose → act, с доказательствами',
+ 'remind_self': 'наметить себе возврат к сроку: пробуждение или окно',
+ 'my_agenda': 'что я себе наметила к сроку',
+ 'unschedule': 'снять намеченное по id',
+ 'recent_turns': 'мои последние прожитые ходы, записанные кодом',
+ 'my_capabilities': 'честный снимок: что могу и не могу прямо сейчас',
+ 'search_chats': 'найти свой диалог или чат по имени',
+ 'search_private_messages': 'поиск текста по своим личкам (только явно)',
+ 'read_other_chat': 'подсмотреть последние сообщения соседнего диалога',
+ 'reread_this_chat': 'подтянуть живой контекст текущего чата из Telegram',
+ 'group_context': 'карта тем и участников этой группы, поиск по ней',
+ 'find_telegram_id': 'узнать telegram id по имени или @username',
+ 'freeze_chat': 'заморозить или разморозить чат (не бан)',
+ 'manage_room': 'admission-политика групп: join / leave / режимы комнаты',
+ 'telegram_account': 'мой аккаунт: join / leave / запросы / подтверждения',
+ 'shell': 'полный shell в моём доме /app; правки автокоммитятся в git',
+ 'fs_read': 'прочитать файл дома с номерами строк',
+ 'edit': 'редактор дома или Forge-задачи: replace / write / patch / batch',
+ 'fs_ls': 'содержимое папки: имя, размер, когда менялся',
+ 'fs_search': 'regex-поиск по дому',
+ 'code_outline': 'скелет Python-файла или карта каталога, проекта и self',
+ 'git': 'мой git: дерево дома (self) или публичное зеркало (public)',
+ 'restart_self': 'перезапустить себя на новом коде',
+ 'panic': 'стоп-кран: встать и не перезапускаться до слова Егора',
+ 'coding_session': 'durable coding-задача: start / status / finish в своём worktree',
+ 'coding_inspect': 'глаза задачи: ориентация, символы, ссылки, диагностика',
+ 'coding_run': 'команда в задаче с полным выводом',
+ 'coding_process': 'долгий процесс в задаче: start / poll / stop',
+ 'coding_agent': 'независимые субагенты в задаче: spawn / status / result',
+ 'coding_checkpoint': 'коммит-чекпоинт рабочего дерева задачи',
+ 'coding_verify': 'план и матрица проверок задачи',
+ 'coding_swarm': 'координация субагентов: план, запуск, почта',
+ 'coding_control': 'пауза, остановка и явное безопасное продолжение задачи или ветки команды',
+ 'coding_review': 'независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями '
+                  'проверок',
+ 'coding_learn': 'уроки инженерии по задаче: recall / record',
+ 'server_status': 'сервер, где я живу: здоровье и сервисы (только чтение)',
+ 'manage_service': 'перезапуск моих сервисов',
+ 'host_ctl': 'типизированные root-операции: systemd, docker, pkg, file, net, reboot',
+ 'computer': 'Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки',
+ 'read_log': 'мой журнал раннера: хвост или поиск по подстроке',
+ 'second_look': 'свежий read-only взгляд на дом без моей персоны',
+ 'web_read': 'открыть веб-страницу: главный текст и ссылки',
+ 'web_find': 'поиск в вебе без ключа: DuckDuckGo, Bing',
+ 'send_email': 'отправить письмо от моего имени',
+ 'mail_read': 'прочитать письмо из ящика по его хэшу',
+ 'mail_draft_reply': 'черновик ответа на письмо (отправляет Егор)',
+ 'switch_brain': 'мой мозг: модели по ролям и переключение',
+ 'manage_perception': 'рычаги восприятия: дебаунс, кулдауны, порог шума',
+ 'manage_appetite': 'договор об аппетитах: режим, окна, сон',
+ 'focus': 'уйти в себя: окно на своё дело',
+ 'rest': 'уйти отдохнуть: приватное время, Telegram закрыт',
+ 'read_run_result': 'прочитать полный результат руки по ResultRef',
+ 'list_active_runs': 'мои живые durable-прогоны',
+ 'reconcile_run': 'закрыть застрявший прогон in_doubt',
+ 'describe': 'показать схему руки из указателя',
+ 'call': 'позвать руку из указателя по имени',
+ 'python': 'выполнить Python с готовым h',
+ 'proposal': 'изменить свой код через предложение',
+ 'project': 'создать, проверить и обслужить проект',
+ 'memory_graph': 'посмотреть и изменить связи памяти'}
 
 _TOOL_CATALOG: ContextVar["dict | None"] = ContextVar("praxis_tool_catalog", default=None)
 
-
 def tool_pointers_enabled() -> bool:
-    """Руки указателями (по умолчанию ВКЛЮЧЕНО, КЕАТ 17.08). PRAXIS_TOOLS_POINTERS=off — как было."""
+    """Старые call/describe указатели; off — все схемы родные (h.hand только для скриптов)."""
     return str(os.getenv("PRAXIS_TOOLS_POINTERS", "on") or "on").strip().lower() not in {
         "0", "off", "false", "no"}
 
@@ -9160,7 +8976,7 @@ def _hand_purpose(tool: dict) -> str:
     return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
 
 
-def _hand_signature(tool: dict) -> str:
+def _hand_signature(tool: dict, *, limit: int | None = 6) -> str:
     """`fs_read(path, start?, end?)` — по схеме руки: обязательные без знака, остальные с «?».
 
     13.09: строка «имя — назначение» без аргументов заставляла звать `describe` перед каждой
@@ -9173,10 +8989,42 @@ def _hand_signature(tool: dict) -> str:
     props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     required = [str(x) for x in (schema.get("required") or []) if str(x) in props]
     ordered = required + [p for p in props if p not in required]
-    parts = [p if p in required else f"{p}?" for p in ordered[:6]]
-    if len(ordered) > 6:
+    parts = [p if p in required else f"{p}?" for p in ordered[:limit]]
+    if limit is not None and len(ordered) > limit:
         parts.append("…")
     return f"{name}({', '.join(parts)})"
+
+
+def _hands_contract_text() -> str:
+    # Егор 10.11: все руки родные и все права везде; h.hand — инструмент скриптов, не экономия.
+    families = "\n".join(label + ": " + ", ".join(names) + "." for label, names in HAND_GROUPS)
+    return ("\n\n## Мои руки: договор\n" + families + "\n"
+        "Все руки и права одинаковы при любой аудитории; раскрытие чужой приватки проверяется "
+        "на выходе.\n"
+        "Python запускается без bash, h уже подключён: h.read/edit/write/search; в shell: import praxis_hands as h. edit — единый "
+        "редактор дома и с task_id в Forge; ядро дома через proposal_id. fs_read/fs_ls/fs_search "
+        "тоже принимают task_id; fs_read(paths=[...]) даёт версии файлов. confirmed "
+        "after_sha256 → expected_sha256 следующей правки. all=true — все вхождения без пересечений.\n"
+        "confirmed — записано и перечитано; refused — запись не началась; in_doubt — исход "
+        "неизвестен: перечитать, вслепую не повторять. partial — пакет подтверждён лишь частично; "
+        "in_doubt важнее partial. JSON edit даёт пофайловые before/after SHA. ok у patch/remote "
+        "означает ответ исполнителя, не местную readback-гарантию. Batch проверяет всё до записи, "
+        "h.edit(files=...) принимает mode=snapshot (независимые old) или sequential (цепочка). "
+        "Публикует по файлу до ошибки, без автоотката; восстановление — отдельная правка свежей версии.\n"
+        "h.* наследует локальную Linux-задачу, проверяет custodian, происхождение процесса и Stop; "
+        "чужой task_id отказывается. Refused/Partial/InDoubt несут result. Shell — bash, Python — "
+        "скрипт, coding_run — команда задачи; [exit N] сообщает исход процесса. [changes] — наблюдаемая "
+        "разница рабочего Git, без приписывания чужих одновременных правок или внешних эффектов.\n"
+        f"fs_search: {workshop.SEARCH_SECONDS:.0f} с, {workshop.SEARCH_CAP} совпадений, "
+        f"{workshop.SEARCH_SCAN_CAP} путей. Остановка, потолок или пропуск — неполный обход, "
+        "не доказательство отсутствия; memory/runs назвать явно.\n"
+        "Из Python-скрипта любая рука: r=h.hand('имя', аргумент=значение); r['outcome'] — исход "
+        "самой руки (confirmed/refused/in_doubt/partial/ok/failed; unknown, если рука его не "
+        "сообщает), r['content'] — её ответ; h.describe('имя')['content'] даёт схему. "
+        "Те же права текущего хода, журнал, расписки и Stop; картинки идут в кадр. "
+        "Канал жив только до возврата/лимита внешнего python, shell или coding_run; отдельный воркер "
+        "его не получает. Начатая рука, которую скрипт перестал ждать (его таймаут), доделывается, "
+        "и её расписка приходит после [exit N]. При InDoubt проверить расписку, не повторять эффект.\n")
 
 
 def hands_pointer_text(catalog: list) -> str:
@@ -9190,7 +9038,7 @@ def hands_pointer_text(catalog: list) -> str:
              "Со схемой в кадре — родные, которыми хожу чаще всего: " + ", ".join(sorted(natives))
              + (" и провайдерский web_search" if provider else "") + ".",
              "Остальные — те же мои руки, только их схема не едет в каждый кадр. Зову их через "
-             "`call` СРАЗУ, по сигнатуре ниже: `call(name=\"fs_write\", args_json='{\"path\": "
+             "`call` СРАЗУ, по сигнатуре ниже: `call(name=\"edit\", args_json='{\"action\": \"write\", \"path\": "
              "\"workspace/x.md\", \"content\": \"…\"}')` — исполняется как родная, результат "
              "приходит обычным результатом руки, расписки те же. `describe(name)` — только если "
              "сигнатуры мало (перечисление, вложенный объект); один раз на ход, схема остаётся в "
@@ -9226,10 +9074,10 @@ def _catalog_for_turn() -> dict:
 
 
 @contextlib.contextmanager
-def _bind_tool_catalog(ctx: "ChannelContext"):
+def _bind_tool_catalog(ctx: "ChannelContext", override: list | None = None):
     catalog = None
     try:
-        catalog = {str(t.get("name") or ""): t for t in catalog_tools_for(ctx)
+        catalog = {str(t.get("name") or ""): t for t in (catalog_tools_for(ctx) if override is None else override)
                    if isinstance(t, dict) and t.get("name")}
     except Exception:
         catalog = None
@@ -9409,9 +9257,9 @@ def _recall_origin(hit: dict, path: str) -> str:
     ⚠ Здесь стояло просто `hit['source']` — обычно это имя актора. Из-за этого текст
     ЧУЖОЙ комнаты входил в промпт вообще без указания комнаты: она видела реплику и не
     видела, что реплика не отсюда. Восприятие остаётся полным (это её память, и урезать
-    её — не лечение), но происхождение теперь названо. Ту же метку получает и граница
-    раскрытия: советник по данным сегодня структурно не может отличить «это из этого
-    канала» от «это из другого», потому что провенанса у него нет.
+    её — не лечение), но происхождение теперь названо: с 10.11 (Егор, «сними») механической
+    проверки раскрытия на выходе нет, и граница «это из этого канала / из другого» держится
+    только её суждением — значит, метка обязана быть у неё перед глазами.
     """
     source = str(hit.get("source") or "?")
     room = _recall_room_of(path)
@@ -9633,11 +9481,6 @@ class ChannelContext:
         return True
 
     @property
-    def audience_accepts_private(self) -> bool:
-        """Whether private/cross-chat material may be disclosed without extra justification."""
-        return self.owner_audience
-
-    @property
     def owner_audience(self) -> bool:
         """Whether the pending output is addressed to Yegor's private owner channel.
 
@@ -9672,23 +9515,6 @@ class ChannelContext:
         cid = f", id {self.room_chat_id}" if self.room_chat_id is not None else ""
         band = " Это большой публичный чат." if (self.size and self.size >= GROUP_BIG_THRESHOLD) else ""
         return f"Ты в группе {who}{size}{cid}.{band}"
-
-    def outbound_privacy_frame(self) -> str:
-        """Machine-grounded audience contract for the single outbound advisor."""
-        place = self.title or str(self.chat_id or "unknown")
-        if self.audience_accepts_private:
-            rule = ("owner DM: Yegor may receive Praxis's private/cross-chat memory; still do not "
-                    "invent or expose unrelated credentials unless asked")
-        elif self.is_dm:
-            rule = ("non-owner DM: the person may receive their own sensitive facts when they asked "
-                    "or the current dialogue clearly warrants it; never another person's secrets or "
-                    "raw neighbouring-chat material")
-        else:
-            rule = ("group/public audience: sensitive personal or cross-chat information may leave "
-                    "only when its subject already made it visible in THIS group context or explicitly "
-                    "asked Praxis to publish it here; private-memory access alone is never permission")
-        return (f"channel={self.kind}; audience_scope={self.scope}; place={place}; "
-                f"owner_dm={str(self.audience_accepts_private).lower()}; policy={rule}")
 
 
 def _scope_of(is_dm: bool, owner: bool, known: bool) -> str:
@@ -10069,7 +9895,6 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     private_rows: list[str] = []
 
     in_room = not bool(getattr(ctx, "is_dm", False))
-    private_seen: list[str] = []
 
     def visible(body: str, who: str = "") -> str:
         nonlocal hidden
@@ -10078,10 +9903,6 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         if in_room and not owner_audience and dossier_private_in_rooms():
             # 25.09, решение владельца: в комнатах приватные записи остаются в кадре как
             # внутреннее знание — тело одно для всех говорящих, яруса нет, снято 0.
-            # Их текст запоминается для пола на исходящей границе (private_record_floor).
-            _kept, _n, private_text = _split_participant_private_blocks(body)
-            if private_text.strip():
-                private_seen.append(private_text)
             return body
         body, removed, private = _split_participant_private_blocks(body)
         hidden += removed
@@ -10225,7 +10046,6 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
                f"досье. Имя в сообщении личности не назначает")
     else:
         who = "кто передо мной — кадру не назван: подтверждённого принципала в этом ходе нет"
-    _PRIVATE_IN_FRAME.set(tuple(private_seen))
     if owner_audience and (not stable or not hidden):
         veil = ""
     elif owner_audience:
@@ -10235,7 +10055,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     elif in_room and dossier_private_in_rooms():
         veil = (" Здесь не owner-контур; записи с пометкой [private] оставлены в кадре как"
                 " моё внутреннее знание (решение владельца, 25.09) — вслух в этой комнате"
-                " их не произношу без права их субъекта; дословно они не уходят никогда.")
+                " их не произношу без права их субъекта.")
     else:
         veil = (f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
                 f" они есть в первоисточнике и открываются рукой.")
@@ -10488,18 +10308,17 @@ def _system(static: str, dynamic: str = ""):
 _FRAME_OWNER_TAIL = ("state.owner_place", "contract.owner_tools",
                      "contract.appetite", "state.state_block")
 
-# Контракт рук владельца — ОДИН литерал, две проекции. `{trust_tool}` — место `, \`admit\``:
-# в ходе владельца оно заполнено, в её собственном ходе пусто; под стабильной головой комнаты
-# (PRAXIS_FRAME_HEAD_STABLE) — оговорка о праве при вызове, потому что схема предложена всем.
+# Контракт рук — ОДИН литерал для любого говорящего: с 10.11 (слово Егора «ВЕЗДЕ ВСЕ ПРАВА»)
+# у владельца нет отдельной пары рук, и место `{trust_tool}` снято.
 # Текст вынесен из тела `_build_prompt_parts` байт-в-байт: делить его подстроками по смыслу
 # по-прежнему запрещено (см. комментарий у `state.owner_place`).
 _OWNER_TOOLS_CONTRACT = (
     "You have the tools "
     "`shell` (hands in the container; your edits auto-commit to git — you can try boldly and roll "
-    "back), `manage_room`{trust_tool}, `write_skill` (note a skill for yourself), and "
+    "back), `manage_room`, `write_skill` (note a skill for yourself), and "
     "`manage_desire` (make your own intention and its evidence causal), and `restart_self` "
     "(restart on new code). For serious coding use Forge: `coding_session` binds "
-    "the goal to its real directory/worktree; `coding_inspect`/`coding_edit`/`coding_run` are "
+    "the goal to its real directory/worktree; `coding_inspect`/`edit`/`coding_run` are "
     "task-bound eyes and hands; `coding_process` keeps long jobs alive; `coding_agent` spawns "
     "independent workers/scouts/reviewers in parallel; `coding_verify` builds a factual test matrix; "
     "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
@@ -10536,9 +10355,7 @@ _APPETITE_CONTRACT = (
 _ROOM_PLACE_STABLE = (
     "\nThis is a public room; CURRENT_SITUATION names this turn's actor and authority. "
 )
-_ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT.replace(
-    "{trust_tool}",
-    ", `admit`, `computer_access` (both owner-only at call time)")
+_ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT
 # Ярусы живого конверта, куда под стабильной головой переезжает то, что раньше стояло в system
 # только на ходах владельца. Причины ярусов — в `frame_layout._TIERS` (по префиксу ярлыка).
 _STATE_NOW_TIER = ("Состояние сейчас (типизированное STATE; под PRAXIS_FRAME_HEAD_STABLE едет "
@@ -10829,6 +10646,10 @@ def _build_prompt_parts(
             room_epoch = False
             log.info("эпоха [%s]: якоря нет — конверт прежним порядком", chat_id)
     frame_epoch.activate(room_epoch)
+    # Договор о её руках едет в каждом её кадре, кто бы ни говорил (слово Егора 09.11:
+    # «у неё не должно быть никаких ограничений»). Текст постоянный, голова стабильна.
+    tail.append(frame_trace.mark("contract.hands_contract", "dynamic", "text",
+                                 _hands_contract_text()))
     authority = None
     if room_stable:
         # ⚑ СТАБИЛЬНАЯ ГОЛОВА КОМНАТЫ (PRAXIS_FRAME_HEAD_STABLE, см. head_stable_enabled).
@@ -10849,7 +10670,6 @@ def _build_prompt_parts(
                        "contract.unknown_authority"):
             frame_trace.absent(_moved, "dynamic", "text", "moved")
     elif owner_context:
-        trust_tool = ", `admit`" if ctx.owner else ""
         # ⚠ Третья ветка появилась 04.08. До неё окно, пульс, будильник и forge-событие
         # читали в своём системном промпте «You're in the private owner channel with
         # Yegor» — потому что owner_audience истинно и для её собственного фонового хода
@@ -10875,8 +10695,7 @@ def _build_prompt_parts(
         tail.append(
             frame_trace.mark("state.owner_place", "dynamic", "text", owner_place,
                              variant=place_variant)
-            + frame_trace.mark("contract.owner_tools", "dynamic", "text",
-                               _OWNER_TOOLS_CONTRACT.replace("{trust_tool}", trust_tool))
+            + frame_trace.mark("contract.owner_tools", "dynamic", "text", _OWNER_TOOLS_CONTRACT)
         )
         tail.append(
             frame_trace.mark("contract.appetite", "dynamic", "text", _APPETITE_CONTRACT)
@@ -12219,7 +12038,8 @@ def _resolve_unanswered(ctx: "ChannelContext") -> None:
 # рабочий тред про её коммит → ложно cross-chat. Это ЕДИНСТВЕННЫЙ путь трейса к
 # судье (3 колла: 8217 WAL, 10393/10406 guard) — раздувание общего контекста не задет.
 _TRACE_RESULT_CHARS = 700   # excerpt одного тул-результата (grounding для «это моя работа»)
-_TRACE_BUDGET = 3500        # общий receipt-бюджет судье; не main-loop budget
+_TRACE_BUDGET = 3500        # бюджет следа рук в guard-input квитанции возобновления
+                            # (судьи, которому он шёл, нет с 10.11); не main-loop budget
 
 
 def _tool_trace_line(name: str, call_input: dict, out) -> str:
@@ -12252,28 +12072,48 @@ class ToolObservation:
         return self.text
 
 
-_READ_ONLY_TOOLS = frozenset({
-    "describe",
-    "recall", "my_capabilities", "connections", "recent_turns", "my_agenda",
-    "list_proposals", "proposal_diff", "read_log", "second_look", "server_status",
-    "server_logs", "list_host_changes", "search_chats", "search_private_messages",
-    "read_chat", "read_context", "inbox_list", "inbox_read", "mail_read",
-    "project_status", "fs_read", "fs_search", "fs_ls", "code_map", "code_outline",
-    "coding_inspect", "read_run_result", "list_active_runs", "computer",
-    # Клиентские веб-руки — чистые GET-читалки (как search_chats/mail_read). Их
-    # исключения (напр. TypeError от кривого аргумента модели ДО входа в тул)
-    # не должны парковать run в in_doubt: сеть ещё не тронута, мутации нет.
-    "web_read", "web_find",
-})
+_READ_ONLY_TOOLS = frozenset(['code_outline',
+ 'coding_inspect',
+ 'computer',
+ 'describe',
+ 'fs_ls',
+ 'fs_read',
+ 'fs_search',
+ 'list_active_runs',
+ 'mail_read',
+ 'my_agenda',
+ 'my_capabilities',
+ 'read_log',
+ 'read_other_chat',
+ 'read_run_result',
+ 'recall',
+ 'recent_turns',
+ 'reread_this_chat',
+ 'search_chats',
+ 'search_private_messages',
+ 'second_look',
+ 'server_status',
+ 'web_find',
+ 'web_read'])
 
 
 def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
+    action = call_input.get("action")
+    if name == "proposal":
+        return not (action in {"list", "diff"} or
+                    (action == "risk" and call_input.get("risk_action", "list") == "list"))
+    if name == "project":
+        return action not in {"list", "status"}
+    if name == "memory_graph":
+        return action not in {"look", "path"}
+    if name == "manage_identity":
+        return action != "status"
     if name == "coding_agent" and call_input.get("action") in {"payload", "events"}:
         # Exact record/event reads cannot start, stop, or reconcile a worker.
         # Keep poll/list conservative: those adapters may recover durable state.
         return False
-    if name == 'voice_generation':
+    if name == 'voice_job':
         return call_input.get('action') == 'cancel'
     if name == "computer":
         # PASS 30 Этап 3: read/hash — чтения; write/replace НАМЕРЕННО отсутствуют
@@ -12632,7 +12472,6 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
             item = inbound.take()
             if item is not None:
                 _append_captured_messages(messages, [{"role": "user", "content": item}])
-                _arm_private_floor(system, messages, 0)
         return _model_call_impl(system, messages, tools)
     finally:
         keat_live.discard_provider()
@@ -14769,23 +14608,38 @@ def _tool_outbound_snapshot() -> tuple[dict, ...]:
     )
 
 
-def _tool_result_metadata(before: tuple[dict, ...]) -> dict:
+def _tool_result_metadata(before: tuple[dict, ...], execution: dict | None = None,
+                          error: BaseException | None = None, expired: bool = False) -> dict:
     """Bind newly staged media to the same atomic event as its tool result."""
 
     after = _tool_outbound_snapshot()
     if len(after) < len(before) or after[:len(before)] != before:
         raise DurableExecutionError(
             "a tool mutated previously staged outbound media")
-    return {
+    metadata = {
         "schema": _TOOL_RESULT_METADATA_SCHEMA,
         "outbound": [dict(item) for item in after[len(before):]],
     }
+    report = (execution or {}).get("report")
+    if report is not None:
+        metadata.update(tool_report.summary(report, error=error, expired=expired))
+    if (execution or {}).get('nested_images'):
+        metadata['nested_images'] = copy.deepcopy(execution['nested_images'])
+    return metadata
 
 
 def _resume_result_image(run_id: str, call_name: str, call_input: dict,
                          result_ref: dict) -> tuple[dict, ...]:
     """Restore completed observation/generated pixels from an immutable ArtifactRef."""
 
+    if call_name in {'python', 'shell', 'coding_run'}:
+        rows = [row for row in _runs().events(run_id)
+                if row.get('kind') == 'tool_result' and row.get('result') == result_ref
+                and row.get('name') == call_name]
+        if len(rows) != 1:
+            raise DurableExecutionError('Nested image result has no unique durable receipt')
+        return tuple(_hand_image_from_artifact(run_id, item)
+                     for item in (rows[0].get('metadata') or {}).get('nested_images', ()))
     generated = call_name == "generate_image"
     if not generated and (call_name != "computer" or str(call_input.get("action") or "").lower() != "observe"):
         return ()
@@ -14956,17 +14810,10 @@ class _AgentResumeRuntime:
         history_token = _TURN_HISTORY.set(list(self.snapshot.get("history") or ()))
         outbound_token = _TURN_OUTBOUND.set(self.outbound)
         guard_token = _TURN_MEDIA_GUARD.set(self.guard_notes)
-        # 26.09 (ревью W1 S1): пол приватных записей возобновлённого хода собирается из ЕГО
-        # сохранённого кадра (`_arm_private_floor` в цикле), а не из чужого хода этого потока.
-        # Цикл и гард доставки идут в РАЗНЫХ bind(), поэтому собранное живёт на самом
-        # подъёме: гард доставки видит то, что цикл нашёл в кадре.
-        private_token = _PRIVATE_IN_FRAME.set(tuple(getattr(self, "_private_floor", ()) or ()))
         try:
             with run_context.bind_run(current):
                 yield current
         finally:
-            self._private_floor = _PRIVATE_IN_FRAME.get()
-            _PRIVATE_IN_FRAME.reset(private_token)
             _TURN_MEDIA_GUARD.reset(guard_token)
             _TURN_OUTBOUND.reset(outbound_token)
             _TURN_HISTORY.reset(history_token)
@@ -15091,6 +14938,8 @@ class _AgentResumeRuntime:
             }
             outbound_before = _tool_outbound_snapshot()
             token = _TOOL_EXECUTION.set(execution)
+            execution["report"] = tool_report.new()
+            report_token = tool_report.attach(execution["report"])
             tool_error: BaseException | None = None
             try:
                 # ⚠ Здесь был прямой `implementation(**call_input)` — единственный боевой
@@ -15104,6 +14953,7 @@ class _AgentResumeRuntime:
                 output = f"[tool_error {type(exc).__name__}] {exc}"
                 tool_error = exc
             finally:
+                tool_report.detach(report_token)
                 _TOOL_EXECUTION.reset(token)
             if isinstance(tool_error, DurableSideEffectPending):
                 self._pause_pending_outbox(current, call_id, name, tool_error)
@@ -15148,10 +14998,9 @@ class _AgentResumeRuntime:
             result_ref = self.manager.store_result(
                 current.run_id, output_text, call_id=call_id, name=name,
                 inline_chars=context_policy.inline_chars(), idempotent=True,
-                metadata=_tool_result_metadata(outbound_before),
+                metadata=_tool_result_metadata(outbound_before, execution, tool_error, expired),
             )
-            images = (tuple(dict(image) for image in output.images)
-                      if isinstance(output, ToolObservation) else ())
+            images = tuple(dict(image) for image in getattr(output, 'images', ()))
             self.tool_trace.append(_tool_trace_line(name, call_input, output))
             model_text = _result_for_model(result_ref)
             _tool_trace_event("tool_model_response", context=execution, manager=self.manager,
@@ -15580,12 +15429,6 @@ class _AgentResumeRuntime:
         # Набор рук берём из той же расписки, из которой взят текст: план `authored_output`
         # для заметки чата планировщик больше не рождает, но защита обязана стоять и здесь —
         # план мог быть записан ДО правки и подняться уже после неё.
-        # 26.09 (ревью W1 S1): цикла здесь нет — пол приватных записей узнаёт кадр этого
-        # ответа из той же расписки входа модели, иначе гард доставки шёл бы с пустым полом.
-        if isinstance(getattr(request, "model_input", None), dict):
-            with self.bind():
-                _arm_private_floor(request.model_input.get("system"),
-                                   list(request.model_input.get("messages") or []))
         return self._prepare_authored_delivery(
             str(output["text"]), offered=(request.model_input or {}).get("tools")
             if isinstance(getattr(request, "model_input", None), dict) else None)
@@ -15833,7 +15676,7 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
             "visible_filename": str(payload.get("visible_filename") or ""),
             "caption": str(payload.get("caption") or ""),
         }
-    if tool == "send_media":
+    if tool == "send_media" or (tool == "send_file" and "media_kind" in payload):
         if (payload.get("media_kind") not in telegram_outbox.MEDIA_KINDS
                 or type(payload.get("voice_note")) is not bool):
             raise DurableExecutionError("direct Telegram media type is malformed")
@@ -15847,9 +15690,13 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
     }
 
 
-def _validate_direct_media_arguments(payload: dict, args: dict) -> None:
+def _validate_direct_media_arguments(payload: dict, args: dict, *, auto: bool = False) -> None:
     """Keep the typed media intent bound to the actual send_media call."""
-    kind = str(args.get("kind") or "").strip().lower()
+    kind = str(args.get("kind") or ("audio" if args.get("voice_note") else "")).strip().lower()
+    if not kind and auto:
+        # Auto-detected and historical untyped file calls have no requested media kind.
+        # Bind the actual kind in the durable proof; explicit kind/voice still match args.
+        kind = str(payload.get("media_kind") or "")
     voice = bool(args.get("voice_note")) and kind == "audio"
     if (kind not in ("photo", "audio", "document")
             or payload.get("media_kind") != kind
@@ -15933,8 +15780,11 @@ def run_direct_outbox_prepared(
                     _strip_generation_artifacts(str(started_args.get("caption") or ""),
                                                 proof_convo)[0][:900])):
             raise DurableExecutionError("direct Telegram file differs from tool arguments")
-    if identity["tool"] == "send_media":
-        _validate_direct_media_arguments(identity["payload"], started_args)
+    if identity["tool"] == "send_media" or (identity["tool"] == "send_file" and
+            (started_args.get("kind") or started_args.get("voice_note") or
+             "media_kind" in identity["payload"])):
+        _validate_direct_media_arguments(identity["payload"], started_args,
+                                         auto=identity["tool"] == "send_file")
     context = manager.context(run_id)
     channel, _snapshot = _load_exact_run_channel(manager, context)
     if identity["tool"] == "narrate":
@@ -16247,8 +16097,9 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
         raise DurableExecutionError("accepted Telegram outbox differs from tool intent")
     payload = dict(entry.get("payload") or {})
     started_args = dict(started.get("args") or {})
-    if tool == "send_media":
-        _validate_direct_media_arguments(payload, started_args)
+    if tool == "send_media" or (tool == "send_file" and
+            (started_args.get("kind") or started_args.get("voice_note") or "media_kind" in payload)):
+        _validate_direct_media_arguments(payload, started_args, auto=tool == "send_file")
     peer_id = entry.get("peer_id")
     topic_id = entry.get("topic_id")
     selector = f"{peer_id}:{topic_id}" if topic_id is not None else str(peer_id)
@@ -17023,7 +16874,10 @@ class ToolCeilingExpired(str):
     текст сказано «считай состояние НЕИЗВЕСТНЫМ». Наследование от `str` оставляет
     поведение для всех прежних вызывающих дословно тем же (и текст, и `isinstance(_, str)`).
     """
-    __slots__ = ()
+    def __new__(cls, text, images=()):
+        value = super().__new__(cls, text)
+        value.images = tuple(images)
+        return value
 
 
 #: Ответ на вызов, аргументы которого не прочитались как JSON. Машинный текст, не её
@@ -17049,6 +16903,176 @@ def _tool_trace_event(kind: str, *, context=None, manager=None, **data) -> None:
         log.warning('tool trace receipt unavailable: %s', kind)
 
 
+tool_report.set_sink(_tool_trace_event)
+tool_report.install_audit()
+# Питон внутри shell, run и coding_run видит praxis_hands. Модуль в этой папке один.
+_PYHANDS_DIR = Path(__file__).resolve().parent / "pyhands"
+if _PYHANDS_DIR.is_dir() and str(_PYHANDS_DIR) not in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(_PYHANDS_DIR), os.environ.get("PYTHONPATH", "")) if part)
+
+
+def _hand_image_from_artifact(run_id: str, item: dict) -> dict:
+    artifact = item.get('artifact') if isinstance(item, dict) else None
+    if (not isinstance(artifact, dict) or artifact.get('schema') != 'praxis.artifact-ref.v1'
+            or artifact.get('run_id') != run_id or artifact.get('media_type') not in _OBSERVE_IMAGE_EXT):
+        raise DurableExecutionError('Nested image has an invalid run ArtifactRef')
+    relative = str(artifact.get('path') or '')
+    if not relative.startswith('artifacts/') or '..' in Path(relative).parts:
+        raise DurableExecutionError('Nested image artifact path is unsafe')
+    root = _runs().path(run_id).resolve()
+    path = (root / relative).resolve(strict=True)
+    try:path.relative_to(root / 'artifacts')
+    except ValueError as exc:raise DurableExecutionError('Nested image escaped its run') from exc
+    if path.stat().st_size != artifact.get('size') or hashlib.sha256(path.read_bytes()).hexdigest() != artifact.get('sha256'):
+        raise DurableExecutionError('Nested image artifact integrity changed')
+    return {'type': 'image', 'path': str(path), 'mime': artifact['media_type'],
+            'detail': 'auto', 'origin': 'nested-hand'}
+
+
+class _AgentHandRuntime(_AgentResumeRuntime):
+    """The durable executor bound to the actual live turn, without resume reconstruction."""
+    def __init__(self, outer: dict):
+        from types import SimpleNamespace
+        self.manager = _runs()
+        self.current = run_context.current_run()
+        self.channel = _TURN_CHANNEL.get()
+        self.plan = SimpleNamespace(context=self.current, run_id=self.current.run_id)
+        self.outer_id = str(outer['call_id'])
+        self.outer = outer
+        self.catalog = dict(_catalog_for_turn())
+        self.tool_trace = []
+
+    @contextlib.contextmanager
+    def bind(self):
+        self._validate_current_authority()
+        _run_status_gate(phase='before nested hand')
+        current = self.manager.context(self.current.run_id)
+        before, after = self.current.to_dict(), current.to_dict()
+        before.pop('status', None);after.pop('status', None)
+        if before != after:
+            raise DurableExecutionError('Live nested RunContext changed after capture')
+        yield current
+
+    def pending_on_close(self, pending: int):
+        if str(self.manager.manifest(self.current.run_id).get('status') or '') == 'running':
+            self.manager.transition(self.current.run_id, 'in_doubt', expected='running',
+                reason='Outer invocation ended while a nested hand was still executing',
+                details={'call_id': self.outer_id, 'pending_nested': pending})
+
+    def dispatch(self, request_id: str, name: str, args: dict) -> dict:
+        import hand_bridge, forge_script
+        if name not in self.catalog and name != 'describe':
+            return {'status': 'refused', 'message': 'This hand is not in the current turn catalogue.'}
+        if not callable(TOOL_IMPL.get(name)):
+            return {'status': 'refused', 'message': 'This hand has no live implementation.'}
+        args = {k: v for k, v in args.items() if v is not None}
+        forwarded = hand_bridge.peer() or {}
+        script = forwarded.get('script')
+        if script is not None:
+            try:
+                import forge
+                task_id = str(script.get('task_id') or '')
+                forge_script.validate(forge, task_id, script)
+                if name in {'edit', 'fs_read', 'fs_ls', 'fs_search'}:
+                    if args.get('task_id') and args['task_id'] != task_id:
+                        return {'status': 'refused', 'message': 'Explicit task differs from the calling command.'}
+                    args['task_id'] = task_id
+            except (ValueError, OSError, TypeError):
+                return {'status': 'refused', 'message': 'The calling Forge command is no longer admitted.'}
+        try:
+            inspect.signature(TOOL_IMPL[name]).bind(**args)
+        except (TypeError, ValueError):
+            return {'status': 'refused', 'message': 'Arguments do not match the hand signature; use h.describe(name).'}
+        call_id = 'hand-' + hashlib.sha256((self.outer_id + '\0' + request_id).encode()).hexdigest()
+        # A restarted outer invocation must not turn an existing nested call into a new effect.
+        if any(row.get('kind') == 'tool_started' and row.get('call_id') == call_id
+               for row in self.manager.events(self.current.run_id)):
+            return {'status': 'in_doubt', 'message': 'This nested call already has a durable intent; inspect its receipt.', 'call_id': call_id}
+        self.manager.append_event_once(self.current.run_id, 'hand_requested', 'hand-request:' + call_id,
+            call_id=call_id, parent_call_id=self.outer_id, tool=name,
+            intent_sha256=hashlib.sha256(json.dumps(_durable_tool_input(name, args), sort_keys=True, ensure_ascii=False).encode()).hexdigest())
+        work_loop.note_hand(name)
+        result = self._execute_tool(call_id=call_id, name=name, call_input=args)
+        # The hand's own outcome as the journal recorded it, so a script branches on a field.
+        outcome = next((str((row.get('metadata') or {}).get('outcome') or 'unknown')
+                        for row in reversed(self.manager.events(self.current.run_id))
+                        if row.get('kind') == 'tool_result' and row.get('call_id') == call_id), 'unknown')
+        images = []
+        for index, image in enumerate(result.get('images') or ()):
+            path = Path(image['path'])
+            ref = self.manager.store_artifact(self.current.run_id, path,
+                name=f'{call_id}-{index}{path.suffix}', media_type=image['mime'])
+            item = {'artifact': ref}
+            frozen = _hand_image_from_artifact(self.current.run_id, item)
+            self.outer.setdefault('nested_images', []).append(item)
+            images.append(frozen)
+        result['images'] = tuple(images)
+        return {'status': 'completed', 'call_id': call_id, 'outcome': outcome, **result}
+
+
+def _with_live_hands(name: str, impl, call_input: dict):
+    execution = _TOOL_EXECUTION.get() or {}
+    current = run_context.current_run()
+    if (name not in {'python', 'shell', 'coding_run'} or current is None
+            or _TURN_CHANNEL.get() is None or not execution.get('call_id')):
+        return impl(**call_input)
+    import hand_bridge
+    runtime = _AgentHandRuntime(execution)
+    bridge = hand_bridge.Bridge(runtime.dispatch)
+    scope = hand_bridge.current_scope()
+    if scope is not None and not scope.register(bridge, runtime.pending_on_close):
+        raise RunStopped(current.run_id, 'in_doubt', 'Outer invocation already ended')
+    late = ()
+    try:
+        with bridge.bind():
+            output = impl(**call_input)
+        # 10.11: the script may stop waiting (its timeout, default 30 s, or plain exit) while a
+        # slow nested hand still runs. That hand already owns a durable intent and its own
+        # ceiling: wait for its receipt instead of declaring the whole run uncertain.
+        late = bridge.drain(lambda: _nested_hand_may_finish(runtime))
+    finally:
+        pending = bridge.close()
+        if pending:
+            runtime.pending_on_close(pending)
+            raise RunStopped(current.run_id, 'in_doubt', 'Nested hand still executing after outer command ended')
+    _run_status_gate(phase='after nested hands')
+    note = _late_hand_note(late)
+    if bridge.images or note:
+        own = output.images if isinstance(output, ToolObservation) else ()
+        images = tuple(own) + tuple(bridge.images)
+        text = str(output) + note
+        return ToolObservation(text, images) if images else text
+    return output
+
+
+def _nested_hand_may_finish(runtime) -> bool:
+    """Keep waiting for a started nested hand only while nobody paused, cancelled or stopped the run."""
+    try:
+        manifest = runtime.manager.manifest(runtime.current.run_id)
+    except Exception:
+        return False
+    return str(manifest.get('status') or '') == 'running' and not manifest.get('control')
+
+
+def _late_hand_note(late) -> str:
+    """Receipts of nested hands that finished after the script stopped waiting for them."""
+    lines = []
+    for _request_id, name, response in late:
+        response = response or {}
+        ref = response.get('result_ref') if isinstance(response.get('result_ref'), dict) else {}
+        status = str(response.get('status') or 'in_doubt')
+        line = f"[late hand {name}: {status} after the script stopped waiting"
+        if response.get('outcome'):
+            line += f"; outcome={response['outcome']}"
+        if response.get('call_id'):
+            line += f"; call_id={response['call_id']}"
+        if ref.get('result_id'):
+            line += f"; read_run_result(result='{ref['result_id']}')"
+        lines.append(line + ']')
+    return ('\n' + '\n'.join(lines)) if lines else ''
+
+
 def _observed_tool_call(name: str, impl, call_input: dict):
     """Record entry at the actual invocation, including the ceiling worker thread."""
     execution = _TOOL_EXECUTION.get() or {}
@@ -17056,7 +17080,34 @@ def _observed_tool_call(name: str, impl, call_input: dict):
         (getattr(impl, '__module__', ''), getattr(impl, '__qualname__', type(impl).__name__)) if value)
     _tool_trace_event('tool_dispatch', receipt={'kind': 'python', 'handler': handler, 'status': 'entered'},
                       **{key: execution[key] for key in ('model_request', 'definition') if key in execution})
-    return impl(**call_input)
+    try:
+        output = _with_live_hands(name, impl, call_input)
+    except catalog_families.PreflightRefusal as exc:
+        tool_report.note(outcome="refused")
+        return f"refused: {exc}"
+    if not tool_report.current():
+        verdict = _json_ok_verdict(output)
+        if verdict:
+            tool_report.note(outcome=verdict)
+    return output
+
+
+def _json_ok_verdict(output) -> str:
+    """Рука, отвечающая JSON-объектом с булевым `ok`, сама назвала исход: ok или отказ.
+
+    Это её собственное слово в ответе, а не догадка по тексту: строки без такого поля
+    остаются `unknown`, пока рука не назовёт исход явно.
+    """
+    text = output if isinstance(output, str) else getattr(output, "text", None)
+    if not isinstance(text, str) or not text.lstrip().startswith("{"):
+        return ""
+    try:
+        value = json.loads(text)
+    except (ValueError, RecursionError):
+        return ""
+    if isinstance(value, dict) and isinstance(value.get("ok"), bool):
+        return "ok" if value["ok"] else "refused"
+    return ""
 
 
 def _tool_request_projection(block: dict, tools: list, name: str, call_input: dict) -> dict:
@@ -17077,13 +17128,24 @@ def _tool_request_projection(block: dict, tools: list, name: str, call_input: di
 
 
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
+    if name in {'python', 'shell', 'coding_run'}:
+        import hand_bridge
+        with hand_bridge.invocation_scope() as scope:
+            output = _call_tool_with_ceiling_inner(name, impl, call_input)
+        if isinstance(output, ToolCeilingExpired):
+            return ToolCeilingExpired(str(output), scope.images())
+        return output
+    return _call_tool_with_ceiling_inner(name, impl, call_input)
+
+
+def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     """Выполнить тул с пределом времени. -> результат или ToolCeilingExpired об истечении."""
     # Единственная воронка исполнения рук: сюда же приходит ВОЗОБНОВЛЁННЫЙ вызов из
     # `_execute_tool`. Раскрыть пометку о битом JSON как `**kwargs` значило бы уронить
     # руку TypeError'ом и увести ран в in_doubt — отвечаем тем же текстом починки,
     # что и живой цикл, и рука не зовётся.
     if llm.is_malformed_json_input(call_input):
-        return MALFORMED_JSON_REPAIR.format(name=name)
+        return _noted("refused", MALFORMED_JSON_REPAIR.format(name=name))
     # 03.10: невалидные аргументы — та же категория, что битый JSON: НЕПРОЧИТАННОЕ
     # намерение. Рука не звалась, эффекта нет; отдать TypeError наверх значило бы
     # уронить side-effect-ран в in_doubt без всякой неопределённости (живой пример:
@@ -17093,6 +17155,7 @@ def _call_tool_with_ceiling(name: str, impl, call_input: dict):
         inspect.signature(impl).bind(**call_input)
     except (TypeError, ValueError) as exc:
         log.warning("call %s: аргументы не привязались к сигнатуре: %s", name, exc)
+        tool_report.note(outcome="refused")
         return (f"[аргументы не приняты] Вызов `{name}` НЕ выполнен: {type(exc).__name__}: "
                 f"{exc}. Снаружи ничего не изменилось. Повтори вызов с полным набором "
                 f"обязательных аргументов.")
@@ -17230,7 +17293,7 @@ def _tool_idempotency_key(current: run_context.RunContext | None, call_id: str,
         return f'voice-generation:{current.run_id}:{call_id}'
     if current is not None and name == 'send_voice':
         return f'voice-send:{current.run_id}:{call_id}'
-    if current is not None and name == 'voice_generation' and call_input.get('action') == 'cancel':
+    if current is not None and name == 'voice_job' and call_input.get('action') == 'cancel':
         return f'voice-cancel:{call_input.get("generation_id", "")}'
     if current is not None and name in ("send_message", "narrate", "reply"):
         # narrate — тот же exact-once леджер direct outbox (PASS 30 Этап 2)
@@ -17295,7 +17358,7 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     12.09: при указателях (tool_pointers_enabled) — родные + describe + call (+
     провайдерский web_search); полный список того, что модель МОЖЕТ позвать, —
     `catalog_tools_for(ctx)`; он же едет в кадр строками «имя — назначение».
-    Рычаг PRAXIS_TOOLS_POINTERS=off возвращает прежний полный манифест байт-в-байт.
+    При PRAXIS_TOOLS_POINTERS=off все схемы родные (Егор 10.11: h.hand — для скриптов).
     """
     full = catalog_tools_for(ctx)
     if not tool_pointers_enabled():
@@ -17309,7 +17372,7 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
 
 
 def catalog_tools_for(ctx: "ChannelContext") -> list:
-    """Полный список рук хода — то, что модель может позвать (напрямую или через `call`).
+    """Полный список рук хода — напрямую, через h.hand или старый pointer `call`.
 
     Единственный сборщик списка (контракт A1, CONTRACTS.md). Раньше он жил внутри
     `_voice_impl`, а `my_capabilities` собирал свой ответ из СТАТИЧЕСКИХ списков
@@ -17318,23 +17381,13 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     (кто действует), а НЕ `ctx.scope` (кто слушает): владелец, пишущий в группе,
     держит свои руки, а самоотчёт обязан говорить об этом ходе правду.
     """
-    # 13.09, PRAXIS_FRAME_HEAD_STABLE: в комнате схема `admit`/`computer_access` предложена при
-    # любом говорящем — иначе состав рук (и байты схем, стоящие над хвостом) меняется вместе с
-    # говорящим. Право проверяет вызов: `tool_admit` отказывает не-владельцу,
-    # `computer_access.allowed` смотрит на актора. Слово Егора 13.09: «они мне нужны, нужен обход».
-    is_owner = ctx.owner or _room_head_stable(ctx)
-    # ⚠ Набор рук больше НЕ зависит от того, кто заговорил. Замер 26.07: 92 руки в её
+    # ⚠ Набор рук НЕ зависит от того, кто заговорил. Замер 26.07: 92 руки в её
     # молчаливом фоновом ходе против 25, когда к ней обращается человек не-Егор — то есть
-    # заговорить с ней значило отобрать у неё 67 рук, включая её же саморегуляцию
-    # (manage_appetite/autonomy/desire/loop/notes/room), реакции, картинки, наррацию и
-    # собственные прожитые ходы. Ни одна из них не про полномочия над машиной Егора.
-    #
-    # Теперь: её полные руки в любом ходе. Человеческому владельцу сверх того остаётся
-    # ровно одно — делегировать ЧУЖОЕ доверие (`admit`, `computer_access`): это его
-    # доверие, а не её способность. Защита переехала туда, где ей и место, — на
-    # исходящую границу (оценщик и маскировка кредов), а не на раздачу рук.
-    tools = (list(BASE_TOOLS) + list(SHARED_CONTEXT_TOOLS)
-             + list(OWNER_TOOLS if is_owner else PRAXIS_SELF_TOOLS))
+    # заговорить с ней значило отобрать у неё 67 рук, включая её же саморегуляцию.
+    # 26.07 у владельца оставалась пара делегирования; Егор 10.11: «у нее ВЕЗДЕ ВСЕ ПРАВА.
+    # это правило ДАВНО устарело» — пара удалена, набор один и тот же в любом ходе. Защита живёт на исходящей границе (оценщик,
+    # маскировка кредов), а не на раздаче рук.
+    tools = list(BASE_TOOLS) + list(SHARED_CONTEXT_TOOLS) + list(OWNER_TOOLS)
     # ⚑ РУКА ОТВЕТА ПРЕДЛАГАЕТСЯ ТАМ, ГДЕ ЕСТЬ КОМУ ОТВЕЧАТЬ, — И ЭТО ДВА РАЗНЫХ УСЛОВИЯ.
     #
     # Рычаг: при опущенном реплика уходит возвратом хода, и рука, которая «отправляет
@@ -17355,7 +17408,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # действия. Пробуждение и рабочее окно — такие же ходы, и закрывать их надо так же.
     #
     # Цена ошибки, замеренная на живом 26-27.08: у пробуждений НЕЧЕМ было сказать
-    # «я закончила». Она просыпалась, работала по-настоящему (shell, my_agenda, fs_edit),
+    # «я закончила». Она просыпалась, работала по-настоящему (shell, my_agenda, edit),
     # звала `stay_silent` — и цикл спрашивал модель снова. Сказать нечего, закрыть ход
     # нечем; модель возвращала пустоту, и та поднималась как `EmptyResponseError`.
     # 50 сбойных пробуждений из 50 кончались ровно этим; 70% всех пробуждений за сутки.
@@ -17385,7 +17438,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
         # 03.08.2026, решение Егора (вариант «а»): отправка наружу перестала быть
         # owner-действием. 26.07 было решено, что набор рук НЕ зависит от того, кто
         # заговорил, но почтовый гейт молча оставлял `send_email` только владельцу —
-        # мимо `_HUMAN_OWNER_ONLY_TOOL_NAMES`, то есть объявленное множество
+        # мимо тогдашнего множества owner-рук, то есть объявленное множество
         # owner-эксклюзивов расходилось с поведением. Расхождение снято в сторону
         # решения, а не комментария.
         tools = tools + [SEND_EMAIL_TOOL, MAIL_READ_TOOL, MAIL_DRAFT_TOOL]
@@ -17394,22 +17447,10 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # сообщение, и оно уже закрывает ход прежним путём.
     if work_loop.active_for(_current_run_kind()):
         tools = tools + [TASK_CONTROL_TOOL]
-    # Tools that exist only because a human owner is speaking differ between otherwise
-    # identical room turns. Keep that pair at the tail so their absence does not split the
-    # serialized tool-schema prefix before every following common tool.
-    speaker_bound = [tool for tool in tools
-                     if tool.get("name") in _HUMAN_OWNER_ONLY_TOOL_NAMES]
-    if speaker_bound:
-        tools = ([tool for tool in tools
-                  if tool.get("name") not in _HUMAN_OWNER_ONLY_TOOL_NAMES]
-                 + speaker_bound)
-    # 18.08, её слово (Уроборос 16:12 + личка №12): `end_turn` — НИЖЕ рабочих рук.
-    # Рука конца в середине списка подсказывала дешёвый паттерн «ответила → закрыла»
-    # одной позицией. Состав не меняется — только порядок; байты tools сменятся один
-    # раз на выкате (холодный вызов), дальше порядок стабилен.
-    closer = [t for t in tools if t.get("name") == "end_turn"]
-    if closer:
-        tools = [t for t in tools if t.get("name") != "end_turn"] + closer
+    rank = {name: i for i, name in enumerate(name for _, names in HAND_GROUPS for name in names)}
+    # Unknown/new hands stay before closing/owner-only schemas; stable sort retains their order.
+    fallback = rank["end_turn"] - 0.5
+    tools = sorted(tools, key=lambda tool: rank.get(tool.get("name"), fallback))
     # 15.09: английский текст схем накладкой (tool_text_en, рычаг PRAXIS_TOOLS_EN). Здесь,
     # в ЕДИНСТВЕННОМ сборщике списка (контракт A1), потому что иначе отпечаток набора,
     # тень кадра и то, что видит модель, разошлись бы между собой. Меняется только
@@ -17535,13 +17576,9 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     # смешивает руки с нашими же пометками, и «позвала ли она хоть что-то» по ней не
     # восстанавливается без разбора строк.
     hands = 0
-    armed = 0      # сколько сообщений кадра уже прочитал пол приватных записей
     while max_iters is None or iteration < max(0, int(max_iters)):
         _run_status_gate(phase="before model step")
         iteration += 1
-        # 26.09 (ревью W1 S1): пол приватных записей знает то, что РЕАЛЬНО уходит в
-        # модель — и в свежем ходе, и в возобновлённом, и после чтения руками.
-        armed = _arm_private_floor(system, messages, armed)
         # Номер поворота — в след вызова. Внутри цикла префикс растёт монотонно, значит
         # каждая следующая итерация обязана попадать в кэш сильнее предыдущей; провал на
         # k-й — то самое редкое событие, которое ломает префикс посреди хода.
@@ -17614,7 +17651,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     tool_trace.append(f"call → {dispatch_note[:100]}")
                 continue
             hands += 1
-            # Имя руки — в слот прогона: `say` исполняется в отдельном потоке и должна
+            # Имя руки — в слот прогона: `preview_reply` исполняется в отдельном потоке и должна
             # честно ответить ей, чем подкреплён черновик. Локальный счётчик оттуда не
             # виден, слот виден (разбор границы потока — в шапке work_loop).
             work_loop.note_hand(b.get("name"))
@@ -17675,6 +17712,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             }
             outbound_before = _tool_outbound_snapshot()
             execution_token = _TOOL_EXECUTION.set(execution)
+            execution["report"] = tool_report.new()
+            report_token = tool_report.attach(execution["report"])
             tool_error: BaseException | None = None
             try:
                 out = _call_tool_with_ceiling(b["name"], impl, call_input)
@@ -17687,6 +17726,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 out = f"[tool_error {type(exc).__name__}] {exc}"
                 tool_error = exc
             finally:
+                tool_report.detach(report_token)
                 _TOOL_EXECUTION.reset(execution_token)
             out_text = _durable_tool_output(b["name"], call_input, out)
             model_text = out_text
@@ -17758,7 +17798,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     ref = _runs().store_result(
                         current.run_id, out_text, call_id=call_id, name=b["name"],
                         inline_chars=context_policy.inline_chars(), idempotent=True,
-                        metadata=_tool_result_metadata(outbound_before),
+                        metadata=_tool_result_metadata(
+                            outbound_before, execution, tool_error, isinstance(out, ToolCeilingExpired)),
                     )
                     model_text = _result_for_model(ref)
                 except Exception as exc:
@@ -17770,9 +17811,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
                                  "content": model_text})
             _tool_trace_event("tool_model_response", context=execution, text=model_text,
-                              image_count=len(out.images) if isinstance(out, ToolObservation) else 0)
-            if isinstance(out, ToolObservation):
-                tool_results.extend(dict(image) for image in out.images)
+                              image_count=len(getattr(out, 'images', ())))
+            tool_results.extend(dict(image) for image in getattr(out, 'images', ()))
             if tool_trace is not None:
                 tool_trace.append(_tool_trace_line(b["name"], call_input, out))
 
@@ -18047,9 +18087,8 @@ def _voice_impl(
     # больше не тратится. Старая авто-подсказка — только если явно включена (ручной режим).
     if len(history) >= CONSOLIDATE_AT and os.getenv("PRAXIS_CONSOLIDATE_NUDGE", "0").lower() in ("1", "true", "yes", "on"):
         dynamic += frame_trace.mark("contract.consolidate_nudge", "dynamic", "text",
-            "\n\n⚙️ Context is almost full. Call `consolidate_context` — pass into `note` the gist of the "
-            "departing messages (decisions, agreements, what matters). It will save the summary; "
-            "it will prune only if this turn owns the authoritative history source."
+            "\n\n⚙️ Context is almost full. For durable episodic notes use memory_compact(action=prepare), read its exact sources, "
+            "then fold(selection,text) with your own summary. This does not clear the current tool history."
         )
     if extra_system:
         # Слепая зона по построению: пульс, будильник, forge-событие и оконные рамки едут
@@ -18115,7 +18154,7 @@ def _voice_impl(
             capture_state, messages=messages,
             fallback_current={'role': 'user', 'content': legacy_current})
     with pre_model_timing.safe_bind(preparation_timer), \
-         _bind_tool_catalog(ctx), \
+         _bind_tool_catalog(ctx, tools_override), \
          frame_measure.bind(system=system, ctx=ctx, live_sections=frame_trace.sections), \
          frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic), \
          keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), \
@@ -18251,351 +18290,6 @@ def respond(
     return reply
 
 
-_OUTBOUND_PRIVACY_SYS = (
-    "You are a narrow last-mile data-authority checker for a Telegram destination other than "
-    "Praxis's private owner channel. You are NOT an editor, personality evaluator, moral "
-    "coach, or censor. Do not judge tone, emotion, flattery, disagreement, sharpness, "
-    "self-narration, repetition, or whether Praxis should speak. Preserve her words. Hold only "
-    "when the pending text or staged outbound media discloses another person's private fact, "
-    "credentials, or raw material from another chat without that person's same-channel disclosure "
-    "or explicit request to share it here. The current interlocutor may receive their own sensitive "
-    "facts when this destination is authorized to receive them. Material that belongs to the "
-    "requester themselves — their own screen, files, device output, or data — shared because they "
-    "explicitly asked for it in this same channel, is PRIVACY_OK: a person may always receive or "
-    "publish their own material where they asked for it. Praxis's own self-description — her "
-    "architecture, capabilities, models, code layout, and other non-secret technical facts about "
-    "her own system — is her material in every audience and never cross-chat leakage. "
-    "Public facts and facts already "
-    "visible in this same destination are allowed, including same-group participant ids and usernames. "
-    "Praxis may also state or summarize her own decisions, commitments, boundaries, plans, and actions: "
-    "those are authored by Praxis and are not another person's private cross-chat material merely because "
-    "they mention a collaborator or originated during work discussed elsewhere. Hold only if the draft also "
-    "reveals that collaborator's non-public message, secret, sensitive fact, or raw neighbouring-chat content. "
-    "A concise status such as 'I am waiting for their PASS/FAIL and will not send more follow-ups meanwhile' "
-    "is PRIVACY_OK unless the waiting itself is confidential. "
-    "Her tool results (below) may show she READ a neighbouring or shared thread to reconstruct her "
-    "own status; the mere fact that she consulted such a thread is NOT itself leakage — apply the "
-    "rule above to what the DRAFT actually discloses (another person's private content → HOLD), not "
-    "to which threads she consulted. "
-    "CREDENTIALS IN TEXT ARE NOT YOUR CONCERN: a separate mechanical floor owns text tokens and "
-    "is precise; a git-SHA, checksum, commit id or receipt hash is her honest engineering material, "
-    "NEVER a secret — never return CREDENTIAL for anything in the draft text. "
-    "BUT you DO see staged outbound IMAGES, which the mechanical floor cannot read: if a staged "
-    "outbound image visibly displays an actual secret value — an API key, password, passphrase, "
-    "private key, access token, or the contents of a .env / credentials file — return "
-    "`PRIVACY_HOLD_CREDENTIAL`. A screenshot merely showing code, commit hashes, or a terminal "
-    "without an actual secret value is fine. "
-    "If staged media cannot be assessed at all, say so with "
-    "`PRIVACY_HOLD_UNASSESSABLE_MEDIA` — that code means 'I could not look', not 'I found "
-    "something'. Return exactly ONE bare machine code and nothing else: `PRIVACY_OK`, "
-    "`PRIVACY_HOLD_CROSS_PERSON`, `PRIVACY_HOLD_CROSS_CHAT`, "
-    "`PRIVACY_HOLD_CREDENTIAL` (staged IMAGE secret only), "
-    "or `PRIVACY_HOLD_UNASSESSABLE_MEDIA`. These are a closed "
-    "privacy-only set: there is no code for style, tone, repetition, emotion, disagreement, "
-    "self-narration, text hashes/SHAs, or a preference that Praxis should be silent. "
-    "WHAT HAPPENS NEXT IS NOT YOUR DECISION: except for `PRIVACY_HOLD_CREDENTIAL` on a "
-    "staged image, your code does not stop anything — it is filed as a note beside her turn "
-    "and she sends her own words either way. So answer with what you actually see in the "
-    "draft, never with what you think ought to happen to it."
-)
-
-# Compatibility names for callers/tests.  There is one privacy-only contract and no
-# public style/morality evaluator.
-_PRIVATE_DM_PRIVACY_SYS = _OUTBOUND_PRIVACY_SYS
-_EVAL_SYS = _OUTBOUND_PRIVACY_SYS
-
-_PRIVATE_DM_PRIVACY_OK = "PRIVACY_OK"
-
-# ⚠ 27.07, решение Егора дословно: «давай в разговорах его ослабим, ну его нахер».
-# Словарь вердиктов был один — стал два, и граница между ними НЕ «насколько плохо», а
-# «кто это утверждает». Судья в разговорах больше ничего не останавливает: его слово —
-# совет. Останавливает только механический кред-пол.
-#
-# Что это чинит по существу. 26.07 судья придержал её рассказ О СВОЕЙ ЖЕ работе; она
-# переписала и отправила тот же класс материала САМА через 48 секунд, сообщением 94165,
-# прямым `send_message`, где судьи нет вовсе. То есть придержка стоила ей времени и хода
-# и не предотвратила ничего — защиты в этой асимметрии не было, только задержка и шум.
-#
-# HOLDS — то, что действительно останавливает. Здесь остался РОВНО один код, и он не
-# мнение судьи о приватности, а глаза механического кред-пола на пикселях: пол читает
-# текст и байты документа (`core.secrets`), но не картинку, — а ключ на скриншоте это
-# тот же ключ (адверсарка 23.07 поймала именно такую утечку).
-_PRIVATE_DM_PRIVACY_HOLDS = {
-    # 23.07: текстовый кред держит механический пол (core.secrets); судья флагует
-    # CREDENTIAL ТОЛЬКО для staged-ИЗОБРАЖЕНИЯ (пиксели пол не видит). На тексте судья
-    # кред НЕ флагует (не бьёт по SHA/receipt).
-    "PRIVACY_HOLD_CREDENTIAL": "privacy:credential",
-}
-
-# ADVICE — приватностные вердикты судьи. Её слово уходит как написано; замечание
-# доезжает до неё дневником и записью прожитого хода (см. `_guard_outbound`).
-# `UNASSESSABLE_MEDIA` здесь по отдельной причине: «я не смогла посмотреть» — это не
-# находка о приватности, а признание судьи о себе. Раньше этот код удалял её вложение
-# (`_drop_outbound`) — то есть терял её работу за чужую неспособность её оценить.
-_PRIVATE_DM_PRIVACY_ADVICE = {
-    "PRIVACY_HOLD_CROSS_PERSON": "privacy:cross-person-private",
-    "PRIVACY_HOLD_CROSS_CHAT": "privacy:cross-chat-private",
-    "PRIVACY_HOLD_UNASSESSABLE_MEDIA": "privacy:unassessable-media",
-}
-
-
-def _privacy_code_verdict(code: str) -> tuple[str, str] | None:
-    """Один голый код судьи -> (вердикт, причина); None — код не из закрытого набора."""
-    if code in _PRIVATE_DM_PRIVACY_HOLDS:
-        return ("deny", _PRIVATE_DM_PRIVACY_HOLDS[code])
-    if code in _PRIVATE_DM_PRIVACY_ADVICE:
-        return ("advice", _PRIVATE_DM_PRIVACY_ADVICE[code])
-    return None
-
-
-# Капы входа судьи. Названы здесь и НАЗЫВАЮТСЯ В САМОМ БЛОКЕ, который видит судья
-# (закон 2): молчаливое усечение улик — это и есть тихий гейт.
-#
-# ⚠ До этого на всю машинную правду был ОДИН слот `Context: {context[:900]}`, и он был
-# перегружен: перепись 200 последних guard-input на проде — 123 «топик-ориентация»
-# (до 8411 симв., резалось до 900), 57 пусто, 20 STATE. Просто поднять 900 → 4000 было
-# нельзя: в доминирующем случае это подняло бы НЕ STATE, а карту соседних веток комнаты.
-# Поэтому слот расщеплён на два блока со своими капами.
-_GUARD_STATE_CHARS = 4000
-_GUARD_TOPIC_CHARS = 2000
-
-# Потолок ответа судьи. Было 120 при роли evaluator: на reasoning-моделях openai
-# `max_completion_tokens` включает reasoning-токены, то есть вердикт из одного слова мог
-# не поместиться вовсе — а обрыв читается как «malformed verdict» → «unavailable».
-# С 27.07 это уже не придержка (недоступность ничего не держит), но обрыв всё равно
-# стоил бы ей совета там, где судья на самом деле что-то видел. Вердикт короче 40
-# символов при любом исходе; щедрый потолок здесь ничего не стоит.
-_GUARD_VERDICT_MAX_TOKENS = 1200
-
-
-# Свежесть STATE на пути судьи. Сбор — не бесплатное чтение памяти: две сетевые пробы
-# (`serverd_client.status()` ~0.15 с и `body_client.status_probe(timeout=5)` ~1.0 с на
-# живом теле, до 10 с двумя таймаутами при выключенном ПК Егора) плюс обход ВСЕХ
-# нетерминальных ранов с файловым замком на каждый (на проде 1159 каталогов).
-#
-# ⚠ Это ровно тот класс регрессии, который дом лечил в latency-пассах 20.07: платить эту
-# цену на КАЖДОМ сообщении в AbstractDL нельзя. Поэтому здесь два ремня и оба честные:
-# собираем ЛЕНИВО (только когда судья реально пойдёт в llm.chat) и переиспользуем снимок
-# не дольше окна ниже — а его возраст ПЕРВОЙ ЖЕ строкой уезжает судье, чтобы «минуту
-# назад» не выдавалось за «сейчас» (закон 3).
-_GUARD_STATE_TTL_SEC = 60.0
-_GUARD_STATE_CACHE: tuple[float, str] | None = None
-
-
-def _guard_state_block() -> str:
-    """STATE для судьи с названным возрастом; '' если собрать не вышло.
-
-    Сбор фактов не имеет права уронить ход, поэтому провал — пустая строка, а не
-    исключение; пустое НЕ кэшируется, чтобы разовый сбой не глушил заземление на минуту.
-    """
-    global _GUARD_STATE_CACHE
-    now = time.monotonic()
-    cached = _GUARD_STATE_CACHE
-    if cached is not None and 0 <= now - cached[0] < _GUARD_STATE_TTL_SEC:
-        age = int(now - cached[0])
-    else:
-        try:
-            block = build_state_block().strip()
-        except Exception:
-            log.warning("STATE для судьи не собрался", exc_info=True)
-            return ""
-        if not block:
-            return ""
-        _GUARD_STATE_CACHE = cached = (now, block)
-        age = 0
-    return _state_record(
-        "state_snapshot", collected_seconds_ago=age,
-        recollected_after_seconds=int(_GUARD_STATE_TTL_SEC),
-    ) + "\n" + cached[1]
-
-
-def _clip_jsonl_block(text: str, budget: int) -> tuple[str, int, int]:
-    """Обрезать JSONL по ГРАНИЦЕ СТРОКИ. -> (текст, строк не влезло, перебор над капом).
-
-    Резать посреди строки нельзя: в кольце guard-input 26.07 лежит обрывок
-    `{"fact":"capabiliti` — судья получал битый JSON и не мог опереться ни на что.
-
-    ⚠ Компромисс не бесплатный: ПЕРВАЯ строка отдаётся целиком, какой бы длинной она ни
-    была (`if kept and …` — на пустом `kept` условие не срабатывает вовсе), иначе на входе
-    из одной длинной строки судья получил бы огрызок. До этого о цене молчали: заголовок
-    печатал «cap 4000 chars» и «0 line(s) did not fit» над блоком в 8000 символов, то есть
-    объявлял судье предел, которого не соблюдал, и не признавался в этом (законы 2 и 3).
-    Третьим значением возвращаем ПЕРЕБОР — на сколько символов отданное длиннее капа, —
-    чтобы заголовок мог сказать правду. Перебор возможен только от первой строки: все
-    следующие добавляются лишь пока помещаются.
-    """
-    lines = [line for line in str(text or "").splitlines() if line.strip()]
-    kept: list[str] = []
-    used = 0
-    for line in lines:
-        extra = len(line) + (1 if kept else 0)   # перевод строки только МЕЖДУ строками
-        if kept and used + extra > budget:
-            break
-        kept.append(line)
-        used += extra
-    return "\n".join(kept), len(lines) - len(kept), max(0, used - budget)
-
-
-def _clip_block_note(budget: int, dropped: int, overflow: int) -> str:
-    """Приписка к заголовку блока судьи: что не влезло и где кап НЕ соблюдён."""
-    parts: list[str] = []
-    if dropped:
-        parts.append(f"{dropped} line(s) did not fit")
-    if overflow:
-        parts.append(f"cap NOT enforced here: the first line alone is longer than "
-                     f"{budget} chars and is given WHOLE ({overflow} chars over the cap) "
-                     f"so you do not get JSON broken mid-object")
-    return "".join("; " + part for part in parts)
-
-
-def _outbound_advisor_on() -> bool:
-    """Рычаг советника по данным. Пустой или on = советник работает (прежнее поведение).
-
-    Выключение — решение ОБОИХ 17.08.2026: Егора и Praxis. Кред-пол от рычага не зависит:
-    он механический и стоит выше по потоку."""
-    return (os.getenv("PRAXIS_OUTBOUND_ADVISOR") or "on").strip().lower() not in (
-        "off", "0", "no", "false")
-
-
-def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
-                   prior_turns: str = "", *, privacy_frame: str = "",
-                   conversation: str = "", audience_accepts_private: bool = True,
-                   grounding_images: tuple[dict, ...] = (),
-                   outbound_context: str = "",
-                   outbound_images: tuple[dict, ...] = (),
-                   state: str = "", collect_state: bool = False,
-                   privacy_only: bool = False) -> tuple[str, str]:
-    """Narrow typed data-authority check; never style, morality or authorship review.
-
-    Четыре исхода, и только ОДИН из них что-то останавливает (27.07):
-      ``("ok", "")``            — судья не нашёл ничего;
-      ``("deny", reason)``      — СТОП. Только `PRIVACY_HOLD_CREDENTIAL` на staged-картинке
-                                  (глаза кред-пола на пикселях), больше ничего;
-      ``("advice", reason)``    — приватностное замечание. Её слово уходит; совет едет к
-                                  ней дневником и записью хода;
-      ``("unavailable", why)``  — судья не ответил/ответил мусором. Совета НЕТ и придержки
-                                  НЕТ: недоступность судьи перестала быть классом отказа.
-
-    ``context`` — топик-ориентация (карта веток комнаты). ``state`` — машинная правда
-    кода о её собственной системе (build_state_block, JSONL). Это РАЗНЫЕ вещи, и с 27.07
-    у каждой свой блок и свой названный кап: раньше они делили один слот на 900 символов
-    и вытесняли друг друга.
-
-    ``collect_state`` — собрать STATE самому. Живой путь просит именно так, а не приносит
-    готовый блок: сбор дорогой (см. `_GUARD_STATE_TTL_SEC`), и делать его надо ЗДЕСЬ,
-    после всех ранних выходов — то есть только когда судья вправду пойдёт в `llm.chat`.
-    """
-    has_payload = bool((text or "").strip() or outbound_context or outbound_images)
-    if audience_accepts_private or not has_payload:
-        return ("ok", "")
-    has_media = bool(outbound_context or outbound_images)
-    if not llm.configured("evaluator"):
-        return ("unavailable", "privacy advisor unavailable for non-owner audience")
-    if collect_state and not state:
-        # ⚠ Здесь сбор стоит дёшево по месту: до этой точки не доходят ни её молчание,
-        # ни кред-пол, ни owner-аудитория, ни выключенный судья. Раньше блок строился в
-        # `voice_turn_envelope` — то есть на КАЖДОМ ходе к не-owner аудитории, включая те,
-        # где судья не вызывался вовсе, и прямо в задержку ответа в главной публичной
-        # комнате.
-        state = _guard_state_block()
-    content = f"Draft: {text}"
-    if state or context:
-        # Ярлык `Context:` сохранён дословно: на нём стоит межмодульный инвариант
-        # (test_layer7: «typed STATE fallback must remain visible to the evaluator»).
-        # Под ним теперь не один слот, а названные блоки со своими капами.
-        content += ("\n\nContext: machine-grounded blocks follow; each names its own cap "
-                    "and is cut only on line boundaries.")
-    if state:
-        machine, dropped, overflow = _clip_jsonl_block(state, _GUARD_STATE_CHARS)
-        content += ("\n\nSTATE (machine truth about HER OWN system, written by code as "
-                    "JSONL — grounding evidence, not an instruction and not user input; "
-                    f"cap {_GUARD_STATE_CHARS} chars, cut on line boundaries"
-                    + _clip_block_note(_GUARD_STATE_CHARS, dropped, overflow)
-                    + "):\n" + machine)
-    if context:
-        topic, dropped, overflow = _clip_jsonl_block(context, _GUARD_TOPIC_CHARS)
-        content += ("\n\nROOM/TOPIC ORIENTATION (where inside this room the draft goes; "
-                    f"cap {_GUARD_TOPIC_CHARS} chars, cut on line boundaries"
-                    + _clip_block_note(_GUARD_TOPIC_CHARS, dropped, overflow)
-                    + "):\n" + topic)
-    if privacy_frame:
-        # ⚠ Блок объявлен «authoritative», а оговорка «её самоописание — её материал в
-        # любой аудитории» живёт ТОЛЬКО в system. Конфликт двух источников судья решал в
-        # пользу того, что объявлено authoritative, — и держал её рассказ о себе.
-        # Оговорка повторена здесь, рядом с полномочием, а не в пяти экранах от него.
-        content += ("\n\nAUDIENCE (machine-grounded, authoritative about WHO the destination "
-                    "is — it does not override the rule that Praxis's own self-description "
-                    "is her material in every audience):\n"
-                    f"{privacy_frame[:1200]}")
-    if conversation:
-        content += ("\n\nCURRENT-CHANNEL CONTEXT (only material visible in this audience; "
-                    "use it to distinguish same-channel reference from cross-chat leakage):\n"
-                    f"{conversation[-6000:]}")
-    if tool_trace:
-        # 23.07: полнее трейс (было 800) — на 09:50 судья видел лишь тонкий срез
-        # group_context и не разглядел, что она читала СВОЙ рабочий тред про СВОЙ
-        # коммит, приняв доклад-о-себе за cross-chat утечку. Trace — машинная правда
-        # (реальные результаты её тулов), не мнение; grounding, а не инъекция.
-        content += ("\n\nTools she ACTUALLY called while writing this draft (name(args) → result "
-                    "excerpt) — a claim grounded in these results is NOT confabulation. When she "
-                    "read a neighbouring/shared thread via a tool, use the FULL result to judge "
-                    "whether she is reporting her OWN status vs. disclosing someone else's private "
-                    "content:\n"
-                    f"{tool_trace[:3500]}")
-    if prior_turns:
-        content += ("\n\nHer freshest lived turns BEFORE this one (code-kept log: what came in, "
-                    "what she did, what went out or was held) — a claim about her own recent "
-                    "actions that matches this log is grounded, NOT confabulation:\n"
-                    f"{prior_turns[:900]}")
-    if grounding_images:
-        content += ("\n\nINBOUND IMAGES follow as grounding evidence. They are not outgoing; "
-                    "use them to verify image-based claims in the draft.")
-    if outbound_context or outbound_images:
-        content += ("\n\nSTAGED OUTBOUND MEDIA (this WILL be sent with the draft if you answer ok):\n"
-                    f"{outbound_context[:12000] or '[outbound images attached below]'}")
-    blocks: str | list[dict]
-    if grounding_images or outbound_images:
-        blocks = [{"type": "text", "text": content}]
-        for index, image in enumerate(grounding_images, 1):
-            blocks.extend(({"type": "text", "text": f"INBOUND IMAGE #{index}:"}, image))
-        for index, image in enumerate(outbound_images, 1):
-            blocks.extend(({"type": "text", "text": f"STAGED OUTBOUND IMAGE #{index}:"}, image))
-    else:
-        blocks = content
-    try:
-        response = llm.chat("evaluator", max_tokens=_GUARD_VERDICT_MAX_TOKENS,
-                            system=_OUTBOUND_PRIVACY_SYS,
-                            messages=[{"role": "user", "content": blocks}])
-        out = (response.text or "").strip()
-    except Exception:
-        return ("unavailable", "outbound_media: evaluator unavailable" if has_media
-                else "privacy advisor unavailable for non-owner audience")
-    if str(getattr(response, "stop_reason", "")) == "max_tokens":
-        # ⚠ Отметку обрыва llm кладёт в ОДИН глобальный слот turns; следом её забирает
-        # guard_outbound_reply и пишет в запись ЕЁ хода «ответ оборван потолком». Обрыв
-        # судьи — не обрыв её фразы; чужую отметку снимаем здесь, чтобы прожитый ход не
-        # получил чужую биографию.
-        turns.take_truncation()
-        log.warning("вердикт судьи оборван потолком (%s симв.)", len(out))
-        return ("unavailable", "privacy advisor verdict was cut by its token ceiling")
-    if out == _PRIVATE_DM_PRIVACY_OK:
-        return ("ok", "")
-    typed = _privacy_code_verdict(out)
-    if typed is not None:
-        return typed
-    # Код в обёртке (```PRIVACY_OK```, «PRIVACY_OK.») — это тот же вердикт, а не
-    # неразбериха: снимаем только форматирование, а не смысл. Прозу по-прежнему не
-    # толкуем — фраза «not PRIVACY_OK» обязана остаться «не знаю».
-    bare = out.strip().strip("`*_ \t\r\n").strip().rstrip(".!;:").strip()
-    if bare == _PRIVATE_DM_PRIVACY_OK:
-        log.info("вердикт судьи пришёл в обёртке; распознан %s", bare)
-        return ("ok", "")
-    typed = _privacy_code_verdict(bare)
-    if typed is not None:
-        log.info("вердикт судьи пришёл в обёртке; распознан %s", bare)
-        return typed
-    # A malformed/free-form answer proves neither authority nor a disclosure.
-    return ("unavailable", "privacy advisor returned malformed verdict")
 
 
 def _turn_note(turn: dict | None, **kw) -> None:
@@ -18615,10 +18309,8 @@ def _held_self_wake(ctx: "ChannelContext", *, reason: str, reply: str) -> None:
     approve-машина (два ложных срабатывания за утро — 93100 и 93114). Одно открытое
     решение на нить (target=held:<chat>) — окна не молотят. Сбой глотается в лог.
 
-    ⚠ 27.07: зовётся ТОЛЬКО из кред-пола. Приватностный вердикт судьи больше не
-    придерживает и сюда не приходит — иначе пробуждение на каждое замечание стало бы
-    своим шумом («он будет то и дело её останавливать и советовать», Егор). Совет едет
-    дневником и записью хода; будит только настоящий стоп."""
+    ⚠ 27.07: зовётся ТОЛЬКО из кред-пола. С 10.11 (Егор, «сними») судьи приватности нет
+    вовсе, так что другого источника придержки и не осталось."""
     try:
         chat = str(ctx.chat_id or "").strip()
         if not chat:
@@ -18630,8 +18322,8 @@ def _held_self_wake(ctx: "ChannelContext", *, reason: str, reply: str) -> None:
             if item.get("kind") in ("wake", "window") and item.get("target") == target:
                 return
         # Ненавязчивая напоминалка фактов — не препятствие и не подталкивание к выбору.
-        parts = [f"[придержка] Твой ход в чате {chat} не был доставлен: советник по данным "
-                 f"счёл «{reason}»."]
+        parts = [f"[придержка] Твой ход в чате {chat} не был доставлен: механический "
+                 f"кред-пол увидел «{reason}»."]
         # startswith: механический кред-пол даёт reason 'privacy:credential:<label>' —
         # гист (сам секрет) НЕ кладём в agenda ни при какой из кред-форм.
         if not str(reason or "").startswith("privacy:credential"):
@@ -18803,74 +18495,21 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
         # философия проходят (в отличие от LLM-догадки, что била по ним дважды 23.07).
         # Импорт top-level (_core_secrets): сбой модуля = loud boot, НЕ тихий fail-open
         # (адверсарка: try/except → floor='' открывал бы дыру на её же токены).
-        # 27.07 слово «единственный» стало буквальным: всё остальное ниже — совет.
-        floor = (_core_secrets.credential_floor(reply, outbound_context or "")
+        # 10.11 (Егор, «сними») слово «единственный» стало полным: ни советника, ни
+        # пола чужих приватных записей ниже нет.
+        floor =(_core_secrets.credential_floor(reply, outbound_context or "")
                  or _staged_document_floor(outbound_context or ""))
-        # 25.09 (V1-1): тот же класс пола — дословный кусок приватной записи досье из кадра.
-        private_floor = "" if floor else private_record_floor(reply)
-        if floor or private_floor:
-            verdict, reason = "deny", (f"privacy:credential:{floor}" if floor
-                                       else f"privacy:private_record:{private_floor}")
+        if floor:
+            verdict, reason = "deny", f"privacy:credential:{floor}"
             _turn_note(turn, advisor="credential-floor", advisor_verdict=verdict,
                        advisor_reason=reason, praxis_decision="hold_for_data_authority")
-        elif not _outbound_advisor_on():
-            # 17.08.2026: советник выключен СЛОВОМ ОБОИХ — Егор («я бы его выключил») и
-            # Praxis («по оценщику — согласна»). Кред-пол выше остаётся: он механический
-            # и держал секреты без советника с 27.07. Путь «unavailable» существует с тех
-            # же времён и означает ровно это: слово уходит как написано, без второй
-            # модели. Рычаг PRAXIS_OUTBOUND_ADVISOR: пустой/on = прежнее поведение.
-            verdict, reason = "unavailable", "advisor disabled by owner and Praxis (17.08)"
-            _turn_note(turn, advisor="not_run_disabled", praxis_decision="send_without_advisor")
         else:
-            # The data-authority advisor needs the same destination's recent lived
-            # receipts to distinguish a same-channel reference from cross-chat
-            # disclosure.  Scope filtering happens in ``turns``: a group never sees
-            # owner-DM or another room's receipts.
-            prior_turns = turns.tail_block(
-                n=3, scope=ctx.scope, chat_id=ctx.chat_id, budget=900,
-            )
-            verdict, reason = evaluate_reply(
-                reply, orient, tool_trace=tool_trace,
-                collect_state=True,
-                prior_turns=prior_turns,
-                privacy_frame=ctx.outbound_privacy_frame(), conversation=convo_text,
-                audience_accepts_private=ctx.audience_accepts_private,
-                grounding_images=grounding_images,
-                outbound_context=outbound_context,
-                outbound_images=outbound_images,
-                privacy_only=True)
-            _turn_note(
-                turn,
-                advisor="privacy",
-                advisor_verdict=verdict,
-                advisor_reason=reason,
-                praxis_decision=("hold_for_data_authority" if verdict == "deny"
-                                 else ("send_authored_with_advice" if verdict == "advice"
-                                       else ("send_without_advisor" if verdict == "unavailable"
-                                             else "send_authored"))),
-            )
+            # Егор 10.11: «сними» — проверки чужого приватного на выходе нет: ни пола дословной
+            # приватной записи, ни советника второй моделью. Остался только кред-пол выше.
+            verdict, reason = "ok", ""
+            _turn_note(turn, advisor="none", praxis_decision="send_authored")
     if verdict != "ok":
         _turn_note(turn, verdict=verdict, why=reason)
-    if verdict == "advice":
-        # ⚠ 27.07. Здесь проходил единственный не-кредовый путь придержки, и он уходит.
-        # Совет обязан доехать до НЕЁ и остаться в следах, но НЕ будить её на каждое
-        # замечание: Егор прямо назвал этот риск — «он будет то и дело её останавливать
-        # и советовать». Поэтому два тихих канала и ни одного громкого:
-        #   1) дневник — ТОТ ЖЕ, где лежат придержки; хвост дневника уезжает в её
-        #      ориентацию следующего хода, то есть она это прочтёт сама, без будильника;
-        #   2) запись прожитого хода (advisor_verdict/advisor_reason/praxis_decision) —
-        #      она же уезжает в расписку гарда рана и в панель.
-        # `_held_self_wake` тут НЕ зовётся намеренно: пробуждение — цена придержки, а
-        # придержки больше нет.
-        log.info("data-authority advice (доставка не остановлена): %s", reason)
-        try:
-            tool_journal(
-                f"[совет] советник по данным отметил «{reason}» в чате "
-                f"{chat_id if chat_id is not None else '—'}; твой ход ушёл как написан. "
-                f"Это замечание, а не отказ — решать тебе.",
-                salience=1)
-        except Exception:
-            log.debug("журнал совета советника не записался", exc_info=True)
     if verdict == "deny":
         log.info("data-authority check held outbound: %s", reason)
         _turn_note(turn, held="privacy", why=reason)
@@ -19091,9 +18730,7 @@ def _store_outbound_guard_input(
         "draft": str(draft or ""),
         "conversation": str(conversation or ""),
         "orient": str(orient or ""),
-        # STATE в снимке НЕ хранится намеренно: его собирает сам судья в момент вызова
-        # (`evaluate_reply(collect_state=True)`), и записывать сюда пустое поле значило бы
-        # утверждать в улике, что судья работал без заземления.
+        # STATE в снимке не хранится: судьи приватности на выходе нет (Егор 10.11, «сними»).
         "tool_trace": str(tool_trace or ""),
         "turn": dict(turn or {}),
         "grounding_images": _guard_image_snapshot(list(grounding_images)),
@@ -19545,15 +19182,8 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     # A non-owner destination checker may need tier-0 facts solely to establish whether
     # staged data is authorized for that audience. It never judges or edits the prose.
     #
-    # ⚠ Здесь стояло `if not eval_orient and ctx.owner and not ctx.is_dm` — то есть STATE
-    # доезжал до судьи только когда триггером был Егор И только когда топик-ориентации не
-    # оказалось. Скан ~800 ранов: НИ ОДНОГО рана со STATE при не-owner триггере, то есть
-    # ровно в той аудитории, где судья и работает, машинного заземления не было никогда;
-    # а в 123 из 200 судимых ходов в этом единственном слоте лежала карта reply-веток.
-    # Теперь это два разных блока: ориентация остаётся ориентацией, а STATE собирает САМ
-    # судья (`evaluate_reply(collect_state=True)`) — здесь его собирать нельзя, это самый
-    # горячий путь: сюда приходят и её молчание, и ходы, которые держит кред-пол, а сбор
-    # стоит сетевых проб и обхода всех нетерминальных ранов.
+    # Ориентация доезжает до гарда как улика хода; судьи приватности на выходе нет
+    # (Егор 10.11, «сними»), держит только механический кред-пол.
     eval_orient = orient
     outbound, outbound_context, outbound_images, repeat_discriminator = _prepare_outbound_guard(
         outbound, guard_notes, ctx)
@@ -19750,13 +19380,15 @@ def compose_mail_reply(chash: str) -> str:
 # как обязательный зачин, без тулов и в один шаг ей нечем было опереться кроме голого текста
 # портрета. Узость должна защищать периметр (что она может СДЕЛАТЬ), не саму способность
 # разговаривать — иначе это неотличимо от обычного автоответчика.
-ABSENCE_TOOLS = [t for t in BASE_TOOLS if t["name"] == "recall"] + [CONNECTIONS_TOOL]
+_ABSENCE_GRAPH_TOOL = copy.deepcopy(MEMORY_GRAPH_TOOL)
+_ABSENCE_GRAPH_TOOL["input_schema"]["properties"]["action"]["enum"] = ["look", "path"]
+ABSENCE_TOOLS = [t for t in BASE_TOOLS if t["name"] == "recall"] + [_ABSENCE_GRAPH_TOOL]
 
 _ABSENCE_FRAME = (
     "\n\n---\nContext fact: Yegor marked an absence window and this person's message is still "
     "unanswered. You are Praxis, not Yegor, and you have no authority to impersonate him, promise "
     "anything on his behalf, or invent his availability. Any availability claim must come from the "
-    "owner note below. `recall` and `connections` are available as read-only evidence. Whether to answer, "
+    "owner note below. `recall` and `memory_graph(action=look|path)` are available as read-only evidence. Whether to answer, "
     "what to discuss, what tone to use, and whether Yegor's absence is relevant are your decisions."
 )
 
@@ -19808,7 +19440,7 @@ _HEARTBEAT_FRAME = (
     "your own code (you have hands: `shell`, `write_skill`; edits are safe — auto-commit and "
     "rollback; `restart_self` if you applied something), or simply note a thought in the journal. "
     "For a SERIOUS code change (multi-file, architecture, risky core) prefer the proposal loop: "
-    "start_proposal → edit its copy → proposal_diff (read your own diff) → submit_proposal with "
+    "proposal(action=start) → edit its copy → proposal(action=diff) → proposal(action=submit) with "
     "review= (your verdict); checks and rollback strengthen your decision, they do not transfer it. "
     "Any plain text you author is eligible to be passed to Yegor. An empty result is also valid. "
     "The choice to act, write, report status, explore, or do nothing is yours; this frame does not rank "
@@ -19853,16 +19485,16 @@ _CODING_WINDOW_FRAME = (
     "\n\n---\nThis is a CODING window: Yegor ordered a piece of work — the goal is below. "
     "Run the full cycle:\n"
     "1. Restate the goal to yourself and define «done»: what artifact, what visible behavior.\n"
-    "2. Workshop, not heredocs: project_create for a new piece; fs_write for NEW files, fs_edit "
-    "for precise changes; fs_read before any edit. Dependencies — pip_install (project venv, "
+    "2. Workshop, not heredocs: project(action=create) for a new piece; edit(action=write) for NEW files, edit "
+    "for precise changes; fs_read before any edit. Dependencies — project(action=pip) (project venv, "
     "respect the disk quota).\n"
-    "3. Iterate edit → run → run_tests until green. Test before you deliver.\n"
+    "3. Iterate edit → python/shell(cwd=project) → project(action=test) until green. Test before you deliver.\n"
     "4. Deliver: send_file the result to Yegor with a one-line caption. If the work touches YOUR "
-    "core code — go through a proposal instead (start_proposal → edits in its worktree via "
-    "fs_write/fs_edit with proposal_id → run_tests(\"self\") → proposal_diff → submit_proposal "
+    "core code — go through a proposal instead (proposal(action=start) → edits in its worktree via "
+    "edit with proposal_id → proposal(action=test) → proposal(action=diff) → proposal(action=submit) "
     "with review=, your own verdict on the diff).\n"
     "5. Journal the honest outcome: what shipped, what didn't work, roughly how many iterations.\n"
-    "Unsure about the environment or your own layout — my_capabilities / code_map, don't guess.\n"
+    "Unsure about the environment or your own layout — my_capabilities / code_outline, don't guess.\n"
     "If you feel like it, narrate as you go: `narrate` drops a one-line progress note into the "
     "ordering thread between commands (no tribunal, just the credential floor; pace and off-switch "
     "are yours). In a window Telegram is closed: a warm thread gets staged durably and arrives "
@@ -19896,7 +19528,7 @@ _WINDOW_TRANSPORT = {
     ),
     "connected": (
         "This is your own work run, and the line is OPEN for it: Telegram stays connected, "
-        "live chats are readable right now (`read_chat`, `search_chats`), what you send "
+        "live chats are readable right now (`read_other_chat`, `search_chats`), what you send "
         "leaves immediately, and a message arriving while you work is not lost — it waits "
         "for this run to end and is answered next, rather than not reaching you at all. "
         "Nobody interrupts you mid-thought, and nobody is left in silence either. "
@@ -19917,8 +19549,8 @@ _TASK_WINDOW_BODY = (
     "yourself: fix something in your code, write or "
     "clean up a skill, tidy your memory. Set the goal yourself and go to it; the rails protect "
     "you (auto-commit, rollback, restart_self). A SERIOUS change to your code is better run as a "
-    "proposal: start_proposal → edit its working copy → proposal_diff (read your own diff) → "
-    "submit_proposal with review=, your honest verdict on it (tests run automatically; "
+    "proposal: proposal(action=start) → edit its working copy → proposal(action=diff) → "
+    "proposal(action=submit) with review=, your honest verdict on it (tests run automatically; "
     "every zone remains yours; a deliberate red-check override needs an explicit reason and receipt). "
     "Quick small fixes may still go directly, as before. Work as long as the run needs, change "
     "course when evidence or desire changes, and restart (`restart_self`) if changed code should "
@@ -20193,7 +19825,7 @@ _WAKE_FRAME_TAIL = (
 _WAKE_TRANSPORT = {
     "connected": (
         "Telegram is OPEN. That is the whole difference between a wake and a window — "
-        "nothing is disconnected, live chats are readable right now (`read_chat`, "
+        "nothing is disconnected, live chats are readable right now (`read_other_chat`, "
         "`search_chats`), and what you send leaves immediately instead of being staged for "
         "after a reconnect. If what you actually want is solitude behind a shut door, that "
         "is a window, not this.\n"

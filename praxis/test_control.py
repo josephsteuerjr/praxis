@@ -111,9 +111,9 @@ class TestFreezeChat(Base):
                 owner=True, known=True, is_dm=False,
             ))
             try:
-                agent.tool_freeze_chat(on=True)
+                agent.tool_freeze_chat(action="freeze")
                 self.assertTrue(rooms.is_frozen("-100500"))
-                agent.tool_freeze_chat(on=False, chat_id="-100500")
+                agent.tool_freeze_chat(action="unfreeze", chat_id="-100500")
                 self.assertFalse(rooms.is_frozen("-100500"))
             finally:
                 agent._TURN_CHANNEL.reset(token)
@@ -124,7 +124,7 @@ class TestFreezeChat(Base):
                 principal_id=101, owner=True, known=True,
             ))
             try:
-                self.assertIn("укажи", agent.tool_freeze_chat(on=True).lower())
+                self.assertIn("укажи", agent.tool_freeze_chat(action="freeze").lower())
             finally:
                 agent._TURN_CHANNEL.reset(token)
 

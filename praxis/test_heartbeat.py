@@ -17,7 +17,7 @@ import unittest
 import praxis_time
 from pathlib import Path
 
-# 12.09: руки указателями — этот стенд меряет ПОЛНЫЙ манифест как список `tools`; семантика указателей — test_tool_pointers. Рычаг снимается в tearDownModule.
+# Old pointers are off; rare-hand authority remains in the bound Python catalogue.
 def setUpModule():
     os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
 
@@ -55,6 +55,7 @@ class FakeClient:
         class _M:
             def create(_s, **kw):
                 self.last = kw
+                self.last_catalog = dict(agent._catalog_for_turn())
                 return FakeResp(self.reply)
         self.messages = _M()
 
@@ -148,9 +149,11 @@ class TestHeartbeatTurn(Base):
         names = [t["name"] for t in fc.last.get("tools", [])]
         self.assertIn("shell", names, "у тика должны быть руки (owner-тулы)")
         self.assertIn("write_skill", names)
-        self.assertTrue({"manage_room", "telegram_account", "computer"}.issubset(names))
+        self.assertTrue({"python", "telegram_account", "computer"}.issubset(names))
+        self.assertIn("manage_room", fc.last_catalog)
+        self.assertIn("manage_room", names, "Егор 10.11: все руки родные")
         self.assertTrue({"admit", "computer_access"}.isdisjoint(names),
-                        "Praxis-self не должна делегировать права другим людям")
+                        "старые руки мини-аппа удалены (Егор 10.11)")
         sysp = fc.last.get("system", "")
         sysp = "".join(b["text"] for b in sysp) if isinstance(sysp, list) else sysp
         self.assertIn("own initiative window", sysp, "нет рамки автономного времени")
@@ -178,7 +181,9 @@ class TestTaskWindow(Base):
         names = [t["name"] for t in fc.last.get("tools", [])]
         self.assertIn("shell", names, "в окне должны быть руки")
         self.assertIn("restart_self", names)
-        self.assertTrue({"manage_room", "telegram_account", "computer"}.issubset(names))
+        self.assertTrue({"python", "telegram_account", "computer"}.issubset(names))
+        self.assertIn("manage_room", fc.last_catalog)
+        self.assertIn("manage_room", names, "Егор 10.11: все руки родные")
         self.assertTrue({"admit", "computer_access"}.isdisjoint(names))
         sysp = fc.last.get("system", "")
         sysp = "".join(b["text"] for b in sysp) if isinstance(sysp, list) else sysp

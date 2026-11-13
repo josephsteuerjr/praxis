@@ -1,0 +1,62 @@
+// Words follow the runtime policy; the archive count is a different quantity.
+export interface FoldState {
+  room: string; hot: number | null; keep: number; offer_at: number; hard_at: number;
+  token_cap?: number; tape_chars?: number; offer_mode?: boolean; backstop_hours?: number;
+  chars?: number; tokens?: number; owner_context?: boolean;
+  policy_source?: string;
+  operation?: { state: "queued" | "starting" | "running" | "interrupted" | "unconfirmed"; note: string } | null;
+  paused?: boolean;
+  delivery?: { state: string; retry_at: number; retries: number; at: number } | null;
+  offer: Record<string, unknown> | null;
+  pending: { id?: string; at?: string } | null;
+  receipt: { state?: string; note?: string; folded?: number; at?: string } | null;
+}
+
+export function deliveryWords(st: FoldState, now = Date.now()) {
+  const d = st.delivery;
+  if (!d || now / 1000 - d.at > 86400) return "";
+  if (d.state === "waiting") {
+    const seconds = Math.max(0, Math.ceil(d.retry_at - now / 1000));
+    return seconds > 0 ? `Telegram просит подождать ещё ${seconds} с. Отправка повторится автоматически.`
+      : "Telegram: время ожидания прошло; отправка повторяется автоматически.";
+  }
+  if (now / 1000 - d.at > 120) return "";
+  if (d.state === "accepted" && d.retries) return "Telegram принял отправку после ожидания.";
+  if (d.state === "cancelled") return "Отправка остановлена владельцем.";
+  if (d.state === "failed") return "Доставка не подтверждена. Причина записана в журнале и результате отправки.";
+  return "";
+}
+
+export function foldWords(st: FoldState, now = Date.now()) {
+  const number = (n: number) => n.toLocaleString("ru-RU");
+  const form = st.hot === null ? 'other' : new Intl.PluralRules('ru-RU').select(st.hot);
+  const noun = ({one:'сообщение',few:'сообщения',many:'сообщений',other:'сообщения'} as Record<string,string>)[form];
+  const counter = st.hot === null ? "Горячая память: число пока неизвестно" : `Горячая память: ${number(st.hot)} ${noun}`;
+  const parts = [
+    "Это свежие сообщения, которые ещё не вошли в сводку. Число рядом с названием чата считает весь архив.",
+    `Обычная цель после свёртки — оставить ${number(st.keep)} последних сообщений. Большой объём текста может потребовать более короткого хвоста.`,
+    `При ${number(st.offer_at)} сообщениях агент получает напоминание; при ${number(st.hard_at)} — строгое напоминание о давлении. Компакт пишет только текущий агент своими словами; часы, владелец и тихая модель его не заменяют.`,
+    "Один проход может обработать лишь часть накопившегося разговора. Переписка остаётся в архиве; сводку пишет агент своими словами.",
+  ].filter(Boolean);
+  let note = "";
+  let state = "idle";
+  if (st.operation) {
+    state = st.operation.state; note = st.operation.note;
+  } else if (st.pending || st.receipt?.state === "running") {
+    // Older channels carry no live execution proof. A request is not execution.
+    state = st.receipt?.state === "running" ? "unconfirmed" : "queued";
+    note = state === "queued" ? "Просьба записана; начало свёртки ещё не подтверждено."
+      : "Сохранена старая расписка; выполнение свёртки сейчас не подтверждено.";
+  } else if (st.receipt?.at && now - Date.parse(st.receipt.at) < 120_000) {
+    state = st.receipt.state || "idle";
+    note = state === "done" && st.receipt.folded !== undefined
+      ? `В сводку перенесено сообщений: ${number(st.receipt.folded)}. Остальное остаётся в горячей памяти; переписка сохранена.`
+      : state === "nothing" ? "В этом проходе сворачивать нечего. Переписка сохранена."
+      : st.receipt.note || "";
+  } else if (st.offer) {
+    note = st.offer.hard ? "Агенту предложена свёртка: есть жёсткое давление на горячую память."
+      : "Агенту предложено свернуть старую часть разговора.";
+  }
+  return { counter, explanation: parts.join(" "), note, state,
+    canFold: false };
+}

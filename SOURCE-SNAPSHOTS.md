@@ -30,26 +30,39 @@ beyond that frozen desktop code.
 
 ## Current cloud Praxis mirror
 
-`praxis/` mirrors the selected public source from cloud HEAD
-`ec97b59cb85f7c3611ba82de118924a0481b8060`, captured at
-`2026-11-05T21:02:40.555504+00:00`. Forge recovery implementation
-`8332863d3c2882f6c8335be52ca9dffd5211d4df` advances the earlier Fish discovery implementation
-`805d92ed4c945a9ff547a0b236aca7c6bcd845df`, which remains recorded in the provenance.
-`CORE-SOURCE.json` records all 742 selected source digests, mirror digests
-and executable modes, together with the canonical mirror digest.
+`praxis/` mirrors the selected public source of the running cloud Praxis on
+2026-11-13: HEAD `d926fcc8a5efe34867bfce83f92d4c155f26d3ff` plus the deployed
+tools publication `e2301dc726de4166b5ea30d497313650fd110195`, whose four files
+(`agent.py`, `tool_report.py`, `STATUS.md`, `test_hand_outcomes_1111.py`) are
+live but not yet committed in her repository. Since the previous mirror
+(`ec97b59`, 2026-11-05) this brings in the Python hands and their single
+executor, the unified `edit` with batch replacement, the `python` hand and
+`h.*` scripting bridge, tool outcomes in every step's receipt, the reworked
+tool catalogue and its schemas, the removal of the Rust hands and of the
+Telegram confirmation store, and the Atlanta server application.
+`CORE-SOURCE.json` records all 775 selected source digests, mirror digests and
+executable modes, together with the canonical mirror digest.
 
-The selected public source matches committed cloud source after line-ending
-normalization. The cloud repository also contains 16 private working entries
-outside that selection. Capture preserved its HEAD, index, private status and
-all refs. Private memory, soul, workspace, credentials and private Git history
-are excluded. Two existing public documentation sanitizations preserve the
-executable AST.
+Two live files stay out of the mirror: a stray copy of `mtproto_runner.py`
+committed alongside a skill and a one-off script that reads a private inbox
+path. Eight files that Hélène releases 1.7.0 and 2.0.0 had placed into
+`praxis/` were never part of live Praxis; they are retained so the next
+Hélène composition does not lose them silently. Private memory, soul,
+workspace, credentials and private Git history are excluded. Two public
+documentation sanitizations (third-party handles and a name in comments)
+preserve the executable code.
 
-Historical cloud full-gate receipts remain bound to their recorded earlier
-snapshot in `CORE-SOURCE.json`. Current desktop composition qualification is
-bound to the 2.5.0 package inventories. Cloud source synchronization advances
-the shared development base. Immutable desktop tags and shipped per-platform
-inventories retain the authority for each released composition.
+No gate was re-run for this mirror: it publishes code that is already live,
+and the live qualification receipts are named in `CORE-SOURCE.json`. The next
+Hélène composition takes this base. Five new Praxis tests enter it while their
+subject modules remain overridden by older `helene/core/` files, so they are
+expected to show that gap at the next desktop release gate. Immutable desktop
+tags and shipped per-platform inventories retain the authority for each
+released composition.
+
+Praxis's own server application (the MiniApp/PWA and the `praxis-desk`
+backend) lives in [`remote/praxis-desk/`](remote/praxis-desk) as the exact
+deployed source; see its README.
 
 The records below describe historical 2.2.9 deliveries. Their immutable tags,
 digests and older voice references are provenance, not the current desktop source

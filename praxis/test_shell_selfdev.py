@@ -156,7 +156,10 @@ class TestShellWorkdir(Base):
 
         out = agent.tool_shell("pwd")
 
-        self.assertEqual(out.strip(), str(self.tmp))
+        self.assertEqual(out.partition('\n[command:')[0], str(self.tmp))
+        self.assertIn('[command: ok]', out)
+        self.assertIn('[changes:', out)
+        self.assertTrue(out.endswith('[exit 0]'), out)
         self.assertFalse(missing.exists())
 
 
@@ -216,8 +219,9 @@ class TestCoreEditCheck(Base):
 class TestOwnerToolset(Base):
     def test_owner_tools_present(self):
         names = [t["name"] for t in agent.OWNER_TOOLS]
-        for n in ("shell", "manage_room", "admit", "write_skill", "restart_self"):
+        for n in ("shell", "manage_room", "write_skill", "restart_self"):
             self.assertIn(n, names)
+        self.assertNotIn("admit", names)  # Егор 10.11: рука старого мини-аппа удалена
 
 
 if __name__ == "__main__":

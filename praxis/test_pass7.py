@@ -10,15 +10,22 @@ import selfdev
 
 class ToolsWired(unittest.TestCase):
     def test_tool_impl_has_new_tools(self):
-        for name in ("connections", "start_proposal", "submit_proposal", "list_proposals"):
+        for name in ("memory_graph", "proposal"):
             self.assertIn(name, agent.TOOL_IMPL)
+        for name in ("connections", "start_proposal", "submit_proposal", "list_proposals"):
+            self.assertNotIn(name, agent.TOOL_IMPL)
 
     def test_owner_tools_expose_new_tools(self):
         names = {t["name"] for t in agent.OWNER_TOOLS}
-        for name in ("connections", "start_proposal", "submit_proposal", "list_proposals"):
+        for name in ("memory_graph", "proposal"):
             self.assertIn(name, names)
         base_names = {t["name"] for t in agent.BASE_TOOLS}
-        self.assertNotIn("connections", base_names)   # карта и контур — не для чужих каналов
+        self.assertNotIn("memory_graph", base_names)  # family stays in the sovereign set
+        schemas = {t["name"]: t["input_schema"] for t in agent.OWNER_TOOLS}
+        self.assertEqual(set(schemas["memory_graph"]["properties"]["action"]["enum"]),
+                         {"look", "path", "alias", "forget"})
+        self.assertTrue({"start", "submit", "list", "diff", "risk"}.issubset(
+            schemas["proposal"]["properties"]["action"]["enum"]))
 
     def test_remember_schema_has_relates(self):
         rem = next(t for t in agent.BASE_TOOLS if t["name"] == "remember")

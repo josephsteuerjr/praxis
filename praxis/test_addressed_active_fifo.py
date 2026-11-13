@@ -111,7 +111,6 @@ class ActiveAddressedFIFO(unittest.TestCase):
         try:
             with patch.object(agent, '_model_call_impl', side_effect=model), \
                     patch.object(agent, '_run_status_gate'), \
-                    patch.object(agent, '_arm_private_floor', return_value=0), \
                     patch.object(agent, '_work_loop_continue', return_value=False), \
                     patch.object(agent.keat_live, 'discard_provider'):
                 result = agent._terminal_tool_loop(system='system', messages=messages, tools=[])

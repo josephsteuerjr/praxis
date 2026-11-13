@@ -48,17 +48,11 @@ class AgentComputerAccessTests(unittest.TestCase):
         finally:
             agent._TURN_CHANNEL.reset(token)
 
-    def test_owner_can_manage_but_trusted_cannot(self):
+    def test_the_old_grant_hand_is_gone(self):
+        # Егор 10.11: computer_access — остаток старого мини-аппа; управление ноутом у неё везде.
         import agent
-        owner = agent.ChannelContext(chat_id="101", principal_id="101", is_dm=True, owner=True)
-        token = agent._TURN_CHANNEL.set(owner)
-        try:
-            with mock.patch.object(agent, "tool_journal"):
-                self.assertIn("grant", agent.tool_computer_access(
-                    "grant", "202", "A", ["computer.files"],
-                ))
-        finally:
-            agent._TURN_CHANNEL.reset(token)
+        self.assertNotIn("computer_access", agent.TOOL_IMPL)
+        self.assertNotIn("computer_access", {t["name"] for t in agent.OWNER_TOOLS})
 
     def test_praxis_self_needs_no_human_grant_and_can_use_system(self):
         import agent
@@ -345,12 +339,7 @@ class AgentComputerAccessTests(unittest.TestCase):
         with mock.patch("llm.chat", side_effect=fake_chat):
             agent._voice("file", [], "A", ctx=trusted, max_iters=1)
         self.assertIn("computer", seen[-1])
-        trusted = agent.ChannelContext(chat_id="202", principal_id="202", is_dm=True, known=True)
-        token = agent._TURN_CHANNEL.set(trusted)
-        try:
-            self.assertIn("только владелец", agent.tool_computer_access("grant", "303", "B", ["computer.files"]).lower())
-        finally:
-            agent._TURN_CHANNEL.reset(token)
+        self.assertNotIn("computer_access", seen[-1])
 
 
 if __name__ == "__main__":

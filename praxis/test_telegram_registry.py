@@ -8,7 +8,6 @@ from telethon.tl import functions, types
 from telethon.tl.tlobject import TLRequest
 
 from telegram_registry import (
-    CriticalConfirmation,
     ParameterValidationError,
     RegistryLookupError,
     TelegramAccountDispatcher,
@@ -359,54 +358,41 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(membership.status, "denied")
         self.assertEqual(len(calls), 1)
 
-    async def test_account_critical_requires_separate_bound_consumable_confirmation(self):
+    async def test_account_critical_runs_directly_for_sovereigns_only(self):
+        # Егор 10.11 («Снять целиком»): отдельного подтверждения из лички владельца нет —
+        # ни для logout/2FA, ни для удаления аккаунта, смены номера или платежей. Вызов
+        # исполняют она и Егор напрямую; чужому человеку raw MTProto по-прежнему закрыт.
         calls = []
-        verified = []
 
         async def caller(request):
             calls.append(request)
             return {"logged_out": True}
-
-        async def verifier(proof, binding):
-            verified.append((proof, binding))
-            return proof.token == "one-use-owner-proof"
 
         dispatcher = TelegramAccountDispatcher(
             caller=caller,
             entity_resolver=None,
             owner_id="owner",
             registry=self.registry,
-            confirmation_verifier=verifier,
+            sovereign_principals={"praxis:self"},
         )
+        for principal in ("owner", "praxis:self"):
+            allowed = await dispatcher.dispatch(
+                "functions.auth.LogOutRequest", {}, principal=principal
+            )
+            self.assertTrue(allowed.ok, allowed.to_dict())
+            self.assertEqual(allowed.policy["risk"], "account_critical")
+            self.assertNotIn("confirmation", allowed.policy)
+        self.assertEqual(len(calls), 2)
+
         denied = await dispatcher.dispatch(
-            "functions.auth.LogOutRequest", {}, principal="owner"
+            "functions.auth.LogOutRequest", {}, principal="trusted",
+            granted_scopes={"telegram.account"},
         )
         self.assertEqual(denied.status, "denied")
-        self.assertEqual(denied.error["type"], "ConfirmationRequired")
-        self.assertFalse(calls)
+        self.assertEqual(denied.error["type"], "PermissionDenied")
+        self.assertEqual(len(calls), 2)
 
-        binding = dispatcher.confirmation_binding(
-            "functions.auth.LogOutRequest", {}, principal="owner"
-        )
-        wrong = CriticalConfirmation(token="wrong-one-use-owner-proof")
-        rejected = await dispatcher.dispatch(
-            "functions.auth.LogOutRequest", {}, principal="owner", confirmation=wrong
-        )
-        self.assertEqual(rejected.status, "denied")
-        self.assertFalse(calls)
-
-        proof = CriticalConfirmation(token="one-use-owner-proof")
-        allowed = await dispatcher.dispatch(
-            "functions.auth.LogOutRequest", {}, principal="owner", confirmation=proof
-        )
-        self.assertTrue(allowed.ok, allowed.to_dict())
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(len(verified), 2)
-        rendered = json.dumps(allowed.to_dict())
-        self.assertNotIn("one-use-owner-proof", rendered)
-        self.assertTrue(allowed.policy["confirmation"]["verified"])
-
-    async def test_account_critical_receipt_has_no_secret_or_plain_verifier(self):
+    async def test_account_critical_receipt_has_no_secret_or_plain_digest(self):
         parameters = {
             "phone_number": "+19995550123",
             "phone_code_hash": "short-hash-secret",
@@ -419,24 +405,14 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
                 "phone_code": parameters["phone_code"],
             }
 
-        async def verifier(proof, _binding):
-            return proof.token == "opaque-owner-proof"
-
         dispatcher = TelegramAccountDispatcher(
             caller=caller,
             entity_resolver=None,
             owner_id="owner",
             registry=self.registry,
-            confirmation_verifier=verifier,
-        )
-        binding = dispatcher.confirmation_binding(
-            "functions.auth.SignInRequest", parameters, principal="owner",
         )
         receipt = await dispatcher.dispatch(
-            binding.request_name,
-            parameters,
-            principal="owner",
-            confirmation=CriticalConfirmation(token="opaque-owner-proof"),
+            "functions.auth.SignInRequest", parameters, principal="owner",
         )
 
         self.assertTrue(receipt.ok, receipt.to_dict())
@@ -453,10 +429,9 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
             receipt.parameter_commitment, hashlib.sha256(encoded).hexdigest(),
         )
         rendered = json.dumps(receipt.to_dict(), ensure_ascii=False, sort_keys=True)
-        for secret in (*parameters.values(), "result-auth-secret", "opaque-owner-proof"):
+        for secret in (*parameters.values(), "result-auth-secret"):
             self.assertNotIn(secret, rendered)
             self.assertNotIn(hashlib.sha256(secret.encode("utf-8")).hexdigest(), rendered)
-        self.assertNotIn("proof_sha256", rendered)
 
     async def test_transport_envelopes_are_listed_but_never_dispatchable(self):
         called = False

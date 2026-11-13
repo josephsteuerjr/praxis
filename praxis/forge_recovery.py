@@ -80,7 +80,14 @@ def _scope(directory: Path, request: dict) -> str:
         raise ValueError('device or foreign-host custody cannot use a local reboot proof')
     if request.get('scope') and request['scope'] != task.get('scope','self'):
         raise ValueError('request scope contradicts owning task')
-    if request.get('root') != task.get('root'):
+    # Historical local process requests recorded cwd, not root. Accept only an
+    # exact owning-root cwd for that format; never infer a host/device binding
+    # from an arbitrary descendant path or a missing execution directory.
+    legacy_local_process = (directory.parent.name == 'processes' and 'root' not in request
+                            and scope == 'self' and not request.get('remote')
+                            and request.get('task_id') == directory.parents[1].name
+                            and bool(task.get('root')) and request.get('cwd') == task['root'])
+    if request.get('root') != task.get('root') and not legacy_local_process:
         raise ValueError('request root contradicts owning task')
     if request.get('remote') and scope != 'host':
         raise ValueError('remote execution needs its own bound host proof')

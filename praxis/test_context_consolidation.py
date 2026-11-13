@@ -102,8 +102,9 @@ class TestConfig(Base):
 
     def test_tool_registered(self):
         names = [t["name"] for t in agent.BASE_TOOLS]
-        self.assertIn("consolidate_context", names)
-        self.assertIn("consolidate_context", agent.TOOL_IMPL)
+        self.assertNotIn("consolidate_context", names)
+        self.assertIn("memory_compact", agent.TOOL_IMPL)
+        self.assertNotIn("consolidate_context", agent.TOOL_IMPL)
 
 
 class TestConsolidateTool(Base):
@@ -223,7 +224,9 @@ class TestNudge(Base):
             else:
                 os.environ["PRAXIS_CONSOLIDATE_NUDGE"] = prev
         self.assertIn("almost full", sysp)
-        self.assertIn("consolidate_context", sysp)
+        self.assertIn("memory_compact(action=prepare)", sysp)
+        self.assertIn("fold(selection,text)", sysp)
+        self.assertNotIn("consolidate_context", sysp)
 
     def test_nudge_off_by_default(self):
         # по умолчанию авто-подсказки нет — компактирование идёт субагентом, не её голосом

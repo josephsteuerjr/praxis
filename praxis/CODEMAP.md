@@ -52,8 +52,7 @@
 | `telegram_topics.py` | Exact root/topic route и стабильный conversation id для forum messages. |
 | `group_context.py` | Root-bounded append-only group archive, topic/participant projection, search, orientation bundle и backfill receipt. |
 | `telegram_membership.py` | Fsync JSONL state machine sovereign owner/self join/leave и post-acceptance room projection. |
-| `telegram_registry.py` | Discovery установленной Telethon TL-schema; sovereign noncritical/raw dispatch и account-critical confirmation binding. |
-| `telegram_confirmation.py` | Отдельный exact-new-owner-DM challenge, one-use proof, encrypted TTL parameter spool и digest-only receipt provenance. |
+| `telegram_registry.py` | Discovery установленной Telethon TL-schema; sovereign raw dispatch; account-critical исполняется напрямую, параметры и результат не эхоятся в receipt. |
 | `telegram_contacts.py` | Restart-proof адресная книга без хранения access hash. |
 | `telegram_followups.py` | Durable ledger просьб написать кому-то и уведомлений о полученном ответе. |
 | `rooms.py` | Allowlist/departed mask, freeze/mode и валидируемый root-room context profile. |
@@ -77,7 +76,7 @@
 | `goals.py` | Однонаправленный compatibility/migration bridge удалённой moral-goals системы; живые свободные намерения принадлежат `desires.py`. |
 | `computer_memory.py` | Канонические receipts/events Windows-работы, task/device reports и одна life-promotion на завершение. |
 | `computer_inventory.py` | Server-observed inventory snapshot и catch-up refresh для Windows device. |
-| `computer_access.py` | Owner-rooted human grants по stable Telegram user id; Praxis self sovereign, trusted не делегирует и не получает SYSTEM. |
+| `computer_access.py` | Гранты по stable Telegram user id для зрителей старого `praxis_app`; руки Praxis его не вызывают и им не ограничены (с 10.11 рука `computer_access` удалена). |
 
 ## Автономная периодика
 
@@ -103,8 +102,12 @@
 | `forge_learning.py` | Evidence-linked reusable lessons завершённых задач. |
 | `test_forge_contract_0610.py` | Контракт задачи (критерии + verify_commands), дедуп верификации по tree-sha и честный finish: regression-набор PR oro/forge-contract-0610. |
 | `workshop.py` | Python file/shell/dev-tool surface, используемая model tools. |
-| `hands.py` | Мост к компилируемому filesystem/process floor с Python fallback. |
-| `hands/` | Rust `praxis-hands`, path/write/output rails и генератор согласованного Python registry. |
+| `editor.py`, `tool_report.py` | Единый replace/write/patch/batch, versioned readback и честные confirmed/refused/partial/in_doubt. |
+| `catalog_families.py` | Объединённые proposal/project/memory_graph и native Python schema, явная preflight-валидация. |
+| `python_execution.py`, `command_execution.py` | Прямой stdin Python с h; общий launcher и наблюдаемый Git/exit хвост после admission. |
+| `pyhands/praxis_hands.py`, `forge_script.py` | Python file API, task nonce/custodian verification и клиент h.hand/h.describe. |
+| `hand_bridge.py` | Приватный Unix IPC живой foreground-команды: peer identity, exact request cache, scoped lifetime, drain начатых вызовов после выхода скрипта; durable parent dispatch в agent. |
+| `hands.py` | Пол рук на чистом Python: снимок и публикация файла с проверкой записанного, поиск отдельным процессом, скелет, запуск. |
 | `selfgit.py` | Автокоммиты изменений собственного дерева и provenance core edits. |
 | `selfdev.py` | Sovereign worktree proposal/test/review/merge/restart workflow с rollback и durable override reason. |
 | `_sandbox.py`, `praxis_test.py`, `conftest.py` | Test-only перенаправление `PRAXIS_BASE` в disposable tree до импорта runtime-модулей; bare unittest не является поддержанным локальным entrypoint. |
@@ -184,7 +187,7 @@ Win32 process handle/wait и никогда не пробует Windows PID че
 | `memory/llm.json` | Runtime model roles/limits; обычно gitignored. |
 | `docker-compose.yml` | Локальный `praxis` + optional Ollama. |
 | `docker-compose.deploy.yml` | Production containers, mounts и owner surfaces. |
-| `Dockerfile`, `requirements.txt` | Python runtime и сборка Rust hands floor. |
+| `Dockerfile`, `requirements.txt` | Python runtime. |
 | `praxis_test.py`, `test_*.py` | Герметичный unittest entrypoint и действующие contract/regression tests; retired phrase/personality-freeze suites не входят в дерево. |
 | `serverd/test_broker_v2.py` | Linux broker contract tests. |
 | `body/crates/*` tests | Rust protocol/body/bridge/router unit and integration tests. |

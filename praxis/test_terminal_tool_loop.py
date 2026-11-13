@@ -33,8 +33,10 @@ class TerminalToolLoopTests(unittest.TestCase):
         names = agent._offered_function_names(tools)
         self.assertEqual(names, {tool["name"] for tool in local_tools})
         self.assertIn("computer", names)
-        self.assertIn("inbox_list", names)
-        self.assertIn("inbox_read", names)
+        self.assertIn("fs_ls", names)
+        self.assertNotIn("inbox_list", names)
+        self.assertIn("fs_read", names)
+        self.assertNotIn("inbox_read", names)
         self.assertNotIn("web_search", names)
 
     def test_provider_web_search_cannot_alias_a_local_function(self):

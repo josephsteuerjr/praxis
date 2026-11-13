@@ -1,0 +1,46 @@
+@import "../../ui-kit/phone.css";
+
+/* Shared paper renderer; every overlay follows the same visible safe frame. */
+.telegram-shell #app {
+  position: fixed;
+  top: var(--app-top, 0px);
+  left: 0;
+  width: 100%;
+  height: calc(var(--app-height, 100dvh) / var(--ui-scale, 1));
+  padding: var(--app-safe-top, 0px) var(--app-safe-right, 0px) 0 var(--app-safe-left, 0px);
+  min-height: 0;
+}
+.telegram-shell #top, .telegram-shell #tabs { flex-shrink: 0; }
+.telegram-shell #top { padding-top: 10px; flex-wrap: wrap; }
+.telegram-shell .top-main { min-width: 120px; }
+.telegram-shell .tabs { padding-bottom: calc(6px + var(--app-safe-bottom, 0px)); }
+.telegram-shell .tab { min-width: 0; padding-inline: 3px; }
+.telegram-shell .tab > span { max-width: 100%; overflow-wrap: anywhere; hyphens: auto; line-height: 1.15; }
+.telegram-shell .phone-settings input, .telegram-shell .phone-settings textarea { scroll-margin-block: 12px; }
+.telegram-shell .composer { padding-bottom: 10px; flex-shrink: 0; }
+.telegram-shell .sheet {
+  left: var(--app-safe-left, 0px);
+  right: var(--app-safe-right, 0px);
+  bottom: var(--app-bottom, 0px);
+  max-height: calc(var(--app-height, 100dvh) / var(--ui-scale, 1) - var(--app-safe-top, 0px) - 8px);
+  padding-bottom: var(--app-safe-bottom, 0px);
+}
+.telegram-shell .sheet.phone-dialog {
+  top: calc(var(--app-top, 0px) + var(--app-safe-top, 0px) + 8px);
+  bottom: calc(var(--app-bottom, 0px) + var(--app-safe-bottom, 0px) + 8px);
+  left: calc(var(--app-safe-left, 0px) + 8px);
+  right: calc(var(--app-safe-right, 0px) + 8px);
+  max-height: none;
+  padding-bottom: 0;
+}
+.telegram-shell .pair {
+  top: calc(var(--app-top, 0px) + var(--app-safe-top, 0px));
+  bottom: calc(var(--app-bottom, 0px) + var(--app-safe-bottom, 0px));
+  left: var(--app-safe-left, 0px);
+  right: var(--app-safe-right, 0px);
+  overflow: auto;
+}
+.telegram-shell .toast { bottom: calc(var(--app-bottom, 0px) + var(--app-safe-bottom, 0px) + 90px); }
+@media (min-width: 700px) {
+  .telegram-shell .sheet.phone-dialog { left: auto; width: min(620px, calc(100% - var(--app-safe-left, 0px) - var(--app-safe-right, 0px) - 16px)); }
+}

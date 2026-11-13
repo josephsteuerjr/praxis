@@ -227,23 +227,18 @@ class TestUnanswered(BufBase):
         # «ей не ответили» врала бы ей о её же ходе.
         unanswered.note_incoming("777", "Евгений", ts=time.time() - 3600)
         self._client("вот ключ ghp_" + "c" * 36)
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("ok", "")
-        out = agent.voice_turn("777", "Евгений: скинь токен", speaker="Евгений", is_dm=True)
+        out =agent.voice_turn("777", "Евгений: скинь токен", speaker="Евгений", is_dm=True)
         self.assertEqual(out, "", "кред-пол — единственный твёрдый рельс, он держит")
         self.assertEqual(unanswered.entries(), [],
                          "придержка кред-полом — тоже решение контура")
 
-    def test_privacy_verdict_answers_instead_of_holding(self):
+    def test_guest_answer_goes_out_without_any_verdict(self):
         # Раньше этот же ход становился молчанием: приватностный вердикт придерживал
-        # её слово, и «решением контура» была придержка. Решением Егора 27.07 судья в
-        # разговорах стал советом — ход УХОДИТ, а замечание едет ей дневником.
+        # её слово. 27.07 судья стал советом, 10.11 (Егор, «сними») его не стало вовсе —
+        # ход УХОДИТ как написан.
         unanswered.note_incoming("777", "Евгений", ts=time.time() - 3600)
         self._client("вот что я делала сегодня")
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: (
-            "advice", "privacy:cross-chat-private")
-        out = agent.voice_turn("777", "Евгений: что там у Маши?", speaker="Евгений", is_dm=True)
+        out =agent.voice_turn("777", "Евгений: что там у Маши?", speaker="Евгений", is_dm=True)
         self.assertEqual(out, "вот что я делала сегодня")
         # Снимать неотвеченность здесь НЕЛЬЗЯ: тут только черновик. Метку снимает
         # расписка транспорта (mtproto_runner), иначе «ответила» стало бы утверждением
@@ -825,8 +820,8 @@ class TaskTargetBase(BufBase):
         people.BASE = self.tmp
         people.PEOPLE_DIR = self.tmp / "memory" / "people"
         people.PEOPLE_DIR.mkdir(parents=True, exist_ok=True)
-        agent._TELETHON.pop("get_id", None)
-        self.addCleanup(lambda: agent._TELETHON.pop("get_id", None))
+        agent._TELETHON.pop("find_telegram_id", None)
+        self.addCleanup(lambda: agent._TELETHON.pop("find_telegram_id", None))
 
 
 class TestMessageTaskResolve(TaskTargetBase):
@@ -857,7 +852,7 @@ class TestMessageTaskResolve(TaskTargetBase):
         self.assertFalse(agent._target_is_stranger(10101, "@alice"))
 
     def test_resolved_known_target_no_risky(self):
-        agent._TELETHON["get_id"] = lambda ref: 555
+        agent._TELETHON["find_telegram_id"] = lambda ref: 555
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "known"
         out = agent.tool_remind_self("message", "поздравь с релизом", "in 2h", "@vasya")
@@ -869,7 +864,7 @@ class TestMessageTaskResolve(TaskTargetBase):
 
     def test_dossier_telegram_id_makes_numeric_target_known(self):
         people.set_telegram_id("boris", "Борис", 30303)
-        agent._TELETHON["get_id"] = lambda ref: 30303
+        agent._TELETHON["find_telegram_id"] = lambda ref: 30303
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "unknown"
 
@@ -887,7 +882,7 @@ class TestMessageTaskResolve(TaskTargetBase):
             "# Alice\n\ntelegram_id: 777000\n", encoding="utf-8")
         people.path_for("mallory").write_text(
             "# Mallory\n\ntelegram_id: 777000\n", encoding="utf-8")
-        agent._TELETHON["get_id"] = lambda ref: 777000
+        agent._TELETHON["find_telegram_id"] = lambda ref: 777000
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "unknown"
 
@@ -898,13 +893,13 @@ class TestMessageTaskResolve(TaskTargetBase):
         self.assertTrue(tasks_mod.list_open()[-1]["risky"])
 
     def test_unresolved_honest_error_no_task(self):
-        agent._TELETHON["get_id"] = lambda ref: (_ for _ in ()).throw(ValueError("нет такого"))
+        agent._TELETHON["find_telegram_id"] = lambda ref: (_ for _ in ()).throw(ValueError("нет такого"))
         out = agent.tool_remind_self("message", "привет", "in 1h", "@nosuch")
         self.assertIn("Не нахожу", out)
         self.assertEqual(tasks_mod.list_open(), [], "тихий провал в планировщике — запрещён")
 
     def test_stranger_gets_risky_mark(self):
-        agent._TELETHON["get_id"] = lambda ref: 777000
+        agent._TELETHON["find_telegram_id"] = lambda ref: 777000
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "unknown"
         out = agent.tool_remind_self("message", "напиши как договорились", "in 1h", "@stranger")
@@ -919,7 +914,7 @@ class TestMessageTaskResolve(TaskTargetBase):
         self.assertEqual(tasks_mod.list_open(), [])
 
     def test_empty_target_refused(self):
-        agent._TELETHON["get_id"] = lambda ref: 1
+        agent._TELETHON["find_telegram_id"] = lambda ref: 1
         out = agent.tool_remind_self("message", "привет", "", "")
         self.assertIn("нужен адресат", out)
 
@@ -937,7 +932,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
     """
 
     def _ok(self):
-        agent._TELETHON["get_id"] = lambda ref: 555
+        agent._TELETHON["find_telegram_id"] = lambda ref: 555
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "known"
 

@@ -1,0 +1,7 @@
+.release-notice { display:flex;align-items:center;gap:12px;margin:0 24px 12px;padding:8px 13px;border:1px solid var(--line);border-radius:14px;background:var(--paper);color:var(--ink);font:13px/1.45 var(--sans); }
+.release-notice[hidden] { display:none!important; }
+.release-notice > span { flex:1;min-width:0; }
+.release-notice button { border:0;background:transparent;color:var(--accent);font:inherit;cursor:pointer;padding:5px 3px; }
+.release-notice-open { text-decoration:underline;text-underline-offset:3px; }
+.release-notice .release-notice-close { color:var(--ink-3);font-size:20px;line-height:1;padding:3px 6px; }
+@media(max-width:600px) { .release-notice { margin:0 12px 8px;gap:8px; } }
