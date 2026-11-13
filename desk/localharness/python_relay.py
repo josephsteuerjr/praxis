@@ -94,7 +94,12 @@ def control(agent,op,*,timeout_sec=20,**arguments):
                 raise ValueError('Эта версия praxis-relay не поддерживает вход по коду. Обнови компонент до 1.2.0 или выбери вход в браузере на компьютере.') from None
             raise ValueError('Реле отклонило действие. Перечитай состояние подписки.') from None
         raise
-    if op in ('login', 'login_device', 'logout', 'switch'):
+    # The relay signs in inside its own process and installs the new account
+    # into its router itself. Every host supervisor restarts the relay when
+    # this marker moves, so bumping it when a login merely *starts* killed the
+    # pending browser/device flow a millisecond later. Login completion is
+    # already visible through the slot auth signature in the catalog revision.
+    if op in ('logout', 'switch'):
         changed(agent.tree/'relay')
     return result
 

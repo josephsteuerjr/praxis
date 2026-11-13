@@ -104,6 +104,71 @@ class DeviceLogin(unittest.TestCase):
                 self.assertEqual(broker.call_args.args, (root, body))
 
 
+class SupervisorKeepsPendingLogin(unittest.TestCase):
+    """Real control() against a local relay endpoint, real supervisor marker read.
+
+    2.7.1 bumped login-generation as soon as a login started; the desktop
+    supervisor then restarted the relay and the pending sign-in died with it.
+    """
+
+    def setUp(self):
+        import http.server
+        import threading
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.tree = Path(self.temp.name)
+        self.home = self.tree/'relay'
+        (self.home/'local_auth').mkdir(parents=True)
+        self.ops = []
+        ops = self.ops
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if self.headers.get('X-Relay-Control') != 'control-token':
+                    self.send_response(403); self.end_headers(); return
+                ops.append(body)
+                raw = json.dumps(raw_state()).encode()
+                self.send_response(200); self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        (self.home/'local_auth/control.json').write_text(json.dumps(
+            {'port': server.server_address[1], 'token': 'control-token'}), encoding='utf-8')
+        self.agent = SimpleNamespace(tree=self.tree, config=self.tree/'helene.json')
+        self.agent.config.write_text('{}')
+        self.owner = SimpleNamespace(current=lambda: self.agent)
+
+    def generation(self):
+        from localharness.desktop_supervisor import _relay_login_generation
+        return _relay_login_generation(SimpleNamespace(cwd=self.home))
+
+    def test_starting_either_login_does_not_restart_the_relay(self):
+        python_relay.changed(self.home)
+        before = self.generation()
+        for method in ('device_code', 'browser'):
+            view = python_relay.invoke(self.owner, 'relay_login', {'slot': 'secondary', 'method': method})
+            self.assertEqual(self.generation(), before, method)
+            self.assertTrue(view['login']['pending'], method)
+        python_relay.invoke(self.owner, 'relay_cancel_login', {'slot': 'secondary', 'login_id': LOGIN_ID})
+        self.assertEqual(self.generation(), before)
+        self.assertEqual([op['op'] for op in self.ops], ['login_device', 'login', 'cancel_login_id'])
+
+    def test_completed_account_changes_still_refresh_the_relay(self):
+        for command in ('relay_logout', 'relay_switch'):
+            before = self.generation()
+            time.sleep(0.002)
+            try:
+                python_relay.invoke(self.owner, command, {'slot': 'primary'})
+            except ValueError:
+                pass  # fixture reports primary as active already; marker is what matters
+            self.assertNotEqual(self.generation(), before, command)
+
+
 @unittest.skipUnless(sys.platform.startswith('linux') and hasattr(socket,'SO_PEERCRED'), 'Linux peer credentials')
 class ServerBoundary(unittest.TestCase):
     def setUp(self):

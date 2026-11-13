@@ -80,10 +80,12 @@ class LifecycleTests(unittest.TestCase):
                 auth.write_text('{"tokens":{"access_token":"synthetic-only"}}')
                 return child
             with patch.object(desktop_process.JobChild,'spawn') as spawn_child,patch.object(python_relay,'control',return_value={'login':{'pending':False},'accounts':[{'slot':'secondary','configured':True}]}) as control:
+                # Device code is the default since 2.7.1; browser remains explicit.
                 python_relay.invoke(owner,'relay_login',{'slot':'secondary'})
+                python_relay.invoke(owner,'relay_login',{'slot':'secondary','method':'browser'})
                 self.assertEqual(python_relay.invoke(owner,'relay_status',{'slot':'secondary'}),'authorized')
-                self.assertEqual(control.call_args_list[0].args[1],'login')
-                self.assertEqual(control.call_args_list[0].kwargs,{'slot':'secondary'})
+                self.assertEqual([call.args[1] for call in control.call_args_list[:2]],['login_device','login'])
+                self.assertEqual(control.call_args_list[0].kwargs['slot'],'secondary')
                 spawn_child.assert_not_called()
 
 
