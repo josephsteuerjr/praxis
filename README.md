@@ -23,6 +23,12 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.7.2 Beta
+
+Fixes ChatGPT subscription sign-in on the desktop: browser and device-code
+logins no longer stop right after they start. See the
+[patch and limits](desk/docs/RELEASE-2.7.2.md).
+
 ## Included in 2.7.1 Beta
 
 All tool schemas are offered natively. The Context screen adds searchable chats,

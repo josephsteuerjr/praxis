@@ -1,3 +1,11 @@
+# 2.7.2 Beta
+
+Fix ChatGPT subscription sign-in on the desktop: browser and device-code logins
+no longer end immediately after they start. Saved accounts, settings and the
+bundled praxis-relay 1.2.0 are unchanged.
+
+Read the [changes and limits](docs/RELEASE-2.7.2.md).
+
 # 2.7.1 Beta
 
 All available tool schemas are native by default. Context snapshots have chat
