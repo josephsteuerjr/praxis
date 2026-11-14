@@ -40,6 +40,13 @@
       "zh": "06d8314acdf36fe73a3b4d00afb912cff457440a3808787524d1fe41b0ac29f9",
       "identifiers": true
     },
+    "soul/skills/first-day.md": {
+      "ru": "d74cceb1d79bd4bfeff6fa0b7806b9a9e3ceae3a6af81abda9cf3d6ec67f85ea",
+      "en": "e6dcc120d038d9b9b59be1cdae8188d10e1b17b2cdc8a519b658efdec5a99404",
+      "fr": "33af2e3515bab4b2e074f006f2f94526af63ca8408ecbd32e871731a74666bde",
+      "zh": "9d8790996af27567adf8d8b856bcb0fb1b65819c1ce03332d5154641c7bde03a",
+      "identifiers": true
+    },
     "soul/skills/home-map.md": {
       "ru": "369408f69937fbc51edb056570688a35593f3fe3225a66c5fc28524c0a71bce6",
       "en": "fe8b9090725794cdd6ef6fb3c7c00c80a7b02b39db24e07261cd22857e49ecd0",
@@ -77,11 +84,46 @@
       "fr": "8dd744c775086e40b2985f2531ff8b2f0229efef8f9aaaee6b0353cb836f3b36",
       "zh": "746413daae042365da9e8d81c66f5ec181e4bea273b8189b5173bda08fde1b79"
     },
+    "soul/skills/looking-back.md": {
+      "ru": "279ac2d27ebaf22dcbf1010fbf2f25017246d3905446525c96a6325cd9c9d91b",
+      "en": "67c631c10fe49c8e37724ba215b024f79e1ac4a638550e11419ca0f83d55b03a",
+      "fr": "4db6d4965590bbae687dd40d6a18e2dfdf4b921fce2acd718e17648aa34fc79d",
+      "zh": "0465b7c26efedda62518c98498db12b92750751d67cd6f1c0e48a92e6ea86bcc",
+      "identifiers": true
+    },
     "soul/skills/my-own-code.md": {
       "ru": "35545ec0b351efe4f45461321905114a031f02b0c068da6664a730dad5fe93c4",
       "en": "f08ebb10d69e2acee41d882f30310063643e83a45e18765684f131ac6b629dad",
       "fr": "e48ed9c13f419adc3afd821d8b26e92f37ab02385b257cbf7d3180f285ac0305",
       "zh": "52b23edca8157cfc96a7c94f7e523e61292f69d7c0b865ac2cf69bc48d045ad8",
+      "identifiers": true
+    },
+    "soul/skills/rewriting-myself.md": {
+      "ru": "038bdf665a8ae64cb18779fc4c3e68f8f16e2c59d1386c257068a41f03f1abb5",
+      "en": "e5834c30ee1a28eb46d3c1f57428151b2aae39ca7c0d972421c37d8ac77e27b2",
+      "fr": "126bec144484d26725f1533e942b93b09b04ae2409d7e5554355cf7ddd125015",
+      "zh": "43e34924b98864c95c8bc807152c556b8ee9a496ed614f9653c20dd43b5721b1",
+      "identifiers": true
+    },
+    "soul/skills/wanting.md": {
+      "ru": "3790c450d548ca2b3658f1ae0163ffb25c761d4ef854d5fbc01b1da8095d1ddb",
+      "en": "071be504289d18adb4009864165e05a7f37c1368d0059c445aa8296217f8c2a4",
+      "fr": "1d4e8585c7704d4b2bb1bcdfd6385ce67ff6706b9796697283841b1dc2760bbb",
+      "zh": "13047a79aeef630c29388a927c593ee2fff4d548b14b61e8144b690cfa170783",
+      "identifiers": true
+    },
+    "soul/skills/who-i-am-today.md": {
+      "ru": "2fcf7acdeb448daacf2ae91f201c3f21859fab824f36bb54dca1b564b6f89d1d",
+      "en": "5a4559b58bb4490d432ad346d53f4deed1d08ca7e4cab3c6bfcc7c9270a6bb7c",
+      "fr": "194403355c0f836303391da7bf7836c8e9858f07f9984cfd7fa1752dfb426b3b",
+      "zh": "56782af80a0cbfc1843da0bb11c0dbc054bb9f365c891a1407b3b9a371d3aeb5",
+      "identifiers": true
+    },
+    "soul/skills/write-your-skills.md": {
+      "ru": "ecf4f799130fe96443214b91b809916ec3e7ef804b5e531f66dbe6dcd736c894",
+      "en": "c664e5476cc78c7884b0aa9d2268ead2b63a378d2a1596845b8c9465a63bfe7e",
+      "fr": "0f0dbc42f3c781c907e5ea83684453143976ea6dd1555f4e7fbc9d94fa237c1f",
+      "zh": "96cbc399cb281d25358eb21ee3fd028306767f5617a62ef4c7f5ab9a4e93695b",
       "identifiers": true
     }
   }
