@@ -110,6 +110,13 @@
       "zh": "195343d3471035c4899f4fb733013daaccf9972695af31c6825f83853a54bb71",
       "identifiers": true
     },
+    "soul/skills/coding_hands.md": {
+      "ru": "822efb24946f1e0b3ce36d12cea3bdc479860d9b937e448459d42aff65315e4b",
+      "en": "a0a672c4afb3e1515305e7b9fd7ba907fa8e916fba0dbe79a36a1f7c5dea0b55",
+      "fr": "2761be09a94adff3a4378935ab6f622387466e0ea52076f8a3c45cf0294440d1",
+      "zh": "b32b4fd455c1b05970b1f11e389fbc4d47712f17df57c27c02fa4b7ae25fe9d4",
+      "identifiers": true
+    },
     "soul/skills/complexity-and-appetite.md": {
       "ru": "4cd9ff796e86cff9ad0002d0eeb781f89d7d50023dc77e6d541966f2a8912e65",
       "en": "081bd12b5e67315e8ea29f4524b367fd5ec42b62874b44cf72fbbb7ef0fad222",
@@ -150,6 +157,13 @@
       "en": "c34f0a581927bb4dea565da1ae189f5067961d56eec01efeca09cbad93dc5cdc",
       "fr": "52538745b2f1e43fc2a1a6c8e66c2d272dabd1839df6d8f4b5beea1e82345767",
       "zh": "13bd3f88dcfffe2fbd170ba2572c7e0fd5cd9da27a7b86aade0c5320673c4b65",
+      "identifiers": true
+    },
+    "soul/skills/durable-run-leak-layers.md": {
+      "ru": "8623fd86cc2beb00b0f9a104ce65ad200a344a2d38e02efe8af1f91d99955f17",
+      "en": "f00df3f48f58d490f723f0bfe363efa6502f114f84ee0413ee3751e4906b1396",
+      "fr": "681f42dc51a168d934bb9a05c9da91913d27c8057b18417fcc25645940c5f776",
+      "zh": "5aaf8c82d22b2535afd765dfe7399e6f657fda64f32bc49a9c2a668c1059f8a4",
       "identifiers": true
     },
     "soul/skills/email.md": {
@@ -490,6 +504,13 @@
       "zh": "4c984b06012783f23eb2637ae7831a5370af4776a412c7391219d48624185d30",
       "identifiers": true
     },
+    "soul/skills/proposal-gate-attribution.md": {
+      "ru": "c82200b84ad557d8e7480dd39a5c5b6abbe669105c734d8726137883453dfed9",
+      "en": "5b914ffb67852506618b7cd8a0fe9fdc92cddff5bca98da070af82de4007100e",
+      "fr": "b69d830acb6d53d50698f718054ebc69416f3faad47e0913dc1fbbc68c8bc6b5",
+      "zh": "b9331560a2c7e1d66612f326dd4381f523481cde4ba5307bd94e904de33c4908",
+      "identifiers": true
+    },
     "soul/skills/quote-insertion-check.md": {
       "ru": "8718fb0c28a9d7e6e82c99e17ae883dc3ce0bc3af71bffcd031a2e8bea2d0482",
       "en": "0eaa70dceaa6bbd8d6af7ee86be5eb1d6337728e3ce3f51fa617245ccc0ca4d2",
@@ -588,6 +609,13 @@
       "zh": "10c0af985ec42a2cf22aac6d5666c02c20a2d76e8264acd018590593ee536ab7",
       "identifiers": true
     },
+    "soul/skills/suite-count-calibration.md": {
+      "ru": "5a4713cb6903afa4524d008b19323a43fa86a1173fb667dd9329c39fc23ac61a",
+      "en": "cd37eee95cdc4aa67e11e80d6b63b2fc60293d849f8197d7b6ac3e8ecf92d03d",
+      "fr": "42121b49cec7bfabe367f4d8d3e6978347b152e49839221bc77f9ef2b41c2dd6",
+      "zh": "575b5723928ce73836546643f3f1efb3fc99d57bd4233cddbcd08a18e315df95",
+      "identifiers": true
+    },
     "soul/skills/take-shape.md": {
       "ru": "6f631ea66e11162fa5bea344f6e291cc12eb9851d32ac95b7c8f5661e3a76433",
       "en": "70ee713bdd6020c3679e4bec7fe2ededfebfd9c582e88a155d8f7ba55118c6c3",
@@ -642,6 +670,13 @@
       "en": "651479017f69a63885dd9f88a80b4efbbfe7dea9ac515d4dd87d9d4f6ea2a7e1",
       "fr": "878537a3081532219ed4957491cad483437508c351a82304fdbf02705bfd03ff",
       "zh": "0b537be5bcd4f2c963d51f436c0cf0e3d5e5d6588c7b3830708475a41eb537cb",
+      "identifiers": true
+    },
+    "soul/skills/test-runner-env-hygiene.md": {
+      "ru": "704398c4d82fd28d3ff09ea6ce3061006e598ab48b8b125f2188dcdf39dfeb87",
+      "en": "11ea39562d929d13e19c56b02d44e214eb2e1a40a2b143406f74721cd23ac107",
+      "fr": "ebceaafd576a29a390000b29d5e344668cedffb80ebcc46c917c4d6ac75edf9e",
+      "zh": "36cfa21ded667c7e56e744c412cfcd10bb01a2b3cfb1aedcab77a1257006f454",
       "identifiers": true
     },
     "soul/skills/thread_discipline.md": {
@@ -726,6 +761,13 @@
       "en": "1c6ecebec1fc76f8bcf8d2a2c99031592f8db41eff72e2bf7dcdde043435e23c",
       "fr": "e5dd21a19496de7789b873e4ddb0ee0ad218479529a2d4a500c42ab0db15569c",
       "zh": "3964c1368fd1b2a1dce59987a1b0e46dec4156f9d431264011b2ae5e0c7525a5",
+      "identifiers": true
+    },
+    "soul/skills/working_with_hands.md": {
+      "ru": "c92a60986f530da0babcdfa72d87819e430f2269d0bf4101d2f8ab43d313401e",
+      "en": "934a7ef03405d2d4b96f896565de23cb613e33f10fe52bf9dd401ad6b08defb3",
+      "fr": "13d80feefa6b84ca1f1d90cd3488bcddf913bc1cd613d170d3027cc46d75e41b",
+      "zh": "60ec394ab8997d8176b8ef7a414c8a3a8171d6ce666f47bbc0540ebad4ffd6ba",
       "identifiers": true
     },
     "soul/skills/write-your-skills.md": {
