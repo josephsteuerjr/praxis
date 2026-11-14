@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import './fixtures/ru-localization.mjs';
 
 const source = readFileSync(new URL('../../ui-kit/window/views/learn.ts', import.meta.url), 'utf8');
 const state = { agentState: null, connected: false, platform: 'windows' };
@@ -47,10 +48,10 @@ test('table of contents matches section reading order and all useful destination
 });
 
 test('the introduction keeps missing values as blanks and typed values verbatim', () => {
-  assert.equal(assemble(INTRO, {querySelector: () => null}, 'intro'), INTRO);
+  assert.equal(assemble(INTRO(), {querySelector: () => null}, 'intro'), INTRO());
   const values = new Map([[1, '  Егор  '], [3, 'делаю   проекты'], [5, 'не выдумывал факты']]);
   const root = { querySelector(selector) { const i = Number(selector.match(/data-hole="(\d+)"/)[1]); return {value: values.get(i) || ''}; } };
-  assert.equal(assemble(INTRO, root, 'intro'), 'Меня зовут Егор. Я делаю проекты. Мне важно, чтобы ты не выдумывал факты.');
+  assert.equal(assemble(INTRO(), root, 'intro'), 'Меня зовут Егор. Я делаю проекты. Мне важно, чтобы ты не выдумывал факты.');
 });
 
 test('connection and model labels never invent data and escape long provider names', () => {
