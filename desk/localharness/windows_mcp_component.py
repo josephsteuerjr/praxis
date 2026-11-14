@@ -172,8 +172,13 @@ def install(program, progress=None):
             notices.append(dict(package='Python', version=PIN['python'], files=['LICENSE.txt']))
             (home / 'THIRD-PARTY-NOTICES.json').write_text(json.dumps(notices, ensure_ascii=False, indent=2), encoding='utf-8')
             report(stage='checking')
-            checked = subprocess.run([interpreter(home), '-B', '-c',
-                'import windows_mcp,fastmcp,win32api; import windows_mcp.__main__; print("ready")'],
+            from .program_state import directory as state_directory
+            from .update_process import permanent_environment
+            environment=permanent_environment()
+            environment.update(HELENE_WINDOWS_MCP_STATE=str(state_directory(program,'windows-mcp')),
+                ANONYMIZED_TELEMETRY='false',POSTHOG_API_KEY='',WINDOWS_MCP_WATCHDOG='false')
+            checked = subprocess.run([interpreter(home), '-B',
+                str(Path(__file__).with_name('windows_mcp_entry.py')), '--check'],env=environment,
                 cwd=home, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 timeout=90, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if checked.returncode:
