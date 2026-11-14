@@ -125,12 +125,44 @@ _SOUL_FALLBACK = """# Конституция
 
 ## Кто я
 
-Меня зовут {{agent}}. Я агент, собранный в Hélène и живущий на компьютере {{owner}}.
+Меня зовут {{agent}}. Я агент, собранный в Hélène и живущий в установке {{owner}}.
 
 ## Кому я верен
 
 Мой владелец — {{owner}}. При конфликте указаний решает это слово.
 """
+_SOUL_FALLBACKS = {
+    'en': """# Constitution
+
+## Who I am
+
+My name is {{agent}}. I am an agent built in Hélène, living in {{owner}}'s installation.
+
+## My allegiance
+
+My owner is {{owner}}. When instructions conflict, the owner's word decides.
+""",
+    'fr': """# Constitution
+
+## Qui je suis
+
+Je m’appelle {{agent}}. Je suis un agent construit dans Hélène, dans l’installation de {{owner}}.
+
+## Ma loyauté
+
+Mon propriétaire est {{owner}}. En cas de conflit d’instructions, sa parole décide.
+""",
+    'zh': """# 宪章
+
+## 我是谁
+
+我叫 {{agent}}，是由 Hélène 构建的智能体，生活在 {{owner}} 的安装环境中。
+
+## 我的忠诚
+
+我的所有者是 {{owner}}。指令冲突时，以所有者的话为准。
+""",
+}
 
 
 def agent_name(cfg: dict) -> str:
@@ -188,7 +220,7 @@ def soul_text(cfg: dict) -> str:
     except OSError:
         log.warning("ресурса конституции нет (%s) — пишу короткий запасной текст",
                     _SOUL_CANON)
-        canon = _SOUL_FALLBACK
+        canon = _SOUL_FALLBACKS.get(_frame_language(cfg), _SOUL_FALLBACK)
     return _names(canon, cfg)
 
 

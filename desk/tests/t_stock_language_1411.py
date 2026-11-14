@@ -49,5 +49,29 @@ class StockLanguage(unittest.TestCase):
             cfg['agent']['name']='Личное имя';cfg['owner']={'name':'名字'}
             self.assertEqual(boot._names('{{agent}} {{owner}}',cfg),'Личное имя 名字')
 
+    def test_canonical_constitution_follows_frame_for_all_ui_choices(self):
+        headings={'ru':'# Конституция','en':'# Constitution','fr':'# Constitution','zh':'# 宪章'}
+        for ui in ('ru','en','fr','zh'):
+            for frame in ('ru','en','fr','zh'):
+                config={'lang':ui,'agent':{'name':'AUTHORED 日本語','frame_language':frame},
+                        'owner':{'name':'AUTHORED Owner'}}
+                resource=boot._RESOURCES/('SOUL.md' if frame=='ru' else f'SOUL.{frame}.md')
+                self.assertEqual(boot._stock_path('SOUL.md',config),resource)
+                text=boot.soul_text(config)
+                self.assertEqual(text,boot._names(resource.read_text(encoding='utf-8'),config))
+                self.assertTrue(text.startswith(headings[frame]));self.assertNotIn('{{',text)
+                self.assertIn('AUTHORED 日本語',text);self.assertIn('AUTHORED Owner',text)
+                self.assertEqual(len([line for line in text.splitlines() if line[:2] in ('1.','2.','3.','4.','5.')]),5)
+                for name in ('soul/SOUL.md','soul/VOICE.md','soul/self/CURRENT.md','soul/skills/INDEX.md',
+                             'my_capabilities','remind_self','recent_turns','manage_identity','manage_desire'):
+                    self.assertIn('`'+name+'`',text)
+
+    def test_missing_constitution_resource_uses_same_frame_language(self):
+        for language,heading in (('ru','# Конституция'),('en','# Constitution'),('fr','# Constitution'),('zh','# 宪章')):
+            with patch.object(Path,'read_text',side_effect=FileNotFoundError):
+                text=boot.soul_text({'lang':'ru','agent':{'frame_language':language,'name':'AUTHORED'}})
+            self.assertTrue(text.startswith(heading));self.assertIn('AUTHORED',text)
+            self.assertNotIn('{{',text)
+
 
 if __name__=='__main__':unittest.main()

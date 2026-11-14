@@ -50,6 +50,17 @@ class FirstBirth(unittest.TestCase):
         self.create(kind='canonical')
         self.assertEqual(self.soul.read_text(encoding='utf8'),boot.soul_text(common.load(self.root/'helene.json')))
 
+    def test_canonical_birth_uses_frame_choice_independently_of_ui(self):
+        self.values.update(lang='zh',frame_language='fr',living_prose=False)
+        self.create(kind='canonical')
+        config=common.load(self.root/'helene.json')
+        expected=boot._names((boot._RESOURCES/'SOUL.fr.md').read_text(encoding='utf-8'),config)
+        self.assertEqual(self.soul.read_text(encoding='utf-8'),expected)
+        self.assertEqual(config['lang'],'zh')
+        self.assertEqual(config['agent']['frame_language'],'fr')
+        self.assertFalse(config['agent']['living_prose'])
+        self.assertEqual(self.seed.read_text(encoding='utf-8'),expected)
+
     def test_BOM_choice_uses_the_same_decoded_seed_as_the_runner(self):
         self.create('\ufeff# BOM choice\n')
         self.assertEqual(self.seed.read_bytes(),b'\xef\xbb\xbf# BOM choice\n')
