@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Управление компьютером — опция ПОВЕРХ любого режима, не режим и не служба.
 //
 // Рука `computer` дерева (окна, экран, клавиатура и мышь, файлы и процессы)
@@ -71,45 +72,43 @@ function bodyNames(mac: boolean, sep: string): string {
 }
 
 /** Два разрешения macOS в порядке показа: ключ снимка, раздел настроек, слова. */
-const TCC_ROWS: ReadonlyArray<[keyof NonNullable<ComputerLive["tcc"]>, string, string]> = [
+const TCC_ROWS = (): ReadonlyArray<[keyof NonNullable<ComputerLive["tcc"]>, string, string]> => [
   // ⚠ Имя пункта — ровно то, что написано в Системных настройках Sequoia:
   // «Запись экрана» там больше нет, есть «Запись экрана и системного звука».
   // Короткое имя отправляло владельца искать несуществующую строку.
-  ["screen_recording", "screen", "Запись экрана и системного звука"],
-  ["accessibility", "accessibility", "Универсальный доступ"],
+  ["screen_recording", "screen", uiText("ui.app.src.computer.829ed8b787")],
+  ["accessibility", "accessibility", uiText("ui.app.src.computer.ce2519caf3")],
 ];
 
-const TCC_NOTE =
-  "Оба разрешения выдаются в Системных настройках, раздел «Конфиденциальность и безопасность»: " +
-  "пункты «Запись экрана и системного звука» и «Универсальный доступ». " +
-  "После обновления программы система считает её новой: убери Helene из списка и добавь снова.";
+const TCC_NOTE = () =>
+  uiText("ui.app.src.computer.cdd00c811c");
 
 /** Строка о теле по снимку харнесса. Только то, что он прислал. `mac` — система
  *  агента: на ней зависят только имена файлов тела. */
 export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, mac = false): { text: string; ok: boolean | null } {
   if (!live || typeof live !== "object" || live.enabled === undefined) {
-    return { text: "Снимка тела ещё нет: код агента пишет его при старте.", ok: null };
+    return { text: uiText("ui.app.src.computer.b6a61ac066"), ok: null };
   }
-  const at = live.checked_at ? ` Проверено ${fmtTimeSec(live.checked_at)}.` : "";
+  const at = live.checked_at ? uiText("ui.app.src.computer.27bcfb63b6", {p0: String(fmtTimeSec(live.checked_at))}) : "";
   if (!live.enabled) {
-    const have = live.available === false ? ` Тела в сборке нет: ${bodyNames(mac, " и ")} рядом с программой не найдены.` : "";
-    const pending = enabledNow ? " Включено в черновике — поднимется после сохранения и перезапуска." : "";
-    return { text: `Выключено.${have}${pending}`, ok: null };
+    const have = live.available === false ? uiText("ui.app.src.computer.aa759b8f1f", {p0: String(bodyNames(mac, uiText("ui.app.src.computer.21db14e45f")))}) : "";
+    const pending = enabledNow ? uiText("ui.app.src.computer.961a7b4df7") : "";
+    return { text: uiText("ui.app.src.computer.b06efdab80", {p0: String(have), p1: String(pending)}), ok: null };
   }
-  if (live.available === false) return { text: `Опция включена, но тела в сборке нет: ${live.reason || `${bodyNames(mac, " / ")} не найдены`}.`, ok: false };
+  if (live.available === false) return { text: uiText("ui.app.src.computer.24a38cbcb5", {p0: String(live.reason || uiText("ui.app.src.computer.11e209b450", {p0: String(bodyNames(mac, " / "))}))}), ok: false };
   if (live.connected === true) {
     if (live.platform === "linux" && live.console === false) {
-      return { text: `Тело подключено; графический рабочий стол недоступен. ${(live.hints || []).join(' ')}${at}`, ok: false };
+      return { text: uiText("ui.app.src.computer.b23853f545", {p0: String((live.hints || []).join(' ')), p1: String(at)}), ok: false };
     }
     if (live.platform === "linux" && live.console !== true) {
-      return { text: `Тело подключено; графический рабочий стол ещё не проверен.${at}`, ok: null };
+      return { text: uiText("ui.app.src.computer.3a3db14e03", {p0: String(at)}), ok: null };
     }
     const id = live.identity || {};
-    const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? `сессия ${id.session_id}` : "", id.integrity].filter(Boolean).join(", ");
-    return { text: `Тело подключено: мост 127.0.0.1:${live.port || "?"}${who ? ` (${who})` : ""}.${at}`, ok: true };
+    const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? uiText("ui.app.src.computer.02e323576f", {p0: String(id.session_id)}) : "", id.integrity].filter(Boolean).join(", ");
+    return { text: uiText("ui.app.src.computer.1a24fbb915", {p0: String(live.port || "?"), p1: String(who ? ` (${who})` : ""), p2: String(at)}), ok: true };
   }
-  if (live.connected === false) return { text: `${live.reason || "Тело не отвечает."}${at}`, ok: false };
-  return { text: `${live.reason || "Поднимается."}${at}`, ok: null };
+  if (live.connected === false) return { text: `${live.reason || uiText("ui.app.src.computer.a51665ae00")}${at}`, ok: false };
+  return { text: `${live.reason || uiText("ui.app.src.computer.2a323bd1f1")}${at}`, ok: null };
 }
 
 /**
@@ -127,7 +126,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
   let enabled = stored.enabled;
   const scopes = new Set(stored.scopes);
   const option: ComputerOption | null | undefined = live?.computer_option;
-  box.append(el("h3", "", option?.title || "Управление компьютером"));
+  box.append(el("h3", "", option?.title || uiText("ui.app.src.computer.d58fe7fd81")));
 
   // Труба не прислала опции — харнесс старее окна. Своих слов не пишем; блок
   // в файле уедет обратно таким, каким лежал.
@@ -136,8 +135,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
       el(
         "p",
         "receipt err",
-        "Про управление компьютером код агента ничего не рассказал — похоже, он старее окна (тело тулы `computer` появилось в 0.3.1). " +
-          "Галочки окно оставит в файле такими, какие они есть.",
+        uiText("ui.app.src.computer.a43a180213"),
       ),
     );
     return { el: box, enabled: () => enabled, scopes: () => [...scopes] };
@@ -164,8 +162,8 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
     const known = (COMPUTER_SCOPES as readonly string[]).includes(s.key);
     if (!known) {
       rights.append(
-        el("p", "receipt err", `${s.title || s.key}: это право окно писать не умеет — код агента новее окна.`),
-        el("p", "field-hint", `Правь его руками в helene.json, список computer.scopes. Что делает: ${s.text || "—"}`),
+        el("p", "receipt err", uiText("ui.app.src.computer.5c904b8350", {p0: String(s.title || s.key)})),
+        el("p", "field-hint", uiText("ui.app.src.computer.0421599c96", {p0: String(s.text || "—")})),
       );
       continue;
     }
@@ -186,14 +184,14 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
     for (const r of scopeRows) r.setAttribute("aria-disabled", String(!enabled));
     if (!enabled) {
       rightsNote.className = "field-hint";
-      rightsNote.textContent = "Опция выключена: права лежат в файле, но тела нет и тул отказывает словами. Включение применяется перезапуском.";
+      rightsNote.textContent = uiText("ui.app.src.computer.6b6c8e9ebd");
     } else if (!scopes.size) {
       rightsNote.className = "receipt err";
-      rightsNote.textContent = "Ни одного права не выдано — тело поднимется, а тул откажет на любое действие. Так тоже можно, но зачем.";
+      rightsNote.textContent = uiText("ui.app.src.computer.a7552be5f2");
     } else {
       rightsNote.className = "field-hint";
       rightsNote.textContent =
-        "Права код агента перечитывает из файла на каждый вызов тулы: после «Сохранить» они действуют сразу, перезапуск нужен только для включения самого тела.";
+        uiText("ui.app.src.computer.9953806a14");
     }
   };
 
@@ -206,19 +204,19 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
     const tcc = mac && snap && typeof snap === "object" ? snap.tcc : null;
     tccBox.hidden = !tcc || typeof tcc !== "object";
     if (tccBox.hidden || !tcc) return;
-    for (const [key, kind, title] of TCC_ROWS) {
+    for (const [key, kind, title] of TCC_ROWS()) {
       const ok = tcc[key] === true;
       const row = el("div", "actions");
-      row.append(el("span", "receipt " + (ok ? "ok" : "err"), `${title}: ${ok ? "есть" : "нет"}`));
+      row.append(el("span", "receipt " + (ok ? "ok" : "err"), `${title}: ${ok ? uiText("ui.app.src.computer.747f78e5a0") : uiText("ui.app.src.computer.dc9337ff5b")}`));
       if (!ok) {
         row.append(
-          button("Открыть настройки", "quiet", () => void shell("open_privacy_pane", { kind }).catch((e) => toast(humanError(e).text))),
+          button(uiText("ui.app.src.computer.7c8ef82d31"), "quiet", () => void shell("open_privacy_pane", { kind }).catch((e) => toast(humanError(e).text))),
         );
       }
       tccBox.append(row);
     }
     for (const hint of snap?.hints || []) if (hint) tccBox.append(el("p", "field-hint", hint));
-    tccBox.append(el("p", "field-hint", TCC_NOTE));
+    tccBox.append(el("p", "field-hint", TCC_NOTE()));
   };
 
   // --- живое состояние: снимок харнесса, кнопка «Проверить» перечитывает трубу.
@@ -228,7 +226,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
     status.textContent = line.text;
     syncTcc(snap);
   };
-  const check = button("Проверить", "quiet", async () => {
+  const check = button(uiText("ui.app.src.computer.e4424a6df6"), "quiet", async () => {
     try {
       const fresh = await api<ModeState>("/api/mode");
       syncStatus(fresh.computer_live);
@@ -246,8 +244,8 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
     el(
       "p",
       "field-hint",
-      "Тело живёт в твоей сессии, снаружи ограды, и умирает вместе с кодом агента. Токены — только в памяти процесса, на диске их нет." +
-        (logs && logs.length ? ` Логи тела: ${logs.join(", ")}.` : ""),
+      uiText("ui.app.src.computer.86e8e82cc4") +
+        (logs && logs.length ? uiText("ui.app.src.computer.e87da5285c", {p0: String(logs.join(", "))}) : ""),
     ),
   );
 
