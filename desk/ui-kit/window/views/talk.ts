@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 import { VoiceArrivals } from "../voice-arrivals";
 import { voicePreferences } from "../voice-preferences";
 const voiceArrivals = new VoiceArrivals();
@@ -17,6 +18,7 @@ import { deliveryWords, type FoldState } from "../../memory-fold";
 import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
+import { isToday } from "../../text";
 import * as panel from "../panel";
 import { confirmedByFeed } from "../pending";
 import { sameRoom } from "../session";
@@ -110,14 +112,9 @@ function failedNotices(): string {
   if (!failed.length) return "";
   const last = failed[0];
   const day = fmtDay(last.created_at);
-  const when = (day === "Сегодня" ? "" : day + ", ") + fmtTime(last.created_at);
+  const when = (isToday(last.created_at) ? "" : day + ", ") + fmtTime(last.created_at);
   const why = brainErrorIsCurrent() ? `: ${esc(S.agentState!.brain.last_error!)}` : "";
-  return `<div class="notice err">
-    <span class="dot failed"></span>
-    <span>Ход ${esc(when)} не дошёл до конца${why}. ${failed.length > 1 ? `Таких ходов за сутки: ${failed.length}.` : ""}</span>
-    <button class="notice-action" data-go="journal" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Открыть журнал</button>
-    <button class="notice-action" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Прочитано</button>
-  </div>`;
+  return uiText("ui.ui.kit.window.views.talk.50ba795eb2", {p0: String(esc(when)), p1: String(why), p2: String(failed.length > 1 ? uiText("ui.ui.kit.window.views.talk.ce16ddd9c1", {p0: String(failed.length)}) : ""), p3: String(esc(failed.map(r => `${S.room}:${r.id}`).join('|'))), p4: String(esc(failed.map(r => `${S.room}:${r.id}`).join('|')))});
 }
 
 /**
@@ -140,7 +137,7 @@ function brainNotice(): string {
       <span class="dot ${s.level === "error" ? "failed" : ""}"></span>
       <span>${esc(s.phrase)}</span>
       ${s.action ? `<button class="notice-action" data-act="${esc(s.action.target)}" type="button">${esc(s.action.label)}</button>` : ""}
-      ${raw ? `<details class="fail-detail notice-detail"><summary>Подробности</summary><pre class="mono">${esc(raw)}</pre></details>` : ""}
+      ${raw ? uiText("ui.ui.kit.window.views.talk.06e379d3ed", {p0: String(esc(raw))}) : ""}
     </div>`;
   }
   return "";
@@ -170,16 +167,16 @@ export function currentTurn(): { run_id: string; key: string } | null {
 export function interruptReceiptWords(receipt: Record<string, unknown> | null | undefined): string {
   if (!receipt || typeof receipt !== "object") return "";
   const n = (k: string) => Array.isArray(receipt[k]) ? (receipt[k] as unknown[]).length : 0;
-  if (n("failed")) return "Не удалось подтвердить остановку — открой подробности хода";
-  if (n("pending_tool_outcomes")) return "Останавливается — ждёт результата текущего действия";
-  if (n("cancelled")) return "Ход остановлен";
-  if (!n("requested")) return "Ход уже завершён";
-  return "Остановка запрошена";
+  if (n("failed")) return uiText("ui.ui.kit.window.views.talk.a067789018");
+  if (n("pending_tool_outcomes")) return uiText("ui.ui.kit.window.views.talk.0db1b79cd9");
+  if (n("cancelled")) return uiText("ui.ui.kit.window.views.talk.42a576267d");
+  if (!n("requested")) return uiText("ui.ui.kit.window.views.talk.56f5eb012b");
+  return uiText("ui.ui.kit.window.views.talk.37bd566622");
 }
 
 export function mountTurnControls(container: HTMLElement) {
   turnControls = container;
-  container.innerHTML = '<span class="turn-receipt" aria-live="polite"></span><button class="notice-action" data-stop-turn type="button" hidden>Сбросить задачу</button>';
+  container.innerHTML = uiText("ui.ui.kit.window.views.talk.5f97a2c942");
   container.querySelector("button")!.addEventListener("click", () => void stopCurrentTurn());
 }
 
@@ -191,8 +188,8 @@ export function onStateChange(blocked = false) {
     const button = turnControls.querySelector<HTMLButtonElement>("button")!;
     button.hidden = blocked || !target;
     button.disabled = !!stopReceipt?.pending;
-    button.textContent = stopReceipt?.pending ? "Останавливается…" : "Сбросить задачу";
-    button.title = "Прервать этот ход и его процессы; сохранить историю и соседние задачи";
+    button.textContent = stopReceipt?.pending ? uiText("ui.ui.kit.window.views.talk.8c37f21b90") : uiText("ui.ui.kit.window.views.talk.196eca5b0e");
+    button.title = uiText("ui.ui.kit.window.views.talk.b9e06f602c");
     const receipt = turnControls.querySelector<HTMLElement>(".turn-receipt")!;
     receipt.textContent = !blocked && target ? stopReceipt?.text || "" : "";
   }
@@ -205,14 +202,14 @@ export function onStateChange(blocked = false) {
 async function stopCurrentTurn() {
   const target = currentTurn();
   if (!target || controlsBlocked || stopReceipt?.pending) return;
-  const record = { key: target.key, text: "Остановка запрошена…", pending: true };
+  const record = { key: target.key, text: uiText("ui.ui.kit.window.views.talk.f67d3fdc29"), pending: true };
   stopReceipt = record;
   onStateChange(controlsBlocked);
   try {
     const answer = await post<{ ok: boolean; confirmed?: boolean; note?: string }>(`/api/run/${encodeURIComponent(target.run_id)}/cancel`, {});
-    if (!answer.ok) throw new Error(answer.note || "Просьба не записана");
+    if (!answer.ok) throw new Error(answer.note || uiText("ui.ui.kit.window.views.talk.c0740b033b"));
     if (stopReceipt !== record) return;
-    record.text = answer.note || (answer.confirmed ? 'Ход остановлен' : 'Завершение действия пока не подтверждено');
+    record.text = answer.note || (answer.confirmed ? uiText("ui.ui.kit.window.views.talk.42a576267d") : uiText("ui.ui.kit.window.views.talk.1a43bf64c4"));
     record.pending = false;
     onStateChange(controlsBlocked);
   } catch (error) {
@@ -226,10 +223,7 @@ async function stopCurrentTurn() {
 function stubNotice(): string {
   const room = S.rooms.find((r) => r.key === S.room);
   if (!room?.stub) return "";
-  return `<div class="notice">
-    <span class="dot"></span>
-    <span>Этот чат — заглушка: код агента ещё не умеет несколько чатов с агентом (появится в 0.3.3). Здесь можно проверить, как это будет выглядеть; писать — в основной чат.</span>
-  </div>`;
+  return uiText("ui.ui.kit.window.views.talk.4791a364d4");
 }
 
 /**
@@ -270,7 +264,7 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     // ленте оно перестаёт быть строкой с путём. Голос агента приезжает так.
     // Строковый `m.media` остаётся тем, чем был: подписью telegram-вложения.
     const media = mediaBlock(m) || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "") || (m.media_error ? `<p class="muted">${esc(m.media_error)}</p>` : '');
-    const edited = m.edited_at ? " · ред." : "";
+    const edited = m.edited_at ? uiText("ui.ui.kit.window.views.talk.1cf6b10ef7") : "";
     // Имя в подписи — только у чужих людей в общих комнатах.
     const showName = !m.outgoing && !system && !windowish && name !== S.agentState?.owner;
     // Справа — только владелец: чужая реплика из общей комнаты — слева, с именем.
@@ -285,14 +279,13 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     const birth = system && (m.kind === "birth" || (m.text || "").startsWith("Это твой первый запуск"));
     const cls = own ? "own" : system ? "system" + (silence || birth ? " silence" : "") : m.outgoing ? "agent" : "";
     const preview = replyPreview(m, originals);
-    const reply = preview ? `<button type="button" class="msg-reply-preview" data-reply-id="${esc(preview.id)}"
-      title="Перейти к исходному сообщению"><b>↳ ${esc(preview.author)}</b><span>${esc(preview.text)}</span></button>` : '';
+    const reply = preview ? uiText("ui.ui.kit.window.views.talk.a65080ce17", {p0: String(esc(preview.id)), p1: String(esc(preview.author)), p2: String(esc(preview.text))}) : '';
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
     const visibleText = artifactCaption(m.text || "", m.media_path);
     const body = birth
-      ? `<details><summary>Первый запуск</summary>${md(m.text || "")}</details>`
+      ? uiText("ui.ui.kit.window.views.talk.d94296c171", {p0: String(md(m.text || ""))})
       : md(visibleText);
     const base = `${m.timestamp || ""}|${m.outgoing ? "a" : system ? "s" : "o"}|${m.sender_id ?? ""}`;
     const n = seen.get(base) ?? 0;
@@ -341,19 +334,12 @@ function skeleton(page: HTMLElement, peer: string): Dom {
     const target = Array.from(page.querySelectorAll<HTMLElement>(".msg[data-message-id]"))
       .find(row => row.dataset.messageId === link.dataset.replyId);
     if (target) { showMessage(target); return; }
-    link.title = "Исходное сообщение ещё не загружено. Открой более раннюю часть переписки.";
+    link.title = uiText("ui.ui.kit.window.views.talk.8d294b4319");
     let feedback = link.parentElement?.querySelector<HTMLElement>(".reply-feedback");
     if (!feedback) { feedback = document.createElement("p"); feedback.className = "receipt reply-feedback"; link.after(feedback); }
     feedback.textContent = link.title;
   });
-  page.innerHTML = `<div class="center talk">
-    <div class="talk-zoom">
-      <div class="feed" role="log" aria-label="Переписка"></div>
-      <div class="pending-box"></div>
-      <div class="talk-empty" hidden></div>
-      <div class="talk-foot"><div data-fold-box></div><div class="talk-notices"></div></div>
-    </div>
-  </div>`;
+  page.innerHTML = uiText("ui.ui.kit.window.views.talk.519701d003");
   const zoom = page.querySelector<HTMLElement>(".talk-zoom")!;
   const dom: Dom = {
     page,
@@ -408,7 +394,7 @@ function paintEmpty(dom: Dom, hasRows: boolean) {
   dom.empty.hidden = !show;
   if (!show) return;
   const windowish = isWindowRoom(dom.peer);
-  const emptyText = windowish ? "Напиши первое сообщение внизу." : "Архива этой комнаты ещё нет.";
+  const emptyText = windowish ? uiText("ui.ui.kit.window.views.talk.38455fc008") : uiText("ui.ui.kit.window.views.talk.4b71346fa2");
   // Четыре начала — только в пустой переписке с агентом этого окна, и только
   // пока она пуста: с первым же сообщением полоска уходит навсегда. Тому, кто
   // уже написал, подсказки «с чего начать» не нужны, а место они занимают ровно
@@ -417,7 +403,7 @@ function paintEmpty(dom: Dom, hasRows: boolean) {
     ? `<div class="starters">${STARTERS.map((st, i) =>
         `<button class="starter" type="button" data-starter="${i}">${esc(st.label)}</button>`).join("")}</div>`
     : "";
-  const html = `<div class="empty"><b>Здесь пока тихо</b>${emptyText}${starters}</div>`;
+  const html = uiText("ui.ui.kit.window.views.talk.6668513c39", {p0: String(emptyText), p1: String(starters)});
   if (html === dom.emptyHTML) return;
   dom.emptyHTML = html;
   dom.empty.innerHTML = html;
@@ -486,9 +472,7 @@ export async function render(container: HTMLElement): Promise<void> {
       bindFail(dom.empty, () => void render(container));
       return;
     }
-    paintNotices(dom, `<div class="notice err read-fail"><span class="dot failed"></span>
-      <span>${esc(humanError(e).text)} Показано последнее прочитанное.</span>
-      <button class="notice-action" data-fail-retry type="button">Повторить</button></div>`);
+    paintNotices(dom, uiText("ui.ui.kit.window.views.talk.bcc1960376", {p0: String(esc(humanError(e).text))}));
     return;
   }
   if (doms.get(container) !== dom || S.room !== peer) return; // комната сменилась, пока читали

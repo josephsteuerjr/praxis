@@ -1,16 +1,18 @@
+import { t as uiText } from "../../lang/lang";
 // Список прогонов с раскрывающимися шагами — общий для «Сейчас» и «Вейков».
 // Подпись хода — слово агента из chat-turns комнаты (без скобок кадра),
 // без него — первая строка цели прогона.
 import { api, post } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
+import { isToday } from "../text";
 import { stepsHTML, type RunDetail } from "../steps";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, runIsLive, type Run } from "./state";
 
 export const RUN_KIND: Record<string, string> = {
-  chat_turn: "сообщение",
-  wake: "пробуждение",
-  task_window: "окно задачи",
-  moderation: "модерация",
+  get chat_turn() { return uiText("ui.ui.kit.window.runlist.8eb484df7b"); },
+  get wake() { return uiText("ui.ui.kit.window.runlist.0f3c3b6b95"); },
+  get task_window() { return uiText("ui.ui.kit.window.runlist.871470f451"); },
+  get moderation() { return uiText("ui.ui.kit.window.runlist.5cb789e9aa"); },
 };
 
 /** run_id → слово агента, заметка границы и собеседник (из chat-turns комнат). */
@@ -38,7 +40,7 @@ function noteLabel(note: string): string {
   const n = String(note || "").trim();
   const m = n.match(/^(done|wait|blocked|silence)\s*:\s*(.*)$/i);
   const body = m ? m[2] : n;
-  const head = m ? (m[1].toLowerCase() === "wait" ? "Жду: " : m[1].toLowerCase() === "blocked" ? "Препятствие: " : "") : "";
+  const head = m ? (m[1].toLowerCase() === "wait" ? uiText("ui.ui.kit.window.runlist.eb451ec6a0") : m[1].toLowerCase() === "blocked" ? uiText("ui.ui.kit.window.runlist.82a25559f5") : "") : "";
   return body.trim() ? head + cleanLabel(body) : "";
 }
 
@@ -88,18 +90,18 @@ export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
   return `<div class="ev ${S.evOpen.has(r.id) ? "open" : ""}" data-ev="${esc(r.id)}">
     <button type="button" class="ev-head" aria-expanded="${S.evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}">
       <span class="ev-title" title="${esc(r.goal_head || "")}">${esc(runLabel(r))}</span>
-      <span class="ev-time">${day === "Сегодня" ? "" : esc(day) + " "}${fmtTime(r.created_at)}</span>
+      <span class="ev-time">${isToday(r.created_at) ? "" : esc(day) + " "}${fmtTime(r.created_at)}</span>
       <span class="dot ${dot}"></span>
       <span class="ev-chevron" aria-hidden="true">›</span>
     </button>
-    ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? ` · <a href="#" data-room="${esc(roomKeyOf(r))}" data-room-name="${esc(r.chat_title)}">открыть чат →</a>` : ""}</div>` : ""}
+    ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? uiText("ui.ui.kit.window.runlist.ce30106559", {p0: String(esc(roomKeyOf(r))), p1: String(esc(r.chat_title))}) : ""}</div>` : ""}
     <div class="ev-steps" id="run-${esc(r.id)}" ${S.evOpen.has(r.id) ? "" : "hidden"}></div>
     ${r.status === 'running' ? resetRunHTML(r.id) : ''}
   </div>`;
 }
 
 export function resetRunHTML(id: string): string {
-  return `<div class="run-reset"><button type="button" class="btn btn-quiet" data-reset-run="${esc(id)}">Сбросить задачу</button><span class="receipt" aria-live="polite"></span></div>`;
+  return uiText("ui.ui.kit.window.runlist.ea277d2bbc", {p0: String(esc(id))});
 }
 
 export function bindRunReset(box: HTMLElement): void {
@@ -108,11 +110,11 @@ export function bindRunReset(box: HTMLElement): void {
     button.dataset.bound = 'true';
     button.addEventListener('click', async () => {
       const id=button.dataset.resetRun!, receipt=button.parentElement!.querySelector<HTMLElement>('.receipt')!;
-      button.disabled=true;receipt.textContent='Сброс запрошен…';
+      button.disabled=true;receipt.textContent=uiText("ui.ui.kit.window.runlist.8d85809664");
       try {
         const answer=await post<{ok:boolean;confirmed?:boolean;note?:string}>(`/api/run/${encodeURIComponent(id)}/cancel`,{});
-        if(!answer.ok)throw Error(answer.note || 'Не удалось записать запрос');
-        receipt.textContent=answer.note || (answer.confirmed ? 'Ход остановлен' : 'Завершение действия пока не подтверждено');
+        if(!answer.ok)throw Error(answer.note || uiText("ui.ui.kit.window.runlist.cc4265e4d3"));
+        receipt.textContent=answer.note || (answer.confirmed ? uiText("ui.ui.kit.window.runlist.42a576267d") : uiText("ui.ui.kit.window.runlist.1a43bf64c4"));
       } catch(error) { receipt.textContent=humanError(error).text; }
       finally { button.disabled=false; }
     });
@@ -137,13 +139,13 @@ export function bindRuns(box: HTMLElement, _redraw: () => void, openRoom: (key: 
     const head = node.querySelector<HTMLButtonElement>(".ev-head")!;
     const steps = node.querySelector<HTMLElement>(".ev-steps")!;
     const load = () => {
-      steps.innerHTML = '<div class="muted">читаю шаги…</div>';
+      steps.innerHTML = uiText("ui.ui.kit.window.runlist.45f2d8405e");
       void runDetail(id).then(
         (d) => {
-          if (steps.isConnected) steps.innerHTML = d ? stepsHTML(d) : '<div class="muted">шагов нет</div>';
+          if (steps.isConnected) steps.innerHTML = d ? stepsHTML(d) : uiText("ui.ui.kit.window.runlist.aca03f4417");
         },
         (e) => {
-          if (steps.isConnected) steps.innerHTML = `<div class="muted">шаги не прочитались: ${esc(humanError(e).text)}</div>`;
+          if (steps.isConnected) steps.innerHTML = uiText("ui.ui.kit.window.runlist.0c7b96ae7e", {p0: String(esc(humanError(e).text))});
         },
       );
     };

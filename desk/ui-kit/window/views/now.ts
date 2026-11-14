@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 // «Сейчас» — главный экран (слово владельца 07.09: «я должен видеть сразу
 // текущий ход»): идущий ход во всю ширину, шаги живьём, кадр, недавние ходы
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
@@ -44,7 +45,7 @@ function mountAgents(container: HTMLElement) {
   if(!slot)return;
   if(!agentDrawer){
     agentDrawer=document.createElement('details');agentDrawer.className='now-agents';
-    const summary=document.createElement('summary');summary.textContent='☰ Субагенты';
+    const summary=document.createElement('summary');summary.textContent=uiText("ui.ui.kit.window.views.now.82c96d3c4b");
     const host=document.createElement('section');agentDrawer.append(summary,host);
     agents=forgePanel(host,undefined,2500,{compact:true,controls:true});
     agentDrawer.addEventListener('toggle',syncAgents);
@@ -73,14 +74,14 @@ function since(run: Run): string {
 }
 
 function idleHTML(): string {
-  if (cfg.needs_local_setup) return `<div class="now-idle"><span class="dot"></span><span>Настрой модель, чтобы начать работу.</span><button class="btn btn-quiet" type="button" data-go="settings">Настроить модель →</button></div>`;
+  if (cfg.needs_local_setup) return uiText("ui.ui.kit.window.views.now.599b693f82");
   const s = S.agentState;
-  if (!s) return `<div class="now-idle"><span class="dot"></span><span>Подключение…</span></div>`;
+  if (!s) return uiText("ui.ui.kit.window.views.now.68bc2d2da5");
   const at = s.brain?.last_call_at;
   const age = at ? Math.round((Date.now() / 1000 - at) / 60) : null;
-  const when = age == null ? "" : age < 1 ? "модель отвечала только что" : age < 60 ? `модель отвечала ${age} мин назад` : `модель отвечала ${Math.round(age / 60)} ч назад`;
-  const phrase = foreignHarness() ? `Нет текущих действий${when ? " · " + when : ""}` : `${s.phrase}${when ? " · " + when : ""}`;
-  const wake = s.next_wake ? ` · следующее пробуждение ${fmtTime(s.next_wake) || s.next_wake}` : "";
+  const when = age == null ? "" : age < 1 ? uiText("ui.ui.kit.window.views.now.0f9229ccb7") : age < 60 ? uiText("ui.ui.kit.window.views.now.59a9097481", {p0: String(age)}) : uiText("ui.ui.kit.window.views.now.38c8a65581", {p0: String(Math.round(age / 60))});
+  const phrase = foreignHarness() ? uiText("ui.ui.kit.window.views.now.d94e047496", {p0: String(when ? " · " + when : "")}) : `${s.phrase}${when ? " · " + when : ""}`;
+  const wake = s.next_wake ? uiText("ui.ui.kit.window.views.now.e1a5d49bb2", {p0: String(fmtTime(s.next_wake) || s.next_wake)}) : "";
   return `<div class="now-idle"><span class="dot ${!foreignHarness() && s.level === "error" ? "failed" : "ok"}"></span><span>${esc(phrase)}${esc(wake)}</span></div>`;
 }
 
@@ -124,19 +125,7 @@ export async function render(container: HTMLElement, opts: {openAgents?: boolean
     : idleHTML();
   const rest = list.filter((r) => r.id !== shown?.id);
   if(currentId!==(shown?.id || '')){currentId=shown?.id || '';currentOpen=true;}
-  container.innerHTML = `<div class="center now">
-    ${usageShell(true)}
-    ${shown ? `<details class="now-current" ${currentOpen ? 'open' : ''}><summary>Текущий ход</summary>${liveHTML}${resetRunHTML(shown.id)}</details>` : liveHTML}
-    <div data-now-agents></div>
-    <details class="now-context"><summary>Контекст ${live ? 'сейчас' : 'последнего ответа'}</summary>${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}</details>
-    <label class="now-history-toggle"><input type="checkbox" data-now-history ${showPrevious ? 'checked' : ''}> Предыдущие ходы <span class="muted">${rest.length}</span></label>
-    <section class="now-history" ${showPrevious ? '' : 'hidden'}>
-    ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || `<div class="empty"><b>Здесь появятся действия и результаты</b>
-      <p>Здесь будут завершённые ходы. Поручи агенту дело в чате или выбери идею в онбординге.</p>
-      <button class="btn btn-quiet" type="button" data-go="learn">Что ему можно поручить →</button></div>`}
-    </section>
-    <details class="now-operator"><summary>Проверки оператора</summary><div data-operator-runs></div></details>
-  </div>`;
+  container.innerHTML = uiText("ui.ui.kit.window.views.now.71fe296067", {p0: String(usageShell(true)), p1: String(shown ? uiText("ui.ui.kit.window.views.now.30c4a30b62", {p0: String(currentOpen ? 'open' : ''), p1: String(liveHTML), p2: String(resetRunHTML(shown.id))}) : liveHTML), p2: String(live ? uiText("ui.ui.kit.window.views.now.b8225c8fbb") : uiText("ui.ui.kit.window.views.now.e3332464eb")), p3: String(frameStripHTML(strip, live ? uiText("ui.ui.kit.window.views.now.c5c5a30ef7") : uiText("ui.ui.kit.window.views.now.7df116e2f2"), uiText("ui.ui.kit.window.views.now.5f24c70fd4"))), p4: String(showPrevious ? 'checked' : ''), p5: String(rest.length), p6: String(showPrevious ? '' : 'hidden'), p7: String(rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || uiText("ui.ui.kit.window.views.now.115220e19b"))});
   const previous=container.querySelector<HTMLInputElement>('[data-now-history]');
   previous?.addEventListener('change',()=>{showPrevious=previous.checked;const history=container.querySelector<HTMLElement>('.now-history');if(history)history.hidden=!showPrevious;});
   const current=container.querySelector<HTMLDetailsElement>('.now-current');
@@ -147,14 +136,14 @@ export async function render(container: HTMLElement, opts: {openAgents?: boolean
   operator?.addEventListener('toggle',async()=>{
     if(!operator.open || operatorLoading || operatorLoaded)return;
     const host=operator.querySelector<HTMLElement>('[data-operator-runs]')!;
-    operatorLoading=true;host.textContent='Читаю проверки…';
+    operatorLoading=true;host.textContent=uiText("ui.ui.kit.window.views.now.c61414ece6");
     try {
       const rows=await api<Run[]>('/api/runs?limit=80&audience=operator');
       if(my!==gen || !host.isConnected)return;
-      host.innerHTML=rows.map(r=>runRowHTML(r,{showRoom:true})).join('') || '<p class="muted">Проверок пока нет.</p>';
+      host.innerHTML=rows.map(r=>runRowHTML(r,{showRoom:true})).join('') || uiText("ui.ui.kit.window.views.now.65bb90f5e6");
       bindRuns(host,()=>{},(key,name)=>dispatchEvent(new CustomEvent('frame-open-room',{detail:{key,name}})));
       operatorLoaded=true;
-    } catch(error) { if(host.isConnected)host.textContent='Не удалось прочитать проверки. Сверни и открой раздел снова.'; }
+    } catch(error) { if(host.isConnected)host.textContent=uiText("ui.ui.kit.window.views.now.29d9794fcb"); }
     finally { operatorLoading=false; }
   });
   for (const a of container.querySelectorAll<HTMLElement>("[data-go]")) {

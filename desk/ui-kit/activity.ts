@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 import { esc, fmtTime } from "./text";
 
 import { renderSteps, stepsHTML, type RunDetail } from "./steps";
@@ -16,7 +17,7 @@ export function selectActivity<T extends ActivityRun>(previous: T | undefined, l
 
 function status(d: RunDetail): string {
   const value = d.manifest?.terminal?.status || d.manifest?.status;
-  return ({ running: "Действия сейчас", done: "Работа завершена", completed: "Работа завершена", failed: "Работа остановилась с ошибкой", cancelled: "Работа отменена", canceled: "Работа отменена", blocked: "Нужно внимание", paused: "Работа приостановлена", in_doubt: "Нужно проверить результат" } as Record<string, string>)[value || ""] || "Последняя работа";
+  return ({ running: uiText("ui.ui.kit.activity.d36944f93b"), done: uiText("ui.ui.kit.activity.edc4e7a138"), completed: uiText("ui.ui.kit.activity.edc4e7a138"), failed: uiText("ui.ui.kit.activity.042fb5f9ab"), cancelled: uiText("ui.ui.kit.activity.d33d9337ec"), canceled: uiText("ui.ui.kit.activity.d33d9337ec"), blocked: uiText("ui.ui.kit.activity.57b33e5c74"), paused: uiText("ui.ui.kit.activity.6cf0b8fc13"), in_doubt: uiText("ui.ui.kit.activity.e16eb78176") } as Record<string, string>)[value || ""] || uiText("ui.ui.kit.activity.1699f99af2");
 }
 
 export function activityHTML(run: ActivityRun, detail: RunDetail | undefined,
@@ -26,7 +27,7 @@ export function activityHTML(run: ActivityRun, detail: RunDetail | undefined,
   return `<section class="turn-live now-live activity-card" id="turn-live" data-run="${esc(run.id)}" data-status="${esc(d.manifest?.status || run.status)}">
     <div class="turn-live-head"><span class="dot ${d.manifest?.status === "running" ? "live" : ""}"></span><span data-activity-status>${esc(status(d))}</span><span class="t" id="turn-live-t">${esc(duration)}</span></div>
     ${run.chat_title ? `<div class="turn-live-sub">${esc(run.chat_title)}</div>` : ""}
-    <div class="ev-steps" id="turn-live-steps">${detail ? stepsHTML(detail, { limit: 12, overview: true }) : opts.pending ? '<div class="muted">Читаю действия…</div>' : '<div class="muted">Не удалось прочитать действия. Повторяю подключение…</div>'}</div>
+    <div class="ev-steps" id="turn-live-steps">${detail ? stepsHTML(detail, { limit: 12, overview: true }) : opts.pending ? uiText("ui.ui.kit.activity.f1a60a6254") : uiText("ui.ui.kit.activity.669a7c0c5d")}</div>
   </section>`;
 }
 
