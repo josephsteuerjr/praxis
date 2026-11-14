@@ -19,6 +19,7 @@ import { artifactCaption, mediaDescriptor, paperMediaHTML, mountPaperMedia } fro
 import { artifactBytes, browserSave } from "./paper-transfer";
 import { phoneSettings } from './phone-settings';
 import { phoneActions } from './phone-actions';
+import { mountPraxisControl } from './praxis-control';
 import { mountPaperSelects } from './paper-select';
 import { apply as applyLook,load as loadLook } from './window/look';
 
@@ -487,7 +488,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   // ---------------------------------------------------------------- вкладки
+  let disposePraxisControl:(()=>void)|undefined;
+  let systemEpoch=0;
   function showTab(next: Tab) {
+    disposePraxisControl?.();disposePraxisControl=undefined;
     tab = next;
     if (next !== "chats") room = "";
     for (const b of tabsNav.querySelectorAll<HTMLElement>(".tab")) b.setAttribute("aria-current", String(b.dataset.tab === next));
@@ -501,7 +505,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
   screen.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-panic],[data-open-agent-settings]");
+      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-open-agent-settings]");
     if (!spot) return;
     if(spot.hasAttribute('data-open-agent-settings')){openSettings();return;}
     const note = screen.querySelector<HTMLElement>("#sys-note");
@@ -511,19 +515,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       note.className = bad ? "err" : "muted";
       note.textContent = text;
     };
-    if (spot.hasAttribute("data-panic")) {
-      (spot as HTMLButtonElement).disabled = true;
-      say("включаю аварийный стоп…");
-      try {
-        const answer = await post<{ ok: boolean; note: string }>("/api/panic", {});
-        say(answer.note, !answer.ok);
-        if (!answer.ok) (spot as HTMLButtonElement).disabled = false;
-      } catch {
-        say("Связь оборвалась во время остановки; подтверждения нет. Проверь стоп у Праксис или используй /panic в Telegram.", true);
-        (spot as HTMLButtonElement).disabled = false;
-      }
-      return;
-    }
     if (spot.hasAttribute("data-interrupt")) {
       say("прошу остановить ход…");
       try {
@@ -612,7 +603,11 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const usage=el('section','now-usage');usage.innerHTML=usageShell(true);
       screen.replaceChildren(usage,nowRoot);mountUsage(usage,api);
       nowView=phoneActions(nowRoot,settingsRequest,()=>base+'\n'+key,
-        undefined,{history:true});
+        undefined,{history:true,onReset:(id,status)=>{
+          runs=runs.map(run=>run.id===id?{...run,status}:run);
+          if(state?.runner?.run===id)state={...state,runner:{...state.runner,busy:false,run:''}};
+          paintTop();
+        }});
     }
     if(!sheetKind&&!document.hidden)nowView!.start();
   }
@@ -915,22 +910,26 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   async function renderSystem(guard: () => boolean = () => tab === "system") {
-    screen.innerHTML = '<div class="empty">читаю…</div>';
+    if(!guard())return;
+    const revision=++systemEpoch;
+    disposePraxisControl?.();disposePraxisControl=undefined;
+    screen.innerHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div><section class="task-row" id="praxis-control"></section><div id="system-details"><div class="empty">читаю…</div></div>`;
+    const target=screen.querySelector<HTMLElement>('#praxis-control')!;
+    const details=screen.querySelector<HTMLElement>('#system-details')!;
+    disposePraxisControl=mountPraxisControl(target,async<T>(path:string,body?:unknown)=>
+      body===undefined?api<T>(path):post<T>(path,body));
     const [boxes, brain, models] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
       scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
     ]);
-    if (!guard()) return;
-    // 12.09: прерывание живого хода — просьба в memory/.control, движок снимает ход на тике.
-    const interruptHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div>`;
-    const mountPause = () => {};
+    if (!guard()||revision!==systemEpoch||!details.isConnected) return;
     if (!boxes || !boxes.available) {
-      screen.innerHTML = interruptHTML + `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
+      details.innerHTML = `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
         (closed.has("containers")
           ? notGiven("Система")
           : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
-      mountPause(); return;
+      return;
     }
     const rows = boxes.containers
       .map(
@@ -992,13 +991,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       ${field("Фон", imageSelect("background", [["opaque", "Обычный"], ["transparent", "Прозрачный"], ["auto", "Автоматически"]]))}
       <div class="actions"><button type="button" class="chip" data-brain-apply="images">Применить</button></div>
     </div>` : "";
-    screen.innerHTML = interruptHTML +
+    details.innerHTML =
       `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
       `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
       `<div class="screen-title">Мозг</div>${brainRows}${imageRows}` +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
-    mountPause();
   }
 
   async function renderTasks(guard: () => boolean = () => tab === "tasks") {
@@ -1371,7 +1369,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     void loadRuns().then(() => {
       paintTop();
       void loadRooms();
-      showTab("now");
+      if(tab==='now')showTab("now");
     });
   }
 

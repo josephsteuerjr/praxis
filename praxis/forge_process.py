@@ -138,14 +138,17 @@ def run(request_path: Path) -> int:
             _write(result_path, {'status':'stopped', 'code':-1, 'finished':_now()})
             return 0
         with log_path.open("a", encoding="utf-8") as log:
-            kwargs = {"shell": True, "cwd": str(request["cwd"]), "stdout": log,
+            # A typed argv (run_command language) is one exact program; otherwise the
+            # recorded command is a shell string, as it always was.
+            typed = request.get("argv")
+            kwargs = {"shell": typed is None, "cwd": str(request["cwd"]), "stdout": log,
                       "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "text": True}
             if os.name == "nt":
                 kwargs["creationflags"] = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                                            | getattr(subprocess, "CREATE_NO_WINDOW", 0))
             else:
                 kwargs["start_new_session"] = True
-            proc = CommandProcess(str(request["command"]), **kwargs)
+            proc = CommandProcess(list(typed) if typed is not None else str(request["command"]), **kwargs)
             # Preserve the birth mark captured while this child is still ours:
             # later a recycled PID is not a safe target for an external stop.
             state = {"status": "running", "child_pid": proc.pid,

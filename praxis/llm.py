@@ -2421,6 +2421,14 @@ def _resolve_fallback_model(primary_framework: str, primary_model: str,
 
 
 def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMResponse:
+    import run_context
+    context = run_context.current_run()
+    if context is not None and not os.environ.get('PRAXIS_TEST') and framework not in _TEST_CLIENTS:
+        import model_step
+        if not _resolved:
+            model = _resolve_model(framework, model)
+        return model_step.call(framework, model, kw, _config(),
+                               single_attempt=_SINGLE_PROVIDER_ATTEMPT.get())
     cli = _client_for(framework)
     if cli is None:
         raise RuntimeError(f"llm: фреймворк {framework} не настроен (нет ключа)")

@@ -229,3 +229,8 @@ on a person's machine are separate pieces of evidence.
 
 Created by Yegor Kosyrev. Original and third-party attribution is retained in
 [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Thanks to [Ouroboros](https://github.com/razzant/ouroboros) by
+[Anton Razzhigaev](https://t.me/abstractDL) & Andrew Kaznacheev for the
+open-source ideas that informed Praxis's exact-argv `run_command` with declared
+outputs and scratch paths, and the design of its code navigation.

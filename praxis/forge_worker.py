@@ -199,15 +199,41 @@ RUN_TOOL = {
                            "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}}, ["command"]),
 }
 
+RUN_COMMAND_TOOL = {
+    "name": "run_command",
+    "description": (
+        "Run one program in the task with exact argv and no shell: argv[0] is the program (PATH "
+        "name or a path relative to cwd), each other item is one argument byte for byte. Quotes, "
+        "spaces, ;, $(), *, backslashes and newlines are plain data. Use it for ordinary program "
+        "calls; use run when you want shell grammar (pipes, redirects, globs, &&). It never falls "
+        "back to shell. Same admission, custody, Stop and full log as run; stdout and stderr are "
+        "combined. A missing program or cwd is refused before launch. The reply ends with a "
+        "[run_command {...}] facts line and [exit N]; [exit unobserved] after a timeout is not "
+        "success. Host and Windows tasks refuse it before sending anything."
+    ),
+    "input_schema": _obj({"argv": {"type": "array", "items": {"type": "string"}, "description": "Program then its arguments, one array item per argument."},
+                           "cwd": {"type": "string", "description": "Working directory inside the task root; omitted uses the root."},
+                           "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."},
+                           "stdin_text": {"type": "string", "description": "Optional exact standard input text; omitted means closed stdin."},
+                           "env": {"type": "array", "items": {"type": "object", "properties": {
+                               "name": {"type": "string", "description": "Variable name."},
+                               "value": {"type": "string", "description": "Exact value."}}, "required": ["name", "value"]},
+                               "description": "Optional extra environment for this one program: [{name, value}]. The facts line and task receipts name variables only; like any tool argument, the values stay in this run's call record. PRAXIS_* is runtime-owned and refused. Nothing is read from settings."},
+                           "outputs": {"type": "array", "items": {"type": "string"}, "description": "Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size."},
+                           "scratch": {"type": "array", "items": {"type": "string"}, "description": "Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven."}}, ["argv"]),
+}
+
 PROCESS_TOOL = {
     "name": "process",
     "description": (
         "Start/poll/stop/list a long-running command without blocking this agent. start returns an "
-        "id immediately and keeps the complete log. timeout=0 is unbounded."
+        "id immediately and keeps the complete log. timeout=0 is unbounded. start takes either "
+        "command (a shell string) or argv (one exact program and arguments, no shell), never both."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["start", "poll", "stop", "list"], "description": "start launches a durable command; poll reads it; stop requests cancellation; list shows commands."},
-        "process_id": {"type": "string", "description": "Process to poll or stop."}, "command": {"type": "string", "description": "Command to start."},
+        "process_id": {"type": "string", "description": "Process to poll or stop."}, "command": {"type": "string", "description": "Shell command string to start."},
+        "argv": {"type": "array", "items": {"type": "string"}, "description": "Exact program then arguments to start without a shell; instead of command."},
         "cwd": {"type": "string", "description": "Working directory inside the task root."}, "name": {"type": "string", "description": "Human-readable command name."},
         "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}, "tail": {"type": "integer", "description": "Trailing log lines to return."},
     }, ["action"]),
@@ -270,7 +296,7 @@ Operating contract:
 - Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
 - Change files with `edit` (replace, batch, write, patch) after inspect(action=read). When a script suits the job, write Python and use import praxis_hands as h (h.read, h.edit): the same version check and write lock. Bare file writes, including str.replace followed by open().write, bypass both.
-- A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Stop of an agent branch also requests Stop for its descendant-owned process/verification jobs. A job keeps custody until its whole command tree is proven settled; an unknown outcome is never a clean Stop. Legacy task-scoped jobs without a parent require explicit job or whole-task control.
+- A worker may use `run_command` for one program with exact arguments, `run` for shell commands, builds, tests and probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Stop of an agent branch also requests Stop for its descendant-owned process/verification jobs. A job keeps custody until its whole command tree is proven settled; an unknown outcome is never a clean Stop. Legacy task-scoped jobs without a parent require explicit job or whole-task control.
 - Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
 - Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
@@ -309,6 +335,8 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
         return editor.edit(task_id=task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "run":
         return forge.run(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
+    if name == "run_command":
+        return forge.run_command(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "process":
         return forge.process(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "verify":
@@ -531,7 +559,7 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
         else:
             tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL,TRANSCRIPT_TOOL]
             if role == "worker":
-                tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
+                tools += [EDIT_TOOL, RUN_TOOL, RUN_COMMAND_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
         adapter_id = (type(adapter).__module__ + "." + type(adapter).__qualname__) if adapter is not None else ""
         state = journal.start(request, {
             "next_boundary": "model_ready", "iteration": 0,

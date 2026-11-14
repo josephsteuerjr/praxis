@@ -353,6 +353,51 @@ class AdminActuatorUsesLiveTelethonTypes(unittest.TestCase):
         self.assertEqual(rights.until_date, until)
 
 
+class BanReachesTheWireAsAFullBan(unittest.TestCase):
+    """Offline regression: ban/purge must forbid viewing, not merely sending."""
+
+    def test_ban_and_purge_forbid_viewing_before_any_purge(self):
+        from telethon.tl import functions as tl_functions
+        for action in ("ban_member", "purge_member"):
+            with self.subTest(action=action):
+                requests = []
+
+                class Client:
+                    async def __call__(self, request):
+                        requests.append(request)
+
+                with mock.patch.object(mtproto_runner, "client", Client()):
+                    wire = asyncio.run(mtproto_runner._admin_apply(
+                        types.SimpleNamespace(id=1240718803), action, {"user_id": 4242}))
+                self.assertIsInstance(requests[0], tl_functions.channels.EditBannedRequest)
+                self.assertEqual(requests[0].participant, 4242)
+                rights = requests[0].banned_rights
+                self.assertTrue(rights.view_messages)
+                self.assertTrue(rights.send_messages)
+                self.assertIsNone(rights.until_date)
+                self.assertTrue(wire["permanent"])
+                self.assertEqual(len(requests), 2 if action == "purge_member" else 1)
+                if action == "purge_member":
+                    self.assertIsInstance(requests[1],
+                                          tl_functions.channels.DeleteParticipantHistoryRequest)
+                    self.assertEqual(requests[1].participant, 4242)
+                    self.assertTrue(wire["history_purged"])
+
+    def test_restrict_does_not_forbid_viewing(self):
+        requests = []
+
+        class Client:
+            async def __call__(self, request):
+                requests.append(request)
+
+        with mock.patch.object(mtproto_runner, "client", Client()):
+            asyncio.run(mtproto_runner._admin_apply(
+                types.SimpleNamespace(id=1240718803), "restrict",
+                {"user_id": 4242, "seconds": 60}))
+        self.assertFalse(requests[0].banned_rights.view_messages)
+        self.assertTrue(requests[0].banned_rights.send_messages)
+
+
 class RestrictReachesTheWireTemporary(unittest.TestCase):
     """«На 30 секунд» обязано доехать до Telegram временны́м, а не вечным.
 

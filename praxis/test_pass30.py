@@ -84,7 +84,8 @@ class FsProbeImageTests(unittest.TestCase):
                 mock.patch.object(agent.llm, "can_see", return_value=True):
             seen = agent.tool_fs_read(str(image))
             self.assertIsInstance(seen, agent.ToolObservation)
-            self.assertEqual(seen.images[0]["origin"], "computer-observe")
+            # 13.11.2026: картинка из файла — не скрин, у неё своё окно видимости.
+            self.assertEqual(seen.images[0]["origin"], "file-observe")
             self.assertEqual(seen.images[0]["mime"], "image/jpeg")
             self.assertTrue(Path(seen.images[0]["path"]).is_file())
             self.assertIn("frame.jpg", seen.text)

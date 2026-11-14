@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import select
 import subprocess
 import sys
 import time
@@ -26,6 +27,13 @@ def main(path):
         stopping=True
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
+    # Provider lifetime is opt-in; ordinary command backgrounds are unchanged.
+    parent_fd=None
+    if request.get('parent_lifeline'):
+        try:
+            parent_fd=os.pidfd_open(request['parent_pid'])
+            if os.getppid()!=request['parent_pid']:stopping=True
+        except ProcessLookupError:stopping=True
     (directory/'ready').write_text(request['nonce'])
     while request.get('deferred') and not stopping:
         if os.getppid()!=request['parent_pid']:
@@ -42,13 +50,18 @@ def main(path):
         print(f'command launch failed: {exc}',file=sys.stderr)
         leader=None;code=127
     while True:
+        if parent_fd is not None and select.select([parent_fd],[],[],0)[0]:stopping=True
         empty=False
         while True:
             try:pid,status=os.waitpid(-1,os.WNOHANG)
             except ChildProcessError:
                 empty=True;break
             if not pid:break
-            if pid==leader:code=os.waitstatus_to_exitcode(status)
+            if pid==leader:
+                code=os.waitstatus_to_exitcode(status)
+                temporary=directory/'foreground.tmp'
+                temporary.write_text(json.dumps({'nonce':request['nonce'],'exit_code':code}))
+                temporary.replace(directory/'foreground.json')
         if empty:break
         stop_file=directory/'stop'
         if stop_file.exists() and stop_file.read_text()==request['nonce']:stopping=True
@@ -72,6 +85,7 @@ def main(path):
     temporary=directory/'settled.tmp'
     temporary.write_text(json.dumps(value))
     temporary.replace(directory/'settled.json')
+    if parent_fd is not None:os.close(parent_fd)
     return 0
 
 

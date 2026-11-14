@@ -1,3 +1,56 @@
+# Owner interruption boundary — 14.11.2026
+
+Phone owner controls use deskapp -> existing token-authenticated deskctl. Full stop
+writes memory/.panic before stopping only the configured praxis container; direct
+mtproto_runner startup honors that marker until explicit Start. Selected reset
+writes one durable memory/.control/run-cancel/<run>.json request. step_control's
+independent watcher cancels RunManager dispatch and terminates only registered,
+owned handles, publishing exact-resource receipts into the existing run ledger.
+
+Provider attempts use warm run-owned model_step workers, with one lease per attempt
+and additional workers for concurrent calls. Private framed/versioned JSON binds
+run/generation/lease/attempt; every call freezes config and changed SDK endpoints/keys
+reopen the client. Transport loss is an unknown outcome, never pool replay. Routing,
+retry/fallback, accounting and exact ordered adapter arguments stay with llm.chat.
+Provider-only parent lifeline and terminal/idle collection close their process trees;
+ordinary explicit command backgrounds retain their prior lifetime. Resource stop
+dispatch fans out before independent settlement; late publication invalidates old censuses. Commands retain their existing
+Linux subreaper/Windows Job ownership; foreground exit differs from tree settlement.
+Remote Forge commands retain canonical task/operation identity and require exit
+proof. A still-running native Python call is never reported killed by Future.cancel.
+Unknown side effects remain unknown. Receipt authority belongs to the resource
+owner, including spawn-to-publication reservations; another executor cannot attest
+an empty process list. Cancelled input does not re-arm boot-sweep/unanswered work,
+but subsequent human input can create fresh work. Startup orphan recovery freezes
+its run census before Telegram connects instead of delaying normal message intake.
+
+## Run/task lifetimes and cross-executor census
+
+Normal provider pools follow their durable run. An explicit captured Forge task_id
+adds a distinct pool scope: the background worker owns its provider lifetime even
+after its historical origin chat turn ends. Atexit and the provider parent pidfd
+close it; explicit reset markers retain their existing semantics. No task/service
+command lifetime is inferred from the end of a model attempt.
+
+Every registered resource/reservation publishes a private pending marker before
+effect admission. Only its live-handle owner removes it after completion. Existing
+RunManager kernel advisory locks serialize marker admission and aggregate receipt
+merge/publication. Other owners and unknown/orphaned markers keep reset pending;
+they are never cleared by name, PID reuse or an empty foreign census. Resource
+stop signals fan out; canonical unresolved tool effects survive process death.
+
+## Typed owned search effects
+
+Home search/walk and local Forge rg/regex effects use search_execution through the
+single command launcher. The parent retains task/root authority and projection;
+private JSON stdin/result carry only the selected effect. Deferred CommandProcess
+admission registers ownership before reading/regex work; parent lifeline and tree
+settlement cover nested parent-dispatched calls independently of the outer script.
+forge_search_step shares the existing algorithm with the direct/test route.
+Existing query/glob/timeout/caps/decoding and task/service backgrounds are preserved.
+Other read/parse/mutation/remote native operations need their own ownership and
+reconciliation contracts; Future.cancel alone is not proof of effect termination.
+
 # Архитектура Praxis
 
 Этот документ описывает устойчивые контракты **текущего дерева**, а не историю проходов разработки.
@@ -856,6 +909,34 @@ Changes — наблюдаемая разница byte/mode/HEAD рабочег�
 авторстве одновременных изменений или наблюдении внешних эффектов. Домашние фоновые
 потомки переживают нормальное завершение; timeout закрывает обычную группу.
 Удалённый task python пока явно отказывается до исполнения.
+
+`run_command(argv,cwd,timeout,task_id,stdin_text)` (кандидат 14.11) запускает одну
+программу массивом без shell: элементы не склеиваются и не разбираются заново, glob,
+переменные и кавычки остаются данными. Неверный argv, отсутствующие программа или cwd
+— refused до запуска. Дом идёт тем же `_home_command` (права, cwd, safety point,
+автокоммит, рельс хардбота по отображаемой строке), задача — тем же `forge.run`
+(admission, custody, журнал, Stop; argv записан в request.json). stdin_text — точный
+UTF-8 и EOF через безымянный поток; без него stdin закрыт. stdout/stderr объединены.
+Строка `[run_command {...}]` называет executor, cwd, argv, найденную программу, exit
+или signal, timeout и подтверждение остановки дерева; после timeout `[exit unobserved]`,
+неподтверждённая остановка — in_doubt. Host serverd (`/bin/sh -c`) и Windows-задачи
+(PowerShell) не имеют typed argv: run_command отказывает до отправки, без перехода в
+строку. Воркер получает `run_command(argv,cwd,timeout,stdin_text)` с неявной задачей.
+shell, worker `run` и `coding_run` остаются явными строковыми shell-операциями.
+Рука `git` принимает `paths` массивом (кандидат 14.11): diff/add получают каждый
+элемент одним pathspec (diff после `--`). Записанные до этого вызовы со строкой
+воспроизводятся прежним разбиением по пробелам и помечаются в ответе.
+`coding_process`/worker `process` start принимает либо `command` (shell-строка), либо
+`argv` (одна точная программа); оба сразу, неверный argv, отсутствующие программа/cwd и
+argv для host/Windows-задачи отказываются до старта. Тот же супервизор `forge_process.py`
+(один владелец, start/poll/stop/list, ID и журнал): `request.json` хранит argv и
+найденную программу, супервизор запускает массив без shell.
+`run_command` также принимает `env` (массив пар name/value — strict-схемы OpenAI не
+несут свободный словарь; PRAXIS_* отказывается, явный PYTHONPATH дописывается после
+служебного), `outputs` (отчёт до/после: created/modified/unchanged/deleted/missing, sha256)
+и `scratch` (только внутри cwd и не под Git; удаляется после запуска и не входит в [changes],
+остаётся, если ничего не запускалось или остановка дерева не доказана). Строка фактов и
+request.json называют только имена env; сам вход вызова, как любой аргумент, в журнале хода.
 
 `hand_bridge.py` даёт foreground-команде приватный Unix socket (каталог 0700,
 socket 0600), token только в окружении ребёнка и проверку SO_PEERCRED/UID/происхождения.

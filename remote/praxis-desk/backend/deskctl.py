@@ -492,11 +492,39 @@ async def h_health(request: web.Request):
                               "tree": str(TREE), "at": _utc()})
 
 
+@guard
+async def h_praxis_state(request: web.Request):
+    from deskd import praxis_control
+    if not allowed('praxis'):
+        return web.json_response(refuse('praxis'), status=403)
+    return web.json_response(await praxis_control.state(TREE, _docker))
+
+
+@guard
+async def h_praxis_action(request: web.Request):
+    from deskd import praxis_control
+    if not allowed('praxis'):
+        return web.json_response(refuse('praxis'), status=403)
+    try:
+        value = await request.json()
+    except ValueError:
+        return web.json_response({'ok': False, 'note': 'Некорректный запрос.'}, status=400)
+    if not isinstance(value, dict):
+        return web.json_response({'ok': False}, status=400)
+    if value.get('action') == 'cancel' and set(value) == {'action', 'run_id'}:
+        result = await praxis_control.cancel_run(TREE, value['run_id'])
+    else:
+        result = await praxis_control.action(TREE, _docker, value)
+    return web.json_response(result)
+
+
 def app() -> web.Application:
     server = web.Application()
     server.add_routes([
         web.get("/health", h_health),
         web.get("/state", h_state),
+        web.get('/praxis/control', h_praxis_state),
+        web.post('/praxis/control', h_praxis_action),
         web.get('/allowances', h_allowances),
         web.get('/services/xtts', h_xtts_state),
         web.post('/services/xtts', h_xtts_action),

@@ -1346,7 +1346,9 @@ class FrameDidNotMove(unittest.TestCase):
         historical.append({"name": "speak"})
         # 02.11 explicit Forge API additions. Project only these names out of
         # this historical-byte fixture; actual schemas/consumers test them live.
-        additions={'coding_control','coding_review'}
+        # 14.11 run_command (exact-argv program hand, spec CLAUDE-CODE-MODEL-TOOLS-SPEC-1411):
+        # the same projection; its schema and offering are tested in test_run_command_1411.
+        additions={'coding_control','coding_review','run_command'}
         for name in additions:
             self.assertEqual(sum(t['name']==name for t in agent.PRAXIS_SELF_TOOLS),1)
         # 10.11 owner-approved merge: reconstruct historical tool cardinality only

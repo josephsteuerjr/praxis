@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -2701,40 +2702,23 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
     if action == "search":
         if not query:
             return InspectReply("Для search нужен query.", "refused")
-        rg = shutil.which("rg")
-        if rg:
-            cmd = [rg, "--line-number", "--no-heading", "--color", "never", "-g", glob or "**/*",
-                   "--", query, str(p if p.is_dir() else p.parent)]
-            try:
-                r = _run(cmd, timeout=40)
-                out = r.stdout or ""
-                if r.returncode not in (0, 1):
-                    out += r.stderr or ""
-                # rg exit 2 is an error (bad regex, unreadable root); 0/1 are found/none.
-                return InspectReply(_cap(out.strip() or "Ничего не найдено.", 20000),
-                                    "ok" if r.returncode in (0, 1) else "failed")
-            except Exception as exc:
-                return InspectReply(f"Поиск упал: {type(exc).__name__}: {exc}", "failed")
-        try:
-            rx = re.compile(query)
-        except re.error as exc:
-            return InspectReply(f"Плохой regex: {exc}", "refused")
-        hits = []
-        base = p if p.is_dir() else p.parent
-        for file in base.glob(glob or "**/*"):
-            if not file.is_file() or any(x in _SKIP_DIRS for x in file.parts):
-                continue
-            try:
-                for no, line in enumerate(file.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                    if rx.search(line):
-                        hits.append(f"{file.relative_to(root)}:{no}: {line[:220]}")
-                        if len(hits) >= 200:
-                            break
-            except OSError:
-                pass
-            if len(hits) >= 200:
-                break
-        return "\n".join(hits) or "Ничего не найдено."
+        import run_context
+        import forge_search_step
+        request = {'root':str(root), 'path':str(p), 'query':query,
+                   'glob':glob, 'rg':shutil.which('rg'), 'skip_dirs':sorted(_SKIP_DIRS)}
+        if run_context.current_run() is not None and not os.environ.get('PRAXIS_TEST'):
+            import search_execution
+            # Root/task admission above remains in the parent. Only the heavy
+            # read/regex/rg effect crosses the private serializable boundary.
+            value = search_execution.call([sys.executable, '-I', '-S', '-B',
+                str(Path(__file__).with_name('forge_search_step.py'))], request)
+            if value is None:
+                return InspectReply('Поиск не вернул подтверждённого ответа; исполнитель не перезапускался.', 'unknown')
+        else:
+            value = forge_search_step.execute(request, runner=_run)
+        content = value['content']
+        if value.get('cap'):content = _cap(content, value['cap'])
+        return InspectReply(content, value['outcome'])
     return InspectReply("action: status | orientation | overview | review | model | symbols | references | "
                         "diagnostics | impact | checks | lessons | observations | mailbox | read | list | "
                         "search | diff | history", "refused")
@@ -3101,8 +3085,32 @@ def run_python(task_id: str, code: str, cwd: str = ".", timeout: int = 600,
                _python_code=code)
 
 
+def run_command(task_id: str, argv: list, cwd: str = ".", timeout: int = 0,
+                stdin_text: str | None = None, _parent_request_path: str = "",
+                env: dict | None = None, outputs: list | None = None,
+                scratch: list | None = None) -> str:
+    """One program with exact argv in this task: run's admission, custody, log and Stop."""
+    import command_execution
+    try:
+        argv = command_execution.validate_argv(argv)
+        if stdin_text is not None and not isinstance(stdin_text, str):
+            raise command_execution.ArgvRefusal("stdin_text must be a string")
+        env = command_execution.validate_env(env)
+        for label, value in (("outputs", outputs), ("scratch", scratch)):
+            command_execution.declared_paths(value, ".", label=label)
+    except command_execution.ArgvRefusal as exc:
+        tool_report.note(outcome="refused")
+        return f"run_command refused before launch: {exc}"
+    return run(task_id, shlex.join(argv), cwd, timeout, _parent_request_path,
+               _argv=argv, _stdin_text=stdin_text, _env=env, _outputs=outputs, _scratch=scratch)
+
+
 def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
-        _parent_request_path: str = "", *, _python_code: str | None = None) -> str:
+        _parent_request_path: str = "", *, _python_code: str | None = None,
+        _argv: list[str] | None = None, _stdin_text: str | None = None,
+        _env: dict | None = None, _outputs: list | None = None,
+        _scratch: list | None = None) -> str:
+    """`command` is a shell string, except with _argv/_python_code where it is a label only."""
     task, root, err = _task_root(task_id)
     if err:
         return err
@@ -3112,6 +3120,13 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         if _python_code is not None:
             tool_report.note(outcome="refused", target=str(root))
             return "Python refused before execution: direct Python is local Linux only; use coding_run or computer for this remote task."
+        if _argv is not None:
+            # Host serverd starts `/bin/sh -c command` and the Windows task route is
+            # PowerShell: neither has a typed argv request yet. Never fall back to a string.
+            tool_report.note(outcome="refused", target=str(root))
+            return (f"run_command unsupported for this {task.get('scope') or 'remote'} task: its "
+                    "backend accepts only a shell command string, so nothing was sent. Use "
+                    "coding_run with an explicit shell command if that is what you intend.")
         # ⚠ Тот же рельс, что и на shell: задача со scope=host отдаёт произвольную
         # команду root-брокеру, и адверсарка 26.07 прошла ею мимо рельса хардбота
         # («rm -rf /opt/hardbot2/data && docker restart hardbot2-bot-1» → root, ok).
@@ -3130,12 +3145,41 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         _note_remote_run(command, cwd, out)
         return out + deadline_note
     place, path_err = _inside(root, cwd)
+    import command_execution
+    program = None
+    output_paths, scratch_paths = [], []
+    if _argv is not None:
+        reason = path_err or ("" if place is not None and place.is_dir() else f"no such directory: {cwd}")
+        if not reason:
+            program = command_execution.resolve_program(
+                _argv[0], place, command_execution.child_env(None, _env or {}))
+            if program is None:
+                reason = (f"program not found: {_argv[0]!r} (searched PATH; a name with a slash "
+                          "is relative to cwd and must be an executable file)")
+        if not reason:
+            try:
+                output_paths = command_execution.declared_paths(_outputs, place, label="outputs")
+                scratch_paths = command_execution.declared_paths(_scratch, place, label="scratch")
+                command_execution.check_scratch(scratch_paths, place)
+                for declared in output_paths:
+                    _, outside = _inside(root, str(declared))
+                    if outside:
+                        raise command_execution.ArgvRefusal(f"output {declared} is outside the task root")
+            except command_execution.ArgvRefusal as exc:
+                reason = str(exc)
+        if reason:
+            tool_report.note(outcome="refused", target=str(place or root))
+            return "run_command refused before launch: " + reason + command_execution.argv_facts(
+                executor=f"forge task {task_id}", cwd=place or cwd, argv=_argv, program=None,
+                stdin_text=_stdin_text, started=False)
     if path_err or place is None or not place.is_dir():
         return path_err or f"Нет cwd {cwd}."
     command = str(command or "").strip()
     if not command:
         return "Нужна команда."
     seconds = max(0, int(timeout or 0))
+    stop_fact = None
+    outputs_before = [command_execution.path_state(p) for p in output_paths]
     t0 = time.monotonic()
     log_path = _task_dir(task_id) / "runs" / f"{_dt.datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3151,18 +3195,26 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
             with _mutation_lock(task_id):
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
                 if reason:
+                    if _argv is not None:
+                        tool_report.note(outcome="refused", target=str(place))
                     return f"Run refused: {reason}"
                 before_workspace = command_execution.workspace_snapshot(place)
                 parent_id, _ = _worker_parent(task_id, _parent_request_path)
                 import forge_script
                 script_env, script_binding = forge_script.issue(task_id,unit_id,_parent_request_path,base=BASE)
+                typed = ({"argv": list(_argv), "env_names": sorted(_env or ()),
+                          "outputs": [str(p) for p in output_paths],
+                          "scratch": [str(p) for p in scratch_paths]} if _argv is not None else {})
                 intent={"id":unit_id,"task_id":task_id,"command_custody":"foreground-group-v1",
                     "script_edit_context":script_binding,
-                    "command":command,"cwd":str(place),"created":_now(),"status":"starting",
+                    "command":command,**typed,"cwd":str(place),"created":_now(),"status":"starting",
                     "parent_unit_id":parent_id,"log":str(log_path)}
                 _atomic_json(directory/'request.json',intent)
-                import command_execution
-                if _python_code is None:
+                if _argv is not None:
+                    launch, use_shell, executable = list(_argv), False, None
+                    source = (inputs.enter_context(command_execution.text_input(_stdin_text))
+                              if _stdin_text is not None else subprocess.DEVNULL)
+                elif _python_code is None:
                     launch, use_shell, executable, source = command, True, _FORGE_SHELL, subprocess.DEVNULL
                 else:
                     import python_execution
@@ -3170,12 +3222,13 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                     source = inputs.enter_context(python_execution.source_input(_python_code))
                 proc = command_execution.launch(launch, shell=use_shell, executable=executable, stdin=source,
                                         cwd=str(place), stdout=log_file,defer_start=True,
-                                        custody_directory=directory/'command-custody', env=script_env)
+                                        custody_directory=directory/'command-custody',
+                                        env=command_execution.child_env(script_env, _env) if _env else script_env)
                 born = _proc_started_at(proc.pid)
                 _RUNNERS[int(proc.pid)] = proc
                 _atomic_json(directory / "request.json", {"id": unit_id, "task_id": task_id,
                     "command_custody": "foreground-group-v1", "script_edit_context":script_binding,
-                    "command": command, "cwd": str(place), "created": _now(), "status": "running",
+                    "command": command, **typed, "cwd": str(place), "created": _now(), "status": "running",
                     "supervisor_pid": proc.pid, "supervisor_started_at": born,
                     "parent_unit_id": parent_id, "log": str(log_path),'command_identity':proc.custody_identity()})
                 _atomic_json(directory / "state.json", {"foreground": True,
@@ -3202,6 +3255,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     except subprocess.TimeoutExpired:
         assert proc is not None
         stopped, detail = _stop_foreground(proc)
+        stop_fact = {"confirmed": bool(stopped), "detail": str(detail)}
         code, status = -1, "timed_out" if stopped else "unknown"
         if not stopped:
             unresolved = _retain_foreground_unknown(task_id, proc, command, place,
@@ -3226,10 +3280,34 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     _event(task_id, "command", command=command, cwd=str(place), code=code, status=status,
            duration_s=duration, log=str(log_path), summary=f"{status} exit={code} {duration}s")
     note = f"; process_id={unresolved} (poll/stop; finish blocked)" if unresolved else ""
-    tool_report.execution({"kind": "process", "command": command, "cwd": str(place), "status": status,
-                           "exit_code": code, "duration_s": duration, "log": str(log_path)})
-    tool_report.note(outcome={"ok": "ok", "unknown": "in_doubt"}.get(status, "failed"), target=str(place))
-    changes = command_execution.workspace_changes(before_workspace, place)
+    typed_receipt = {"argv": list(_argv), "program": program} if _argv is not None else {}
+    tool_report.execution({"kind": "process", "command": command, **typed_receipt, "cwd": str(place),
+                           "status": status, "exit_code": code, "duration_s": duration, "log": str(log_path)})
+    outcome = {"ok": "ok", "unknown": "in_doubt"}.get(status, "failed")
+    if _argv is not None and proc is None:
+        outcome = "refused"  # nothing was spawned: a known non-effect for one exact program
+    tool_report.note(outcome=outcome, target=str(place))
+    # Scratch goes only when the tree is known gone (an unknown outcome may still be writing).
+    scratch_rows = (command_execution.remove_scratch(scratch_paths, settled=status != "unknown",
+                                                     launched=proc is not None)
+                    if scratch_paths else None)
+    changes = command_execution.workspace_changes(before_workspace, place, exclude=scratch_paths)
+    if _argv is not None:
+        observed = proc is not None and status not in {"timed_out", "unknown"}
+        shown = code if observed else ("not started" if proc is None else "unobserved")
+        return (_cap(str(out).strip() or "(empty output)") + command_execution.argv_facts(
+            executor=f"forge task {task_id}", cwd=place, argv=list(_argv), program=program,
+            stdin_text=_stdin_text,
+            # An exception after the custodian existed (e.g. at admission) leaves the start unknown.
+            started=None if status == "unknown" and stop_fact is None else proc is not None,
+            code=code if observed else None,
+            timed_out=status == "timed_out" or stop_fact is not None, stop=stop_fact,
+            env_names=tuple(_env or ()),
+            outputs=(command_execution.output_facts(output_paths, outputs_before)
+                     if output_paths else None),
+            scratch=scratch_rows)
+            + command_execution.tail(shown, status, changes, duration=duration, log=log_path,
+                                     unresolved=unresolved))
     return _cap(str(out).strip() or "(пустой вывод)") + command_execution.tail(
         code, status, changes, duration=duration, log=log_path, unresolved=unresolved)
 
@@ -3785,8 +3863,24 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
 
 def process(task_id: str, action: str, process_id: str = "", command: str = "",
             cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
-            _parent_request_path: str = "") -> str:
+            _parent_request_path: str = "", argv: list | None = None) -> str:
     action = str(action or "list").strip().lower()
+    if argv is not None:
+        # Two request languages: command is a shell string, argv one exact program.
+        import command_execution
+        reason = ""
+        if action != "start":
+            reason = "argv applies only to start"
+        elif str(command or "").strip():
+            reason = "give command (a shell string) or argv (one exact program), not both"
+        else:
+            try:
+                argv = command_execution.validate_argv(argv)
+            except command_execution.ArgvRefusal as exc:
+                reason = str(exc)
+        if reason:
+            tool_report.note(outcome="refused")
+            return f"Process refused before start: {reason}"
     if action == "start":
         try:
             with _mutation_lock(task_id) as beat:
@@ -3796,7 +3890,7 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
                 parent, _ = _worker_parent(task_id, _parent_request_path)
                 beat(lease_sec=120)
                 return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail,
-                                         parent_unit_id=parent)
+                                         parent_unit_id=parent, argv=argv)
         except (TimeoutError, ValueError) as exc:
             return f"Process refused: {exc}"
     return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail)
@@ -3804,12 +3898,17 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
 
 def _process_unlocked(task_id: str, action: str, process_id: str = "", command: str = "",
             cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
-            parent_unit_id: str = "") -> str:
+            parent_unit_id: str = "", argv: list[str] | None = None) -> str:
     task, root, err = _control_root(task_id, action)
     if err:
         return err
     assert root is not None
     action = str(action or "list").strip().lower()
+    if argv is not None and _remote_client(task or {}) is not None:
+        tool_report.note(outcome="refused", target=str(root))
+        return (f"Process refused before start: argv is unsupported for this "
+                f"{(task or {}).get('scope') or 'remote'} task; its backend takes only a shell "
+                "command string, so nothing was sent.")
     if action in {'poll','stop'} and process_id:
         directory = _unit_dir(task_id,'processes',process_id)
         import forge_recovery
@@ -3844,19 +3943,30 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         return "\n".join(f"{r['id']} [{r.get('status')}] {r.get('name') or r.get('command')}"
                           for r in rows[:30]) or "Процессов нет."
     if action == "start":
-        command = str(command or "").strip()
+        command = shlex.join(argv) if argv is not None else str(command or "").strip()
         if not command:
-            return "Для start нужна command."
+            return "Для start нужна command (shell-строка) или argv (точная программа)."
         place, path_err = _inside(root, cwd)
         if path_err or place is None or not place.is_dir():
+            if argv is not None:
+                tool_report.note(outcome="refused", target=str(root))
             return path_err or f"Нет cwd {cwd}."
+        typed = {}
+        if argv is not None:
+            import command_execution
+            program = command_execution.resolve_program(argv[0], place)
+            if program is None:
+                tool_report.note(outcome="refused", target=str(place))
+                return (f"Process refused before start: program not found: {argv[0]!r} (searched "
+                        "PATH; a name with a slash is relative to cwd and must be an executable file)")
+            typed = {"argv": list(argv), "program": program}
         unit_id = _id("proc")
         d = _unit_dir(task_id, "processes", unit_id)
         request = {
             "id": unit_id, "task_id": task_id, "name": str(name or "").strip(),
             "command_custody": "group-v1",
             "parent_unit_id": parent_unit_id,
-            "command": command, "cwd": str(place), "timeout": max(0, int(timeout or 0)),
+            "command": command, **typed, "cwd": str(place), "timeout": max(0, int(timeout or 0)),
             "created": _now(), "status": "starting",
         }
         req = d / "request.json"

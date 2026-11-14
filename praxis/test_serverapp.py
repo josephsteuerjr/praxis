@@ -826,11 +826,16 @@ class TestAtlantaShell(unittest.TestCase):
     """09.11.2026: мини-апп называется Атланта, и оболочка не должна ссылаться на файлы,
     которых нет: битый ассет здесь означает белый экран в Telegram."""
 
+    def setUp(self):
+        # PRAXIS_BASE isolates runtime data, while shipped assets live beside
+        # the module. Asset checks must not read the empty runtime sandbox.
+        self.asset_root = Path(serverapp.__file__).resolve().parent
+
     def _static(self, name):
-        return serverapp.BASE / "serverapp_static" / name
+        return self.asset_root / "serverapp_static" / name
 
     def test_every_asset_exists(self):
-        html = (serverapp.BASE / "serverapp.html").read_text(encoding="utf-8")
+        html = (self.asset_root / "serverapp.html").read_text(encoding="utf-8")
         sw = self._static("sw.js").read_text(encoding="utf-8")
         css = self._static("atlanta.css").read_text(encoding="utf-8")
         names = set(re.findall(r"/s/([0-9A-Za-z._-]+)", html + sw + css))
@@ -840,7 +845,7 @@ class TestAtlantaShell(unittest.TestCase):
             self.assertTrue(self._static(name).is_file(), name)
 
     def test_named_atlanta_everywhere_the_owner_sees(self):
-        html = (serverapp.BASE / "serverapp.html").read_text(encoding="utf-8")
+        html = (self.asset_root / "serverapp.html").read_text(encoding="utf-8")
         self.assertIn("<title>Атланта</title>", html)
         self.assertNotIn("ATLAS", html)
         manifest = json.loads(self._static("manifest.webmanifest").read_text(encoding="utf-8"))

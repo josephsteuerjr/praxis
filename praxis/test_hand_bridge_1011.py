@@ -59,7 +59,17 @@ class LiveHands(unittest.TestCase):
         self.manager.start_tool(self.current.run_id,outer,'python',args,side_effect=True)
         self.last_execution={'run_id':self.current.run_id,'call_id':outer,'tool':'python','args':args}
         token=agent._TOOL_EXECUTION.set(self.last_execution)
-        try:return agent._call_tool_with_ceiling('python',agent.tool_python,args)
+        ended=threading.Event();original=agent._observed_tool_call
+        def observed(name,impl,call_input):
+            try:return original(name,impl,call_input)
+            finally:
+                if name=='python':ended.set()
+        # A ceiling releases the caller while the real outer thread can still
+        # publish durable results. Keep fixture patches/tree until it settles.
+        self.addCleanup(lambda:self.assertTrue(ended.wait(12),'outer fixture thread did not settle'))
+        try:
+            with patch.object(agent,'_observed_tool_call',observed):
+                return agent._call_tool_with_ceiling('python',agent.tool_python,args)
         finally:agent._TOOL_EXECUTION.reset(token)
 
     def nested(self):

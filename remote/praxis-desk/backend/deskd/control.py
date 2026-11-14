@@ -382,6 +382,12 @@ def container_restart(name: str) -> dict:
     return deskctl_call(f"/restart/{name}", method="POST")
 
 
+def praxis_control(body=None) -> dict:
+    if body is None:
+        return deskctl_call('/praxis/control')
+    return deskctl_call('/praxis/control', method='POST', body=body, timeout=20)
+
+
 def provider_allowances(tree: Path) -> dict:
     # The control service already reaches the configured relay and its host alias.
     # Keep provider keys and network routing on that existing server boundary.

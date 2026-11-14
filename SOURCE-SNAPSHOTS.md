@@ -31,16 +31,14 @@ beyond that frozen desktop code.
 ## Current cloud Praxis mirror
 
 `praxis/` mirrors the selected public source of the running cloud Praxis on
-2026-11-13: HEAD `d926fcc8a5efe34867bfce83f92d4c155f26d3ff` plus the deployed
-tools publication `e2301dc726de4166b5ea30d497313650fd110195`, whose four files
-(`agent.py`, `tool_report.py`, `STATUS.md`, `test_hand_outcomes_1111.py`) are
-live but not yet committed in her repository. Since the previous mirror
-(`ec97b59`, 2026-11-05) this brings in the Python hands and their single
-executor, the unified `edit` with batch replacement, the `python` hand and
-`h.*` scripting bridge, tool outcomes in every step's receipt, the reworked
-tool catalogue and its schemas, the removal of the Rust hands and of the
-Telegram confirmation store, and the Atlanta server application.
-`CORE-SOURCE.json` records all 775 selected source digests, mirror digests and
+2026-11-14: HEAD `b2af030e605e58e6919c91298c69f942220de590` (runtime
+`e7e34ba305fc23417b4df6c8ad80615d6087efde`), with no deployed-uncommitted files.
+Since the previous mirror (`6acb9d4`, 2026-11-13) this brings in owner Stop/Start and
+selected-run reset, warm run-owned provider workers, owned search with exact-run
+reset, and the `run_command` hand: one program with exact argv and no shell, with
+stdin text, explicit environment pairs, declared outputs and scratch paths; the
+`git` hand takes paths as an array and long-running task processes accept argv.
+`CORE-SOURCE.json` records all selected source digests, mirror digests and
 executable modes, together with the canonical mirror digest.
 
 Two live files stay out of the mirror: a stray copy of `mtproto_runner.py`
@@ -54,9 +52,10 @@ preserve the executable code.
 
 No gate was re-run for this mirror: it publishes code that is already live,
 and the live qualification receipts are named in `CORE-SOURCE.json`. The next
-Hélène composition takes this base. Five new Praxis tests enter it while their
-subject modules remain overridden by older `helene/core/` files, so they are
-expected to show that gap at the next desktop release gate. Immutable desktop
+Hélène composition takes this base. New Praxis tests (from 2026-11-13 and
+2026-11-14) enter it while their subject modules remain overridden by older
+`helene/core/` files, so they are expected to show that gap at the next desktop
+release gate until the engine changes are ported. Immutable desktop
 tags and shipped per-platform inventories retain the authority for each
 released composition.
 

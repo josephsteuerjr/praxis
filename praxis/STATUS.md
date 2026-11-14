@@ -1,3 +1,154 @@
+# run_command, git.paths array, process argv LIVE VERIFIED — 14.11.2026
+
+Runtime `e7e34ba305fc23417b4df6c8ad80615d6087efde` deployed fast-forward from `e761be44dd51d489674abff1e190b70cba0b185d` (Claude, spec
+CLAUDE-CODE-MODEL-TOOLS-SPEC-1411), on top of Codex R2. Two complete 432-module Linux rosters on that SHA each PASS
+7274/7274 tests, 16 skips, 0 errors, identical ID multisets and skips. An
+earlier full roster on the pre-pin commit was RED in 4 frame/limit inventory pins; fixed by the existing
+projection/table pattern, no digest re-measured; RED summary retained.
+
+`run_command(argv, cwd, timeout, task_id, stdin_text, env, outputs, scratch)` (worker: no task_id)
+runs one program with exact argv and no shell, through `_home_command`/`hands.execute_argv` at home
+and `forge.run` custody in a local task. Bad argv, missing program/cwd, PRAXIS_* env, tracked or
+escaping scratch are refused before spawn; host/Windows tasks refuse before any RPC. A facts line names
+executor/cwd/argv/program/exit or signal/timeout/tree-stop/env names/outputs/scratch; a timeout shows
+[exit unobserved]. `git` paths is an array (recorded strings keep their old split, marked);
+`coding_process`/worker `process` start accepts argv. K, shell, python and coding_run name the choice.
+
+Core ready 156.6s, PID 1477955, 0 restarts, no tracebacks. Only praxis restarted;
+desk/deskctl/config/auth/private ledgers/soul/unrelated services retained. MiniApp/PWA front-only
+update (app commit f8bfed5): run_command cards are labelled Программа with a one-line
+quoted argv; old assets retained, no service restart.
+
+Evidence `/opt/deploy-operator/praxis-tools-1411`: final3-r1/final3-r2 SUMMARY.json, full-r1 (RED),
+rollout/RECEIPT.json + HEALTH.json + rollback.tar.gz, front-rollout/RECEIPT.json; private immutable refs
+`refs/task-{releases,rollbacks}/praxis-tools-1411`; guarded inverse-commit rollback_remote.py.
+P2 code search is a design (`_state/praxis-tools-1411/p2/DESIGN.md` locally), not deployed.
+Rebased onto Codex R2 (search ownership, same command_execution/forge/hands files) without conflict;
+joint narrow suites incl. search/model-worker/custody 409 OK before the full rosters.
+
+# Warm providers and owned search LIVE VERIFIED — 14.11.2026
+
+Qualified runtime `7c86785e5e6e60bbc3cf5ca9e6bc49d6f0ffac59` is deployed from `1aa60bde2250ab9946dd6d20864cbda6bbe677e8`. Two complete430-module
+Linux rosters each PASS7228tests/16skips/0errors; exact ID multisets and
+skip pairs match. Evidence `/opt/deploy-operator/process-ownership-1411/search-qualified-r{7,8}`.
+Earlier snapshots/RED fixtures and superseded greens are preserved separately.
+
+R1 warm run-owned SDK workers retain exact frozen config/wire, concurrency, parent routing/retries,
+partial/typed errors and unknown-outcome/no-pool-replay behavior. Explicit Forge tasks bind a task
+scope: their worker can continue after its historical origin chat turn finishes. Atexit/parent pidfd
+owns that worker lifetime; explicit reset markers retain their existing effect. Normal run terminal
+and idle pause collection remain. No intentional task/service command backgrounds were shortened.
+
+Reset now uses a shared private pending-resource census. Reservations publish before effects;
+all resource owners must remove their own markers after real settlement. A held/unknown foreign
+executor keeps the aggregate pending. Receipt merge/publication and marker admission use existing
+kernel advisory locks; observers cannot sign empty success. Stops fan out independently. The old
+multi-owner false-green was reproduced, fixed and covered by a real second-executor test.
+
+R2 selected class complete: Home search/walk and local/self/worker Forge search use owned children,
+including the regex fallback and nested parent-dispatched hands after script exit. Existing launcher,
+root/task authority, exact query/argv/results, timeout/globs/caps and byte decoding are preserved;
+deferred admission registers the handle before the heavy read/regex effect. Parent lifeline reaps
+these narrow children. No second search attempt is executed after a lost reply.
+
+Final-source idle loopback:25warmcalls/one generation, cold2750.20ms; additional overhead
+median5.397ms/p959.818ms. Six exact OpenAI/Anthropic/GLM
+wire+normalized vectors and eight HTTP/typed-relay/empty/torn-error vectors PASS,0real provider calls.
+Large IPC input6,400,727bytes (image2,097,220), response
+2,720,332bytes: exact parity; direct275.99ms/worker722.73ms.
+All probe workers reaped and pipe streams closed. This is fixture latency, not model generation time.
+
+Actual owner API reset of one own synthetic run stopped the warmed blocked provider, catastrophic-
+regex search child/native Future and selected sleep; sibling remained live, history retained.
+Confirmation387.0ms. Canonical unknown effects are preserved, never
+invented completed results. Core real ready at137.725s,
+PID1400303,0restarts/no tracebacks. Only praxis restarted for this apply; paired app,
+configs/auth/private state/soul, unrelated services and public remotes retained.
+
+Private release/rollback refs `refs/task-{releases,rollbacks}/process-ownership-1411-r2`,
+rollout-r2 tar/preimages/receipt and guarded inverse patch retained. No public release, Hélène/Jarvis
+update, physical phone or new Windows Job acceptance is claimed. Remaining native classes include
+general read/AST/intelligence parsing, mutation reconciliation, shared Telethon and remote workspace
+operations. Running native threads/unknown remote effects remain explicitly unconfirmed; no universal
+kill claim. See operator task OPERATIONS.md and source contracts for that queue.
+
+# Previous R1 qualification — 14.11.2026
+
+Qualified runtime `facb843ef17a9fb4ec8f4a69a622a485d55a4e9c` is deployed from9593bc33. Two complete429-module Linux rosters
+each PASS7216tests/16skips/0errors with identical ID multisets and skip pairs. Earlier full r1
+fixture races are retained as RED evidence; fixed fixture settlement/PID publication separately.
+
+model_step reuses exclusive run-owned SDK workers between attempts, adds workers for parallel calls,
+and freezes each config/request. Private versioned length-framed pipes bind run, generation, lease and
+attempt; stale/corrupt/lost responses never trigger pool replay. Changed SDK keys/endpoints reopen clients.
+The parent keeps routing/retry/fallback, ordered wire/cache inputs, budgets and accounting.
+
+Idle final-source loopback (0 paid requests):25warmcalls/one generation; cold2174.35ms,
+extra overhead median0.873ms/p957.656ms. Six exact
+OpenAI/Anthropic/GLM wire+response vectors and eight HTTP/typed-relay/empty/torn-error vectors PASS.
+Large6,400,727byte IPC input (image2,097,220bytes),
+2,720,332byte response: exact bytes preserved; direct303.01ms /
+worker651.87ms. Small-input latency is not claimed for large serialization.
+
+Cancel closes admission and fans out resource stops independently; an unknown backend cannot delay
+signalling the rest. Only actual handle owners sign the census, and late registration invalidates it.
+Provider parent-death lifeline uses a pinned Linux pidfd; ordinary task/service backgrounds keep their
+existing lifetime. Terminal/paused idle workers are reaped; native threads remain honestly pending.
+
+Actual owner HTTP API reset: warmed loopback provider (same generation across2requests) and selected
+sleeping process both exited/reaped, sibling lived, history retained, confirmation303.3ms.
+Core reached real ready; corePID1106879,0restarts/no tracebacks. Only praxis restarted;
+desk/deskctl/config/auth/private ledgers/soul/unrelated services retained. No physical phone, new
+Windows Job qualification, public release, Jarvis change or Hélène port is claimed.
+
+Evidence `/opt/deploy-operator/process-ownership-1411`: GATES-R1.json, PROVIDER-WARM.json,
+LIVE-RESET-R1.json, rollout-r1/HEALTH.json and RECEIPT.json. Private immutable refs
+`refs/task-{releases,rollbacks}/process-ownership-1411-r1`; rollback tar/preimages and guarded inverse
+commit recipe retained. Bare master/public remotes unchanged. R2 search candidate is separate,
+targeted56 PASS; not included in this production apply. Other native file/parse/write/remote gaps remain.
+
+# Previous qualified controls — 14.11.2026
+
+Qualified runtime code `548f72a935ca06fa6ecf22d0582d686ef6b4646e` is deployed from5fb90f88. Two complete isolated Linux
+rosters (428 modules, bootguard/reaper in their own processes) each passed7201 tests,
+16 skips,0 failures; exact ID multisets and skips match. Evidence:
+`/opt/deploy-operator/praxis-control-1311/qualified-r{1,2}/SUMMARY.json`.
+
+- Late startup run-list responses preserve an already selected phone tab. A delayed
+  inventory regression fails on old fronts and passes on the final six-group fixture.
+- Recovery captures existing run IDs before Telegram connects. A run admitted during
+  loading is outside that orphan-recovery census; normal intake/catch-up is retained.
+- MiniApp/PWA System has immediate Stop/Start through the existing independent
+  deskctl. Stop persists `.panic` before Docker termination; the direct runner entry
+  waits for its explicit release. Restart no longer bypasses the stop marker.
+- Per-turn reset durably cancels dispatch/autocontinuation and terminates the run's
+  owned provider/command process tree. A separate50ms watcher remains responsive to a
+  blocked provider. A kill receipt must come from the executor owning the handles;
+  terminal manifest or a foreign empty census cannot prove process death. Running
+  native calls without a killable process remain explicitly unconfirmed.
+- Foreground commands retain subreaper/Job custody of background descendants;
+  remote Forge stop uses exact admitted operation identity and observed termination.
+  Reset input is not automatically replayed after boot; newer human input is eligible.
+  History, completed actions and unknown effects remain in the original ledgers.
+
+Actual live owner API reset of an owned sleeping-process fixture confirmed in
+195.7ms; sibling stayed alive and service PIDs did not change.
+Backend34 tests; browser6 fixture groups/18 reviewed images; actual public HTTPS
+MiniApp/PWA6 groups plus reopening; real disposable Docker stop/restart/start;
+OpenAI/Anthropic/GLM6 exact wire+response parity vectors all passed. No physical
+phone acceptance or paid provider call is claimed. At that previous stage each provider attempt used a fresh process; R1 below supersedes that lifecycle.
+
+Private app source 3a55ae4636f6d7c85175f9c36871fce6e5b071d6; MiniApp index-BBJ8VsNJ.js,
+mobile index-TTbLRAO3.js. Only praxis/desk/deskctl restarted. Configs, old assets,
+device credentials, soul/private state, unrelated services and Jarvis retained.
+No public release or Hélène port. Immutable private refs:
+`refs/task-{releases,rollbacks}/praxis-control-1411`; rollback tar+preimages+receipt
+in `/opt/deploy-operator/praxis-control-1311/rollout`. Bare master unchanged.
+
+The incident cache anomaly is a separate unestablished cause: actual522 calls had
+376 hits at83968 and130 at22400, but reached332928 once. No permanent83968 ceiling,
+cache setting change or cache repair is claimed. See CACHE-INCIDENT-RECEIPT.json.
+
 # Praxis hands: outcomes named on every frequent step — 11.11.2026 (Claude)
 
 Qualified code 7c1702b501529339e3307ac05eaccfc99e065ada on top of b4d5018f. On 10.11 the phone's step

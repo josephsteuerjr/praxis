@@ -25,7 +25,7 @@ class DetachedCustody(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             marker=Path(directory)/'pid'
             code=("import os,time\nfrom pathlib import Path\npid=os.fork()\n"
-                  f"if pid==0:\n os.setsid()\n Path({str(marker)!r}).write_text(str(os.getpid()))\n time.sleep(60)\n")
+                  f"if pid==0:\n os.setsid()\n p=Path({str(marker)!r})\n t=p.with_suffix('.tmp')\n t.write_text(str(os.getpid()))\n t.replace(p)\n time.sleep(60)\n")
             proc=CommandProcess([sys.executable,'-B','-c',code],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             try:
                 end=time.monotonic()+4

@@ -118,6 +118,7 @@ class CommandProcess:
         self._nonce = None
         self._deferred=bool(kwargs.pop('defer_start',False))
         custody_directory=kwargs.pop('custody_directory',None)
+        parent_lifeline=bool(kwargs.pop('parent_lifeline',False))
         self._keep_custody=custody_directory is not None
         if self._job:
             kwargs['creationflags'] = kwargs.get('creationflags', 0) | 0x4  # CREATE_SUSPENDED
@@ -135,7 +136,8 @@ class CommandProcess:
                 self._nonce=secrets.token_hex(24)
                 request={'command':command,'shell':bool(kwargs.pop('shell',False)),
                          'executable':kwargs.pop('executable',None),'nonce':self._nonce,
-                         'deferred':self._deferred,'parent_pid':os.getpid()}
+                         'deferred':self._deferred,'parent_pid':os.getpid(),
+                         'parent_lifeline':parent_lifeline}
                 (self._custody/'request.json').write_text(json.dumps(request))
                 os.chmod(self._custody/'request.json',0o600)
                 command=[sys.executable,'-B',str(Path(__file__).with_name('command_child.py')),str(self._custody)]
@@ -209,6 +211,39 @@ class CommandProcess:
             if code is not None:return code
             if time.monotonic() >= end:raise subprocess.TimeoutExpired(self.args, timeout)
             time.sleep(.03)
+
+    def wait_foreground(self, timeout=None):
+        """Preserve shell '&' semantics while retaining custody of descendants."""
+        if not self._custody:
+            return self.wait(timeout)
+        directory = self._custody
+        end = time.monotonic() + timeout if timeout is not None else float('inf')
+        while True:
+            with self._lock:
+                code = self.poll()
+                if code is not None:
+                    return code
+                try:
+                    value = json.loads((directory / 'foreground.json').read_text())
+                except (OSError, ValueError):
+                    value = {}
+                if value.get('nonce') == self._nonce and type(value.get('exit_code')) is int:
+                    return value['exit_code']
+            if time.monotonic() >= end:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(.02)
+
+    def request_stop(self):
+        """Signal owned resources immediately; settlement is collected later."""
+        with self._lock:
+            if self.poll() is not None:return
+            if self._job:self._job.stop()
+            elif self._custody:
+                if self._leader_exited():return
+                os.kill(self.pid, signal.SIGTERM)
+            else:
+                self._leader_exited()
+                if self._live() is not None:os.killpg(self.pid, signal.SIGTERM)
 
     def stop_tree(self):
         with self._lock:

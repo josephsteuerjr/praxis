@@ -162,5 +162,8 @@ def missed_dm_candidates(max_age_hours: float = 48.0, now: float | None = None) 
         age_h = max(0.0, (now - last_ts) / 3600.0)
         if age_h >= max_age_hours:
             continue  # поезд ушёл давно — не дёргаем человека спустя двое суток
+        import step_control
+        if step_control.suppresses_replay(cid, last_ts, base=BASE):
+            continue
         out.append({"chat_id": cid, "name": str(m.get("name") or ""), "age_hours": age_h})
     return out

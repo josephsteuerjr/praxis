@@ -2915,8 +2915,9 @@ class RunManager:
             return False
         return recap.get("status") == "written" and (run_dir / "RECAP.md").is_file()
 
-    def recover(self) -> list[dict]:
+    def recover(self, *, run_ids=None) -> list[dict]:
         """Recover interrupted manifests without replaying an uncertain side effect."""
+        eligible = None if run_ids is None else frozenset(run_ids)
         reports: list[dict] = []
         if not self.root.exists():
             return reports
@@ -2926,6 +2927,8 @@ class RunManager:
             live = None       # не знаю — прежний полный обход под замками
         for manifest_path in sorted(self.root.glob("*/*/manifest.json")):
             run_id = manifest_path.parent.name
+            if eligible is not None and run_id not in eligible:
+                continue
             self._paths[run_id] = manifest_path.parent
             if self.settled_without_work(run_id, live=live):
                 continue

@@ -33,6 +33,7 @@ import logging
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -306,7 +307,7 @@ def other_rooms_digest(exclude_chat_id=None, max_rooms=6, per_room_lines=3, budg
 
 import workshop
 import catalog_families
-from catalog_families import PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, PYTHON_TOOL
+from catalog_families import PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, PYTHON_TOOL, RUN_COMMAND_TOOL
 import tool_report
 import forge
 import body_client    # PASS 24: клиент к Windows execution body (единый server-side Forge)
@@ -2488,9 +2489,36 @@ def tool_python(code: str, cwd: str = "", timeout: int = 0, task_id: str = "") -
     return _home_command(code, cwd, timeout, python_code=code)
 
 
+def tool_run_command(argv: list, cwd: str = "", timeout: int = 0, task_id: str = "",
+                     stdin_text: str | None = None, env: dict | None = None,
+                     outputs: list | None = None, scratch: list | None = None) -> str:
+    """One program with exact argv, no shell; home or the selected Forge task address."""
+    import command_execution
+    try:
+        argv = command_execution.validate_argv(argv)
+        if stdin_text is not None and not isinstance(stdin_text, str):
+            raise command_execution.ArgvRefusal("stdin_text must be a string")
+        env_map = command_execution.validate_env(env)
+        for label, value in (("outputs", outputs), ("scratch", scratch)):
+            command_execution.declared_paths(value, ".", label=label)  # shape only, before routing
+    except command_execution.ArgvRefusal as exc:
+        raise catalog_families.PreflightRefusal(f"run_command: {exc}; nothing was launched") from None
+    if task_id:
+        # The task route validates the same public [{name, value}] form itself.
+        return forge.run_command(task_id, argv, cwd=cwd or ".", timeout=timeout,
+                                 stdin_text=stdin_text, env=env, outputs=outputs, scratch=scratch)
+    return _home_command(shlex.join(argv), cwd, timeout, program_argv=argv,
+                         stdin_text=stdin_text, env=env_map, outputs=outputs, scratch=scratch)
+
+
 def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
-                  python_code: str | None = None) -> str:
-    """Полный shell самой Praxis/владельца. Логируем; её правки авто-коммитятся."""
+                  python_code: str | None = None, program_argv: list[str] | None = None,
+                  stdin_text: str | None = None, env: dict | None = None,
+                  outputs: list | None = None, scratch: list | None = None) -> str:
+    """Полный shell самой Praxis/владельца. Логируем; её правки авто-коммитятся.
+
+    program_argv: the same home route for one program without bash; `command` is then
+    only its display label for rails, logs and receipts, never parsed again."""
     # Единственное на сервере, что не её дом, — хардбот Егора. Читать его она может
     # всегда; менять — по просьбе хранителя (см. stewardship.py). Это пол, а не клетка:
     # она пишет команды сама и знает про рельс, поэтому намеренный обход останется
@@ -2513,7 +2541,32 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
         if verdict == "warn":
             tool_journal(f"правлю свой код, проверка предупредила: {reason or '—'}", salience=3)
     _hardbot_read = stewardship.touches_path_mentioned(command)
-    log.info("SHELL $ %s", command)
+    import command_execution
+    program = None
+    output_paths, scratch_paths, child_env = [], [], None
+    if program_argv is not None:
+        # Known refusals happen before the safety point, workspace scan or any spawn.
+        place, _ = _shell_place(cwd)
+        reason = "" if place is not None else f"no such directory: {cwd}"
+        if place is not None:
+            child_env = command_execution.child_env(None, env or {})
+            program = command_execution.resolve_program(program_argv[0], place, child_env)
+            if program is None:
+                reason = (f"program not found: {program_argv[0]!r} (searched PATH; a name with "
+                          "a slash is relative to cwd and must be an executable file)")
+            else:
+                try:
+                    output_paths = command_execution.declared_paths(outputs, place, label="outputs")
+                    scratch_paths = command_execution.declared_paths(scratch, place, label="scratch")
+                    command_execution.check_scratch(scratch_paths, place)
+                except command_execution.ArgvRefusal as exc:
+                    reason = str(exc)
+        if reason:
+            tool_report.note(outcome="refused", target=str(cwd))
+            return ("run_command refused before launch: " + reason + command_execution.argv_facts(
+                executor="home", cwd=place or cwd, argv=program_argv, program=None,
+                stdin_text=stdin_text, started=False))
+    log.info("%s $ %s", "SHELL" if program_argv is None else "RUN_COMMAND", command)
     # PASS 30 Этап 1: точка отката — ВНЕ ветки (refs/praxis-snapshots), master больше
     # не получает «snapshot before shell»; её реальные правки коммитит осмысленно
     # _autocommit_self_edit ниже. Восстановление: selfgit.list_safety_points().
@@ -2525,7 +2578,8 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
     try:
         from core import processes as core_processes
         shell_command, background = (core_processes.wrap_background_launch(command)
-                                     if python_code is None else (command, False))
+                                     if python_code is None and program_argv is None
+                                     else (command, False))
     except Exception:
         shell_command, background = command, False
     workdir, place_error = _shell_place(cwd)
@@ -2535,34 +2589,52 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
     seconds = max(1, min(int(timeout or SHELL_TIMEOUT), SHELL_MAX_TIMEOUT))
     tool_report.note(target=str(workdir))
     exit_note = ""
-    import command_execution
     before_workspace = command_execution.workspace_snapshot(workdir)
+    outputs_before = [command_execution.path_state(p) for p in output_paths]
     process_status, code = "outcome_unknown", "unknown"
+    started, timed_out, stop = None, False, None
     import hands
     import python_execution
-    argv = ["bash", "-lc", shell_command] if python_code is None else python_execution.argv()
+    if program_argv is not None:
+        argv = list(program_argv)
+    else:
+        argv = ["bash", "-lc", shell_command] if python_code is None else python_execution.argv()
     try:
         with contextlib.ExitStack() as inputs:
-            source = (inputs.enter_context(python_execution.source_input(python_code))
-                      if python_code is not None else None)
+            if python_code is not None:
+                source = inputs.enter_context(python_execution.source_input(python_code))
+            elif stdin_text is not None:
+                source = inputs.enter_context(command_execution.text_input(stdin_text))
+            else:
+                source = None
             result = hands.execute_argv(argv, str(workdir), seconds, cap=None, base=BASE,
-                                        confined=False, stdin=source, label=command)
+                                        confined=False, stdin=source, label=command,
+                                        env=child_env)
         if "out" not in result:
             process_status, code = "launch_failed", "not_started"
-            tool_report.note(outcome="failed")
+            started = False
+            # The launcher raised before a process existed: for one exact program that is a
+            # known non-effect. The shell keeps its historical failed label.
+            tool_report.note(outcome="failed" if program_argv is None else "refused")
             _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
                 "cwd":str(workdir), "status":"launch_failed", "error":result.get("msg", "")})
             out = "[ошибка запуска] " + str(result.get("msg") or "unknown")
         else:
+            started = True
             code = int(result["code"])
+            timed_out, stop = bool(result["killed"]), result.get("stop")
             process_status = "timed_out" if result["killed"] else ("ok" if result["ok"] else "failed")
             _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
                 "cwd":str(workdir), "status":"timed_out" if result["killed"] else "returned", "exit_code":code})
             out = result["out"] or ""
-            if result["killed"]:
+            if result["killed"] and program_argv is None:
                 out += f"\n[прервано по таймауту {seconds}s]"
             exit_note = f"\n[exit {code}]"
-            tool_report.note(outcome="ok" if result["ok"] else "failed")
+            if program_argv is not None and timed_out and not (stop or {}).get("confirmed"):
+                # A timeout whose tree exit was not proven may still be running.
+                tool_report.note(outcome="in_doubt")
+            else:
+                tool_report.note(outcome="ok" if result["ok"] else "failed")
     except Exception as exc:
         tool_report.note(outcome="in_doubt")
         _tool_trace_event("tool_execution", receipt={"kind":"process", "argv":argv,
@@ -2586,9 +2658,26 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
         # Прочитанное из хардбота запоминается не чтобы запретить читать, а чтобы потом
         # не дать процитировать чужих клиентов наружу дословно (вопрос Егора 26.07).
         stewardship.note_read(out)
-    changes = command_execution.workspace_changes(before_workspace, workdir)
+    scratch_rows = None
+    if program_argv is not None and scratch_paths:
+        # Removed only when the tree is known gone: no launch, or an observed exit/proven stop.
+        settled = started is True and (not timed_out or bool((stop or {}).get("confirmed")))
+        scratch_rows = command_execution.remove_scratch(scratch_paths, settled=settled,
+                                                        launched=started is not False)
+    changes = command_execution.workspace_changes(before_workspace, workdir, exclude=scratch_paths)
     _autocommit_self_edit(pre_dirt)
     body = out.rstrip("\n") if exit_note else out
+    if program_argv is not None:
+        # The -1 written for a timeout is not an observed exit status: say so.
+        shown = code if started and not timed_out else ("unobserved" if started is not False else code)
+        return ((body if body else "(empty output)") + command_execution.argv_facts(
+            executor="home", cwd=workdir, argv=argv, program=program, stdin_text=stdin_text,
+            started=started, code=code if started else None, timed_out=timed_out, stop=stop,
+            env_names=tuple(env or ()),
+            outputs=(command_execution.output_facts(output_paths, outputs_before)
+                     if output_paths else None),
+            scratch=scratch_rows)
+            + command_execution.tail(shown, process_status, changes))
     return (body if body else "(пустой вывод)") + command_execution.tail(code, process_status, changes)
 
 
@@ -4628,6 +4717,22 @@ def _capture_artifact(captured: dict, *, execution: str) -> dict | None:
 
 
 _LIVE_SCREENSHOTS = 2
+# ⚠ 13.11.2026. Картинка, прочитанная из ФАЙЛА (fs_read), — не скрин: страница книги не
+# «устаревает» через два шага, её сличают с вырезкой и соседней страницей. Под общим
+# лимитом 2 три сличаемых файла вытесняли друг друга по кругу, а пометка говорила
+# «скрин устарел» — и не говорила, что одновременно видны только две. 13.11 это стоило
+# хода 6c96f03e: 2 ч 12 мин, 522 вызова, 511 чтений page-59/formula-008/next-detail,
+# 72 млн входных токенов и ни строки ответа; 12.11 — три кадра фильма по 47 раз.
+# Файлам — свой бюджет различных картинок и пометка, которая называет правило.
+_LIVE_FILE_IMAGES = 6
+
+
+def _file_image_identity(block: dict) -> str:
+    """Те же ли это пиксели: sha исходного файла; без него — имя без номера артефакта рана."""
+    digest = str(block.get("sha256") or "")
+    if digest:
+        return digest
+    return re.sub(r"^\d+-", "", os.path.basename(str(block.get("path") or "")))
 
 
 def _prune_stale_screenshots(messages: list[dict]) -> None:
@@ -4635,25 +4740,52 @@ def _prune_stale_screenshots(messages: list[dict]) -> None:
 
     Каждый кол раньше нёс ВСЕ прежние PNG (линейный рост запроса до десятков МБ —
     главный множитель медленного computer-use). Чистим ТОЛЬКО блоки с
-    origin=computer-observe: присланные людьми фото не трогаем. Пиксели не
-    теряются — оригиналы лежат артефактами рана."""
-    seen = 0
+    origin=computer-observe и origin=file-observe: присланные людьми фото не трогаем.
+    Пиксели не теряются — оригиналы лежат артефактами рана.
+
+    Скрины: живы два последних. Картинки из файлов: живы последние
+    `_LIVE_FILE_IMAGES` РАЗНЫХ; повторно открытый тот же файл держит одно место
+    (старшая копия уступает младшей), чтобы перечитывание не вытесняло соседей."""
+    screens = 0
+    files: set[str] = set()
     for message in reversed(messages):
         content = message.get("content")
         if not isinstance(content, list):
             continue
         for index in range(len(content) - 1, -1, -1):
             block = content[index]
-            if (isinstance(block, dict) and block.get("type") == "image"
-                    and block.get("origin") == "computer-observe"):
-                seen += 1
-                if seen > _LIVE_SCREENSHOTS:
-                    name = os.path.basename(str(block.get("path") or ""))
+            if not (isinstance(block, dict) and block.get("type") == "image"):
+                continue
+            origin = block.get("origin")
+            name = os.path.basename(str(block.get("path") or ""))
+            if origin == "computer-observe":
+                screens += 1
+                if screens > _LIVE_SCREENSHOTS:
                     content[index] = {
                         "type": "text",
                         "text": f"[скрин {name} устарел и скрыт из контекста; "
                                 f"пиксели сохранены артефактом рана]",
                     }
+            elif origin == "file-observe":
+                identity = _file_image_identity(block)
+                if identity in files:
+                    content[index] = {
+                        "type": "text",
+                        "text": f"[картинка {name} скрыта здесь: тот же файл открыт в этом "
+                                f"ходе позже, его пиксели видны ниже]",
+                    }
+                elif len(files) >= _LIVE_FILE_IMAGES:
+                    content[index] = {
+                        "type": "text",
+                        "text": f"[картинка {name} скрыта из контекста: одновременно видны "
+                                f"только последние {_LIVE_FILE_IMAGES} разных картинок из "
+                                f"файлов. Файл не менялся — открыть его снова значит "
+                                f"вытеснить другую. Чтобы сличить больше, склей нужные "
+                                f"фрагменты в одно изображение; пиксели сохранены "
+                                f"артефактом рана]",
+                    }
+                else:
+                    files.add(identity)
 
 
 def _model_view_image(image_path: Path, source_mime: str = "image/png") -> tuple[Path, str]:
@@ -4713,7 +4845,8 @@ _COMPUTER_ACTION_SCOPES = {
 
 def _observe_image_pixels(local: Path, transfer_dir: Path | None, *, mime: str,
                           safe_name: str, sha256: str | None, size: int | None,
-                          note: str = "") -> "ToolObservation | str":
+                          note: str = "",
+                          origin: str = "computer-observe") -> "ToolObservation | str":
     """Общий хвост «пиксели → следующий шаг модели»: артефакт рана + JPEG-вид + image-блок."""
     try:
         current = run_context.current_run()
@@ -4750,10 +4883,15 @@ def _observe_image_pixels(local: Path, transfer_dir: Path | None, *, mime: str,
             json.dumps(ref, ensure_ascii=False, indent=2)
         )
         view_path, view_mime = _model_view_image(image_path, source_mime=mime)
-        return ToolObservation(text=text, images=({
+        image = {
             "type": "image", "path": str(view_path), "mime": view_mime, "detail": "auto",
-            "origin": "computer-observe",
-        },))
+            "origin": origin,
+        }
+        if origin == "file-observe" and sha256:
+            # Опознание «тот же файл» для `_prune_stale_screenshots`; адаптеры llm
+            # собирают картинку только из path/mime, на провод поле не уходит.
+            image["sha256"] = str(sha256)
+        return ToolObservation(text=text, images=(image,))
     finally:
         if transfer_dir is not None and run_context.current_run() is not None:
             shutil.rmtree(transfer_dir, ignore_errors=True)
@@ -4803,7 +4941,7 @@ def _observe_local_image(image_path: Path, *, mime: str) -> "ToolObservation | s
     return _observe_image_pixels(
         local, transfer_dir, mime=mime, safe_name=safe_name,
         sha256=digest, size=local.stat().st_size,
-        note=" from a file in my home",
+        note=" from a file in my home", origin="file-observe",
     )
 
 
@@ -5244,9 +5382,9 @@ def tool_coding_run(task_id: str, command: str, cwd: str = ".", timeout: int = 6
 
 def tool_coding_process(task_id: str, action: str, process_id: str = "",
                         command: str = "", cwd: str = ".", name: str = "",
-                        timeout: int = 0, tail: int = 8000) -> str:
+                        timeout: int = 0, tail: int = 8000, argv: list | None = None) -> str:
     return forge.process(task_id, action=action, process_id=process_id, command=command,
-                         cwd=cwd, name=name, timeout=timeout, tail=tail)
+                         cwd=cwd, name=name, timeout=timeout, tail=tail, argv=argv)
 
 
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
@@ -6618,7 +6756,7 @@ def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
     return None
 
 
-def reconcile_in_doubt_from_receipts() -> list[dict]:
+def reconcile_in_doubt_from_receipts(*, run_ids=None) -> list[dict]:
     """Свести застрявшие in_doubt-вызовы, у которых есть СОБСТВЕННАЯ расписка.
 
     `coding_session finish` закрывается по `task.json.finished`, прямая отправка — по
@@ -6628,6 +6766,8 @@ def reconcile_in_doubt_from_receipts() -> list[dict]:
     """
     reports: list[dict] = []
     for run_id in _in_doubt_run_ids():
+        if run_ids is not None and run_id not in run_ids:
+            continue
         for call_id, started in sorted(_outstanding_rows(run_id).items()):
             found = _receipt_for_outstanding(started)
             if found is None:
@@ -6782,6 +6922,7 @@ TOOL_IMPL = {
     'host_ctl': tool_host_ctl,
     'computer': tool_computer,
     'python': tool_python,
+    'run_command': tool_run_command,
     'proposal': catalog_families.proposal,
     'project': catalog_families.project,
     'memory_graph': catalog_families.memory_graph
@@ -7180,7 +7321,8 @@ SHELL_TOOL = {
         "jq, curl, wget, tar, zip, unzip, patch, diff, make, file, tree, lsof, sqlite3, ffmpeg, "
         "python, pip, pytest; НЕТ ssh, rsync, gcc, node. Shell вне общего замка записи: код правь через edit. "
         "Папка задаётся cwd, срок задаётся timeout (по умолчанию 30 с, не больше 600). "
-        "Ответ кончается строкой [exit N]: N не ноль значит, что команда упала. Питоновый скрипт "
+        "Ответ кончается строкой [exit N]: N не ноль значит, что команда упала. Одна программа "
+        "с аргументами без конвейера — run_command(argv=[...]): без кавычек и разбора. Питоновый скрипт "
         "может import praxis_hands as h (h.read, h.edit, h.write, h.search): та же сверка версии "
         "и замок, что у edit, отказ поднимает исключение. Файлы правь так, а не str.replace."
     ),
@@ -7807,7 +7949,8 @@ FORGE_TOOLS = [
      "description": (
          "Run an arbitrary foreground command at any cwd inside the coding task. Build/test/lint/"
          "probe freely; full output becomes durable evidence and the reply is capped. timeout=0 "
-         "means unbounded. For watchers/servers use coding_process. "
+         "means unbounded. For watchers/servers use coding_process. command is a shell string; "
+         "for one program with exact arguments use run_command(argv=[...], task_id=...). "
          "On Linux local foreground runs, h.read/h.edit/h.write inherit this task and verified command custody; "
          "they can edit under their own running command while other writers and Stop still block. " + _PYHANDS_NOTE),
      "input_schema": _obj({"task_id": {"type": "string"}, "command": {"type": "string"},
@@ -7817,11 +7960,14 @@ FORGE_TOOLS = [
      "description": (
          "Long-running process supervisor: start returns immediately, preserves the full log and "
          "survives the Telegram turn; poll/stop/list later. Use for dev servers, watchers, long tests "
-         "and experiments. timeout=0 is unbounded."),
+         "and experiments. timeout=0 is unbounded. start takes either command (a shell string: "
+         "pipes, redirects, globs) or argv (one exact program and arguments, no shell, like "
+         "run_command), never both; argv on host or Windows tasks is refused before sending."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["start", "poll", "stop", "list"]},
          "process_id": {"type": "string"}, "command": {"type": "string"},
+         "argv": {"type": "array", "items": {"type": "string"}},
          "cwd": {"type": "string"}, "name": {"type": "string"},
          "timeout": {"type": "integer"}, "tail": {"type": "integer"},
      }, ["task_id", "action"])} ,
@@ -8408,8 +8554,24 @@ def _git_run(root: Path, argv: list[str], timeout: int = 120) -> tuple[int, str]
     return proc.returncode, out.strip()
 
 
+def _git_paths(paths) -> tuple[list[str], bool]:
+    """(pathspec argv, legacy). The schema takes an array since 14.11.2026; a string is only
+    a call recorded before that, replayed with its own historical whitespace split."""
+    if paths is None or paths == "" or paths == []:
+        return [], False
+    if isinstance(paths, str):
+        return paths.split(), True
+    if not isinstance(paths, (list, tuple)):
+        raise catalog_families.PreflightRefusal("paths must be an array of path strings")
+    for item in paths:
+        if not isinstance(item, str) or not item or "\0" in item:
+            raise catalog_families.PreflightRefusal(
+                "each path must be a non-empty string without NUL; nothing was run")
+    return list(paths), False
+
+
 def tool_git(repo: str = "self", action: str = "status", message: str = "",
-             paths: str = "") -> str:
+             paths: list[str] | str | None = None) -> str:
     """Её git обеими руками: своё дерево и публичное зеркало.
 
     ЗАЧЕМ ОТДЕЛЬНАЯ РУКА, ЕСЛИ ЕСТЬ `shell`. Потому что `shell` не говорит, что ей МОЖНО.
@@ -8428,13 +8590,17 @@ def tool_git(repo: str = "self", action: str = "status", message: str = "",
     act = str(action or "").strip().lower()
     if act not in _GIT_ACTIONS:
         return "[git] action: " + " | ".join(_GIT_ACTIONS)
+    path_args, legacy_paths = _git_paths(paths)
     try:
         if act == "status":
             code, out = _git_run(root, ["status", "--short", "--branch"])
         elif act == "log":
             code, out = _git_run(root, ["log", "--oneline", "-12"])
         elif act == "diff":
-            code, out = _git_run(root, ["diff", "--stat"] + (paths.split() if paths else []))
+            # An array names pathspecs exactly ("--" keeps "-x" a path); a recorded legacy
+            # string keeps its old argv, where a word could also have been a revision.
+            code, out = _git_run(root, ["diff", "--stat"] + (
+                path_args if legacy_paths else (["--", *path_args] if path_args else [])))
         elif act == "fetch":
             code, out = _git_run(root, ["fetch", "--all"], timeout=180)
         elif act == "pull":
@@ -8453,7 +8619,7 @@ def tool_git(repo: str = "self", action: str = "status", message: str = "",
                     "построению. Выбирать rebase или merge — тебе, руками через `shell`: "
                     "это решение о том, как твоя работа будет выглядеть в истории.")
         elif act == "add":
-            code, out = _git_run(root, ["add", "--"] + (paths.split() if paths else ["."]))
+            code, out = _git_run(root, ["add", "--"] + (path_args or ["."]))
             if code == 0:
                 code, out = _git_run(root, ["status", "--short"])
         elif act == "commit":
@@ -8481,6 +8647,8 @@ def tool_git(repo: str = "self", action: str = "status", message: str = "",
         tool_journal("[git] %s в %s: %s" % (act, repo, (out or "тихо")[:160]),
                      salience=2 if code == 0 else 1)
     head = "[git %s/%s]%s\n" % (repo, act, "" if code == 0 else " ⚠ код %d" % code)
+    if legacy_paths and act in ("diff", "add"):
+        head += "[paths: старая строка, разбита по пробелам: %s]\n" % json.dumps(path_args, ensure_ascii=False)
     return head + (out[:3000] if out else "(вывод пуст)")
 
 
@@ -8501,7 +8669,8 @@ GIT_TOOL = {
         "action": {"type": "string",
                    "enum": list(_GIT_ACTIONS)},
         "message": {"type": "string", "description": "сообщение коммита — причина, а не ярлык"},
-        "paths": {"type": "string", "description": "пути через пробел; пусто = всё"}},
+        "paths": {"type": "array", "items": {"type": "string"},
+                  "description": "diff/add: пути, по одному на элемент, точно как есть; пусто = всё"}},
         "required": ["repo", "action"]},
 }
 
@@ -8547,7 +8716,7 @@ SHARED_CONTEXT_TOOLS = [SEARCH_CHATS_TOOL, SEARCH_PRIVATE_MESSAGES_TOOL,
                          ]
 
 # Полный набор owner-тулов (порядок не важен).
-OWNER_TOOLS = [PYTHON_TOOL, PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, SHELL_TOOL, MANAGE_ROOM_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
+OWNER_TOOLS = [PYTHON_TOOL, RUN_COMMAND_TOOL, PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, SHELL_TOOL, MANAGE_ROOM_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
                 FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL,
                  MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
                MANAGE_LOOP_TOOL,
@@ -8791,6 +8960,7 @@ CALL_TOOL = {
 # Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
 HAND_GROUPS = (('файлы и Python',
   ('python',
+   'run_command',
    'shell',
    'fs_read',
    'fs_ls',
@@ -8954,6 +9124,7 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'describe': 'показать схему руки из указателя',
  'call': 'позвать руку из указателя по имени',
  'python': 'выполнить Python с готовым h',
+ 'run_command': 'запустить программу точным argv, без shell',
  'proposal': 'изменить свой код через предложение',
  'project': 'создать, проверить и обслужить проект',
  'memory_graph': 'посмотреть и изменить связи памяти'}
@@ -9001,6 +9172,11 @@ def _hands_contract_text() -> str:
     return ("\n\n## Мои руки: договор\n" + families + "\n"
         "Все руки и права одинаковы при любой аудитории; раскрытие чужой приватки проверяется "
         "на выходе.\n"
+        "Программа с аргументами — run_command(argv=[...]): без shell, каждый элемент доходит "
+        "одним аргументом; по нужде stdin_text, env, outputs (отчёт о созданных файлах) и "
+        "scratch (одноразовое, удаляется после); [exit unobserved] — исхода нет, это не успех. "
+        "Python — для вычислений, циклов и h; shell — когда нужна его "
+        "грамматика (конвейер, перенаправление, glob, &).\n"
         "Python запускается без bash, h уже подключён: h.read/edit/write/search; в shell: import praxis_hands as h. edit — единый "
         "редактор дома и с task_id в Forge; ядро дома через proposal_id. fs_read/fs_ls/fs_search "
         "тоже принимают task_id; fs_read(paths=[...]) даёт версии файлов. confirmed "
@@ -9013,7 +9189,7 @@ def _hands_contract_text() -> str:
         "Публикует по файлу до ошибки, без автоотката; восстановление — отдельная правка свежей версии.\n"
         "h.* наследует локальную Linux-задачу, проверяет custodian, происхождение процесса и Stop; "
         "чужой task_id отказывается. Refused/Partial/InDoubt несут result. Shell — bash, Python — "
-        "скрипт, coding_run — команда задачи; [exit N] сообщает исход процесса. [changes] — наблюдаемая "
+        "скрипт, run_command — программа точным argv, coding_run — команда задачи; [exit N] сообщает исход процесса. [changes] — наблюдаемая "
         "разница рабочего Git, без приписывания чужих одновременных правок или внешних эффектов.\n"
         f"fs_search: {workshop.SEARCH_SECONDS:.0f} с, {workshop.SEARCH_CAP} совпадений, "
         f"{workshop.SEARCH_SCAN_CAP} путей. Остановка, потолок или пропуск — неполный обход, "
@@ -9022,7 +9198,7 @@ def _hands_contract_text() -> str:
         "самой руки (confirmed/refused/in_doubt/partial/ok/failed; unknown, если рука его не "
         "сообщает), r['content'] — её ответ; h.describe('имя')['content'] даёт схему. "
         "Те же права текущего хода, журнал, расписки и Stop; картинки идут в кадр. "
-        "Канал жив только до возврата/лимита внешнего python, shell или coding_run; отдельный воркер "
+        "Канал жив только до возврата/лимита внешнего python, run_command, shell или coding_run; отдельный воркер "
         "его не получает. Начатая рука, которую скрипт перестал ждать (его таймаут), доделывается, "
         "и её расписка приходит после [exit N]. При InDoubt проверить расписку, не повторять эффект.\n")
 
@@ -12151,6 +12327,13 @@ def _run_status_gate(*, phase: str) -> None:
     if current is None:
         return
     manager = _runs()
+    import step_control
+    if PANIC_SENTINEL.exists():
+        manager.request_pause(current.run_id, actor='runtime:panic', reason='persistent stop requested')
+    force = step_control.requested(current.run_id, manager.base)
+    if force:
+        manager.request_cancel(current.run_id, actor='desk:owner',
+            reason=str(force.get('reason') or 'immediate reset from MiniApp'))
     summary = manager.status(current.run_id)
     control = dict(summary.get("requested_control") or {})
     if (control.get("action") == "cancel"
@@ -12673,6 +12856,7 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                 )
             except Exception:
                 log.exception("model failure receipt did not persist [%s]", current.run_id)
+            _run_status_gate(phase='after interrupted model')
         raise
     finally:
         keat_live.discard_provider()
@@ -14632,7 +14816,7 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
                          result_ref: dict) -> tuple[dict, ...]:
     """Restore completed observation/generated pixels from an immutable ArtifactRef."""
 
-    if call_name in {'python', 'shell', 'coding_run'}:
+    if call_name in {'python', 'run_command', 'shell', 'coding_run'}:
         rows = [row for row in _runs().events(run_id)
                 if row.get('kind') == 'tool_result' and row.get('result') == result_ref
                 and row.get('name') == call_name]
@@ -16734,10 +16918,11 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
     return reports
 
 
-def recover_durable_state() -> list[dict]:
+def recover_durable_state(*, run_ids=None) -> list[dict]:
     """Repair structural WAL/status state without model or transport execution."""
+    eligible = None if run_ids is None else frozenset(run_ids)
     try:
-        reports = _runs().recover()
+        reports = _runs().recover() if eligible is None else _runs().recover(run_ids=eligible)
     except Exception:
         log.exception("durable run recovery упал")
         return []
@@ -16756,7 +16941,8 @@ def recover_durable_state() -> list[dict]:
     # доказуемо сделана (`task.json.finished`, приёмка outbox), не должен оставаться
     # надгробием в её `list_active_runs`.
     try:
-        reports.extend(reconcile_in_doubt_from_receipts())
+        reports.extend(reconcile_in_doubt_from_receipts() if eligible is None else
+                       reconcile_in_doubt_from_receipts(run_ids=eligible))
     except Exception:
         log.warning("фоновой разбор in_doubt упал", exc_info=True)
     # 26.09 (профиль бута): решённые прогоны с записанным итогом пропускаются без замка —
@@ -16768,6 +16954,8 @@ def recover_durable_state() -> list[dict]:
         live = None
     settled = getattr(_runs(), "settled_without_work", None)
     for run_id in _runs().run_ids():
+        if eligible is not None and run_id not in eligible:
+            continue
         if settled is not None and settled(run_id, live=live):
             continue
         try:
@@ -17014,7 +17202,7 @@ class _AgentHandRuntime(_AgentResumeRuntime):
 def _with_live_hands(name: str, impl, call_input: dict):
     execution = _TOOL_EXECUTION.get() or {}
     current = run_context.current_run()
-    if (name not in {'python', 'shell', 'coding_run'} or current is None
+    if (name not in {'python', 'run_command', 'shell', 'coding_run'} or current is None
             or _TURN_CHANNEL.get() is None or not execution.get('call_id')):
         return impl(**call_input)
     import hand_bridge
@@ -17128,7 +17316,7 @@ def _tool_request_projection(block: dict, tools: list, name: str, call_input: di
 
 
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
-    if name in {'python', 'shell', 'coding_run'}:
+    if name in {'python', 'run_command', 'shell', 'coding_run'}:
         import hand_bridge
         with hand_bridge.invocation_scope() as scope:
             output = _call_tool_with_ceiling_inner(name, impl, call_input)
@@ -17166,9 +17354,25 @@ def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     ctx = contextvars.copy_context()
     pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"tool-{name}")
     try:
-        future = pool.submit(ctx.run, functools.partial(_observed_tool_call, name, impl, call_input))
+        import step_control
+        current = run_context.current_run()
+        controlled = current is not None and not os.environ.get('PRAXIS_TEST')
+        with step_control.starting(current.run_id, _runs().base) if controlled else contextlib.nullcontext():
+            future = pool.submit(ctx.run, functools.partial(_observed_tool_call, name, impl, call_input))
+            if controlled:
+                step_control.track(step_control.FutureHandle(future), run_id=current.run_id, base=_runs().base)
         try:
-            return future.result(timeout=TOOL_CEILING_SEC)
+            deadline = time.monotonic() + TOOL_CEILING_SEC
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _futures.TimeoutError()
+                try:
+                    return future.result(timeout=min(.05, remaining))
+                except _futures.TimeoutError:
+                    if future.done():
+                        raise
+                    _run_status_gate(phase='waiting for tool')
         except _futures.TimeoutError:
             minutes = int(TOOL_CEILING_SEC // 60) or 1
             log.error("тул %s не вернулся за %.0fс — отпускаю ход, рука осталась висеть",
@@ -17475,6 +17679,21 @@ def _offered_function_names(tools: list) -> set[str]:
 def _current_run_kind() -> str:
     current = run_context.current_run()
     return str(getattr(current, "kind", "") or "")
+
+
+# ⚠ 13.11.2026. Наблюдение о петле сравнивает аргументы и РЕЗУЛЬТАТ руки. Но в тексте
+# результата чтения картинки у каждого вызова свой номер артефакта рана
+# (`artifact-0001` … `artifact-0510`, `artifacts/0509-…`): 151 одинаковое чтение
+# page-59.png давало 151 разную подпись, и наблюдение молчало все два часа хода
+# 6c96f03e. Порядковые номера рана — не содержание результата; sha пикселей остаётся.
+_LOOP_RUN_LOCAL_ID_RE = re.compile(r"\b(artifact|result)-\d+\b")
+_LOOP_RUN_LOCAL_PATH_RE = re.compile(r"\b(artifacts|results)/\d+-")
+
+
+def _loop_identity_text(text: str) -> str:
+    """Результат руки без порядковых номеров рана — для подписи наблюдения о петле."""
+    text = _LOOP_RUN_LOCAL_ID_RE.sub(r"\1-#", str(text or ""))
+    return _LOOP_RUN_LOCAL_PATH_RE.sub(r"\1/#-", text)
 
 
 def _provider_action_feedback(observation: dict) -> list[dict]:
@@ -17818,7 +18037,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
 
             signature = hashlib.sha256((
                 b["name"] + "\0" + json.dumps(call_input, ensure_ascii=False, sort_keys=True,
-                                                default=str) + "\0" + out_text
+                                                default=str) + "\0" + _loop_identity_text(out_text)
             ).encode("utf-8", errors="replace")).hexdigest()
             repeats[signature] = repeats.get(signature, 0) + 1
             n = repeats[signature]

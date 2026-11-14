@@ -72,7 +72,7 @@ export interface StepsOptions {
 }
 
 export const ACTIONS: Record<string, string> = {
-  shell: "Команда", read_file: "Чтение файла", write_file: "Запись файла",
+  shell: "Команда", run_command: "Программа", read_file: "Чтение файла", write_file: "Запись файла",
   edit_file: "Правка файла", search: "Поиск", web_search: "Поиск в интернете",
   fetch_url: "Чтение страницы", read_url: "Чтение страницы",
   reply: "Ответ", end_turn: "Завершение работы", remind_self: "Напоминание",
@@ -115,9 +115,18 @@ export function resultText(text: string): string {
   }
 }
 
+/** run_command's argv as one readable line; each item stays one argument (quoted like shlex). */
+export function argvLine(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const argv = (args as Record<string, unknown>).argv;
+  return Array.isArray(argv) && argv.length && argv.every(x => typeof x === "string")
+    ? (argv as string[]).map(shellQuote).join(" ") : "";
+}
+
 export function subject(args: unknown): string {
   if (!args || typeof args !== "object") return typeof args === "string" ? args : "";
   const a = args as Record<string, unknown>;
+  if (typeof a.command !== "string" && typeof a.cmd !== "string" && argvLine(a)) return argvLine(a);
   for (const key of ["command", "cmd", "path", "file_path", "query", "url", "text", "goal", "note", "task", "action"]) {
     if (typeof a[key] === "string" && a[key]) return a[key] as string;
   }
@@ -129,7 +138,7 @@ export function suppliedCommand(args: unknown): string {
   if (!args || typeof args !== "object" || Array.isArray(args)) return "";
   const fields = args as Record<string, unknown>;
   return typeof fields.command === "string" ? fields.command :
-    typeof fields.cmd === "string" ? fields.cmd : "";
+    typeof fields.cmd === "string" ? fields.cmd : argvLine(fields);
 }
 
 export type ToolDetail = NonNullable<NonNullable<RunDetail['iterations']>[number]['tools']>[number];
@@ -139,7 +148,8 @@ export function toolParameters(args: unknown): Array<[string, unknown]> {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
   const command = suppliedCommand(args);
   return Object.entries(args).filter(([key, value]) =>
-    !((key === 'command' || key === 'cmd') && typeof value === 'string' && value === command));
+    !((key === 'command' || key === 'cmd') && typeof value === 'string' && value === command) &&
+    !(key === 'argv' && command !== '' && command === argvLine(args)));
 }
 
 function traceBlock(key: string, label: string, content: string, kind: string, opts: Parameters<typeof textBox>[2] = {}): string {

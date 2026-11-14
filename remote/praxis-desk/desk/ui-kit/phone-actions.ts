@@ -21,7 +21,7 @@ export function currentRunId(runs:Run[],state:State,now=Date.now()):string {
 }
 
 /** The desktop roster, review/tests and action renderer at a phone's width. */
-export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,describe?:(run:Run)=>string,options:{history?:boolean;agentsOnly?:boolean}={}) {
+export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,describe?:(run:Run)=>string,options:{history?:boolean;agentsOnly?:boolean;onReset?:(id:string,status:string)=>void}={}) {
   const history=options.history!==false;
   root.className='phone-actions';
   const work=el('section'),forge=el('section','turns-forge'),head=el('div','turns-head');
@@ -53,6 +53,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   let controller:AbortController|undefined,owner=scope(),liveRun='';
   let activity:WorkActivity={};
   let currentState:State={};let lastRuns:Run[]=[];
+  let resetMessage='';
   let olderController:AbortController|undefined,olderBusy=false,pagingStarted=false,hasMore=false,before='',historyError='';
   agents.addEventListener('toggle',event=>{
     if(event.target!==agents)return;
@@ -74,7 +75,29 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     const time=el('span','turn-time'),dot=el('span','turn-dot'),text=el('span','turn-text');
     const title=el('span','turn-title'),meta=el('span','turn-meta'),body=el('div','turn-body st-list');body.hidden=true;
     text.append(title,meta);head.append(time,dot,text);node.append(head,body);node.setAttribute('role','listitem');
+    const controls=el('div','actions'),cancel=el('button','chip','Сбросить задачу'),notice=el('p','muted');
+    cancel.type='button';cancel.title='Прервать выполняющийся шаг и его процессы; сохранить историю';
+    notice.setAttribute('role','status');controls.append(cancel);node.insertBefore(controls,body);node.insertBefore(notice,body);
     const row={node,head,title,time,meta,body,open:false,autoOpened:false,requestVersion:0,paint:mountActionSteps(body),version:undefined as string|undefined,run};
+    cancel.addEventListener('click',async()=>{
+      if(cancel.disabled)return;
+      const captured=epoch,capturedScope=scope();cancel.disabled=true;notice.textContent='Прерываю выполняющийся шаг…';
+      try {
+        const result=await request<{ok:boolean;confirmed?:boolean;note?:string;receipt?:{status?:string}}>(`/api/run/${encodeURIComponent(row.run.id)}/cancel`,{});
+        if(!active||captured!==epoch||capturedScope!==scope())return;
+        notice.textContent=result.note||'Результат сброса пока не подтверждён.';
+        if(!result.confirmed)cancel.disabled=false;
+        else {
+          const status=result.receipt?.status||'cancelled',id=row.run.id;
+          if(liveRun===id){liveRun='';resetMessage=notice.textContent;notice.textContent='';}
+          row.run={...row.run,status};row.version=undefined;
+          lastRuns=lastRuns.map(run=>run.id===id?row.run:run);
+          if(currentState.runner?.run===id)currentState={runner:{...currentState.runner,busy:false,run:''}};
+          options.onReset?.(id,status);paint(lastRuns);
+        }
+      } catch {if(active&&captured===epoch){notice.textContent='Результат не подтверждён. Обновите состояние перед повтором.';cancel.disabled=false}}
+    });
+    Object.assign(row,{cancel,controls});
     head.addEventListener('click',()=>{row.open=!row.open;node.classList.toggle('open',row.open);body.hidden=!row.open;head.setAttribute('aria-expanded',String(row.open));if(row.open)void detail(row,true)});
     return row;
   }
@@ -85,6 +108,8 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     for(const run of runs) {
       let row=rows.get(run.id);if(!row){row=makeRow(run);rows.set(run.id,row)}
       row.run=run;row.time.textContent=fmtTime(run.created_at||'');
+      const controls=row.node.querySelector<HTMLElement>('.actions');
+      if(controls)controls.hidden=['done','failed','cancelled'].includes(run.status||run.terminal_status||'');
       row.title.textContent=describe?.(run)||run.goal_head||({chat_turn:'Сообщение',wake:'Пробуждение',task_window:'Работа'}[run.kind||'']||'Ход агента');
       const live=run.id===liveRun;
       row.node.dataset.status=live?'live':run.status==='failed'||run.terminal_status==='failed'?'failed':run.status==='running'?'unknown':'done';
@@ -95,7 +120,8 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     }
     count.textContent=String(historyCount)+(hasMore?'+':'');message.textContent=historyError||(historyCount?'':'Предыдущих ходов пока нет.');
     more.hidden=!hasMore;more.disabled=olderBusy;more.textContent=olderBusy?'Читаю…':'Ещё ходы';
-    currentMessage.textContent=liveRun?'':'Сейчас нет текущего хода';
+    if(liveRun)resetMessage='';
+    currentMessage.textContent=liveRun?'':resetMessage||'Сейчас нет текущего хода';
   }
   function mergeRuns(incoming:Run[]) {
     const merged=new Map(lastRuns.map(run=>[run.id,run]));
@@ -116,7 +142,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   }
   async function refresh() {
     if(!active||busy||!root.isConnected)return;
-    if(owner!==scope()){epoch++;controller?.abort();olderController?.abort();olderBusy=false;pagingStarted=false;hasMore=false;before='';historyError='';more.hidden=true;owner=scope();rows.clear();list.replaceChildren();currentList.replaceChildren();lastRuns=[];currentState={};liveRun='';activity={};renderWork({});if(!options.agentsOnly){agents.open=false;teams.stop()}}
+    if(owner!==scope()){epoch++;controller?.abort();olderController?.abort();olderBusy=false;pagingStarted=false;hasMore=false;before='';historyError='';resetMessage='';more.hidden=true;owner=scope();rows.clear();list.replaceChildren();currentList.replaceChildren();lastRuns=[];currentState={};liveRun='';activity={};renderWork({});if(!options.agentsOnly){agents.open=false;teams.stop()}}
     busy=true;const captured=epoch;
     const capturedScope=scope();
     controller=new AbortController();

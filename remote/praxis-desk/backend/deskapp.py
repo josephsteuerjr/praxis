@@ -175,7 +175,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt", "/api/agenda", "/api/board", "/api/forge",
+                 "/api/interrupt", "/api/praxis/control", "/api/agenda", "/api/board", "/api/forge",
                  "/api/phone/activity", "/api/phone/forge/tasks", "/api/phone/forge/events",
                   "/api/phone/forge/payload"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
@@ -1142,6 +1142,21 @@ async def _r_brain_set(c: Call):
                                    fields if isinstance(fields, dict) else {})
 
 
+async def _r_praxis_control(c: Call):
+    return await asyncio.to_thread(control.praxis_control)
+
+
+async def _r_praxis_action(c: Call):
+    if not isinstance(c.body, dict):
+        return Fail(400, 'Нужно действие управления.')
+    return await asyncio.to_thread(control.praxis_control, c.body)
+
+
+async def _r_run_cancel(c: Call):
+    return await asyncio.to_thread(control.praxis_control,
+        {'action': 'cancel', 'run_id': c.match['run_id']})
+
+
 async def _r_interrupt(c: Call):
     """Прервать живой ход агента (12.09): просьба в memory/.control, раннер читает на тике.
     Телефону открыто наравне с перезапуском — это окно владельца."""
@@ -1215,6 +1230,9 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route('GET', '/api/praxis/control', _r_praxis_control, private=True),
+    Route('POST', '/api/praxis/control', _r_praxis_action, private=True),
+    Route('POST', '/api/run/{run_id}/cancel', _r_run_cancel, private=True),
     Route("GET", "/api/memory-fold/{room}", _r_fold_state),
     Route("POST", "/api/memory-fold", _r_fold),
     Route("GET", "/api/voice", _r_voice),

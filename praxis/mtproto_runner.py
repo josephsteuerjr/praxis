@@ -201,12 +201,39 @@ def _threadsafe_result(coro_factory, timeout: float):
     """
     loop = _main_loop()
     coro = coro_factory()
+    settled = threading.Event()
+    started = threading.Event()
+    async def observed():
+        started.set()
+        try:
+            return await coro
+        finally:
+            settled.set()
+    wrapped = observed()
     try:
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        future = asyncio.run_coroutine_threadsafe(wrapped, loop)
     except Exception:
+        wrapped.close()
         coro.close()
         raise
+    def cancelled_before_start(done):
+        if not done.cancelled():
+            return
+        def close_unstarted():
+            if not started.is_set():
+                coro.close()
+                settled.set()
+        try:
+            loop.call_soon_threadsafe(close_unstarted)
+        except RuntimeError:
+            close_unstarted()
+    future.add_done_callback(cancelled_before_start)
     try:
+        import step_control
+        context = agent.run_context.current_run()
+        if context is not None and not os.environ.get('PRAXIS_TEST'):
+            step_control.track(step_control.FutureHandle(future, cancellable=True, settled=settled),
+                               run_id=context.run_id, base=agent.MEM_DIR.parent)
         return future.result(timeout=timeout)
     except TimeoutError:
         future.cancel()
@@ -7552,11 +7579,13 @@ async def _admin_apply(entity, action: str, subject: dict) -> dict | None:
         return {"until_date_sent": until, "wire_margin_seconds": _RESTRICT_WIRE_MARGIN}
     if action == "ban_member":
         # Перманентный бан: until_date=None — это «навсегда» на проводе Telegram.
-        # Полный набор send-флагов, как у restrict, но без срока.
+        # view_messages=True отличает полный бан от бессрочного мута.
+        # EditBannedRequest заменяет весь объект: без этого флага снимался
+        # даже уже действующий полный бан.
         await client(functions.channels.EditBannedRequest(
             channel=entity, participant=int(subject["user_id"]),
             banned_rights=types.ChatBannedRights(
-                until_date=None, send_messages=True, send_media=True,
+                until_date=None, view_messages=True, send_messages=True, send_media=True,
                 send_stickers=True, send_gifs=True, send_games=True,
                 send_inline=True, embed_links=True, send_polls=True)))
         return {"until_date_sent": None, "permanent": True}
@@ -7567,7 +7596,7 @@ async def _admin_apply(entity, action: str, subject: dict) -> dict | None:
         await client(functions.channels.EditBannedRequest(
             channel=entity, participant=int(subject["user_id"]),
             banned_rights=types.ChatBannedRights(
-                until_date=None, send_messages=True, send_media=True,
+                until_date=None, view_messages=True, send_messages=True, send_media=True,
                 send_stickers=True, send_gifs=True, send_games=True,
                 send_inline=True, embed_links=True, send_polls=True)))
         await client(functions.channels.DeleteParticipantHistoryRequest(
@@ -9551,6 +9580,9 @@ async def _control_once() -> None:
     """Забота часов: смёрженное предложение просит перезапуск — уходим мягко (exit 42),
     когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат).
     12.09: та же забота читает просьбу Пульта прервать живой ход."""
+    if agent.PANIC_SENTINEL.exists():
+        agent.panic('persistent stop requested')
+        return
     await _desk_interrupt_once()
     reason = selfdev.restart_requested()
     if not reason:
@@ -11512,10 +11544,26 @@ def _restored_buffer_partition(restored: dict[str, list[str]]) -> tuple[dict[str
     return accepted, tuple(absorbed)
 
 
+async def _wait_panic_release() -> None:
+    """Direct Docker entrypoints obey the same persistent stop as bootguard."""
+    reported = False
+    while agent.PANIC_SENTINEL.exists():
+        if not reported:
+            log.warning('PANIC sentinel: waiting for explicit owner start')
+            reported = True
+        await asyncio.sleep(.2)
+
+
 async def main() -> None:
     global _LOOP
     startup_started = time.monotonic()
     _LOOP = asyncio.get_running_loop()  # единственный живой луп — для sync-обёрток тулов
+    import step_control
+    step_control.start(agent.MEM_DIR.parent)
+    await _wait_panic_release()
+    # Handlers/catch-up may admit fresh work while bootstrap is still running.
+    # Structural recovery owns only runs that existed before connecting.
+    startup_run_ids = tuple(await asyncio.to_thread(agent._runs().run_ids))
     try:
         import goals as _legacy_goals
         migration = _legacy_goals.decommission_legacy()
@@ -11595,7 +11643,7 @@ async def main() -> None:
     # paused; unversioned side effects stay in_doubt. Versioned Telegram text plans are retried
     # below only with their persisted route/chunks and stable MTProto random-id keys.
     phase_started = time.monotonic()
-    recovered_runs = await asyncio.to_thread(agent.recover_durable_state)
+    recovered_runs = await asyncio.to_thread(agent.recover_durable_state, run_ids=startup_run_ids)
     log.info("startup phase=durable_recovery seconds=%.3f", time.monotonic() - phase_started)
     if recovered_runs:
         log.warning("восстановлено durable runs: %d", len(recovered_runs))

@@ -503,6 +503,7 @@ EN: dict[str, dict] = {
               "python, pip, pytest. NOT installed: ssh, rsync, gcc, node. Shell is outside the shared write lock: "
               "edit code with edit. Set the folder with cwd and the limit with timeout "
               "(default 30 s, up to 600). The reply ends with [exit N]: non-zero means the command failed. "
+              "One program with arguments and no pipeline: run_command(argv=[...]), no quoting or parsing. "
               "Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same version check and write lock as edit; refusals raise. Edit files that way, not with str.replace."),
         "p": {"command": "the shell command", "cwd": "folder to run in, default /app",
               "timeout": "seconds, default 30, up to 600"},
@@ -528,7 +529,7 @@ EN: dict[str, dict] = {
         "p": {"repo": "self | public",
               "action": "status | log | diff | fetch | pull | add | commit | push",
               "message": "commit message — the reason, not a label",
-              "paths": "space-separated paths; empty means everything"},
+              "paths": "diff/add: one path per array item, passed exactly; empty means everything"},
     },
     "coding_session": {
         "p": {"priority": "urgent: wake when a worker finishes; normal: next hourly window",
@@ -550,7 +551,8 @@ EN: dict[str, dict] = {
     "coding_process": {"p": {"task_id": "the coding task",
                              "action": "start | poll | stop | list",
                              "process_id": "the process to poll or stop",
-                             "command": "command to start",
+                             "command": "shell command string to start",
+                             "argv": "exact program then arguments to start without a shell; instead of command",
                              "cwd": "working directory",
                              "name": "a name for the process",
                              "timeout": "seconds; 0 means unbounded",
@@ -715,7 +717,7 @@ BASE_SHA: dict[str, str] = {
     "search_chats": "459f6478",
     "search_private_messages": "22fcf861",
 
-    "shell": "4c48ee89",
+    "shell": "9ca80d1b",
     "voice_message": "6d240bef",
     "speak": "f9d09b07",
     "stay_silent": "8bd4bde4",

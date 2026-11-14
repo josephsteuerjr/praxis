@@ -13,6 +13,10 @@
 | `frame_continuation.py` | Default-off derived first-input checkpoint группы; source-proved append между chat turns, без переноса внутреннего tool transcript. |
 | `mtproto_runner.py` | Живой Telethon client: update routing, buffers, forum topics, media, delivery/outbox replay, membership/account hooks и единые серверные часы. |
 | `llm.py` | Конфигурация ролей моделей, Anthropic/OpenAI protocol adapters, fallback, usage и hosted tools. |
+| `model_step.py` | Тёплые run/task SDK workers, private framed leases, typed errors и parent lifeline; policy остаётся в llm. |
+| `step_control.py` | Независимый reset watcher, общий pending-resource census и подтверждения фактических владельцев handles. |
+| `search_execution.py` | Typed private search transport через общий launcher с track-before-admit и tree settlement. |
+| `forge_search_step.py` | Общий read-only rg/regex effect Forge без agent/Telethon import и изменения task authority. |
 | `provider_observation.py` | Hosted provider web action metadata: enum/opaque ID whitelist, deduplication, unknown/partial/complete coverage and explicit runtime feedback; never executable function calls. |
 | `bootguard.py` | Preflight, supervision, healthy-commit marker и rollback раннего сломанного self-edit. |
 | `reflex.py` | Детерминированный pre-model фильтр очевидного шума. |
@@ -104,7 +108,7 @@
 | `workshop.py` | Python file/shell/dev-tool surface, используемая model tools. |
 | `editor.py`, `tool_report.py` | Единый replace/write/patch/batch, versioned readback и честные confirmed/refused/partial/in_doubt. |
 | `catalog_families.py` | Объединённые proposal/project/memory_graph и native Python schema, явная preflight-валидация. |
-| `python_execution.py`, `command_execution.py` | Прямой stdin Python с h; общий launcher и наблюдаемый Git/exit хвост после admission. |
+| `python_execution.py`, `command_execution.py` | Прямой stdin Python с h; общий launcher, проверка/поиск программы и строка фактов `run_command`, наблюдаемый Git/exit хвост после admission. |
 | `pyhands/praxis_hands.py`, `forge_script.py` | Python file API, task nonce/custodian verification и клиент h.hand/h.describe. |
 | `hand_bridge.py` | Приватный Unix IPC живой foreground-команды: peer identity, exact request cache, scoped lifetime, drain начатых вызовов после выхода скрипта; durable parent dispatch в agent. |
 | `hands.py` | Пол рук на чистом Python: снимок и публикация файла с проверкой записанного, поиск отдельным процессом, скелет, запуск. |
