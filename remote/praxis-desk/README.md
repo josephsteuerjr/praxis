@@ -40,3 +40,5 @@ manifest identity. Backend regressions run from `backend/` as separate processes
 deployed files.
 
 14 November2026: source44ff961 includes origin-message turn titles, separate operator-probe history and numeric model-generation progress. Both builds, backend44, browser12, argv10, six live HTTPS groups passed. Physical phone acceptance is separate. Old deployment assets were retained.
+
+14 November2026 (later): source e52ce54 adds a code_query summary on step cards (operation, evidence rows, completeness and coverage, projected by the desk backend from the saved result), readable targets for frequent hands, and Telegram fullscreen on phones only. Backend50, browser13 (320/390/820), argv10, both builds; staged on80 live runs with0 errors. Only praxis-desk restarted; old assets retained.

@@ -1,0 +1,1281 @@
+{
+ "references": {
+  "lens": {
+   "kind": "code_query",
+   "op": "references",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "82b7a1eb86419107",
+   "total": 41,
+   "rows": [
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "Budget",
+     "qualname": "intelligence.Budget",
+     "caller": "execute",
+     "receiver": "intelligence",
+     "snippet": "own=budget or intelligence.Budget(label='code_query')",
+     "line": 154,
+     "char": 18,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "mention",
+     "evidence": "text_mention",
+     "method": "text",
+     "ambiguous": false,
+     "name": "Budget",
+     "qualname": "",
+     "snippet": "# в ответе (Budget.report) и крутятся из среды.",
+     "line": 90,
+     "char": 12
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "source_files",
+     "snippet": "return collect(root, limit=limit, suffixes=suffixes, budget=budget or Budget(),",
+     "line": 232,
+     "char": 78,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "project_model",
+     "snippet": "own = budget or Budget(label=\"model\")",
+     "line": 368,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "project_overview",
+     "snippet": "own = budget or Budget(label=\"overview\")",
+     "line": 394,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "review_snapshot",
+     "snippet": "own = budget or Budget(label=\"review\")",
+     "line": 488,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "symbols",
+     "snippet": "own = budget or Budget(label=\"symbols\")",
+     "line": 613,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "references",
+     "snippet": "own = budget or Budget(label=\"references\")",
+     "line": 660,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "diagnostics",
+     "snippet": "own = budget or Budget(label=\"diagnostics\")",
+     "line": 699,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "impact",
+     "snippet": "own = budget or Budget(label=\"impact\")",
+     "line": 772,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "forge_intelligence.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "Budget",
+     "qualname": "Budget",
+     "caller": "verification_plan",
+     "snippet": "own = budget or Budget(label=\"checks\")",
+     "line": 1005,
+     "char": 20,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "llm.py",
+     "kind": "mention",
+     "evidence": "text_mention",
+     "method": "text",
+     "ambiguous": false,
+     "name": "Budget",
+     "qualname": "",
+     "snippet": "# Budget exhaustion likewise dominates even syntactically complete tool calls.",
+     "line": 2292,
+     "char": 6
+    }
+   ],
+   "next_cursor": "82b7a1eb86419107:40",
+   "complete": true,
+   "coverage": {
+    "seen": 726,
+    "parsed": 13,
+    "prefiltered": 712,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "unsupported_suffix": 2625,
+     "name_byte_prefilter": 712
+    },
+    "dynamic_imports": 5,
+    "missing_grammars": [
+     "rust"
+    ],
+    "stopped_by": "",
+    "spent_s": 6.929,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "python_ast": 23,
+    "text": 18
+   },
+   "cache": {
+    "hits": 0,
+    "misses": 13
+   }
+  },
+  "outcome": "ok"
+ },
+ "callees": {
+  "lens": {
+   "kind": "code_query",
+   "op": "callees",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "360ec24b7e5d02ad",
+   "total": 99,
+   "rows": [
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "import_bound",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "Path",
+     "qualname": "Path",
+     "caller": "execute",
+     "snippet": "root=Path(request['root']['path']).resolve();op=request['op'];name=request.get('name','');module=request.get('module','')",
+     "line": 149,
+     "char": 9,
+     "module": "pathlib"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "Budget",
+     "qualname": "intelligence.Budget",
+     "caller": "execute",
+     "receiver": "intelligence",
+     "snippet": "own=budget or intelligence.Budget(label='code_query')",
+     "line": 154,
+     "char": 18,
+     "module": "forge_intelligence"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "inventory",
+     "qualname": "inventory",
+     "caller": "execute",
+     "snippet": "paths=inventory(root,scope,own,skipped,op)",
+     "line": 158,
+     "char": 10,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "manifest",
+     "qualname": "manifest",
+     "caller": "execute",
+     "snippet": "first=manifest(root,paths,own,failed)",
+     "line": 159,
+     "char": 10,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "changed",
+     "qualname": "changed",
+     "caller": "execute",
+     "snippet": "delta=changed(old,first)",
+     "line": 162,
+     "char": 14,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "digest",
+     "qualname": "digest",
+     "caller": "execute",
+     "snippet": "snapshot=digest(json.dumps([VERSION,str(root),binding,sorted(first.items())],ensure_ascii=False,separators=(',',':')).encode())[:16]",
+     "line": 165,
+     "char": 13,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "dumps",
+     "qualname": "json.dumps",
+     "caller": "execute",
+     "receiver": "json",
+     "snippet": "snapshot=digest(json.dumps([VERSION,str(root),binding,sorted(first.items())],ensure_ascii=False,separators=(',',':')).encode())[:16]",
+     "line": 165,
+     "char": 20,
+     "module": "json"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "read",
+     "qualname": "read",
+     "caller": "execute",
+     "snippet": "raw=read(root,p)",
+     "line": 175,
+     "char": 16,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "digest",
+     "qualname": "digest",
+     "caller": "execute",
+     "snippet": "if digest(raw)!=sha:return {'error':'snapshot_changed','changed_paths':[rel],'complete':False}",
+     "line": 176,
+     "char": 15,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "candidates",
+     "qualname": "candidates",
+     "caller": "execute",
+     "snippet": "if op not in ('overview','impact') and not candidates(raw,name,module if op=='references' else ''):",
+     "line": 177,
+     "char": 55,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": null,
+     "name": "decode",
+     "qualname": "decode",
+     "caller": "execute",
+     "snippet": "text=decode(raw,language=='python')",
+     "line": 181,
+     "char": 17,
+     "module": "code_navigation"
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "get",
+     "qualname": "cache.get",
+     "caller": "execute",
+     "receiver": "cache",
+     "snippet": "parsed=cache.get(sha,text,request.get('cache_dir',''),stats)",
+     "line": 183,
+     "char": 23,
+     "module": "code_query_cache"
+    }
+   ],
+   "next_cursor": "360ec24b7e5d02ad:40",
+   "complete": false,
+   "coverage": {
+    "seen": 726,
+    "parsed": 62,
+    "prefiltered": 658,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "unsupported_suffix": 2625,
+     "grammar_unavailable_for_calls": 6,
+     "name_byte_prefilter": 658
+    },
+    "dynamic_imports": 3,
+    "missing_grammars": [
+     "javascript",
+     "rust"
+    ],
+    "stopped_by": "",
+    "spent_s": 10.966,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "python_ast": 99
+   },
+   "cache": {
+    "hits": 0,
+    "misses": 62
+   }
+  },
+  "outcome": "partial"
+ },
+ "callers": {
+  "lens": {
+   "kind": "code_query",
+   "op": "callers",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "19203eb98773ca89",
+   "total": 5,
+   "rows": [
+    {
+     "path": "llm.py",
+     "kind": "call",
+     "evidence": "same_module_name",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "_call_openai",
+     "qualname": "_call_openai",
+     "caller": "_call",
+     "snippet": "return _call_openai(cli, model, **kw)",
+     "line": 2461,
+     "char": 11,
+     "module": "llm"
+    },
+    {
+     "path": "test_cache_address.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "_call_openai",
+     "qualname": "llm._call_openai",
+     "caller": "ItReachesTheRequest._payload",
+     "receiver": "llm",
+     "snippet": "llm._call_openai(cli, \"gpt-5.6-sol\", system=system, messages=[], tools=[],",
+     "line": 249,
+     "char": 12,
+     "module": "llm"
+    },
+    {
+     "path": "test_empty_response.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "_call_openai",
+     "qualname": "llm._call_openai",
+     "caller": "_call_oai",
+     "receiver": "llm",
+     "snippet": "return llm._call_openai(FakeOpenAI(resp), \"gpt-5.6-sol\", system=\"s\", messages=[],",
+     "line": 85,
+     "char": 11,
+     "module": "llm"
+    },
+    {
+     "path": "test_openai_ceiling_field.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "_call_openai",
+     "qualname": "llm._call_openai",
+     "caller": "_sent",
+     "receiver": "llm",
+     "snippet": "llm._call_openai(client, \"gpt-5.6-sol\", system=\"s\",",
+     "line": 41,
+     "char": 12,
+     "module": "llm"
+    },
+    {
+     "path": "test_relay_request_contract.py",
+     "kind": "call",
+     "evidence": "module_attribute",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "_call_openai",
+     "qualname": "llm._call_openai",
+     "caller": "_sent_fields",
+     "receiver": "llm",
+     "snippet": "llm._call_openai(client, model, system=\"s\",",
+     "line": 102,
+     "char": 12,
+     "module": "llm"
+    }
+   ],
+   "next_cursor": null,
+   "complete": true,
+   "coverage": {
+    "seen": 726,
+    "parsed": 6,
+    "prefiltered": 720,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "unsupported_suffix": 2625,
+     "name_byte_prefilter": 720
+    },
+    "dynamic_imports": 0,
+    "missing_grammars": [],
+    "stopped_by": "",
+    "spent_s": 5.675,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "python_ast": 5
+   },
+   "cache": {
+    "hits": 0,
+    "misses": 6
+   }
+  },
+  "outcome": "ok"
+ },
+ "definition": {
+  "lens": {
+   "kind": "code_query",
+   "op": "definition",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "45c60b000dee78a3",
+   "total": 16,
+   "rows": [
+    {
+     "path": "body_client.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "workspace_inspect_result.query",
+     "signature": "",
+     "snippet": "query = str(kwargs.get(\"query\") or \"\")",
+     "line": 1515,
+     "char": 8
+    },
+    {
+     "path": "code_query.py",
+     "kind": "function",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": true,
+     "name": "query",
+     "qualname": "query",
+     "signature": "(op, root, path, name, module, limit, cursor, home)",
+     "snippet": "def query(op, root='home', path='', name='', module='', limit=40, cursor='', *, home=None):",
+     "line": 18,
+     "char": 0
+    },
+    {
+     "path": "fish_tts_client.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "FishTTSClient.voices.query",
+     "signature": "",
+     "snippet": "query = {'self': str(own).lower(), 'page_number': page, 'page_size': 20}",
+     "line": 247,
+     "char": 8
+    },
+    {
+     "path": "forge_search_step.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "execute.query",
+     "signature": "",
+     "snippet": "query, glob = request['query'], request['glob']",
+     "line": 16,
+     "char": 4
+    },
+    {
+     "path": "frame_layout.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "_recall_key.query",
+     "signature": "",
+     "snippet": "query = \" \".join(str(snap.get(\"recall_query\") or \"\").split())",
+     "line": 684,
+     "char": 4
+    },
+    {
+     "path": "frame_layout.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "_recall_key.query",
+     "signature": "",
+     "snippet": "query = query[:80] + \"…\"",
+     "line": 688,
+     "char": 8
+    },
+    {
+     "path": "hands_search.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "query",
+     "signature": "",
+     "snippet": "query = json.load(sys.stdin)",
+     "line": 185,
+     "char": 4
+    },
+    {
+     "path": "memory_fts.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "search.query",
+     "signature": "",
+     "snippet": "query = str(query or \"\").strip()",
+     "line": 2271,
+     "char": 4
+    },
+    {
+     "path": "memory_index.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "search.query",
+     "signature": "",
+     "snippet": "query = (query or \"\").strip()",
+     "line": 655,
+     "char": 4
+    },
+    {
+     "path": "mtproto_runner.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "GroupWake.query",
+     "signature": "",
+     "snippet": "query: str = \"\"",
+     "line": 327,
+     "char": 4
+    },
+    {
+     "path": "praxis_app.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "PraxisAppService.command.query",
+     "signature": "",
+     "snippet": "query = str(body.get(\"query\") or \"\").strip()",
+     "line": 1978,
+     "char": 16
+    },
+    {
+     "path": "telegram_registry.py",
+     "kind": "assignment",
+     "evidence": "definition",
+     "method": "python_ast",
+     "ambiguous": false,
+     "matches_target": false,
+     "name": "query",
+     "qualname": "TelegramCapabilityRegistry.search.query",
+     "signature": "",
+     "snippet": "query = str(query or \"\").strip().lower()",
+     "line": 652,
+     "char": 8
+    }
+   ],
+   "next_cursor": null,
+   "complete": true,
+   "coverage": {
+    "seen": 726,
+    "parsed": 100,
+    "prefiltered": 612,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "unsupported_suffix": 2625,
+     "name_byte_prefilter": 612
+    },
+    "dynamic_imports": 7,
+    "missing_grammars": [
+     "javascript",
+     "rust",
+     "shell",
+     "typescript"
+    ],
+    "stopped_by": "",
+    "spent_s": 14.484,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "python_ast": 15,
+    "regex": 1
+   },
+   "cache": {
+    "hits": 0,
+    "misses": 100
+   }
+  },
+  "outcome": "ok"
+ },
+ "overview": {
+  "lens": {
+   "kind": "code_query",
+   "op": "overview",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "bc906eab7c68df1d",
+   "total": 16,
+   "rows": [
+    {
+     "path": ".",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 682,
+     "lines": 278730,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": ".proposal-orphans",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 1,
+     "lines": 0,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "body",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 39,
+     "lines": 17972,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "core",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 7,
+     "lines": 1486,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "docs",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 17,
+     "lines": 2103,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "memory",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 2411,
+     "lines": 109361,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "panel_static",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 1,
+     "lines": 5,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "praxis_static",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 24,
+     "lines": 11835,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "pyhands",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 1,
+     "lines": 253,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "scripts",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 4,
+     "lines": 933,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "serverapp_static",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 15,
+     "lines": 1536,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "serverd",
+     "kind": "directory",
+     "evidence": "inventory",
+     "method": "heuristic",
+     "ambiguous": true,
+     "files": 14,
+     "lines": 6491,
+     "line": null,
+     "char": null
+    }
+   ],
+   "next_cursor": null,
+   "complete": true,
+   "coverage": {
+    "seen": 3351,
+    "parsed": 677,
+    "prefiltered": 0,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "non_code_file": 2625
+    },
+    "dynamic_imports": 35,
+    "missing_grammars": [
+     "javascript",
+     "powershell",
+     "rust",
+     "shell",
+     "typescript"
+    ],
+    "stopped_by": "",
+    "spent_s": 50.666,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "heuristic": 16
+   },
+   "cache": {
+    "hits": 1,
+    "misses": 676
+   },
+   "overview": {
+    "files_scanned": 3351,
+    "languages": {
+     "python": 677,
+     "rust": 33,
+     "powershell": 1,
+     "shell": 4,
+     "typescript": 2,
+     "javascript": 9
+    },
+    "entrypoints": [
+     "agent.py",
+     "body/Cargo.toml",
+     "body/crates/praxis-body/Cargo.toml",
+     "body/crates/praxis-bridge/Cargo.toml",
+     "body/crates/praxis-protocol/Cargo.toml",
+     "body/crates/praxis-system-router/Cargo.toml",
+     "body/crates/praxis-tray/Cargo.toml",
+     "bootguard.py"
+    ],
+    "central_modules": [
+     {
+      "module": "agent",
+      "imported_by": 209
+     },
+     {
+      "module": "llm",
+      "imported_by": 90
+     },
+     {
+      "module": "run_context",
+      "imported_by": 82
+     },
+     {
+      "module": "mtproto_runner",
+      "imported_by": 72
+     },
+     {
+      "module": "forge",
+      "imported_by": 70
+     },
+     {
+      "module": "memory_life",
+      "imported_by": 68
+     }
+    ],
+    "hotspots": [
+     {
+      "path": "agent.py",
+      "lines": 20426
+     },
+     {
+      "path": "mtproto_runner.py",
+      "lines": 11735
+     },
+     {
+      "path": "memory/_forge_orphans_archive/wcode-fd0c3afd/receipts/obs-20260717T091546080899Z-b73422bf.json",
+      "lines": 8674
+     },
+     {
+      "path": "memory/_forge_orphans_archive/wcode-fd0c3afd/receipts/obs-20260717T091554691106Z-d98d826f.json",
+      "lines": 8674
+     },
+     {
+      "path": "memory/_forge_orphans_archive/wcode-21f70cbf/receipts/obs-20260717T084036792167Z-b13fde71.json",
+      "lines": 7838
+     }
+    ],
+    "tests": 438,
+    "docs": 80
+   }
+  },
+  "outcome": "ok"
+ },
+ "impact": {
+  "lens": {
+   "kind": "code_query",
+   "op": "impact",
+   "error": "",
+   "reason": "",
+   "changed_paths": [],
+   "root": {
+    "kind": "external",
+    "path": "/work",
+    "head": "7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e"
+   },
+   "snapshot": "c34d35f5cac83314",
+   "total": 331,
+   "rows": [
+    {
+     "path": "absence.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "addressed_threads.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "agent.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "canary.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "capabilities.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "catalog_families.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "cjk_vkladki.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "code_navigation.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "code_query.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "code_query_cache.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "code_query_facts.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    },
+    {
+     "path": "consolidate.py",
+     "kind": "affected",
+     "evidence": "heuristic",
+     "method": "heuristic",
+     "ambiguous": true,
+     "line": null,
+     "char": null
+    }
+   ],
+   "next_cursor": "c34d35f5cac83314:20",
+   "complete": false,
+   "coverage": {
+    "seen": 3351,
+    "parsed": 677,
+    "prefiltered": 0,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {
+     "directory": 27,
+     "legacy_impact_display_cap": 1,
+     "non_code_file": 2625
+    },
+    "dynamic_imports": 35,
+    "missing_grammars": [
+     "javascript",
+     "powershell",
+     "rust",
+     "shell",
+     "typescript"
+    ],
+    "stopped_by": "",
+    "spent_s": 60.287,
+    "time_budget_s": 90.0,
+    "file_cap": 12000,
+    "note": ""
+   },
+   "methods": {
+    "heuristic": 331
+   },
+   "cache": {
+    "hits": 1,
+    "misses": 676
+   },
+   "impact": {
+    "changed": [
+     "code_query.py"
+    ],
+    "impacted": 331,
+    "tests": 100,
+    "tests_sample": [
+     "serverd/test_broker_v2.py",
+     "test_accepted_caption_cjk_0310.py",
+     "test_addressed_active_fifo.py",
+     "test_addressed_media.py",
+     "test_addressed_replies.py",
+     "test_addressed_threads.py",
+     "test_agent_paged_inspect_2010.py",
+     "test_agent_reaper.py"
+    ],
+    "parse_errors": 0,
+    "truncated": false
+   }
+  },
+  "outcome": "partial"
+ },
+ "stale": {
+  "lens": {
+   "kind": "code_query",
+   "op": "",
+   "error": "stale_cursor",
+   "reason": "",
+   "changed_paths": [
+    "code_query.py"
+   ],
+   "root": {
+    "kind": "",
+    "path": "",
+    "head": ""
+   },
+   "snapshot": "",
+   "total": null,
+   "rows": [],
+   "next_cursor": null,
+   "complete": false,
+   "coverage": {
+    "seen": null,
+    "parsed": 0,
+    "prefiltered": null,
+    "failed": 0,
+    "failed_sample": [],
+    "skipped": {},
+    "dynamic_imports": 0,
+    "missing_grammars": [],
+    "stopped_by": "",
+    "spent_s": null,
+    "time_budget_s": null,
+    "file_cap": null,
+    "note": ""
+   },
+   "methods": {}
+  },
+  "outcome": "refused"
+ }
+}

@@ -844,6 +844,138 @@ def run_result(run_id: str, result_id: str, *, max_bytes: int = RESULT_READ_MAX)
     return out
 
 
+@lru_cache(maxsize=256)
+def _result_json_file(filename: str, stamp: tuple):
+    """Parsed saved tool result; files are immutable once written, keyed by stat.
+    Returned value is shared through the cache: callers only read it."""
+    with open(filename, "rb") as fh:
+        raw = fh.read(RESULT_READ_MAX + 1)
+    if len(raw) > RESULT_READ_MAX:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def _result_json(path: Path, ref: dict):
+    """Whole JSON tool result: inline when complete, otherwise the run's result file."""
+    inline = ref.get("inline") or {}
+    if not inline.get("truncated"):
+        try:
+            return json.loads(str(inline.get("head") or ""))
+        except ValueError:
+            return None
+    target = _result_file(path, ref)
+    if target is None:
+        return None
+    try:
+        st = target.stat()
+        return _result_json_file(str(target), (st.st_mtime_ns, st.st_size, st.st_ino))
+    except OSError:
+        return None
+
+
+_CQ_FAILED = {"owned_search_failed", "query_failed", "root_unavailable"}
+_CQ_ROW = ("path", "kind", "evidence", "method", "ambiguous", "matches_target", "name",
+           "qualname", "caller", "receiver", "signature", "snippet", "files", "lines")
+
+
+def _code_query_lens(data) -> dict | None:
+    """Phone projection of a code_query result: what was asked, what came back, how
+    complete the scan was. Real results are 6–30 KB, so the 2000-char inline preview
+    is always cut and the phone cannot read them itself. Values are copied, bounded,
+    never interpreted beyond the tool's own fields (no edge is called proven)."""
+    if not isinstance(data, dict) or not ("op" in data or "error" in data):
+        return None
+
+    def text(value, n=200):
+        return "" if value is None else str(value)[:n]
+
+    def count(value):
+        return value if type(value) is int and value >= 0 else None
+
+    def seconds(value):
+        return round(float(value), 3) if type(value) in (int, float) and value >= 0 else None
+
+    cov = data.get("coverage") if isinstance(data.get("coverage"), dict) else {}
+    budget = cov.get("budget") if isinstance(cov.get("budget"), dict) else {}
+    skipped: dict[str, int] = {}
+    for item in cov.get("skipped") or []:
+        if isinstance(item, dict):
+            reason = text(item.get("reason"), 60) or "unknown"
+            skipped[reason] = skipped.get(reason, 0) + (item["count"] if type(item.get("count")) is int else 1)
+    failed = [{"path": text(f.get("path")), "reason": text(f.get("reason"), 60), "line": count(f.get("line"))}
+              for f in (cov.get("failed") or []) if isinstance(f, dict)]
+    rows = []
+    for item in (data.get("rows") or [])[:200]:
+        if not isinstance(item, dict):
+            continue
+        row = {k: (item[k] if item[k] is None or isinstance(item[k], (bool, int, float)) else text(item[k]))
+               for k in _CQ_ROW if k in item}
+        start = item.get("start") if isinstance(item.get("start"), dict) else {}
+        row["line"], row["char"] = count(start.get("line")), count(start.get("char"))
+        binding = item.get("binding") if isinstance(item.get("binding"), dict) else {}
+        if binding.get("module"):
+            row["module"] = text(binding["module"], 120)
+        rows.append(row)
+    root = data.get("root") if isinstance(data.get("root"), dict) else {}
+    op = text(data.get("op"), 20)
+    lens = {
+        "kind": "code_query", "op": op, "error": text(data.get("error"), 80),
+        "reason": text(data.get("reason")),
+        "changed_paths": [text(p) for p in (data.get("changed_paths") or [])[:20]],
+        "root": {"kind": text(root.get("kind"), 20), "path": text(root.get("path"), 300),
+                 "head": text(root.get("head"), 40)},
+        "snapshot": text(data.get("snapshot"), 32), "total": count(data.get("total")),
+        "rows": rows, "next_cursor": text(data.get("next_cursor"), 64) or None,
+        "complete": data.get("complete") is True,
+        "coverage": {
+            "seen": count(cov.get("seen")), "parsed": count(cov.get("parsed")),
+            "prefiltered": count(cov.get("prefiltered")), "failed": len(failed),
+            "failed_sample": failed[:5], "skipped": skipped,
+            "dynamic_imports": len(cov.get("dynamic_imports") or []),
+            "missing_grammars": [text(g, 30) for g in (cov.get("missing_grammars") or [])][:12],
+            "stopped_by": text(budget.get("stopped_by"), 60), "spent_s": seconds(budget.get("spent_s")),
+            "time_budget_s": seconds(budget.get("time_budget_s")), "file_cap": count(budget.get("file_cap")),
+            "note": text(cov.get("note"), 300),
+        },
+        "methods": {text(k, 30): v for k, v in (data.get("method_summary") or {}).items() if type(v) is int},
+    }
+    cache = data.get("cache")
+    if isinstance(cache, dict):
+        lens["cache"] = {"hits": count(cache.get("hits")), "misses": count(cache.get("misses"))}
+    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+    if op == "overview" and detail:
+        model = detail.get("model") if isinstance(detail.get("model"), dict) else {}
+        tests = detail.get("tests") if isinstance(detail.get("tests"), dict) else {}
+        lens["overview"] = {
+            "files_scanned": count(model.get("files_scanned")),
+            "languages": {text(k, 30): v for k, v in (model.get("languages") or {}).items() if type(v) is int},
+            "entrypoints": [text(p) for p in (detail.get("entrypoints") or [])[:8]],
+            "central_modules": [{"module": text(m.get("module"), 120), "imported_by": count(m.get("imported_by"))}
+                                for m in (detail.get("central_modules") or [])[:6] if isinstance(m, dict)],
+            "hotspots": [{"path": text(h.get("path")), "lines": count(h.get("lines"))}
+                         for h in (detail.get("hotspots") or [])[:5] if isinstance(h, dict)],
+            "tests": count(tests.get("count")), "docs": len(detail.get("docs") or []),
+        }
+    elif op == "impact" and detail:
+        lens["impact"] = {
+            "changed": [text(p) for p in (detail.get("changed") or [])[:10]],
+            "impacted": len(detail.get("impacted") or []), "tests": len(detail.get("tests") or []),
+            "tests_sample": [text(p) for p in (detail.get("tests") or [])[:8]],
+            "parse_errors": len(detail.get("parse_errors") or []), "truncated": detail.get("truncated") is True,
+        }
+    return lens
+
+
+def _lens_outcome(lens: dict) -> str:
+    """The tool's own report, used only when its journal outcome is absent/unknown."""
+    if lens.get("error"):
+        return "failed" if lens["error"] in _CQ_FAILED else "refused"
+    return "ok" if lens.get("complete") else "partial"
+
+
 def frame_cuts(days: int = 7) -> dict:
     """Разрезы кэша/времени по группам действий за N дней — экран «Система»."""
     from . import frame_cuts as _cuts
@@ -1088,6 +1220,13 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             # 10.11: исход руки пишет её журнал (tool_report → metadata). Без этих полей экран
             # говорил «результат получен» и про успех, и про отказ — исход есть, его не несли.
             card.update(_tool_outcome(row.get("metadata")))
+            if card.get("tool") == "code_query":
+                lens = _code_query_lens(_result_json(path, row.get("result") or {}))
+                if lens:
+                    card["lens"] = lens
+                    if card.get("outcome") in (None, "unknown"):
+                        card["outcome"] = _lens_outcome(lens)
+                        card["outcome_source"] = "result"
         elif kind in ("tool_failed", "tool_completed", "tool_reconciled"):
             card = tools_by_call.get(str(row.get("call_id") or ""))
             if card is None:

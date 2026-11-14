@@ -142,10 +142,13 @@ try {
  await page.evaluate(async()=>{window.finishedRows=[{id:'past',status:'done',agents:[{id:'done',status:'done',subtask:'Completed work'}]}];await window.forge.refresh()});
  assert.equal(await page.locator('.forge-recent').isVisible(),true);assert.equal(await page.locator('.forge-recent > summary').innerText(),'Завершённые субагенты · 1');assert.equal(await page.locator('#root > [role=status]').isVisible(),false);
  await page.locator('.forge-recent > summary').click();assert.equal(await page.locator('.forge-unit').isVisible(),true);await page.evaluate(()=>window.forge.stop());checks.push('forge_archive_hidden_until_real_records_and_accurate_label');
- const shell=await page.evaluate(()=>{
-   const events={};let requests=0;const tg={initData:'fixture',colorScheme:'light',viewportHeight:700,isFullscreen:true,safeAreaInset:{top:24},contentSafeAreaInset:{top:32},ready(){},expand(){},requestFullscreen(){requests++},isVersionAtLeast(){return true},onEvent(n,f){events[n]=f},BackButton:{show(){},hide(){},onClick(){}}};
-   window.stepsTest.mountTelegramShell(tg);return {requests,fullscreen:document.documentElement.dataset.fullscreen,top:document.documentElement.style.getPropertyValue('--app-safe-top')};
- });assert.equal(shell.requests,1);assert.equal(shell.fullscreen,'active');assert.match(shell.top,/24px/);assert.match(shell.top,/32px/);checks.push('telegram_fullscreen_safe_area');
+ const shells=await page.evaluate(()=>['ios','tdesktop','macos','weba',undefined].map((platform,i)=>{
+   const events={};let requests=0,exits=0;const tg={initData:'fixture',platform,colorScheme:'light',viewportHeight:700,isFullscreen:i<2,safeAreaInset:{top:24},contentSafeAreaInset:{top:32},ready(){},expand(){},requestFullscreen(){requests++},exitFullscreen(){exits++;tg.isFullscreen=false},isVersionAtLeast(){return true},onEvent(n,f){events[n]=f},BackButton:{show(){},hide(){},onClick(){}}};
+   window.stepsTest.mountTelegramShell(tg);return {requests,exits,fullscreen:document.documentElement.dataset.fullscreen,top:document.documentElement.style.getPropertyValue('--app-safe-top')};
+ }));
+ // Owner 14.11: fullscreen on phones only; a desktop fullscreen launch is left once, others untouched.
+ assert.deepEqual(shells.map(s=>[s.requests,s.exits,s.fullscreen]),[[1,0,'active'],[0,1,'expanded'],[0,0,'expanded'],[0,0,'expanded'],[0,0,'expanded']]);
+ assert.match(shells[0].top,/24px/);assert.match(shells[0].top,/32px/);checks.push('telegram_fullscreen_phone_only_safe_area');
  for(const width of [320,390,820]){
   await page.setViewportSize({width,height:844});
   await page.evaluate(()=>{
@@ -188,6 +191,49 @@ try {
   assert.equal(await page.locator('[data-model-progress]').count(),0);
  }
  checks.push('numeric_model_progress_fresh_stale_completed_320_390_820');
+ const lenses=JSON.parse(await fs.readFile(new URL('./test-fixtures/code_query_lens.json',import.meta.url),'utf8'));
+ const cqTool=(id,args,fixture)=>({call_id:id,tool:'code_query',args,status:'received',at:'2026-11-14T00:00:00Z',finished_at:'2026-11-14T00:00:06Z',
+   outcome:fixture.outcome,outcome_source:'result',lens:fixture.lens,result:{head:'{"op":',truncated:true,result_id:'result-0001'}});
+ for (const width of [320,390,820]) {
+  await page.setViewportSize({width,height:900});
+  await page.evaluate(([lenses,tools])=>{
+   document.querySelector('#root').replaceChildren();window.paint=window.stepsTest.mountActionSteps(document.querySelector('#root'));
+   window.paint({id:'cq',manifest:{status:'done'},iterations:[{call_id:'m',status:'completed',ms:900,tools:[
+    ...tools,
+    {call_id:'py',tool:'python',args:{code:'# probe\nimport json\nprint(1)'},outcome:'ok',status:'received',result:{head:'1'}},
+    {call_id:'tc',tool:'task_control',args:{action:'done',summary:'Сводка готова',evidence:'x'},outcome:'ok',status:'received',result:{head:'{}'}}]}]});
+  },[lenses,[cqTool('ref',{op:'references',name:'Budget'},lenses.references),cqTool('callees',{op:'callees',name:'execute',module:'code_navigation'},lenses.callees),
+     cqTool('stale',{op:'references',name:'Budget',cursor:'82b7a1eb86419107:40'},lenses.stale),cqTool('impact',{op:'impact',path:'code_query.py'},lenses.impact),
+     cqTool('overview',{op:'overview'},lenses.overview)]]);
+  const rows=await page.locator('.tool-row').evaluateAll(nodes=>nodes.map(n=>({cls:n.className,icon:n.querySelector('.tool-outcome').textContent,what:n.querySelector('.st-what').textContent,state:n.querySelector('.st-state').textContent.replace(/[\u00a0\u202f]/g,' ')})));
+  assert.deepEqual(rows.map(r=>[r.icon,r.what,r.state]),[
+   ['✓','ссылки на Budget','найдено 41'],['◐','что вызывает execute (code_navigation)','найдено 99 · неполно'],
+   ['⊘','ссылки на Budget · следующая страница','отказ: файлы изменились между страницами'],
+   ['◐','что затронет правка code_query.py','затронуто 331 · неполно'],['✓','обзор проекта','3 351 файлов'],
+   ['✓','import json',''],['✓','done · Сводка готова','']]);
+  assert.match(rows[1].cls,/is-attention/);assert.match(rows[2].cls,/is-failed/);
+  await page.locator('.tool-row .st-toggle').first().click();
+  assert.equal(await page.getByRole('tab').count(),6);
+  if(width>=390)assert.equal(await page.getByRole('tab').evaluateAll(tabs=>new Set(tabs.map(t=>Math.round(t.getBoundingClientRect().top))).size),1,'six tabs fit one line at 390+');assert.equal(await page.getByRole('tab',{name:'Сводка',exact:true}).getAttribute('aria-selected'),'true');
+  const summary=await page.getByRole('tabpanel').innerText();
+  assert.match(summary,/показано 12 из 41 · есть следующая страница/);assert.match(summary,/полный обход/);assert.match(summary,/отсеяно по имени 712/);
+  assert.match(summary,/forge_intelligence\.py:\d+/);assert.match(summary,/не доказанные связи/);assert.match(summary,/из собственного отчёта инструмента/);
+  await page.getByRole('tab',{name:'Аргументы',exact:true}).click();assert.match(await page.getByRole('tabpanel').innerText(),/"op": "references"/);
+  await page.getByRole('tab',{name:'Сводка',exact:true}).click();
+  await page.locator('.tool-row .st-toggle').nth(1).click();
+  assert.match(await page.locator('.tool-row').nth(1).getByRole('tabpanel').innerText(),/неполный: нет грамматики вызовов: \d+/);
+  await page.locator('.tool-row .st-toggle').nth(2).click();
+  assert.match(await page.locator('.tool-row').nth(2).getByRole('tabpanel').innerText(),/Отказ: файлы изменились между страницами stale_cursor[\s\S]*code_query\.py/);
+  assert.deepEqual(await page.locator('.tool-row').nth(2).locator('.cq-facts dt').allInnerTexts(),['Запрос','Итог','Изменились']);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  await page.screenshot({path:artifacts+`/code-query-${width}.png`,fullPage:true});
+  await page.locator('.tool-row .st-toggle').nth(3).click();await page.locator('.tool-row .st-toggle').nth(4).click();
+  assert.match(await page.locator('.tool-row').nth(4).getByRole('tabpanel').innerText(),/Центральные/);
+  assert.equal(await page.locator('.tool-row').nth(3).locator('.cq-tag').count(),0,'impact rows carry no repeated heuristic tags');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  await page.screenshot({path:artifacts+`/code-query-impact-overview-${width}.png`,fullPage:true});
+ }
+ checks.push('code_query_lens_rows_summary_refusal_incomplete_320_390_820');
  assert.deepEqual(errors,[]);await fs.writeFile(artifacts+'/BROWSER-REGRESSIONS.json',JSON.stringify({ok:true,checks,errors},null,2));console.log(JSON.stringify({ok:true,checks}));
 } catch(e){if(page)await page.screenshot({path:artifacts+'/regression-failure.png'}).catch(()=>{});await fs.writeFile(artifacts+'/BROWSER-REGRESSIONS.json',JSON.stringify({ok:false,checks,error:String(e),errors},null,2));throw e}
 finally{await browser.close();server.close()}

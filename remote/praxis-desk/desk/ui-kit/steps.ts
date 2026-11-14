@@ -2,6 +2,7 @@
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
 import { esc, fmtK, md } from "./text";
 import { copyText } from "./dom";
+import { lensHTML, lensState, toolTarget, type ToolLens } from "./tool-lens";
 
 /**
  * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
@@ -55,6 +56,10 @@ export interface RunDetail {
       model_observation?: string;
       model_response_image_count?: number;
       result?: { head?: string; tail?: string; truncated?: boolean; result_id?: string; size?: number | null } | null;
+      /** Сводка ответа руки (readers.py), когда сырой ответ велик для превью. */
+      lens?: ToolLens;
+      /** "result": исход взят из собственного отчёта руки — журнал его не записал. */
+      outcome_source?: string;
     }>;
   }>;
 }
@@ -76,6 +81,12 @@ export interface StepsOptions {
 export const ACTIONS: Record<string, string> = {
   shell: "Команда", run_command: "Программа", read_file: "Чтение файла", write_file: "Запись файла",
   edit_file: "Правка файла", search: "Поиск", web_search: "Поиск в интернете",
+  fs_read: "Чтение файла", fs_ls: "Список файлов", fs_search: "Поиск по файлам", edit: "Правка файла",
+  python: "Python", code_query: "Поиск по коду", task_control: "Ход задачи", coding_session: "Задача разработки",
+  coding_run: "Команда в задаче", coding_inspect: "Осмотр задачи", memory_compact: "Свёртка памяти",
+  manage_notes: "Заметки", telegram_account: "Аккаунт Telegram", "telegram.send_media": "Отправка медиа",
+  my_agenda: "Повестка", manage_loop: "Открытые петли", recent_turns: "Последние ходы", stay_silent: "Промолчать",
+  react: "Реакция", git: "Git",
   fetch_url: "Чтение страницы", read_url: "Чтение страницы",
   reply: "Ответ", end_turn: "Завершение работы", remind_self: "Напоминание",
   recall: "Поиск в памяти", remember: "Запись в память", read_memory: "Чтение памяти",
@@ -169,22 +180,27 @@ export function toolSummary(t: ToolDetail, live = false) {
   const labels: Record<string,string> = {ok:'успех',confirmed:'подтверждено',failed:'ошибка',refused:'отказ',in_doubt:'нужна проверка',partial:'частично',unknown:'исход неизвестен'};
   const icons: Record<string,string> = {ok:'✓',confirmed:'✓',failed:'✗',refused:'⊘',in_doubt:'?',partial:'◐',unknown:'·'};
   const receipt = [t.execution, ...(t.operations || [])].filter(r => r?.exit_code != null).at(-1);
-  const state = active ? 'выполняется' : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
+  const lens = active ? null : lensState(t.lens);
+  const state = active ? 'выполняется' : lens ? lens.state : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
   const elapsed = Date.parse(t.finished_at || '') - Date.parse(t.at || '');
   const seconds = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed/1000 : null;
   const duration = seconds == null ? '' : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} с` : `${Math.floor(seconds/60)} мин ${Math.round(seconds%60)} с`;
   return {outcome,active,state,icon:active ? '◌' : icons[outcome],label:active ? 'выполняется' : labels[outcome],duration,
-    target:t.target || subject(t.args),failed:['failed','refused'].includes(outcome),attention:['partial','in_doubt'].includes(outcome)};
+    target:t.target || toolTarget(t.tool || '', t.args) || subject(t.args),
+    failed:['failed','refused'].includes(outcome) || !!lens?.failed,attention:['partial','in_doubt'].includes(outcome) || !!lens?.attention};
 }
 
 const selectedTraceTabs = new Map<string,string>();
 export const traceTabNames = [['args','Аргументы'],['definition','Функция'],['execution','Исполнение'],['request','JSON-запрос'],['response','JSON-ответ']] as const;
 export function traceTabsHTML(key:string, panels: Record<string,string>): string {
-  const selected = selectedTraceTabs.get(key) || 'args';
+  // «Сводка» есть только у рук с линзой и тогда открывается первой.
+  const tabs: ReadonlyArray<readonly [string,string]> = panels.summary ? [['summary','Сводка'],...traceTabNames] : traceTabNames;
+  const remembered = selectedTraceTabs.get(key);
+  const selected = remembered && tabs.some(([tab])=>tab===remembered) ? remembered : panels.summary ? 'summary' : 'args';
   const id = 'trace-' + encodeURIComponent(key);
   return `<div class="tool-trace" data-trace-key="${esc(key)}"><div class="tool-tabs" role="tablist" aria-label="Детали вызова">` +
-    traceTabNames.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
-    traceTabNames.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
+    tabs.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
+    tabs.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
 }
 function selectTraceTab(button:HTMLElement):void {
   const trace=button.closest<HTMLElement>('[data-trace-key]');if(!trace)return;
@@ -263,6 +279,8 @@ export function nestedText(rows: Record<string, unknown>[] | unknown[]): string 
 export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string {
   const missing=(text:string)=>`<p class="tool-trace-unrecorded">${esc(text)}</p>`;
   const panels:Record<string,string>={};
+  const summary=lensHTML(t.lens,t.args);
+  if(summary)panels.summary=summary+(t.outcome_source==='result'?'<p class="tool-trace-unrecorded">Исход в журнале не записан; значок взят из собственного отчёта инструмента (error/complete).</p>':'');
   panels.args=t.args!=null ? traceBlock(key+':args','Аргументы',pretty(t.args),'request') : missing('Аргументы не записаны.');
   panels.definition=t.definition ? traceBlock(key+':definition','Схема инструмента',pretty(t.definition),'definition') : missing('Схема инструмента в этом журнале не записана.');
   panels.request=t.model_request ? traceBlock(key+':request','Сохранённый JSON-запрос модели',pretty(t.model_request),'request') : missing('Исходный JSON-запрос модели не записан. Аргументы доступны отдельно.');

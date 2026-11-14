@@ -1,8 +1,8 @@
 {
   "format": "praxis-desk-source.v1",
-  "captured_at": "2026-11-14T03:46:55.265352+00:00",
+  "captured_at": "2026-11-14T12:20:02.702410+00:00",
   "source_repository": "private isolated checkout of the November 2026 phone work (not published history)",
-  "source_commit": "44ff96146be51428e50bd52dd4cf421d7da65060",
+  "source_commit": "e52ce540fcc1a49b7d47c22bed2dc5c845572508",
   "deployed": {
     "path": "/opt/praxisdesk",
     "container": "praxis-desk",
@@ -28,12 +28,12 @@
       "test_praxis_stop_1311.py"
     ],
     "backend_files_checked": 19,
-    "front_bundles": "tsc+vite both builds; MiniApp index-gVdIKZu6.js and PWA index-DiI3vJZO.js; all48deployed file hashes verified, old assets retained",
+    "front_bundles": "tsc+vite both builds; MiniApp index-BqFNzv19.js and PWA index-zhKJa1VT.js; 9 changed front files + readers.py hash-verified, old assets retained",
     "recipe": {
       "Dockerfile": "b5850d5c2c7d1728177053e3fc58ad7e6d42fd493e690f4284f1db4dc08693b6",
       "docker-compose.yml": "a9f37505cc0cb40079bbff308816de550d3cbddb3d3f71d7cc5491514a64031d"
     },
-    "front_applied": "2026-11-14: true origin titles/operator disclosure (S1), numeric generation progress (S2)"
+    "front_applied": "2026-11-14: origin titles/operator disclosure (S1), numeric generation progress (S2), code_query lens/step targets/phone-only fullscreen"
   },
   "privacy": {
     "secret_values_rescan_matches": 0,
@@ -41,7 +41,7 @@
   },
   "files": {
     ".gitignore": "53ae52e4c5d14baa0094c548600a087832a2ef2ef4426a64c14245ed2055bdbc",
-    "README.md": "cce04b6a3eeab5c38e445e149d9339062e5e50f317f75b664e2c489df70cad40",
+    "README.md": "50431e306785255e1e515940c08a4efb841f0cf01eb4ca13fe6f29f10683c106",
     "VALIDATION.md": "b766eb92fed41f89b80dc18b2e73a5685c2ea83933a2691f04f6d05bf0ed9288",
     "backend/deskapp.py": "6b6e7c0be302d46254c48ec5eeede3995cc6490c745145ff923785848e9d3076",
     "backend/deskctl.py": "8d91d8ba47fec3217b80f50ff6449da3f9a4437c5c9112b8dab1da1ce2d4a7a7",
@@ -55,12 +55,13 @@
     "backend/deskd/phone_activity.py": "23dba9cb764627a5e353193be33d84aae70d24655946c2c40d0ae6665639763a",
     "backend/deskd/praxis_control.py": "c6c654c86ab0714fcbd830a884aad8b34717c1e2b97902885d328a1a014f2bbc",
     "backend/deskd/praxis_phone.py": "823ca73e63f5cef0516805cfc11966b7622d366e3f95cb2acb57ce63ea4513bd",
-    "backend/deskd/readers.py": "9b5dc23f86aa749af63442f3e6124b51ee09aa514dd6780b289c93b112a23948",
+    "backend/deskd/readers.py": "0375d887aef410ffdea073a20e86354561d679fef136d4e9a2bca1bbbf72a6df",
     "backend/deskd/rooms.py": "32cca28be685209882b3d7587bcd68180a24a521b5a92d5e9694a26b0d489160",
     "backend/deskd/spend.py": "7c73adcfbe7eedae8f9f7c014ba0167ff90b1baf0ad64508599a2574750193e3",
     "backend/deskd/usage.py": "865f99546800671181bf92552cb1a0a0ed76a08143037f524cd8a2cf678d98ff",
     "backend/deskd/xtts_ui.py": "8ac9999f36426c649ec85bc76f2b80522037f5c35c91f6e3a4b3f024b1fb3e0c",
     "backend/requirements-desk.txt": "47d9a342069699978282cdfe19db570bf11325ef7009034e46f53b98a2763d6d",
+    "backend/test_code_query_lens_1411.py": "bab98508857163fb925ca4506ecff8f72435ac1d955e17b1b87f22c122526944",
     "backend/test_forge_snapshot.py": "0fc04770eab9fad8fa154af96fb34b458169511dfd85e92bb78abb83ffa65295",
     "backend/test_model_progress.py": "6e9ea8c5615769fb4431931426d55471b50ee904170b179a2d59cee3b1b00c04",
     "backend/test_praxis_controls.py": "bb4dc6d8edd1fbabebf1239ca8abb531129a4d7258cbd05c69891058faa0ec55",
@@ -69,7 +70,7 @@
     "backend/test_run_titles_1411.py": "cdd570ea7fd143761d8bd8bffc9576ff36c779378506d35a6dc36fdba7d850c6",
     "backend/test_steps_outcome.py": "c8e85bc2ff65533c7be46e0a32c10749b193978d44e319b4a37aefa95a9fba1f",
     "backend/test_steps_phone_receipts.py": "f99c95dd10b7f8cf79164ddcad8c41c0207ffef891d0cc0fceb68cc7b308beb0",
-    "browser_steps.test.mjs": "a9cd01697a8de586fec546cf62063b513ba549a77748e02fd1d5e1e782c238f1",
+    "browser_steps.test.mjs": "6651f88a32a8b96256940198d0cca008963f755f8db2345bcbcf2ad5bb6ddb8f",
     "desk/miniapp/.gitignore": "790e3169bc19b046fe55ba1da6d13b976c28363c8c00462a2195fe5faf260910",
     "desk/miniapp/index.html": "d53d9985701f22a208c5e99ef937dbbf2103edd38c9d418ef87cf6615ce55d34",
     "desk/miniapp/package-lock.json": "c22747fb876b571dc56222ef8764569a93404984036f2d4e4d4cb2ba270f7124",
@@ -80,7 +81,7 @@
     "desk/miniapp/src/lottie-light.d.ts": "df788ded18b27e77caaceb92fea203bdeb09bf1dcfc143b7715a55295affe9ab",
     "desk/miniapp/src/main.ts": "c097fa30117abd2066c1b833bdca2afa963e18f83a1e9db5b86afacfb567e640",
     "desk/miniapp/src/styles.css": "b7d53feb0eacd307cb5d3af6128c5f6927d67699dc08cf67fa978ac8b02c67ce",
-    "desk/miniapp/src/telegram-shell.ts": "43c3d1e64973974c156556128182aee6a7ed11763f59a704b99e51aedd508bfc",
+    "desk/miniapp/src/telegram-shell.ts": "0be3ddc14715e1c040f5b939dcc4b46df3a694f04b758842350f956af65bd143",
     "desk/miniapp/src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
     "desk/miniapp/tsconfig.json": "3be67345532bf2da8581b036c2d614e7edfe2dea103332e196a11d22b124a43c",
     "desk/miniapp/vite.config.ts": "9ec71f99cd24321ebdb6cab12f6bd1f406de373c6ad129b4be8704632344332a",
@@ -144,9 +145,10 @@
     "desk/ui-kit/praxis-voice.ts": "ef14a979cdb906397fade9d2300e6b84fec85420ef8bb3039675e69276074cff",
     "desk/ui-kit/providers.ts": "677460aa282998ca8d18c9375935b0fdbec008cbe23ea59aa0b586c3da89d16f",
     "desk/ui-kit/reply-preview.ts": "69d036f8819853460443faed97a5e38d03d62be72fa9319e3d5bc70acf27b318",
-    "desk/ui-kit/steps.ts": "28b4a09a29cb94644c3a87e4fa8a409772abfc9afff9d0b00279bc0f4aaf1ff2",
+    "desk/ui-kit/steps.ts": "29566e61d41b3cae0392e53fb9ed73a113c5b536a8b85c586d07465cc160200b",
     "desk/ui-kit/text.ts": "16dd46db91bdab7b3c14928d6c035c7c20e7bdf21ca4b24e5fc229d3a5ff68bc",
     "desk/ui-kit/tokens.css": "e666a36375e2c715da0f0943a8b34e6b64793e69c5510cd6a36db473e99d0be3",
+    "desk/ui-kit/tool-lens.ts": "2c185b61755a07cb69f700814f3f25b11cb0e4bc04bf37bebd3cdb66b080361c",
     "desk/ui-kit/tray-position.ts": "3062efa015db5ab093dc82c57994c6e393cde4d4ba3d4bae70669a4c1861b13a",
     "desk/ui-kit/tray-state.ts": "55f99a62b3e7fe0c4a0b3fd9bae49e508dbb96e85d5df5522d0e51e60d78877e",
     "desk/ui-kit/update-error.ts": "011481ba4c12efb09e938e9939c89fcc1d5591c88f3f20092103253de038f638",
@@ -185,7 +187,7 @@
     "desk/ui-kit/window/styles/paper-tokens.css": "2eed71db191e92801e1a7270c1468e2cd4b4936a098546540c78f3bfe87f8315",
     "desk/ui-kit/window/styles/paper.css": "1a4a8ff15ac77891d7ae4818594727a532e78e15f2af2dd90d9dbe6c8ce751d9",
     "desk/ui-kit/window/styles/release-notice.css": "aa1fd43b832a0e5ed68b24daabd005c9a8e2e8a41fcaba03a2a398a22902f857",
-    "desk/ui-kit/window/styles/turns.css": "2071a468b94eb7e5480c424e1800bddf8994f4e47a9f950c6e108277c45ec77b",
+    "desk/ui-kit/window/styles/turns.css": "b21801bf377c0b121275ed800ad24bb234fa6253bcba59540c410cafd033b75e",
     "desk/ui-kit/window/styles/voice.css": "e2960e772c49233b8b2e42bff224d484b33a82bd5d322195670b43a78b1faff1",
     "desk/ui-kit/window/styles/work-activity.css": "433bf1143a8875db601efcb87a988711ed2f40d0c075740a90253b01706dfa31",
     "desk/ui-kit/window/text-menu.ts": "3b9b5ee6b0cab52e90b3f459e43471c93751dff3f719d62838382251099ac70e",
@@ -215,21 +217,21 @@
     "desk/ui-kit/window/voice-session.ts": "5861964258289ad8ac886675ac5031d27e6d405481609575eecb31b5ba9f6baa",
     "desk/ui-kit/window/work-activity.ts": "74e619f70ee20cb0e678071a491d06dffc323f7ec13e71281324602a7d15da8a",
     "steps_argv.test.mjs": "cc59fbd5238801d6670dbd2af8ae12161e6bb9cde318cb2c576b991826090e1f",
-    "test-entry.ts": "3878e356592140fc60cc2460a94f41ee42a609538a1d7ce1d239c3ceeca24f7d"
+    "test-entry.ts": "3878e356592140fc60cc2460a94f41ee42a609538a1d7ce1d239c3ceeca24f7d",
+    "test-fixtures/code_query_lens.json": "e9a11b3e92df6847803b2ad69d08dea9d7700c3f650d1a4b681c09e02b50eaf6"
   },
   "validation": {
-    "backend_tests": 44,
-    "browser_groups": 12,
+    "backend_tests": 50,
+    "browser_groups": 13,
     "argv_node_assertions": 10,
-    "live_https_groups": 6,
+    "live_stage_runs": 80,
+    "live_stage_errors": 0,
     "widths": [
       320,
       390,
       820
     ],
-    "reopen": true,
     "physical_phone": false,
-    "unexpected_tracebacks": 0,
-    "known_optional_modes_warning_preserved": true
+    "unexpected_tracebacks": 0
   }
 }
