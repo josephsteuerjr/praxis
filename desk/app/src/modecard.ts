@@ -10,7 +10,7 @@ import { el, humanError, toast } from "../../ui-kit/window/lib";
 import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
 import { shell, electron } from "../../ui-kit/window/api";
 import { persistSession0 } from "./session0-persist";
-import { localizeMode } from '../../ui-kit/window/mode-owned';
+import { localizeMode, modeOwnedText } from '../../ui-kit/window/mode-owned';
 import { LEGACY_SERVICE, SESSION0_WARNING_FALLBACK,
          type ModeChoice, type ModeState, type StoredService } from "../../ui-kit/window/mode";
 
@@ -315,7 +315,7 @@ export function modeCard(
   askBox.hidden = true;
   if (session0Rung) {
     const warning = (session0Rung as ModeChoice & { warning?: string }).warning
-      || live.session0_warning || SESSION0_WARNING_FALLBACK;
+      || live.session0_warning || modeOwnedText(SESSION0_WARNING_FALLBACK);
     const b = el("button", "choice-item");
     b.type = "button";
     b.setAttribute("role", "radio");
@@ -591,7 +591,7 @@ export function modeCard(
       continue;
     }
     const warn = t.key === "service.session0"
-      ? t.warning || live.session0_warning || SESSION0_WARNING_FALLBACK
+      ? t.warning || live.session0_warning || modeOwnedText(SESSION0_WARNING_FALLBACK)
       : t.warning;
     // Оговорка — в МИГ ВКЛЮЧЕНИЯ (слово Егора 28.09): тумблер с оговоркой не
     // щёлкает сразу, а показывает её с двумя кнопками; включается только по

@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../../lang/lang";
 // Сцена «Для кого поставить» (1.2, 27.09): «для меня» или «для всех».
 //
 // До 1.2 этот вопрос задавала серая страница установщика NSIS («визард позорный» —
@@ -17,14 +18,14 @@ type Scope = "user" | "machine";
 
 const CARDS: Record<Scope, { title: string; text: string; note: string }> = {
   user: {
-    title: "Только для меня",
-    text: "Программа ляжет в твою папку программ. Агент живёт в твоей учётной записи — с твоими файлами и правами, не больше.",
-    note: "Прав администратора не нужно.",
+    get title() { return uiText("ui.setup.ui.src.scenes.where.b0a9e1d087"); },
+    get text() { return uiText("ui.setup.ui.src.scenes.where.3f62b27e44"); },
+    get note() { return uiText("ui.setup.ui.src.scenes.where.28134b7aef"); },
   },
   machine: {
-    title: "Для всех на этом компьютере",
-    text: "Программа ляжет в Program Files, ярлыки увидят все учётные записи. Память агента одна — у компьютера. Вместе со службой агент живёт и без входа в систему.",
-    note: "Windows один раз спросит права администратора — на всю установку сразу.",
+    get title() { return uiText("ui.setup.ui.src.scenes.where.a9079cc0bf"); },
+    get text() { return uiText("ui.setup.ui.src.scenes.where.54164dd2fa"); },
+    get note() { return uiText("ui.setup.ui.src.scenes.where.20089bf603"); },
   },
 };
 
@@ -37,13 +38,13 @@ export class WhereScene extends FormScene {
   constructor(root: HTMLElement) {
     super(root);
     const head = el("h2", "form-head");
-    head.append(el("span", "line", "Для кого поставить?"));
+    head.append(el("span", "line", uiText("ui.setup.ui.src.scenes.where.505fe5adc2")));
     const lead = el(
       "p",
       "form-lead",
       isPraxis()
-        ? "Окно к агенту на твоём сервере. Вопрос — кому его поставить: тебе или всем учётным записям этого компьютера."
-        : "Программа одна, агент один. Вопрос — где им жить: в твоей учётной записи или у всего компьютера.",
+        ? uiText("ui.setup.ui.src.scenes.where.bebfe676ba")
+        : uiText("ui.setup.ui.src.scenes.where.6e2845636b"),
     );
     this.row = el("div", "modes where-cards");
     this.row.setAttribute("role", "radiogroup");
@@ -55,8 +56,8 @@ export class WhereScene extends FormScene {
       card.setAttribute("data-control", "");
       const text = isPraxis()
         ? scope === "machine"
-          ? "Программа ляжет в Program Files, ярлыки увидят все учётные записи; настройки подключения — общие."
-          : "Программа ляжет в твою папку программ; настройки подключения — только твои."
+          ? uiText("ui.setup.ui.src.scenes.where.367932715c")
+          : uiText("ui.setup.ui.src.scenes.where.ea58ad6835")
         : c.text;
       card.append(el("span", "mode-title", c.title), el("p", "mode-text", text), el("p", "mode-note", c.note));
       card.addEventListener("click", () => this.choose(scope));
@@ -70,16 +71,16 @@ export class WhereScene extends FormScene {
     notes.append(
       isPraxis()
         ? explain(
-            "Где будут настройки",
-            "Рядом с программой, в helene.json: адрес сервера и ключ канала. Их спросит само окно при первом запуске; обновление их не трогает.",
+            uiText("ui.setup.ui.src.scenes.where.43a068e5e1"),
+            uiText("ui.setup.ui.src.scenes.where.b91328759b"),
           )
         : explain(
-            "Где будет память",
-            "Рядом с программой, в папке data: память, дневник, конституция, ключи. Копии памяти ложатся в backups — перед каждым обновлением и раз в неделю; срок и число копий меняются в настройках.",
+            uiText("ui.setup.ui.src.scenes.where.10a3388094"),
+            uiText("ui.setup.ui.src.scenes.where.1339dd7f0c"),
           ),
       explain(
-        "Передумать потом",
-        "Переезд между «для меня» и «для всех» — только с копией и только по твоему слову: сама установка раскладку не меняет.",
+        uiText("ui.setup.ui.src.scenes.where.1de06a2c83"),
+        uiText("ui.setup.ui.src.scenes.where.87a2d5707b"),
       ),
     );
     this.mount(head, lead, this.row, this.path, this.fixed, notes);
@@ -93,7 +94,7 @@ export class WhereScene extends FormScene {
     setup.scope = scope;
     setup.dir = this.dirFor(scope) || setup.dir;
     for (const [s, card] of this.cards) card.setAttribute("aria-checked", String(s === scope));
-    this.path.textContent = setup.dir ? `Папка: ${setup.dir}` : "";
+    this.path.textContent = setup.dir ? uiText("ui.setup.ui.src.scenes.where.5e16148938", {p0: String(setup.dir)}) : "";
   }
 
   protected beforeEnter(): void {
@@ -104,8 +105,8 @@ export class WhereScene extends FormScene {
       this.row.hidden = true;
       this.path.hidden = true;
       this.fixed.hidden = false;
-      const mode = (inst?.scope || setup.scope) === "machine" ? "для всех" : "для меня";
-      this.fixed.textContent = `${PRODUCT_NAME} уже стоит здесь (${mode}): ${fixedDir}. Установка ляжет туда же — ${isPraxis() ? "настройки подключения" : "память и настройки"} останутся.`;
+      const mode = (inst?.scope || setup.scope) === "machine" ? uiText("ui.setup.ui.src.scenes.where.07b10af87d") : uiText("ui.setup.ui.src.scenes.where.27719febc2");
+      this.fixed.textContent = uiText("ui.setup.ui.src.scenes.where.38f40b70f6", {p0: String(PRODUCT_NAME), p1: String(mode), p2: String(fixedDir), p3: String(isPraxis() ? uiText("ui.setup.ui.src.scenes.where.88dc3b07b0") : uiText("ui.setup.ui.src.scenes.where.348c99417c"))});
       setup.dir = fixedDir;
       return;
     }

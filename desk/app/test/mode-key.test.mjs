@@ -131,7 +131,7 @@ assert.equal(
     `  окно:  ${fromTs}\n  питон: ${fromPy}`,
 );
 assert.ok(
-  /live\.session0_warning \|\| SESSION0_WARNING_FALLBACK/.test(modeTs),
+  /live\.session0_warning \|\| modeOwnedText\(SESSION0_WARNING_FALLBACK\)/.test(modeTs),
   "живой текст оговорки обязан побеждать копию, а не наоборот",
 );
 

@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 // Одна точка правды прототипа: имя, кадр, тексты.
 //
 // 1.2 (27.09): тот же мастер ставит и Praxis — окно к агенту на своём сервере (exe,
@@ -19,5 +20,5 @@ export const MIN_SCALE = 1280 / STAGE.w;
 // 28.09: презентация («Программный комплекс…») и печатная машинка ушли из мастера
 // вместе с заставкой — остались только слова темы.
 export const COPY = {
-  theme: { system: "Системная", light: "Светлая", dark: "Тёмная" },
+  theme: { get system() { return uiText("ui.setup.ui.src.config.3860f59770"); }, get light() { return uiText("ui.setup.ui.src.config.f0cd3a6033"); }, get dark() { return uiText("ui.setup.ui.src.config.1eecfcaa7b"); } },
 } as const;

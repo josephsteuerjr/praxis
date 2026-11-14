@@ -1,3 +1,4 @@
+import {localizeMode} from "../mode-owned";
 import { t as uiText, locale } from "../../../lang/lang";
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
@@ -203,6 +204,7 @@ function spendHTML(p: { calls_day?: number | null; cache_day?: number | null; ca
  * ВЫБРАНО; расхождение этих двоих и есть то, что стоит увидеть.
  */
 function modeHTML(m: ModeState | null): string {
+  m=localizeMode(m);
   if (!m || !m.name) return "";
   const svc = m.service_installed === null ? uiText("ui.ui.kit.window.views.anatomy.cee7ccc4d3") : m.service_installed ? uiText("ui.ui.kit.window.views.anatomy.e842608049") : uiText("ui.ui.kit.window.views.anatomy.1149e6f59b");
   // Служба есть на обеих системах, а нулевой сессии и брандмауэра на macOS
@@ -337,7 +339,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const materials = materialsHTML(retR.status === "fulfilled" ? retR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
   const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null) + spendCutsHTML(sR.status === "fulfilled" ? sR.value : null);
-  const modeName = mR.status === "fulfilled" && mR.value.name ? uiText("ui.ui.kit.window.views.anatomy.b197e00962", {p0: String(esc(mR.value.title))}) : "";
+  const modeName = mR.status === "fulfilled" && mR.value.name ? uiText("ui.ui.kit.window.views.anatomy.b197e00962", {p0: String(esc(localizeMode(mR.value)?.title || ""))}) : "";
   const tools = a.tools || [];
   const handFence = new Map((a.sandbox?.hands || []).map((h) => [h.name, h]));
   const fenceBox = fenceHTML(a.sandbox?.hands, !!a.sandbox?.enabled);

@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../../lang/lang";
 // Сцена «Конституция»: канонический текст с именами, правится и принимается.
 import { FormScene } from "./base";
 import { el, explain, toggle } from "./form";
@@ -16,12 +17,12 @@ export class ConstitutionScene extends FormScene {
     const aside = el("div", "const-aside");
     aside.append(
       explain(
-        "Это корень агента",
-        "Кто он, зачем, как устроен, чего не делает и кому верен. Всё остальное в нём может меняться само; этот текст — только вместе с тобой.",
+        uiText("ui.setup.ui.src.scenes.constitution.1b250082f1"),
+        uiText("ui.setup.ui.src.scenes.constitution.103b78f8b6"),
       ),
       explain(
-        "Прочитай и поправь",
-        "Текст канонический, но твой. Если что-то не про твоего агента, перепиши прямо здесь: он примет это как своё с первого запуска.",
+        uiText("ui.setup.ui.src.scenes.constitution.1f28e45f6c"),
+        uiText("ui.setup.ui.src.scenes.constitution.e397d7097d"),
       ),
     );
     this.editor = el("textarea", "const-editor");
@@ -32,7 +33,7 @@ export class ConstitutionScene extends FormScene {
       setup.constitution = this.editor.value;
     });
     this.accept = toggle({
-      label: "Принимаю эту конституцию",
+      label: uiText("ui.setup.ui.src.scenes.constitution.527e5509ad"),
       value: setup.accepted,
       onChange: (v) => (setup.accepted = v),
     });
@@ -43,7 +44,7 @@ export class ConstitutionScene extends FormScene {
 
   protected beforeEnter() {
     // Имя не склоняем кодом: заголовок без него, имя живёт в самом тексте.
-    this.head.replaceChildren(el("span", "line", "Конституция"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.constitution.8a9346b6c0")));
     if (!this.touched) {
       setup.constitution = constitutionFor(setup.agent, setup.owner);
       this.editor.value = setup.constitution;
@@ -51,8 +52,8 @@ export class ConstitutionScene extends FormScene {
   }
 
   validate(): string | null {
-    if (!setup.constitution.trim()) return "Конституция не может быть пустой";
-    if (!setup.accepted) return "Сначала прими конституцию: переключатель слева";
+    if (!setup.constitution.trim()) return uiText("ui.setup.ui.src.scenes.constitution.943ccbda92");
+    if (!setup.accepted) return uiText("ui.setup.ui.src.scenes.constitution.060a5b161a");
     return null;
   }
 }

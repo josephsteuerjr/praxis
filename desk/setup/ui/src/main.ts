@@ -1,3 +1,4 @@
+import { t as uiText, initializeLocale } from "../../../lang/lang";
 // Установщик Frame — сцена первого запуска.
 //
 // Кадр 1920×1080 масштабируется пропорционально до порога, ниже — обрезается.
@@ -25,6 +26,18 @@ import { paperButton, paperDialog } from "../../../ui-kit/paper-dialog";
 import { setupWindowClose } from "./window-close";
 import { startSetupTips } from "./tips";
 
+initializeLocale();
+document.title = uiText("setup.chrome.title");
+document.querySelector("#setup-boot h2")!.textContent = uiText("setup.chrome.preparing");
+document.querySelector("#setup-boot p")!.textContent = uiText("setup.chrome.checking");
+document.querySelector(".stepbar")!.setAttribute("aria-label",uiText("setup.chrome.steps"));
+document.querySelector(".step-back span")!.textContent = uiText("setup.chrome.back");
+document.querySelector(".step-next-label")!.textContent = uiText("setup.chrome.next");
+document.querySelector(".theme")!.setAttribute("aria-label",uiText("setup.chrome.theme"));
+document.querySelector('[data-win="minimize"]')!.setAttribute("aria-label",uiText("setup.chrome.minimize"));
+document.querySelector('[data-win="maximize"]')!.setAttribute("aria-label",uiText("setup.chrome.maximize"));
+document.querySelector('[data-win="close"]')!.setAttribute("aria-label",uiText("setup.chrome.close"));
+
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
 // показывается отсюда, поэтому исключение до show() давало живой процесс вообще
 // без окна. В Rust есть вторая страховка (показ через 4 с), здесь — текст причины.
@@ -35,9 +48,9 @@ function crashed(what: unknown) {
   box.style.cssText = "position:fixed;inset:0;z-index:9999;margin:0;padding:32px;white-space:pre-wrap;font:14px/1.5 monospace;background:#faf8f5;color:#2a2622;overflow:auto";
   const setupName = /Mac/.test(navigator.platform || "") ? "Helene Setup" : "helene-setup.exe";
   box.textContent =
-    "Установщик не смог показать сцену.\n\n" +
+    uiText("ui.setup.ui.src.main.0e7ff5cb54") +
     String(what) +
-    `\n\nЗакрой окно и запусти ${setupName} ещё раз. Если повторяется — покажи этот текст автору.`;
+    uiText("ui.setup.ui.src.main.bde3aa9a3a", {p0: String(setupName)});
   document.body.append(box);
   void import("@tauri-apps/api/window")
     .then((m) => m.getCurrentWindow().show())
@@ -48,7 +61,7 @@ addEventListener("unhandledrejection", (e) => crashed(e.reason));
 
 function q<E extends Element>(sel: string): E {
   const el = document.querySelector<E>(sel);
-  if (!el) throw new Error(`нет элемента ${sel}`);
+  if (!el) throw new Error(uiText("ui.setup.ui.src.main.a1859d81e6", {p0: String(sel)}));
   return el;
 }
 
@@ -193,16 +206,16 @@ function closingDuringInstall(): boolean {
   const current = scenes[index];
   if (current !== install && current !== update || !current.isRunning) return false;
   if (closeDialog?.open) { closeDialog.focus(); return true; }
-  const ui = paperDialog(current === update ? "Обновление ещё идёт" : "Установка ещё идёт"); closeDialog = ui.dialog;
+  const ui = paperDialog(current === update ? uiText("ui.setup.ui.src.main.8b803104b9") : uiText("ui.setup.ui.src.main.17fab04cfa")); closeDialog = ui.dialog;
   const words = document.createElement("p"); words.className = "paper-lead";
-  words.textContent = current.canCancel ? "Чтобы закончить сейчас, отмени операцию. Установщик дождётся отката и покажет результат."
-    : "Сейчас версии меняются местами. Дождись результата — окно снова можно будет закрыть.";
-  ui.body.append(words); ui.footer.append(paperButton("Вернуться", () => ui.dialog.close(), true));
-  if (current.canCancel) ui.footer.append(paperButton(current === update ? "Отменить обновление" : "Отменить установку", () => { ui.dialog.close(); current.requestCancel(); }));
+  words.textContent = current.canCancel ? uiText("ui.setup.ui.src.main.72da25178d")
+    : uiText("ui.setup.ui.src.main.accdb444fa");
+  ui.body.append(words); ui.footer.append(paperButton(uiText("ui.setup.ui.src.main.6c99e7d8fb"), () => ui.dialog.close(), true));
+  if (current.canCancel) ui.footer.append(paperButton(current === update ? uiText("ui.setup.ui.src.main.808ad068ba") : uiText("ui.setup.ui.src.main.bfeca28f2a"), () => { ui.dialog.close(); current.requestCancel(); }));
   ui.dialog.addEventListener("close", () => { closeDialog = null; }, { once: true }); return true;
 }
 const requestClose = setupWindowClose(win, closingDuringInstall, () => {
-  hint.textContent = "Окно не закрылось. Попробуй ещё раз."; hint.classList.add("show");
+  hint.textContent = uiText("ui.setup.ui.src.main.e541e4bbd6"); hint.classList.add("show");
 });
 
 function showHint(text: string, delayMs: number) {
@@ -290,7 +303,7 @@ async function updateInstalled(): Promise<void> {
     decided = await installedSetup(inst.dir);
   } catch (error) {
     busy = false;
-    update.preparationFailed("Не удалось прочитать текущие настройки: " + String(error), () => void updateInstalled(), () => void jumpTo(installed));
+    update.preparationFailed(uiText("ui.setup.ui.src.main.42bf06259e") + String(error), () => void updateInstalled(), () => void jumpTo(installed));
     refreshEdge(); return;
   }
   if (!decided && isPraxis()) {
@@ -302,7 +315,7 @@ async function updateInstalled(): Promise<void> {
   if (!decided) {
     // Решений в установке нет (имя, конституция) — обычный мастер, как у `--update`.
     busy = false;
-    update.preparationFailed("Не удалось прочитать настройки установленной Hélène. Обновление не началось; текущая версия и её данные на месте.", () => void updateInstalled(), () => void jumpTo(installed));
+    update.preparationFailed(uiText("ui.setup.ui.src.main.b1be56a321"), () => void updateInstalled(), () => void jumpTo(installed));
     refreshEdge();
     return;
   }
@@ -330,7 +343,7 @@ async function resumeFound(f: Found): Promise<void> {
   if (decided) {
     await jumpTo(where);
   } else {
-    showHint("В найденной памяти не хватает решений — пройдём имя, конституцию и модель.", 0);
+    showHint(uiText("ui.setup.ui.src.main.a0789f6214"), 0);
     await jumpTo(name);
   }
 }
@@ -368,8 +381,8 @@ function refreshEdge() {
   nextBtn.disabled = busy;
   const steps = scenes.filter((s) => s !== installed && s !== found && s !== legacy && s !== update);
   const at = steps.indexOf(current);
-  stepCount.textContent = at >= 0 && steps.length > 1 ? `Шаг ${at + 1} из ${steps.length}` : "";
-  nextLabel.textContent = scenes[index + 1] === install ? "К установке" : "Далее";
+  stepCount.textContent = at >= 0 && steps.length > 1 ? uiText("ui.setup.ui.src.main.6e5e3aa559", {p0: String(at + 1), p1: String(steps.length)}) : "";
+  nextLabel.textContent = scenes[index + 1] === install ? uiText("ui.setup.ui.src.main.3668e7d4af") : uiText("ui.setup.ui.src.main.dc9450d2c2");
 }
 
 // Заполнил поле — причина, по которой не пускало, снимается сама.
@@ -413,7 +426,7 @@ async function start() {
       await win.show();
       await win.setFocus();
     } catch (e) {
-      console.error("окно не показалось", e);
+      console.error(uiText("ui.setup.ui.src.main.fe1aabc2f7"), e);
     }
   }
   const freeze = Number(params.get("freeze"));
@@ -440,9 +453,9 @@ async function start() {
   } catch (error) {
     if (inTauri) {
       const boot = q<HTMLElement>("#setup-boot"); boot.replaceChildren();
-      const title = document.createElement("h2"); title.className = "form-head"; title.textContent = "Не удалось проверить установку";
+      const title = document.createElement("h2"); title.className = "form-head"; title.textContent = uiText("ui.setup.ui.src.main.780553d4c7");
       const reason = document.createElement("p"); reason.className = "form-lead"; reason.textContent = String(error);
-      const retry = document.createElement("button"); retry.className = "form-button primary"; retry.textContent = "Повторить"; retry.addEventListener("click", () => void start()); boot.append(title,reason,retry); return;
+      const retry = document.createElement("button"); retry.className = "form-button primary"; retry.textContent = uiText("ui.setup.ui.src.main.5189135a61"); retry.addEventListener("click", () => void start()); boot.append(title,reason,retry); return;
     }
   }
   shippedVersion = shipped;
@@ -456,7 +469,7 @@ async function start() {
       // файлы, ярлыки и запись в «Приложениях» и спросит про данные.
       // 1.2: uninstall.exe есть только у установок NSIS 1.1.x; остальное снимает сам мастер.
       remove: () => void (machine.inPlace && machine.nsis
-        ? uninstallLaunch().catch((e) => showHint("Не запустился uninstall.exe: " + String(e), 0))
+        ? uninstallLaunch().catch((e) => showHint(uiText("ui.setup.ui.src.main.b5b60a6f23") + String(e), 0))
         : removeInstalled()),
       fresh: () => void go(1),
     }, shipped);

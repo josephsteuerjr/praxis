@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../../../../lang/lang";
 // Сцена «Нашлась память» (1.2, 27.09): программы на машине нет, а память агента
 // осталась — после снятия с «оставить данные» или копией, сделанной владельцем.
 //
@@ -19,30 +20,30 @@ export interface FoundActions {
   fresh: () => void;
 }
 
-const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 
 /** `2026-09-27` → «27 сентября» (год — только если не нынешний). */
 export function humanDay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
   if (!m) return "";
-  const [, y, mo, d] = m;
-  const month = MONTHS[Number(mo) - 1] ?? "";
-  const year = Number(y) !== new Date().getFullYear() ? ` ${y}` : "";
-  return `${Number(d)} ${month}${year}`;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const date = new Date(Date.UTC(y, mo - 1, d, 12));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return "";
+  return new Intl.DateTimeFormat(locale(), {day:"numeric",month:"long",timeZone:"UTC",
+    ...(y !== new Date().getFullYear() ? {year:"numeric"} : {})}).format(date);
 }
 
 /** Что это за находка — словами, а не видом записи. */
 function kindWords(f: Found): string {
-  const ver = f.version ? `, версия ${f.version}` : "";
+  const ver = f.version ? uiText("ui.setup.ui.src.scenes.found.62e3d3a93e", {p0: String(f.version)}) : "";
   switch (f.kind) {
     case "backup":
-      return `твоя копия${ver}`;
+      return uiText("ui.setup.ui.src.scenes.found.e18cc57ed5", {p0: String(ver)});
     case "leftover":
-      return `осталась после удаления программы${ver}`;
+      return uiText("ui.setup.ui.src.scenes.found.f6f84b3b1b", {p0: String(ver)});
     case "unconfigured":
-      return `программа стоит, но не настроена${ver}`;
+      return uiText("ui.setup.ui.src.scenes.found.223375d98b", {p0: String(ver)});
     default:
-      return `установлена${ver}`;
+      return uiText("ui.setup.ui.src.scenes.found.a0c6a633bf", {p0: String(ver)});
   }
 }
 
@@ -66,21 +67,19 @@ export class FoundScene extends FormScene {
     this.list = el("div", "found-list");
     this.list.setAttribute("role", "radiogroup");
     const buttons = el("div", "install-actions");
-    this.go = button("Продолжить", "primary", () => {
+    this.go = button(uiText("ui.setup.ui.src.scenes.found.a42aee58d6"), "primary", () => {
       if (this.picked) this.actions?.resume(this.picked);
     });
-    buttons.append(this.go, button("Начать заново", "quiet", () => this.actions?.fresh()));
+    buttons.append(this.go, button(uiText("ui.setup.ui.src.scenes.found.9a885083e0"), "quiet", () => this.actions?.fresh()));
     const why = el("div", "explain-row");
     why.append(
       explain(
-        "Продолжить",
-        "Программа встанет и получит эту память: агент вспомнит всё, что знал, — с теми же ключами, " +
-          "Telegram и настройками. В установку уходит копия; сама находка остаётся нетронутой.",
+        uiText("ui.setup.ui.src.scenes.found.a42aee58d6"),
+        uiText("ui.setup.ui.src.scenes.found.565670d875"),
       ),
       explain(
-        "Начать заново",
-        "Обычная первая установка: имя, конституция, модель. Найденное останется лежать, где лежит, — " +
-          "к нему можно вернуться следующей установкой.",
+        uiText("ui.setup.ui.src.scenes.found.9a885083e0"),
+        uiText("ui.setup.ui.src.scenes.found.99bb274b39"),
       ),
     );
     this.mount(this.head, this.lead, this.list, buttons, why);
@@ -96,17 +95,17 @@ export class FoundScene extends FormScene {
       card.setAttribute("aria-checked", String(card.dataset.dir === f.dir));
     }
     // Без склонения имени: «с Мира» режет слух, а угадывать падеж по имени нельзя.
-    this.go.textContent = resumable(machine.found).length > 1 ? "Продолжить с этой памятью" : "Продолжить";
+    this.go.textContent = resumable(machine.found).length > 1 ? uiText("ui.setup.ui.src.scenes.found.1fc37a2ba1") : uiText("ui.setup.ui.src.scenes.found.a42aee58d6");
   }
 
   protected beforeEnter(): void {
     const items = resumable(machine.found);
     const one = items.length === 1 ? items[0] : null;
     // Без глагола прошедшего времени: род агента по имени не угадывается.
-    this.head.replaceChildren(el("span", "line", items.length > 1 ? "Нашлась память агентов" : "Нашлась память агента"));
+    this.head.replaceChildren(el("span", "line", items.length > 1 ? uiText("ui.setup.ui.src.scenes.found.ebe2f460e9") : uiText("ui.setup.ui.src.scenes.found.8ce5bfeb7b")));
     this.lead.textContent = one
-      ? "Программы на компьютере нет, а память осталась. Продолжим с ней — или начнём заново?"
-      : "Программы на компьютере нет, а память — есть, и не в одном месте. Выбери, с кем продолжить, или начни заново.";
+      ? uiText("ui.setup.ui.src.scenes.found.6d003a6d5d")
+      : uiText("ui.setup.ui.src.scenes.found.2fa89b630e");
     this.list.replaceChildren();
     for (const f of items) {
       const card = el("button", "found-card");
@@ -114,13 +113,13 @@ export class FoundScene extends FormScene {
       card.setAttribute("role", "radio");
       card.setAttribute("data-control", "");
       card.dataset.dir = f.dir;
-      const name = el("span", "found-name", f.agent || "Без имени");
+      const name = el("span", "found-name", f.agent || uiText("ui.setup.ui.src.scenes.found.0106f3ae25"));
       const meta: string[] = [];
-      if (f.owner) meta.push(`владелец ${f.owner}`);
+      if (f.owner) meta.push(uiText("ui.setup.ui.src.scenes.found.a6997af3b7", {p0: String(f.owner)}));
       const day = humanDay(f.last);
-      if (day) meta.push(`последний день — ${day}`);
-      if (f.data_mb > 0) meta.push(`${f.data_mb} МБ памяти`);
-      if (f.agents.length) meta.push(`рядом: ${f.agents.join(", ")}`);
+      if (day) meta.push(uiText("ui.setup.ui.src.scenes.found.faaf39dfbc", {p0: String(day)}));
+      if (f.data_mb > 0) meta.push(uiText("ui.setup.ui.src.scenes.found.11d7dabe03", {p0: new Intl.NumberFormat(locale(), {maximumFractionDigits:1}).format(f.data_mb)}));
+      if (f.agents.length) meta.push(uiText("ui.setup.ui.src.scenes.found.309fa8bfda", {p0: String(f.agents.join(", "))}));
       card.append(
         name,
         el("span", "found-meta", meta.join(" · ")),

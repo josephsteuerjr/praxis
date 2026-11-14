@@ -197,10 +197,10 @@ assert.match(setupMain, /!isMac\(\) &&( !isPraxis\(\) &&)? \(await legacy\.look\
 // больше не нужен (их снова две).
 assert.ok(!/serviceBoxEl\.hidden = mac/.test(modeScene), "опция службы снова спрятана на macOS — а служба там есть");
 assert.match(modeScene, /mac && SERVICE_OPTION_MACOS \? SERVICE_OPTION_MACOS : SERVICE_OPTION/, "опция службы на Mac не берёт слова macOS из modes.py");
-assert.match(modeScene, /mac \? SERVICE_NOTE_MACOS : SERVICE_NOTE/, "примечание про пароль администратора на Mac не показывается");
+assert.match(modeScene, /mac \? SERVICE_NOTE_MACOS\(\) : SERVICE_NOTE\(\)/, "примечание про пароль администратора на Mac не показывается");
 assert.match(modeScene, /this\.extra\.hidden = !setup\.service \|\| isMac\(\);/, "галочка нулевой сессии на macOS открывается — а этого механизма там нет");
 assert.match(modeScene, /mac && COMPUTER_OPTION_MACOS \? COMPUTER_OPTION_MACOS : COMPUTER_OPTION/, "опция тела на Mac не берёт слова macOS из modes.py");
-assert.match(modeScene, /mac \? COMPUTER_NOTE_MACOS : COMPUTER_NOTE/, "примечание про два разрешения на Mac не показывается");
+assert.match(modeScene, /mac \? COMPUTER_NOTE_MACOS\(\) : COMPUTER_NOTE\(\)/, "примечание про два разрешения на Mac не показывается");
 // Атрибут hidden перебивается `display: grid` у карточки — без явного правила
 // карточка службы оставалась бы на экране (тот же класс, что у ряда 19.09).
 const setupCss = resolvedUiLiterals(readFileSync(join(setupUi, "styles.css"), "utf8"));
@@ -223,7 +223,7 @@ assert.match(viteCfg, /COMPUTER_TEXT_MACOS/, "vite.config.ts не читает C
 assert.match(viteCfg, /SERVICE_TEXT_MACOS/, "vite.config.ts не читает SERVICE_TEXT_MACOS из modes.py");
 assert.match(viteCfg, /SERVICE_WARNING_MACOS/, "vite.config.ts не читает SERVICE_WARNING_MACOS из modes.py");
 assert.match(installScene, /isMac\(\) \? "открой Helene\.app оттуда"/, "на macOS обещают ярлык на рабочем столе");
-assert.match(uninstallScene, /isMac\(\) \? LEAD_MACOS : LEAD/, "лид снятия на macOS обещает службу и ярлыки");
+assert.match(uninstallScene, /isMac\(\) \? LEAD_MACOS\(\) : LEAD\(\)/, "лид снятия на macOS обещает службу и ярлыки");
 assert.match(uninstallScene, /Helene Setup\.app\/Contents\/MacOS\/helene-setup/, "команда экспорта на macOS зовёт helene-setup.exe");
 
 // --------------------------------------------------------------------------
@@ -280,7 +280,7 @@ for (const key of ["setup.mode.lead.macos", "setup.mode.install_note.interactive
 // Лиды собраны из двух литералов — сверяем по кускам склейки, как и раньше целиком.
 const joined = (text) => text.replace(/"\s*\+\s*"/g, "");
 assert.ok(joined(modeScene).includes(ru["setup.mode.lead.macos"]), "лид сцены режима на Mac разошёлся с каталогом");
-assert.ok(joined(modeScene).includes(ru["setup.mode.computer_note.macos"]), "примечание про два разрешения на Mac разошлось с каталогом");
+assert.ok(joined(modeScene).includes(ru["ui.setup.ui.src.scenes.mode.9b3d946b63"]), "примечание про два разрешения на Mac разошлось с каталогом");
 assert.ok(joined(modeScene).includes(ru["setup.mode.service_note.macos"]), "примечание про пароль администратора на Mac разошлось с каталогом");
 // Тексты самой опции службы живут в modes.py (их читает и окно, и сборка
 // установщика): каталог обязан повторять их слово в слово, иначе перевод

@@ -31,6 +31,7 @@ import { el, fmtTimeSec, humanError, toast } from "../../ui-kit/window/lib";
 import contract from "../../ui-kit/contract.json";
 import { button, toggle as switchRow } from "../../ui-kit/dom";
 import type { ComputerLive, ComputerOption, ModeState } from "../../ui-kit/window/mode";
+import { modeMetadata } from '../../ui-kit/window/mode-owned';
 
 /** Что ЛЕЖИТ в файле — по нему и пишем обратно. */
 export interface StoredComputer {
@@ -125,7 +126,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
   const posix = mac || platform === "linux";
   let enabled = stored.enabled;
   const scopes = new Set(stored.scopes);
-  const option: ComputerOption | null | undefined = live?.computer_option;
+  const option: ComputerOption | null | undefined = modeMetadata(live?.computer_option);
   box.append(el("h3", "", option?.title || uiText("ui.app.src.computer.d58fe7fd81")));
 
   // Труба не прислала опции — харнесс старее окна. Своих слов не пишем; блок
