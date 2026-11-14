@@ -6,7 +6,10 @@ import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
+// Optional frozen/installed bundle for read-only regression comparison.
+const dist = process.env.HELENE_UI_FIXTURE_DIST
+  ? resolve(process.env.HELENE_UI_FIXTURE_DIST)
+  : fileURLToPath(new URL('../../dist/', import.meta.url));
 const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
 let pid = 4100, stopped = false, alive = true, busy = true, phase = 'model', room = 'window';
 let run = 'run-20260930T190000000000Z-abcdef01', since = Date.now()/1000;
@@ -30,7 +33,10 @@ const config = {agent:{name:'Hélène'},owner:{name:'Егор'},model:{name:'fix
   telegram:{enabled:false},voice:{enabled:true,model:'turbo',speak:true,voice:'irina'},mode:'local',agent_mode:'sandbox'};
 function frame(data) {
   const bytes=Buffer.from(JSON.stringify(data));
-  const head=bytes.length<126?Buffer.from([0x81,bytes.length]):Buffer.from([0x81,126,bytes.length>>8,bytes.length&255]);
+  let head;
+  if(bytes.length<126)head=Buffer.from([0x81,bytes.length]);
+  else if(bytes.length<=0xffff){head=Buffer.alloc(4);head[0]=0x81;head[1]=126;head.writeUInt16BE(bytes.length,2);}
+  else{head=Buffer.alloc(10);head[0]=0x81;head[1]=127;head.writeBigUInt64BE(BigInt(bytes.length),2);}
   return Buffer.concat([head,bytes]);
 }
 const emit = () => { for(const s of sockets) s.write(frame({event:{t:'run',run}})); };

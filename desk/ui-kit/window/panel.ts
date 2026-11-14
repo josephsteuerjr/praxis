@@ -252,7 +252,7 @@ function panelBox(): HTMLElement {
 
 function mountCol(): Col {
   const box = panelBox();
-  col?.scroller.destroy();
+  if (col) scroll.unmountColumn(col.scroller);
   // This subtree belongs to the selected agent, not the selected conversation.
   // Keep its keyed expansions/payload cursor when only the room changes.
   if (!forgeRoot) {
@@ -579,6 +579,14 @@ export async function render(): Promise<void> {
     const run = byRun.get(liveId);
     rows.unshift({ id: liveId, status: "live", at: run?.created_at || new Date().toISOString(), title: "Работает…", cause: liveTurnCause(liveId, S.evCache.get(liveId) as RunDetail | undefined), live: true });
   }
+  // Silent runs disappear instead of receiving a completed row. KeyedList
+  // removes their DOM, but these maps would retain the detached steps and the
+  // full-detail toggle's captured payload indefinitely (14.11 WebView leak).
+  const visible = new Set(rows.map(r => r.id));
+  for (const id of openSteps.keys()) if (!visible.has(id)) openSteps.delete(id);
+  for (const id of S.evOpen) if (!visible.has(id)) S.evOpen.delete(id);
+  for (const id of autoOpen) if (!visible.has(id)) autoOpen.delete(id);
+  for (const key of openedHands) if (!visible.has(key.slice(0, key.indexOf('/')))) openedHands.delete(key);
   c.head.querySelector(".turns-n")!.textContent = rows.length ? String(rows.length) : "";
   c.empty.hidden = rows.length > 0;
   if (!rows.length) c.empty.innerHTML = `<div class="empty">Ходов ещё нет</div>`;

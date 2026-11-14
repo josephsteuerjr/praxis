@@ -65,3 +65,9 @@ export function mountColumn(el: HTMLElement, inner: HTMLElement): Scroller {
   all.add(s);
   return s;
 }
+
+/** A retired column must leave the appearance registry as well as the DOM. */
+export function unmountColumn(s: Scroller): void {
+  all.delete(s);
+  s.destroy();
+}
