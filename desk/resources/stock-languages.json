@@ -47,6 +47,20 @@
       "zh": "ab28bf5bf8ad4adde47dc54e8dd3a0e1b0d9104df6fa7662d4562804a96cac39",
       "identifiers": true
     },
+    "soul/skills/anti-repeat-autonomous-checks.md": {
+      "ru": "7e60a1cbb8356f4fafe4d60eb809779b6ad2809dd46e1ddece14a0d9a47cce38",
+      "en": "4d0155f400061186adb278b5c2fca5a9a0706b08bd91b39e09135054062c628b",
+      "fr": "9d19334ef8f57750e55c8c66ef73fb624023b8ee69adc8fe45220e2959dfe08b",
+      "zh": "edd9db3cf7a48b982686b84cea170176f99c63a5fb32dd40fde03e3a298edf44",
+      "identifiers": true
+    },
+    "soul/skills/anti-repeat-before-speaking.md": {
+      "ru": "ba25849a1cf6ee0124a900aa1b5fe196fa7ce37e50dad7dfe52671f3eb705d0e",
+      "en": "11b15a4147671a13b7652e28c3d72dcd55107609d14625396c8460d601920153",
+      "fr": "cf7a09285bfe233f055754fde9ee9c1920647b5afe5a68630b98f92ec9d2e5dd",
+      "zh": "d6ac8e77b400386e2cf90914691511e619441ffd1e75bdf1dd06dbfc2c399f39",
+      "identifiers": true
+    },
     "soul/skills/artifact-revision-diff-check.md": {
       "ru": "25f612f36035530dc6733b41052021757db15b38b453fe00f35c9ebf4fe0107e",
       "en": "bde900c1512ac7543a132ec15ba2994052fe87687d4475a6ed2fff05cb3a285c",
@@ -59,6 +73,13 @@
       "en": "1b52ffb0161d483ad59cb37e9577f33090a13c91f4f9d5b80f9f1522ca5c11c1",
       "fr": "dcd29ccefe3950d21df6b7ec6954c55a7cac9b44431a30da40eb3ed2ff52c8c6",
       "zh": "543048ad6d4ad7527206154b3c4f94012298b1a8661b08b2e39f430e3633ea3c",
+      "identifiers": true
+    },
+    "soul/skills/before_sending.md": {
+      "ru": "377c82a29086851d9642b420b25210a2011fb7d59f3c53cff5d40bebfc3e77fc",
+      "en": "77209187c852874c2bfbb98d760fe089d95e094ccf3023330c8130b53373c099",
+      "fr": "aa0c1824c9411a4b55ea77569f803e56a0af19d963cd9761a9402615076750ef",
+      "zh": "97d8b45f49fce8bbd2a5fb0696ece0831b3b92b87d88ad984946459db34a555a",
       "identifiers": true
     },
     "soul/skills/check-by-factual-name.md": {
@@ -110,11 +131,25 @@
       "zh": "629dad3fa908d672007a5c421179abd3d87941e16fcc0a67982dd671d588b894",
       "identifiers": true
     },
+    "soul/skills/cross-project-transfer-attribution.md": {
+      "ru": "ce5d62c590f34692ca2f58062f68efc7ad2b90b692b7697b2700dc4231bc966f",
+      "en": "8473fff0ec5267b302504bb63e8e1a9b7afa51e98e780e9d4a7150298597c451",
+      "fr": "44844accabce2e6334199c945ca5022a3a97afbd808d9f2e1d7959e52b042fdd",
+      "zh": "c0e3a0431e0556a7857b4b59ee0be85ea575a5353367ebc644dee506adf08315",
+      "identifiers": true
+    },
     "soul/skills/crossover-h-gate-check.md": {
       "ru": "57af4796c63d3fb02ce56ad5632e353b0b3a7a18da35020dd438f6c1701ed0ef",
       "en": "74d8abc9685318e83de55ec20a45ebbac03913a43ab9983c92ee62d8af28372c",
       "fr": "520b05debdd2fbbc214563993d4208694363100f7793625f55a7ac62599f9a43",
       "zh": "effaa8cb11c43030277ae0875b8421b97cb231652703ed2f8fd81640713b07c2",
+      "identifiers": true
+    },
+    "soul/skills/deferred-messages-time-discipline.md": {
+      "ru": "4abac605313d5bce0d00abdf29e6c5ec01a594dbd94b55e47abc5cfbb00b9964",
+      "en": "c34f0a581927bb4dea565da1ae189f5067961d56eec01efeca09cbad93dc5cdc",
+      "fr": "52538745b2f1e43fc2a1a6c8e66c2d272dabd1839df6d8f4b5beea1e82345767",
+      "zh": "13bd3f88dcfffe2fbd170ba2572c7e0fd5cd9da27a7b86aade0c5320673c4b65",
       "identifiers": true
     },
     "soul/skills/email.md": {
@@ -138,6 +173,13 @@
       "zh": "9e7e6d8973a2e72ae3314afa60d2112464a6cf834fec13ba91f4127a040a0bfe",
       "identifiers": true
     },
+    "soul/skills/evidence-led-maintenance-habits.md": {
+      "ru": "f87e0bfef7b8eda08b1dbcc8501d195a5cd87e4471c2c6991a67f2db23816394",
+      "en": "8581447f379babee5c9a6360c38398c64ca39e0eb65f86126e6e04c2060fad26",
+      "fr": "51a22fbc9c6cfa997418b22af32cb6db1b2717b32f05d3242d1c696a2cbcf663",
+      "zh": "60bcc208ec71ae328f63ac0a293a56a7d13762ec6f7a616c8a9b29457f7a2d5e",
+      "identifiers": true
+    },
     "soul/skills/expect-before-action.md": {
       "ru": "bfaff64273ee48f3748de2c9a2820d1c3d3a550ed120f4616d61053be7629a03",
       "en": "e2ee01589bd95f42fa8f41dd038334fea64b8e18b75b41b412ec70fc4983320d",
@@ -150,6 +192,13 @@
       "en": "3d7bce1c5f013cdb29a4ee350fe06d04e227a95510872c10c70b244297087990",
       "fr": "8e646ecc6c4b94520f0e8c7ac199b31cc1c5a46f29332839886f03d23707ccc6",
       "zh": "06d8314acdf36fe73a3b4d00afb912cff457440a3808787524d1fe41b0ac29f9",
+      "identifiers": true
+    },
+    "soul/skills/file_compass.md": {
+      "ru": "b10ade47b7235bfa8279152c52d9e8e426ecd37438959e1e626e64e93bea1ea1",
+      "en": "b1112709687aa012de51588988307d9801f53a955d53594a2b8fd0bcf7ccce9e",
+      "fr": "5a6f811fea99c3cfda878cee6027f6cb152281bcd4edaefed59f8e4c49c32bb4",
+      "zh": "7ad29884fe06eb6563221aefab2ec9aa1043563f32042e1abf1cba54f4bbbefa",
       "identifiers": true
     },
     "soul/skills/finish-the-work.md": {
@@ -406,11 +455,32 @@
       "zh": "cb977d75e63e5f306eb08570e7dd6dc62bb3e7b7c1def90c0e973383c8e962e6",
       "identifiers": true
     },
+    "soul/skills/praxis-translation-check.md": {
+      "ru": "1c2fd6dfbe237a44779a29598bd1ed36c47d4cd5a645b29a5a6a10ca87865e3e",
+      "en": "e3b57abdf7371b78df9649190a13fdc0c8faa3561dc7d73fad53c2fb3816bcd2",
+      "fr": "395b08f8c17a5f9b8103a31cf01d35470452b1f3472907a99eccedf2da3dde00",
+      "zh": "a3caaf9addf552c7a44704698ac54b9858ee296a0d491aa8e03f7ef281ea8356",
+      "identifiers": true
+    },
+    "soul/skills/praxis-translation-md.md": {
+      "ru": "29ed9ad6376b99596e2d84930db4cc2523f61d78d7e22dfcf8f1b9730c147811",
+      "en": "ab6425652e7f900c91baa839891dd7d346393a24d9346ab86812d2375c34713f",
+      "fr": "8ec3867cf21b973f1c04061e8308b3c585f2c9d3eb8f4110f7356527ade9e2f1",
+      "zh": "80db2d4bd8bdbba49da244914362da6aa63698ffe29135aa9cefc9112fa8ed64",
+      "identifiers": true
+    },
     "soul/skills/private_disclosure.md": {
       "ru": "765a9e09691d5754b50c962a590feccf1b4dfd83f359ae313fadfede23c7c3d1",
       "en": "26854a6f23bc743e441da548a0064b8bef045808b4d47310db6d4964f55b3b30",
       "fr": "a03b22d09cb36372bd37015c388565545068c538839a746eee6076e9f31aef9c",
       "zh": "82ad247b19a468f47e837a65fe0159bc7d21c298fcb52cf2272389a2866b6830",
+      "identifiers": true
+    },
+    "soul/skills/productive_struggle_tutoring.md": {
+      "ru": "4638e5a59f524318845dd7ae380c947add5c7e2bcbe282f286a7cca255bdd1fa",
+      "en": "9d5379f8b626baaf46a533e56c2bc203510bc8214d6248e1980aa4497bfc7150",
+      "fr": "14180c28ea15e330376a295a2f47ace06c161a7b4cc0bf1bccd6ab6247c39013",
+      "zh": "dab5cc46bee038d399846dfce6584e7937fb87b6a0cccc1c3505bedad4333b43",
       "identifiers": true
     },
     "soul/skills/promises.md": {
@@ -588,11 +658,25 @@
       "zh": "c1a237a2cb45827e131673ba9b049cfc2f3259bd11bb43d093bc891daf743156",
       "identifiers": true
     },
+    "soul/skills/timestamp-before-relative-time.md": {
+      "ru": "4e12fba73ad1f262a41a262d4403d0e507240af8210ad9e22203cd67c74a6703",
+      "en": "af4a4cdd914932f41af397114a5379ec83ede0c4a1acb237f9d41f2cdf782428",
+      "fr": "20ed9172a13212bd9e983b43f901a9f324b1ac4951a03a9d20ca6c43f6f38ffc",
+      "zh": "3063c7b8b107b70530fac56fd59468a283fbd65d4a5df4ad5050727ca0f9890c",
+      "identifiers": true
+    },
     "soul/skills/tool-workflow-design.md": {
       "ru": "be6b1285cb2e541dd11b0e097f11be3b0beaf04a77a3eace0ea0e9e140714eb5",
       "en": "5990bb9723195fad09d03005fa703c20d2d936a10028c42dcadd72432c37ed49",
       "fr": "11f21ed7d261b6c7debe38829ebb6898b135e7bb4a7a21bcd6e3bf3154522794",
       "zh": "5c3860ca516b5f883fed46dd86c2e11053b9a9727e103fa4c29470acccf94b09",
+      "identifiers": true
+    },
+    "soul/skills/tool_result_before_claim.md": {
+      "ru": "2730de8c076831c47461bd644e76ced5126a55e510cd7bb0b14dc10aa429f14f",
+      "en": "51adc39e50e68bdb9afec9475ba0106faea6f8c427625387683cdd1819c45601",
+      "fr": "b5184d85df95544480ca728c59afcc5d74be6ddbe5ea5fe6d8c85627ab4f14ef",
+      "zh": "2a1426566b6536c15e359e72873b7907c5ace2fc55eed31e50d8c282a69b7994",
       "identifiers": true
     },
     "soul/skills/trusted_room_participation.md": {
