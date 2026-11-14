@@ -29,6 +29,8 @@ def mtime_ns(path: Path) -> str | None:
 def save(path: Path, document: str, seen: str | None) -> dict:
     value = json.loads(document)
     if not isinstance(value,dict):raise ValueError('Settings must be a JSON object')
+    from localharness.language_settings import validate as validate_languages
+    validate_languages(value)
     if __package__:
         from .relay_network import environment
     else:

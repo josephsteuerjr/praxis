@@ -1352,6 +1352,22 @@ class TheToolsetIsAnEpochBoundary(ShadowCase):
 
     DEFAULT_TOOLS = ({"name": "recall", "description": "Вспомнить."},)
 
+    def test_frame_language_changes_the_frozen_epoch_once_without_folding_history(self):
+        import frame_language
+        with frame_language.use('ru'):
+            first = self._shadow(0)
+        with frame_language.use('fr'):
+            second = self._shadow(1)
+            third = self._shadow(2)
+        self.assertEqual(first['epoch'],1)
+        self.assertEqual(second['epoch'],2)
+        self.assertEqual(third['epoch'],2)
+        self.assertIsNotNone(second['boundary'])
+        self.assertIsNone(third['boundary'])
+        saved=json.loads((self._stream_dir()/'epoch.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['fold_count'],0)
+        self.assertTrue(saved['frame_language'].startswith('fr:'))
+
     def _capture(self, i=0, tools=None, ctx=None, history=None):
         return self._shadow(i, tools=tools, ctx=ctx, history=history)
 
@@ -1619,8 +1635,7 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
         with patch.object(agent, '_build_prompt_parts', return_value=('synthetic persona', 'live contract', 'evidence')), \
                 patch.object(agent, '_terminal_tool_loop', side_effect=loop), \
                 patch.object(agent.frame_shadow, 'enabled', return_value=True), \
-                patch.object(agent.frame_shadow, 'capture', return_value='SHADOW CANDIDATE MUST NOT BE SENT') as capture, \
-                patch.object(agent, '_arm_private_floor', return_value=0):
+                patch.object(agent.frame_shadow, 'capture', return_value='SHADOW CANDIDATE MUST NOT BE SENT') as capture:
             result = agent._voice_impl('synthetic question', [], 'Synthetic speaker',
                                        ctx=agent.ChannelContext(chat_id='synthetic-shadow',
                                            is_dm=False, owner=False, known=True, principal_id='2'),

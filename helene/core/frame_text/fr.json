@@ -1,0 +1,7 @@
+{
+  "resident.source": "[source : {path} · compétence complète et ressources : soul/skills/{slug}.md, au besoin]",
+  "resident.no_skill": "[source : {path} · fichier soul/skills/{slug}.md absent]",
+  "resident.kit_source": "[kit initial Hélène : {path} ; une version personnelle du savoir-faire a priorité ; les ressources sont disponibles dans la proposition de mise à jour du kit]",
+  "resident.unreadable": "⚠ Partie permanente de la compétence « {slug} » illisible ({reason}) : {path}",
+  "resident.over_cap": "⚠ La partie permanente de « {slug} » ({chars} caractères) dépasse le budget des compétences permanentes ({cap} caractères, {env}) et ne figure pas dans le contexte ; texte : {path}"
+}

@@ -1,0 +1,7 @@
+{
+  "resident.source": "[source: {path} · full skill and materials: soul/skills/{slug}.md, when needed]",
+  "resident.no_skill": "[source: {path} · skill file soul/skills/{slug}.md is missing]",
+  "resident.kit_source": "[from the Hélène starter kit: {path}; an authored skill takes precedence; materials are available in the kit update proposal]",
+  "resident.unreadable": "⚠ Could not read the resident part of skill “{slug}” ({reason}): {path}",
+  "resident.over_cap": "⚠ The resident part of skill “{slug}” ({chars} characters) exceeds the resident-skill budget ({cap} characters, {env}) and is not included in context; text: {path}"
+}

@@ -1,0 +1,7 @@
+{
+  "resident.source": "[来源：{path} · 完整技能及资料：soul/skills/{slug}.md，按需读取]",
+  "resident.no_skill": "[来源：{path} · 缺少技能文件 soul/skills/{slug}.md]",
+  "resident.kit_source": "[来自 Hélène 初始套件：{path}；自行编写的技能优先；资料可在套件更新提案中查看]",
+  "resident.unreadable": "⚠ 无法读取技能“{slug}”的常驻部分（{reason}）：{path}",
+  "resident.over_cap": "⚠ 技能“{slug}”的常驻部分（{chars} 个字符）超过常驻技能预算（{cap} 个字符，{env}），未加入上下文；文本：{path}"
+}

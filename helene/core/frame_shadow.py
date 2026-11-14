@@ -32,7 +32,8 @@ agent.py зовёт `capture()` и игнорирует возврат, llm.py �
 Зоны и их закон (§1–2 контракта): ничто, что меняется чаще, не стоит выше того, что
 меняется реже, ни одной строкой.
 
-    K — конституция: SOUL.md + VOICE.md байтами файлов. Заголовок тени НЕ несёт номер
+    K — конституция: SOUL.md + VOICE.md байтами файлов (+ постоянные части навыков
+        soul/skills/<slug>/resident.md, если они есть). Заголовок тени НЕ несёт номер
         эпохи: он менялся бы каждой границей НАД конституцией — мимо закона порядка.
     E — эпоха v3, семь блоков в порядке частоты изменения, шапка ПОСЛЕДНЕЙ:
         кто я · руки указателем · указатель памяти · адресная книга · недавнее ·
@@ -78,6 +79,8 @@ from pathlib import Path
 import desires as desires_ledger
 import frame_trace
 import memory_provenance
+import resident_skills
+import frame_language
 import run_context
 import self_model
 import tool_offerings
@@ -538,6 +541,11 @@ def _zone_k() -> str:
     parts = [soul]
     if voice:
         parts.append("\n\n---\n" + voice)
+    # 14.11: постоянные части навыков живут в персоне сразу после VOICE — значит, и в
+    # конституции тени. Нет ни одной — байты K прежние.
+    resident, _rows = resident_skills.render(BASE / "soul" / "skills")
+    if resident:
+        parts.append("\n\n---\n" + resident)
     return "".join(parts)
 
 
@@ -1439,6 +1447,7 @@ def _freeze_epoch(stream_dir: Path, ctx, tools, now: datetime, n: int,
         # (её слово 18.08: `end_turn` последний), а у OpenAI-совместимых схемы едут
         # ВЫШЕ system, и любой реордер стоит столько же, сколько смена состава.
         "tools_sha": tool_offerings.fingerprint(tools),
+        "frame_language": frame_language.fingerprint(),
         # fold_count остаётся снимком «сколько было на границе» — для сверки и для
         # чтения старыми глазами; позиционно его больше никто не применяет.
         "fold_count": int(fold_count), "fold_line": str(fold_line or ""),
@@ -2060,7 +2069,8 @@ def _coverage(live_sections, carried=frozenset(), recap_in_a: bool = False) -> d
             continue
         name = str(row.get("name") or "")
         label = str(row.get("label") or "")
-        if name in {"persona.soul", "persona.voice", "persona.self_current",
+        if name in {"persona.soul", "persona.voice", "persona.resident_skills",
+                    "persona.self_current",
                     "situation.channel", "situation.open", "situation.close"}:
             covered += 1
         elif name in _SITUATION_CANDIDATE_HOMES or (
@@ -2307,6 +2317,14 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
                       reason=reason, audience=effective, force=False,
                       payload=payload)
     tools_sha = tool_offerings.fingerprint(tools)
+    language = frame_language.fingerprint()
+    if saved.get('frame_language') != language:
+        # Changing an agent's context language must replace the frozen prompt,
+        # without folding or rewriting any conversation history.
+        return _cross(stream_dir, ctx, tools, history, now, saved=saved,
+                      n=int(saved.get('n') or 1) + 1,
+                      reason='context language or resident-skill setting changed',
+                      audience=effective, force=False, payload=payload)
     frozen_sha = str(saved.get("tools_sha") or "")
     if not frozen_sha:
         # Эпоха заморожена ДО этой правки — отпечатка у неё нет. Назвать это сменой

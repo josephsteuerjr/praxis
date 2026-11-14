@@ -59,6 +59,7 @@ import computer_memory
 import context_envelope
 import desires
 import frame_epoch
+import frame_language
 import frame_continuation
 import frame_dossiers
 import addressed_replies
@@ -94,6 +95,7 @@ import run_snapshot
 import notes
 import people
 import rails
+import resident_skills
 import rooms
 import lessons
 import selfdev
@@ -10447,7 +10449,12 @@ def _persona_text() -> str:
 
     SOUL — ядро, VOICE — few-shot регистра, а self_model выбирает только компактный
     CURRENT с provenance (legacy self.md остаётся историческим evidence и в prompt не голосует).
-    emotions/being_with дистиллированы в SOUL и ушли в archive (change != delete)."""
+    emotions/being_with дистиллированы в SOUL и ушли в archive (change != delete).
+
+    14.11 (Егор): между VOICE и CURRENT стоят постоянные части навыков —
+    `soul/skills/<slug>/resident.md` (`resident_skills`). Порядок по закону зон: то, что
+    меняется реже, выше; CURRENT остаётся последним. Нет ни одной постоянной части —
+    байты персоны прежние, секция объявлена отсутствующей."""
     # Метки прибора (frame_trace) стоят на РЕЗУЛЬТАТЕ append, а не на содержимом файла:
     # разделитель "\n\n---\n" физически принадлежит секции, которую он открывает. Поэтому
     # байтовая сверка секции с самим VOICE.md даст ровно 5 символов расхождения — это
@@ -10467,6 +10474,12 @@ def _persona_text() -> str:
         parts.append(frame_trace.mark("persona.voice", "persona", "md", "\n\n---\n" + voice))
     else:
         frame_trace.absent("persona.voice", "persona", "md", "empty")
+    resident, _resident_rows = resident_skills.render(SKILLS_DIR)
+    if resident:
+        parts.append(frame_trace.mark("persona.resident_skills", "persona", "md",
+                                      "\n\n---\n" + resident))
+    else:
+        frame_trace.absent("persona.resident_skills", "persona", "md", "empty")
     current_self = self_model.current_prompt(BASE)
     if current_self:
         parts.append(frame_trace.mark("persona.self_current", "persona", "md",
@@ -10666,6 +10679,7 @@ def _epoch_serve(chat_id, anchor, blocks, chosen, ctx=None) -> None:
     frozen, receipt = frame_epoch.serve(
         chat_id, anchor, [(title, kind, block) for title, kind, block, _c, _s in blocks],
         admission_key=({'audience': 'owner' if ctx.owner_audience else 'chat:' + str(ctx.chat_id),
+                        'frame_language': frame_language.fingerprint(),
                         'private_in_rooms': dossier_private_in_rooms(),
                         'scope': ctx.scope} if ctx is not None else None))
     causes = {title: (cause, sign) for title, _kind, _block, cause, sign in blocks}

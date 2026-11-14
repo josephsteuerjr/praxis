@@ -79,6 +79,7 @@ class Controller:
         agent = self.current()
         cfg = agents.read_config(agent.config)
         common = {'agent': agent.name, 'agent_id': agent.id, 'product':'Hélène',
+                  'lang':cfg.get('lang',''),
                   'agents':[a.as_dict() for a in agents.roster(self.root)]}
         if cfg.get('mode') == 'remote':
             return dict(common, base=cfg.get('base',''), key=cfg.get('key',''),

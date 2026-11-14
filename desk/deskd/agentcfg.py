@@ -40,7 +40,8 @@ SCHEMA = "helene.agentcfg.v1"
 EDITABLE: dict[str, str] = {
     "model": "мозг",
     "telegram": "Telegram",
-    "agent": "имя агента",
+    "agent": "агент, язык контекста и живая речь",
+    "lang": "язык интерфейса",
     "owner": "имя владельца и комната",
     "voice": "голос",
     "notifications": "уведомления",
@@ -146,6 +147,11 @@ def _save(patch: Any, seen: str | None = None, path: Path | None = None) -> dict
                          "открыло — перечитай и перенеси правку заново."}
 
     access = patch.get("access")
+    try:
+        from localharness.language_settings import validate as validate_languages
+        validate_languages({**current, **{key: value for key, value in patch.items() if key in EDITABLE}})
+    except ValueError as exc:
+        return {"ok": False, "code": "bad_language_settings", "error": str(exc)}
     if "self_review" in patch:
         try:
             from localharness.self_review import settings

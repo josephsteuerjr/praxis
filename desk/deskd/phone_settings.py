@@ -17,6 +17,12 @@ def field(path,label,group='brain',kind='text',**extra):
 
 FIELDS=[
     field('agent.name','Имя агента','agent'),field('owner.name','Твоё имя','agent'),
+    field('agent.frame_language','Язык контекста агента','agent','select',default='ru',choices=[['ru','Русский'],['en','English'],['fr','Français'],['zh','中文（简体）']],
+          hint='Язык текстов программы в контексте модели и стартовых навыков. Не зависит от языка интерфейса. Личные тексты и история сохраняются.'),
+    field('agent.living_prose','Живая речь','agent','boolean',default=True,
+          hint='Постоянная подсказка для ясной и естественной речи на языке контекста агента. Выключение сохраняет навык и его правки. Применяется со следующего обращения к модели.'),
+    field('lang','Язык интерфейса','look','select',default='',choices=[['','Как в системе'],['ru','Русский'],['en','English'],['fr','Français'],['zh','中文（简体）']],
+          hint='Меняет язык окна и элементов управления. Язык контекста агента выбирается отдельно.'),
     field('owner_context.messages','Свежих сообщений','agent','number',min=50,max=2000,default=600),
     field('owner_context.characters','Знаков разговора','agent','number',min=1000,max=600000,default=128000),
     field('owner_context.tokens','Предел токенов разговора','agent','number',min=2000,max=200000,default=40000),
@@ -71,6 +77,8 @@ FIELDS=[
 ]
 
 def section(path):
+    if path=='lang':return 'Язык интерфейса'
+    if path in ('agent.frame_language','agent.living_prose'):return 'Язык и речь'
     if path.startswith(('agent.','owner.')):return 'Имена'
     if path.startswith('owner_context.'):return 'Контекст владельца'
     if path.startswith('self_review.'):return 'Саморевью'

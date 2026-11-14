@@ -150,6 +150,7 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     # (boot.keat_knobs); без владельца в Telegram его ручек нет вовсе.
     knobs = boot.env_knobs(cfg, tree=tree)
     os.environ["PRAXIS_BASE"] = str(tree)
+    os.environ["HELENE_SKILLS_KIT_ROOT"] = str(boot._RESOURCES)
     # 26.09: рабочая папка руки shell — `workspace/` дома, как и обещает навык
     # home-map. Без этой переменной дерево брало корень дома, а busybox из поставки
     # на `bash -l` и вовсе уходил в профиль владельца (см. agent.tool_shell).
@@ -3401,6 +3402,7 @@ def main() -> None:
     if not args.config:
         parser.error("--config обязателен (кроме --check-extensions)")
     config_path = Path(args.config).resolve()
+    os.environ['HELENE_CONFIG'] = str(config_path)
     _install_root = config_path.parent
     # POSIX: SIGTERM — мягкий выход (atexit, замок дерева), и сторож родителя:
     # умерла оболочка — уходим вслед, а не живём сиротой с замком на дереве.
