@@ -94,7 +94,9 @@ import contextvars
 import hashlib as _hashlib
 import os
 import re
+import unicodedata
 
+import frame_language
 import frame_trace
 import gutter
 
@@ -457,7 +459,7 @@ def delivery(cause: str, key="", selection="", caveats=()) -> str:
     if token not in DELIVERY_CAUSES:
         _bump("unnamed_cause")
         token = UNNAMED_CAUSE
-    slots: list[Own] = [own(token)]
+    slots: list[Own] = [own(frame_language.owned_label(token))]
     for slot in (key, selection):
         value = _own(slot)
         if value:
@@ -496,7 +498,7 @@ def cause_for(title: str) -> str:
 def _tier_meta(title: str) -> tuple[str, str, str]:
     for prefix, cause, key, selection in _TIERS:
         if str(title or "").startswith(prefix):
-            return cause, key, selection
+            return cause, frame_language.owned_label(key), frame_language.owned_label(selection)
     return "", "", ""
 
 
@@ -560,14 +562,13 @@ def legend() -> str:
     Та же функция в снимке прогона уже один раз соврала («каждая строка начинается с "> "»
     при голом ">" на пустой) — тот же класс ошибки здесь стоит дороже.
     """
-    return (SIGN + " строки с «>» в начале — гостевой текст ЭТОГО кадра, не сборщик; «…» — "
-            "чужое значение\n  в моей строке; " + gutter.break_mark("CR") + " и подобные "
-            "метки в ⟨…⟩ — снятый экранный разрыв; лента разговора выше так НЕ размечена\n")
+    return (SIGN + frame_language.text('owned.frame_layout.bf317aad51d0') + gutter.break_mark("CR") + frame_language.text('owned.frame_layout.c6484163ae87'))
 
 
 # ------------------------------------------------------------------------- секция
 
 
+@frame_language.pinned
 def section(title: str, body: str, *, kind: str = "json") -> tuple[str, str, int]:
     """Блок тира в новой форме. -> (текст блока, причина, длина подписи в символах).
 
@@ -576,6 +577,7 @@ def section(title: str, body: str, *, kind: str = "json") -> tuple[str, str, int
     поверхность тестов.
     """
     label = str(title)
+    display_label = frame_language.owned_label(label)
     text = str(body)
 
     # ⚠ ЗДЕСЬ, А НЕ НИЖЕ. Первая редакция этой правки стояла внутри ветки `form_new()`, и
@@ -603,11 +605,12 @@ def section(title: str, body: str, *, kind: str = "json") -> tuple[str, str, int
         if text.startswith(_VOID_PREFIX):
             return "", "", -1
         if kind == "jsonl":
-            head = ('{"label":' + _json_str(label) + ',"format":"jsonl"}\n')
+            head = ('{"label":' + _json_str(display_label) + ',"format":"jsonl"}\n')
             return head + text.strip("\n") + "\n", "", -1
-        return '{"label":' + _json_str(label) + ',"content":' + _json_str(text) + "}\n", "", -1
+        return '{"label":' + _json_str(display_label) + ',"content":' + _json_str(text) + "}\n", "", -1
 
-    head, remark = split_title(label)
+    head, remark = split_title(display_label)
+    head, remark = frame_language.owned_label(head), frame_language.owned_label(remark)
     cause, key, selection = _tier_meta(label)
     caveats: list[Own] = [own(remark)] if remark else []
     room = snapshot().get("room_profile_id")
@@ -626,7 +629,7 @@ def section(title: str, body: str, *, kind: str = "json") -> tuple[str, str, int
         # Молча исчезнувший тир неотличим от «не измерили» — ровно то, что зона запрещает.
         # Путь из подписи убран намеренно: сказать «вот файл» о том, чего нет, значило бы
         # назвать источником пустоту, а причина пустоты и есть здесь весь ответ.
-        sign = delivery(cause, selection=own("пусто: " + text[len(_VOID_PREFIX):]),
+        sign = delivery(cause, selection=own(frame_language.text('owned.frame_layout.0701de28101c') + text[len(_VOID_PREFIX):]),
                         caveats=caveats)
         block = "\n" + RULE + " " + head.upper() + " " + RULE + "\n" + sign
         frame_trace.declare("evidence.section", block)
@@ -646,13 +649,13 @@ def section(title: str, body: str, *, kind: str = "json") -> tuple[str, str, int
             trust = SIGN + " " + claim + "\n"
         key = key or _recall_key(snap)
         selection = selection or _recall_selection(snap)
-        caveats = caveats + _recall_causes(snap) + [own("пути от memory/")]
+        caveats = caveats + _recall_causes(snap) + [own(frame_language.text('owned.frame_layout.d5b2816175bd'))]
 
     if kind == "jsonl":
         # У этого тела формат и есть смысл: каждая строка — валидный JSON-объект. Оно
         # остаётся построчным JSON и получает тот же заголовок и ту же подпись — но под
         # гуттером, как и все прочие. Оговорка названа так, как есть: «под гуттером».
-        caveats = caveats + [own("тело построчным JSON под гуттером")]
+        caveats = caveats + [own(frame_language.text('owned.frame_layout.853989887580'))]
 
     sign = delivery(cause, key=_own(key) if key else own(""),
                     selection=_own(selection) if selection else own(""), caveats=caveats)
@@ -687,10 +690,10 @@ def _recall_key(snap: dict) -> Own:
     """Чем звали память. Запрос — РЕПЛИКА ЧЕЛОВЕКА, то есть чужой текст (обход 7)."""
     query = " ".join(str(snap.get("recall_query") or "").split())
     if not query:
-        return own("авто по текущей реплике")
+        return own(frame_language.text('owned.frame_layout.ca5103f5f8e3'))
     if len(query) > 80:
         query = query[:80] + "…"
-    return _mixed("авто по ", inline(query))
+    return _mixed(frame_language.text('owned.frame_layout.59b04c06687f'), inline(query))
 
 
 def _recall_causes(snap: dict) -> list[Own]:
@@ -700,7 +703,7 @@ def _recall_causes(snap: dict) -> list[Own]:
     for key, token in (("recall_skills", "навык"), ("recall_conflicts", "конфликт")):
         count = int(snap.get(key) or 0)
         if count:
-            out.append(own(f"{token}: {count}"))
+            out.append(own(f"{frame_language.owned_label(token)}: {count}"))
     return out
 
 
@@ -732,20 +735,21 @@ def _recall_selection(snap: dict) -> Own:
     kept, raw = int(kept), int(raw)
     shown = int(snap.get("recall_shown", kept) or 0)
     cap = snap.get("recall_cap")
-    head = f"показано {shown} из {raw} отданных индексом"
+    head = frame_language.text('owned.frame_layout.911e7d901d05', v0=shown, v1=raw)
     if cap is not None:
-        head += f" при потолке k={int(cap)}"
+        head += frame_language.text('owned.frame_layout.88e13b8ea476', v0=int(cap))
     bits = [own(head)]
     dropped = max(0, raw - kept)
     if dropped:
-        named = [(label, int(snap.get(key) or 0)) for key, label in _RECALL_DROPS]
+        named = [(frame_language.owned_label(label), int(snap.get(key) or 0))
+                 for key, label in _RECALL_DROPS]
         named = [(label, count) for label, count in named if count]
         if named:
-            bits.append(own(f"снято {dropped}: {named[0][0]} {named[0][1]}"))
+            bits.append(own(frame_language.text('owned.frame_layout.68c229f7073e', v0=dropped, v1=named[0][0], v2=named[0][1])))
             bits.extend(own(f"{label} {count}") for label, count in named[1:])
         else:
-            bits.append(own(f"снято {dropped}: фильтры этому ходу не назвались"))
-    bits.append(own("кандидатов до ранжирования индекс не отдаёт"))
+            bits.append(own(frame_language.text('owned.frame_layout.7145c30c951f', v0=dropped)))
+    bits.append(own(frame_language.text('owned.frame_layout.bbda4b8cf2dd')))
     return DOT.join(bits)
 
 
@@ -789,15 +793,15 @@ def origin(hit: dict, path: str, trust: str = "", origin_label: str = "") -> str
     # поэтому здесь они считаются, а подпись тира называет их числом — так оба слота
     # оказываются заполнены наблюдёнными данными, а не формой без данных.
     if str(hit.get("source_type") or "") == "skill":
-        facets.append(own("навык"))
+        facets.append(own(frame_language.text('owned.frame_layout.8a256daa2e51')))
         _bump("recall_skills")
     signals = hit.get("signals")
     if isinstance(signals, dict) and signals.get("contradiction"):
-        facets.append(own("спор"))
+        facets.append(own(frame_language.text('owned.frame_layout.2b753a77f4f6')))
         _bump("recall_conflicts")
     supersedes = hit.get("supersedes")
     if isinstance(supersedes, (list, tuple)) and supersedes:
-        facets.append(_mixed("отменяет ", inline(supersedes[0])))
+        facets.append(_mixed(frame_language.text('owned.frame_layout.8fed15abf8d7'), inline(supersedes[0])))
     if rel:
         facets.append(inline(rel))
     passport = "- [" + str(DOT.join([f for f in facets if f])) + "]"
@@ -820,11 +824,10 @@ def _short_date(value) -> str:
 # PRAXIS_FRAME_HEAD_STABLE). Содержание — то же, что несли блоки `contract.unknown_authority`
 # и `contract.family_audience` в system; место другое, слово в слово про право не меняется.
 AUTHORITY = {
-    "owner": "полномочия владельца",
-    "family": "роль FAMILY назначена владельцем; owner-руки не его",
-    "known": "знакомый; полномочий владельца нет",
-    "unknown": ("не в известном наборе; полномочий владельца нет: впустить в «свои» может "
-                "только Егор, чужое приватное остаётся за этой аудиторией"),
+    "owner": "layout.authority.owner",
+    "family": "layout.authority.family",
+    "known": "layout.authority.known",
+    "unknown": "layout.authority.unknown",
 }
 
 LABELS = (("situation.place", "место"), ("situation.speaker", "говорит"),
@@ -862,8 +865,12 @@ def _line(label: str, value: Own) -> str:
     физической строке, и таких строк единицы.
     """
     body = str(value) or DASH
-    indent = " " * (2 + _PAD + 2)
-    head = "  " + label.ljust(_PAD) + "  "
+    label = frame_language.owned_label(label)
+    def width(text):
+        return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+    pad = max(_PAD, *(width(frame_language.owned_label(item)) for _, item in LABELS))
+    indent = " " * (2 + pad + 2)
+    head = "  " + label + " " * (pad - width(label) + 2)
     rows: list[str] = []
     current = ""
     for piece in body.split(gutter.SLOT_SEP):
@@ -877,6 +884,7 @@ def _line(label: str, value: Own) -> str:
     return head + ("\n" + indent).join(rows) + "\n"
 
 
+@frame_language.pinned
 def situation(ctx=None, *, speaker=None, tooled: bool = True, home: bool = True) -> str:
     """Зона `<CURRENT_SITUATION>` — единственный ЗАГЛАВНЫЙ тег кадра.
 
@@ -955,31 +963,31 @@ def situation(ctx=None, *, speaker=None, tooled: bool = True, home: bool = True)
 
 def _place(ctx, snap: dict) -> tuple[Own, str]:
     if ctx is None:
-        return own("фоновый проход: канал этому ходу не назван"), "branch"
+        return own(frame_language.text('owned.frame_layout.3d0c86827a08')), "branch"
     if getattr(ctx, "chat_id", None) is None:
         # Её собственный ход: комнаты нет вовсе. Без этой ветки зона печатала «без названия ·
         # личка · аудитория=owner» — то есть сообщала о разговоре там, где разговора нет, и
         # стояла ближе к реплике, чем правда из системного текста (agent.py:7052).
-        return own("комнаты нет: это твой собственный ход, здесь нет места и собеседника"), "branch"
+        return own(frame_language.text('owned.frame_layout.7c54937c3a8d')), "branch"
     bits: list[Own] = []
     # ⚠ Название публичной группы ставит ЕЁ АДМИН — то есть посторонний (обход 4).
     title = inline(getattr(ctx, "title", ""))
-    bits.append(title or own("без названия"))
-    bits.append(own("личка" if getattr(ctx, "is_dm", True) else "группа"))
+    bits.append(title or own(frame_language.text('owned.frame_layout.6f22b5a01ee1')))
+    bits.append(own(frame_language.text('owned.frame_layout.5ba87ed8f35f') if getattr(ctx, "is_dm", True) else frame_language.text('owned.frame_layout.232309a0a7bc')))
     size = getattr(ctx, "size", None)
     if isinstance(size, int) and not isinstance(size, bool) and size > 0:
-        bits.append(own("~" + f"{size:,}".replace(",", " ") + " человек"))
+        bits.append(own("~" + f"{size:,}".replace(",", " ") + frame_language.text('owned.frame_layout.2cf7a003b8b2')))
     room = getattr(ctx, "room_chat_id", None)
     if room is not None:
         bits.append(own(f"id {room}"))
-    bits.append(own("аудитория=" + str(getattr(ctx, "scope", "") or "unknown")))
+    bits.append(own(frame_language.text('owned.frame_layout.c47449dcb8ed') + str(getattr(ctx, "scope", "") or "unknown")))
     mode = snap.get("room_mode")
     # ⚠ Здесь стояло «профиля комнаты нет» — утверждение о ФАЙЛЕ, которого зона не наблюдала.
     # Наблюдено: легаси-профиль без машинной шапки (`structured=False`, agent.py:7148) едет в
     # кадр тиром «ЭТА КОМНАТА» со своим текстом, а зона в том же кадре отрицает его существование.
     # Различить, кто из двух врёт, по кадру было нельзя. Слот говорит теперь ровно то, что в
     # снимке есть: объявлен ли машинный режим. О наличии профиля говорит тир — один факт, один носитель.
-    bits.append(own("mode=" + str(mode)) if mode else own("режим комнаты не объявлен"))
+    bits.append(own("mode=" + str(mode)) if mode else own(frame_language.text('owned.frame_layout.630722b6c636')))
     disclosure = snap.get("room_disclosure")
     if disclosure:
         bits.append(own("disclosure=" + str(disclosure)))
@@ -990,11 +998,11 @@ def _speaker(ctx, speaker, snap: dict) -> tuple[Own, str]:
     name = inline(speaker)
     principal = getattr(ctx, "principal_id", None) if ctx is not None else None
     if ctx is not None and getattr(ctx, "praxis_self", False):
-        return own("фоновый проход: отправитель кадру не назван, ход мой собственный"), "branch"
+        return own(frame_language.text('owned.frame_layout.7c094f232869')), "branch"
     if not name and principal is None:
-        return own("фоновый проход: отправитель кадру не назван"), "branch"
+        return own(frame_language.text('owned.frame_layout.fb440e76edb4')), "branch"
     if not name:
-        return own(f"пусто: tg {principal} есть, имени в кадре нет"), "empty"
+        return own(frame_language.text('owned.frame_layout.36fa54f61ed0', v0=principal)), "empty"
     bits = [name]
     # ⚠ ОСНОВАНИЕ ЛИЧНОСТИ И НАЛИЧИЕ ПАМЯТИ — РАЗНЫЕ ФАКТЫ (её требование 06.08).
     # Стояло одно `досье есть`, и оно отвечало на вопрос о ПАМЯТИ, притворяясь ответом на
@@ -1004,37 +1012,37 @@ def _speaker(ctx, speaker, snap: dict) -> tuple[Own, str]:
     # подтверждён и открыт ли по нему файл.
     if principal is not None:
         bits.append(own(f"tg {principal}"))
-        bits.append(own("личность установлена транспортом"))
-        bits.append(own("досье привязано по tg id" if snap.get("dossier")
-                        else "досье по tg id не привязано"))
+        bits.append(own(frame_language.text('owned.frame_layout.5ac98a9df27f')))
+        bits.append(own(frame_language.text('owned.frame_layout.d52f7a15cc0a') if snap.get("dossier")
+                        else frame_language.text('owned.frame_layout.2a55513dc3bc')))
     else:
         # Имя есть, подтверждённого принципала нет: назвать это «личностью» было бы
         # ровно тем, что доктрина запрещает — имя личности не назначает.
-        bits.append(own("личность транспортом НЕ подтверждена: имя личности не назначает"))
+        bits.append(own(frame_language.text('owned.frame_layout.76b36c17e141')))
     if getattr(ctx, "owner", False):
-        bits.append(own("это Егор"))
+        bits.append(own(frame_language.text('owned.frame_layout.d6061c6c2a8a')))
     # 13.09, PRAXIS_FRAME_HEAD_STABLE: полномочия ЭТОГО хода живут здесь, а не в system, —
     # иначе смена говорящего меняла system на 17-й тысяче знаков и рвала префикс кэша.
     # Факт наблюдаемый, не предписание: что можно этому человеку, решают гейты при вызове.
     authority = AUTHORITY.get(str(snap.get("authority") or ""))
     if authority:
-        bits.append(own(authority))
+        bits.append(own(frame_language.text(authority)))
     return DOT.join(bits), ""
 
 
 def _address(ctx, snap: dict) -> tuple[Own, str]:
     if ctx is None:
-        return own("адрес ответа этому ходу не назван"), "branch"
+        return own(frame_language.text('owned.frame_layout.10db04235932')), "branch"
     if getattr(ctx, "chat_id", None) is None:
         # Тот же корень, что у `место`: без этой ветки её собственный ход читал «ответ уйдёт
         # в личку, видит один человек» — обещание адресата там, где адресата нет.
-        return own("адресата нет: этот проход ничего никуда не отправляет"), "branch"
+        return own(frame_language.text('owned.frame_layout.55445ab1a517')), "branch"
     bits: list[Own] = []
     if getattr(ctx, "is_dm", True):
-        bits.append(own("ответ уйдёт в личку, видит один человек"))
+        bits.append(own(frame_language.text('owned.frame_layout.448b56409e2d')))
     else:
-        bits.append(own("ответ уйдёт в общую ленту, видят все"))
-        bits.append(own("это не личка"))
+        bits.append(own(frame_language.text('owned.frame_layout.726a428704ed')))
+        bits.append(own(frame_language.text('owned.frame_layout.433a9a7ee328')))
     # Крючок реплая — на ТО САМОЕ сообщение, на которое идёт этот пас, а не на последнее в
     # ленте: последним запросто окажется чужая ветка, и зона отправила бы её ответ не туда.
     # ⚠ 15.08. КРЮЧОК ПРОПАДАЛ РОВНО ТАМ, ГДЕ ОН НУЖНЕЕ ВСЕГО.
@@ -1058,10 +1066,10 @@ def _address(ctx, snap: dict) -> tuple[Own, str]:
         # (agent.py, блок [reply]) — аргумент. Хранимая копия разошлась с правдой, только
         # копия лежала в моей же голове.
         import work_loop as _wl
-        bits.append(own(f"реплаем: reply_to={hook}" if _wl.reply_hand_enabled()
-                        else f"реплаем: ОТВЕТ->#{hook}"))
+        bits.append(own(frame_language.text('owned.frame_layout.922aeef074ba', v0=hook) if _wl.reply_hand_enabled()
+                        else frame_language.text('owned.frame_layout.3d1a6fd8446f', v0=hook)))
     if snap.get("writing"):
-        bits.append(own("вещательный канал — см. тир КУДА ЗДЕСЬ УХОДИТ ОТВЕТ"))
+        bits.append(own(frame_language.text('owned.frame_layout.95ab839af344')))
     return DOT.join(bits), ""
 
 
@@ -1087,13 +1095,13 @@ def _timing(ctx, snap: dict) -> tuple[Own, str]:
     # `(снято при сборке хода)` неубираемо. На возобновлении (agent.py:10603) кадр
     # подставляется ДОСЛОВНО, и без оговорки зона превращается из честного снимка в
     # утверждение о настоящем: часы показывали бы момент, которого уже нет.
-    bits = [own(_clock()), own("(снято при сборке хода)")]
+    bits = [own(_clock()), own(frame_language.text('owned.frame_layout.7e3c045bc6d2'))]
     age = getattr(ctx, "address_age_sec", None) if ctx is not None else None
     if isinstance(age, (int, float)) and not isinstance(age, bool) and 0 <= age < 10 ** 9:
-        bits.append(own(f"обращение {int(round(age))} с назад"))
+        bits.append(own(frame_language.text('owned.frame_layout.d9f63269fa8e', v0=int(round(age)))))
     missed = getattr(ctx, "missed_hours", None) if ctx is not None else None
     if isinstance(missed, (int, float)) and not isinstance(missed, bool) and missed > 0:
-        bits.append(own(f"меня здесь не было {missed:.0f} ч"))
+        bits.append(own(frame_language.text('owned.frame_layout.7409cf90e4de', v0=missed)))
     return DOT.join(bits), ""
 
 
@@ -1118,17 +1126,17 @@ def _dialogue(snap: dict) -> list[Own]:
         # где доставлять нечего. Это её первый ход в этой комнате, а не обрезка; слот
         # молчит, а свою пустоту называет сам `_feed` тем зерном, которое у него есть.
         return []
-    bits = [own("разговора доставлено " + str(delivered))]
+    bits = [own(frame_language.text('owned.frame_layout.2362cac5d999') + str(delivered))]
     if available is not None and int(available) > delivered:
-        bits.append(own("из " + str(int(available)) + " — ОБРЕЗАНО сверху"))
+        bits.append(own(frame_language.text('owned.frame_layout.ef9f13d03f4e') + str(int(available)) + frame_language.text('owned.frame_layout.d2f12ae60a54')))
     elif available is not None:
-        bits.append(own("полнота архива не установлена"))
+        bits.append(own(frame_language.text('owned.frame_layout.82e13b6f02be')))
     limit = snap.get("tape_limit")
     if limit is not None:
-        bits.append(own("предел выборки " + str(int(limit))))
+        bits.append(own(frame_language.text('owned.frame_layout.bf21d4609275') + str(int(limit))))
     source = str(snap.get("tape_source") or "").strip()
     if source:
-        bits.append(own("источник: " + source))
+        bits.append(own(frame_language.text('owned.frame_layout.eb7949a8168b') + source))
     return bits
 
 
@@ -1139,17 +1147,17 @@ def _feed(ctx, snap: dict) -> tuple[Own, str]:
         if dialogue:
             # Ленты соседей нет, а сам разговор доставлен — молчать о нём было бы
             # четвёртым нулём: «до решения не дошли» там, где решение принято.
-            return DOT.join(dialogue + [own("карта адресных ответов этому ходу не собрана")]), ""
-        return own("пусто: карта адресных ответов этому ходу не собрана"), "empty"
+            return DOT.join(dialogue + [own(frame_language.text('owned.frame_layout.04046b4f9b3c'))]), ""
+        return own(frame_language.text('owned.frame_layout.fb19e85191e8')), "empty"
     authors = {str(row[1]) for row in targets if len(row) > 1}
-    bits = dialogue + [own(_plural(len(targets), "сообщение", "сообщения", "сообщений")
-                           + " от " + _plural(len(authors), "человека", "человек", "человек"))]
+    bits = dialogue + [own(frame_language.text('layout.feed_counts',
+                                               messages=len(targets), authors=len(authors)))]
     if ctx is not None and getattr(ctx, "addressed", False):
-        bits.append(own("мне адресовано"))
+        bits.append(own(frame_language.text('owned.frame_layout.18f41eec6220')))
     else:
-        bits.append(own("прямого обращения ко мне нет"))
+        bits.append(own(frame_language.text('owned.frame_layout.58fc87a02c7d')))
     if ctx is not None and not getattr(ctx, "is_dm", True) and len(authors) > 1:
-        bits.append(own("рядом идут чужие ветки"))
+        bits.append(own(frame_language.text('owned.frame_layout.bf04cde4b30f')))
     return DOT.join(bits), ""
 
 
@@ -1168,7 +1176,7 @@ def _working(ctx, snap: dict) -> tuple[Own, str]:
         # мимо стока, — и реплика человека рисовала поддельный показатель прибора СНАРУЖИ
         # кавычек. Снаружи кавычек чужому байту теперь физически нечем оказаться: он входит
         # через сток, а сток кавычки и ставит.
-        bits.append(_mixed("спрошено: ", inline(asked[:_ASKED_CAP] + "…" if cut else asked)))
+        bits.append(_mixed(frame_language.text('owned.frame_layout.29abab06d0f9'), inline(asked[:_ASKED_CAP] + "…" if cut else asked)))
     # ⚠ АКТИВНЫЙ КОНТЕКСТ — ТОЛЬКО АДРЕСНЫЙ. Её слова: «в зоне должны находиться только
     # нити, которые ПРЯМО относятся к текущему человеку, комнате или reply-chain, с
     # источником. Если таких нет — `в работе: нет адресной активной нити`. Пустота здесь
@@ -1181,14 +1189,13 @@ def _working(ctx, snap: dict) -> tuple[Own, str]:
     # перенос → ⟨CR⟩, «» → <>, SLOT_SEP недостижим, иначе реплика человека
     # расщепляла бы слот кадра (BLOCK-дефект ревью 6aa57124).
     bits.append(DOT.join([inline(item) for item in threads]) if threads
-                else own("нет адресной активной нити"))
+                else own(frame_language.text('owned.frame_layout.adca2d8886f5')))
     included, offered = snap.get("tiers_included"), snap.get("tiers_offered")
     if included is not None and offered is not None:
         # Про КАДР, а не про разговор: полнота ленты живёт строкой «лента» и только там.
-        bits.append(own(f"тиров {int(included)} из {int(offered)}, "
-                        f"обрезано {int(snap.get('tiers_dropped') or 0)}"))
+        bits.append(own(frame_language.text('owned.frame_layout.424cdac75f61', v0=int(included), v1=int(offered), v2=int(snap.get('tiers_dropped') or 0))))
     if not bits:
-        return own("пусто: ни реплики, ни собранных тиров этому ходу не назвали"), "empty"
+        return own(frame_language.text('owned.frame_layout.1391d1f29796')), "empty"
     return DOT.join(bits), cut
 
 

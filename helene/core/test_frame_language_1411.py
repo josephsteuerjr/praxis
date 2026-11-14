@@ -89,6 +89,24 @@ class FrameLanguages(unittest.TestCase):
         self.assertIn('AUTHORED Русский prose',resident_skills.render(self.skills)[0])
         self.assertEqual(before,{str(p):p.read_bytes() for p in self.skills.rglob('*.md')})
 
+    def test_catalog_revision_is_coherent_for_the_turn_and_fresh_next_turn(self):
+        catalogs=self.root/'catalogs';catalogs.mkdir()
+        for lang in frame_language.LANGUAGES:
+            (catalogs/f'{lang}.json').write_text(json.dumps(frame_language.catalog(lang)),encoding='utf-8')
+        self.write_config('fr')
+        with patch.object(frame_language,'_ROOT',catalogs):
+            with frame_language.pin():
+                first=frame_language.text('skills.in_frame')
+                fingerprint=frame_language.fingerprint()
+                value=json.loads((catalogs/'fr.json').read_text(encoding='utf-8'))
+                value['skills.in_frame']+=' UPDATED'
+                (catalogs/'fr.json').write_text(json.dumps(value),encoding='utf-8')
+                self.assertEqual(frame_language.text('skills.in_frame'),first)
+                self.assertEqual(frame_language.fingerprint(),fingerprint)
+            with frame_language.pin():
+                self.assertEqual(frame_language.text('skills.in_frame'),first+' UPDATED')
+                self.assertNotEqual(frame_language.fingerprint(),fingerprint)
+
     def test_unreadable_config_retains_only_same_agents_last_valid_choice(self):
         self.write_config('fr',False)
         self.assertEqual(frame_language.language(),'fr')

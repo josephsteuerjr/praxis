@@ -114,13 +114,31 @@ def _catalog(path: str, mtime_ns: int, size: int) -> tuple[dict[str, str], str]:
 
 
 def _loaded(language: str) -> tuple[dict[str, str], str]:
+    pinned = _pinned.get()
+    snapshots = pinned.setdefault('catalogs', {}) if pinned is not None else None
+    if snapshots is not None and language in snapshots:
+        return snapshots[language]
     path = _ROOT / f"{language}.json"
     stat = path.stat()
-    return _catalog(str(path), stat.st_mtime_ns, stat.st_size)
+    loaded = _catalog(str(path), stat.st_mtime_ns, stat.st_size)
+    if snapshots is not None:
+        snapshots[language] = loaded
+    return loaded
 
 
 def catalog(language: str) -> dict[str, str]:
     return _loaded(language)[0]
+
+
+def owned_label(value: str) -> str:
+    """Display an explicitly catalogued product label, preserving unknown extensions.
+
+    Call only for owned headings, enum captions or table metadata. Never apply to
+    user messages, authored document bodies, guest slots or source identifiers.
+    """
+    from frame_labels import KEYS
+    key = KEYS.get(value)
+    return text(key) if key is not None else value
 
 
 def text(key: str, **values) -> str:

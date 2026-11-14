@@ -957,14 +957,16 @@ class NoTokensAndNoContent(FrameBase):
         # Предмет теста от этого не меняется: ярлык обязан быть литералом кода, который
         # ВИДЕН в кадре целиком, — просто видимость проверяется по обеим его частям.
         for label in labels:
-            head, remark = frame_layout.split_title(label)
+            head, remark = frame_layout.split_title(frame_layout.frame_language.owned_label(label))
+            head = frame_layout.frame_language.owned_label(head)
+            remark = frame_layout.frame_language.owned_label(remark)
             self.assertIn(head.upper(), evidence_text,
                           "заголовок ярлыка не из кадра — это новая утечка")
             if remark:
                 self.assertIn(remark, evidence_text,
                               "оговорка ярлыка исчезла из кадра — сказанное потерялось")
         for label in zone_labels:
-            self.assertIn(label, evidence_text,
+            self.assertIn(frame_layout.frame_language.owned_label(label), evidence_text,
                           "ярлык строки зоны не из кадра — это новая утечка")
 
 

@@ -115,7 +115,8 @@ PARAGRAPH = ("Он сказал, что архитектура памяти об
 # руки, непрерывность, живой коммит. Повод — живая конфабуляция 13.08 в AbstractDL:
 # спросили про архитектуру, в кадре не было ни одного факта о себе, зато было чужое
 # слово «DeepSeek» из ленты — им она и ответила. Число перемерено, а не обещано.
-PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 718, 1190, 1944, 968
+# 14.11 edition: generic owner caption replaces the personal name (+3 characters).
+PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 721, 1190, 1947, 968
 # Третье слагаемое живёт константой рядом с остальными, а не выводится в тесте: если гуттер
 # реплики однажды подорожает, это обязано краснить именно здесь.
 PRICE_REPLY = 2
@@ -381,7 +382,7 @@ class SixLinesAlwaysAndThreeDifferentZeros(ZoneBase):
         self.assertIn("AbstractDL Chat", zone)
         self.assertIn("Пётр", zone)
         self.assertIn("обращение 182 с назад", zone)
-        self.assertIn("3 сообщения от 3 человек", zone)
+        self.assertIn(frame_layout.frame_language.text('layout.feed_counts', messages=3, authors=3), zone)
         for line in zone.split("\n"):
             if line.startswith("  ") and line[2:3] != " ":
                 self.assertNotEqual(line[12:13], frame_layout.DASH,
@@ -772,14 +773,15 @@ class InAGroupThePeopleStayApart(ZoneBase):
         zone = zone_of(self.turn(ctx=ctx)["tail"])
         feed = next(ln for ln in zone.split("\n") if ln.startswith("  лента"))
         authors = {row[1] for row in ctx.reply_targets}
-        self.assertIn(f"{len(ctx.reply_targets)} сообщения от {len(authors)} человек", feed)
+        self.assertIn(frame_layout.frame_language.text('layout.feed_counts',
+                      messages=len(ctx.reply_targets), authors=len(authors)), feed)
         self.assertIn("рядом идут чужие ветки", feed)
 
     def test_a_single_voice_room_does_not_claim_foreign_threads(self):
         ctx = self.group(reply_targets=((553, "Пётр", "а что"),))
         zone = zone_of(self.turn(ctx=ctx)["tail"])
         feed = next(ln for ln in zone.split("\n") if ln.startswith("  лента"))
-        self.assertIn("1 сообщение от 1 человека", feed)
+        self.assertIn(frame_layout.frame_language.text('layout.feed_counts', messages=1, authors=1), feed)
         self.assertNotIn("чужие ветки", feed)
 
 
