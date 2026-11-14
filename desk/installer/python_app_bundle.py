@@ -89,10 +89,11 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
     (app/'component-downloads.json').write_bytes(downloads)
     if runtime_wheels:install_runtime_dependencies(output/'runtime',runtime_wheels)
     for pth in (output/'runtime').glob('python*._pth'):
+        from installer.embedded_python_paths import with_hands
         text=pth.read_text(encoding='utf-8')
         for entry in ('..\\app','..\\app\\localharness'):
             if entry not in text.splitlines():text+='\n'+entry+'\n'
-        pth.write_text(text,encoding='utf-8')
+        pth.write_text(with_hands(text),encoding='utf-8')
     for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('deskd','localharness'):
         shutil.copytree(DESK/name,app/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))

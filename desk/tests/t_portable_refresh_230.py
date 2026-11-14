@@ -31,11 +31,13 @@ def put(root, name, data):
 
 
 class Fixture:
-    def __init__(self, root, *, legacy=False):
+    def __init__(self, root, *, legacy=False, hands=False):
         self.root, self.source = root, root / 'source'
         for n in ('agent.py', 'llm.py', 'turns.py', 'forge.py', 'forge_worker.py'):
             put(self.source, 'praxis/' + n, 'VALUE = "base"\n')
         put(self.source, 'praxis/requirements.txt', 'psutil==7.0.0\n')
+        if hands:
+            put(self.source, 'praxis/pyhands/praxis_hands.py', 'PUBLISHED_HANDS = True\n')
         put(self.source, 'praxis/xtts_tts_worker.py', 'WORKER = "canonical"\n')
         put(self.source, 'praxis/test_agent.py', '# fixture test\n')
         put(self.source, 'praxis/memory/private.md', 'DO NOT SHIP')
@@ -118,6 +120,8 @@ class Fixture:
             'tree/agent.py': Entry(b'LEGACY\n'),
             'helene.json': Entry(b'{"setup_complete":false}'),
         }
+        if hands:
+            entries['runtime/python314._pth'] = Entry(b'python314.zip\n.\n..\\tree\nimport site\n')
         if legacy:
             entries['source-admission.json'] = Entry(encoded({'format':'helene-source-admission.v1',
                 'target_version':'2.2.17','baseline_version':'2.1.1',
@@ -137,6 +141,20 @@ class PortableRefreshTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='helene-zip-test-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_windows_refresh_publishes_hands_in_embedded_python_path_and_passport(self):
+        f = Fixture(self.root, hands=True)
+        plan, replacements, removed = f.plan('windows')
+        target = self.root / 'hands.zip'
+        refresh.build(f.donor, target, plan, replacements, removed, expected_plan=plan['sha256'])
+        self.assertTrue(plan['runtime_changed'])
+        with zipfile.ZipFile(target) as z:
+            raw = z.read(PREFIX + 'runtime/python314._pth')
+            self.assertEqual(raw.decode().splitlines().count('..\\tree\\pyhands'), 1)
+            self.assertEqual(json.loads(z.read(PREFIX + 'helene-build.json'))['runtime_path_config_sha256'], sha(raw))
+            self.assertEqual(json.loads(z.read(PREFIX + 'python-package-files.json'))['files']['runtime/python314._pth'], sha(raw))
+        from embedded_python_paths import with_hands
+        self.assertEqual(with_hands(raw.decode()), raw.decode())
 
     def test_windows_refresh_removes_donor_vbs_and_refreshes_the_single_entry_instructions(self):
         from windows_archive_entry import OBSOLETE_ENTRIES,INSTRUCTION_FILES,instructions

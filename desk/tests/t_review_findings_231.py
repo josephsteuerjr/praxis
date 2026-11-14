@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'helene/core'))
 import forge
 import forge_swarm
 import llm
-from test_forge_remote_admission_2710 import RemoteAdmission
+from test_forge_remote_admission_2710 import RemoteAdmission, tree_proof
 
 
 class Findings(unittest.TestCase):
@@ -36,7 +36,8 @@ class Findings(unittest.TestCase):
             if action == 'op.start': return {'ok': True, 'id': 'op-test123'}
             self.assertEqual(params['operation_id'], 'op-test123')
             if action == 'op.stop': stopped = True; return {'ok': True}
-            return {'ok': True, 'status': 'stopped' if stopped else 'running'}
+            return {'ok': True, 'status': 'stopped' if stopped else 'running',
+                    'tree_exit': tree_proof('op-test123')}
         remote.call.side_effect = call
         remote.process.return_value = 'legacy unowned remote start'
         forge.process(self.tid, 'start', command='echo test', _parent_request_path=str(parent/'request.json'))

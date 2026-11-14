@@ -126,7 +126,12 @@ class NativeCustody(unittest.TestCase):
                 +repr(str(root/'output.log'))+'),lambda:False)\nPath('+repr(str(result))+').write_text(json.dumps(value))\n')
             captured={}
             with (root/'launcher.log').open('wb') as output:
-                proc=CommandProcess([sys.executable,'-B',str(worker)],cwd=root,stdout=output,stderr=output)
+                # The SIGKILL scenario kills the launcher itself. A CommandProcess
+                # PID on Linux now names its subreaper; losing that custodian is
+                # deliberately unconfirmed and cannot stand in for launcher death.
+                factory = CommandProcess if stop_tree else subprocess.Popen
+                proc=factory([sys.executable,'-B',str(worker)],cwd=root,stdout=output,stderr=output,
+                             start_new_session=True)
             try:
                 deadline=time.monotonic()+15
                 while not ready.exists() and time.monotonic()<deadline:
@@ -146,7 +151,10 @@ class NativeCustody(unittest.TestCase):
                 self.assertFalse(any(live(p) for p in captured.values()), 'Test sessions survived launcher death')
                 self.assertFalse(result.exists(), 'Dead launcher published successful execution evidence')
             finally:
-                proc.stop_tree()
+                if stop_tree:
+                    proc.stop_tree()
+                elif proc.poll() is None:
+                    proc.kill(); proc.wait(5)
                 for pid,birth in captured.values():
                     try:
                         p=psutil.Process(pid)

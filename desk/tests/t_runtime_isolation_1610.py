@@ -36,6 +36,7 @@ class EmbeddedRuntimeIsolation(unittest.TestCase):
         self.assertIn('import site', pth.splitlines())
         self.assertIn('..\\tree', pth.splitlines())
         self.assertEqual(pth.splitlines().count('..\\tree'), 1)
+        self.assertEqual(pth.splitlines().count('..\\tree\\pyhands'), 1)
         self.assertEqual(digest, hashlib.sha256(pth.encode('utf-8')).hexdigest())
 
     def test_worker_import_smoke_uses_bundled_python_and_fails_closed(self):
@@ -51,7 +52,7 @@ class EmbeddedRuntimeIsolation(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'ModuleNotFoundError: forge'):
                     build_dist.smoke_embedded_forge_worker(root)
             argv = run.call_args.args[0]
-            self.assertEqual(argv, [str(root / 'runtime' / 'python.exe'), '-c', 'import forge_worker'])
+            self.assertEqual(argv, [str(root / 'runtime' / 'python.exe'), '-c', 'import forge_worker, praxis_hands'])
             self.assertEqual(run.call_args.kwargs['cwd'], root / 'tree')
             self.assertEqual(run.call_args.kwargs['env']['PYTHONNOUSERSITE'], '1')
 

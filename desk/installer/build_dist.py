@@ -436,7 +436,8 @@ def build_runtime(out: Path, cache: Path) -> None:
     tree_entry = "..\\tree"
     if tree_entry not in text.splitlines():
         text = text.rstrip("\n") + "\n" + tree_entry + "\n"
-    pth.write_text(text, encoding="utf-8", newline="\n")
+    from embedded_python_paths import with_hands
+    pth.write_text(with_hands(text), encoding="utf-8", newline="\n")
     py = runtime / "python.exe"
     print("  ставлю pip…")
     # timeout на каждом шаге: подвисший индекс PyPI раньше вешал сборку навсегда
@@ -529,7 +530,7 @@ def smoke_embedded_forge_worker(out: Path) -> None:
     py = out / "runtime" / "python.exe"
     if not (tree / "forge_worker.py").is_file() or not (tree / "forge.py").is_file():
         raise SystemExit("в поставке нет forge_worker.py или forge.py")
-    result = subprocess.run([str(py), "-c", "import forge_worker"], cwd=tree,
+    result = subprocess.run([str(py), "-c", "import forge_worker, praxis_hands"], cwd=tree,
                             capture_output=True, text=True, timeout=60,
                             encoding="utf-8", errors="replace", env=_runtime_env())
     if result.returncode:

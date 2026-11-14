@@ -27,6 +27,23 @@ from portable_sources import (FRONTS, application, build_frontends, compose_core
 PLATFORMS = ('windows', 'macos', 'debian', 'fedora')
 
 
+def _windows_script_paths(package, core):
+    if 'pyhands/praxis_hands.py' not in core:
+        return None
+    names = [n for n in package.names() if re.fullmatch(r'Helene/runtime/python\d+\._pth', n)]
+    if len(names) != 1:
+        raise ValueError('Windows script library requires one embedded Python path configuration')
+    from embedded_python_paths import with_hands
+    name = names[0]
+    old = package.get(name)
+    updated = with_hands(old.data.decode('utf-8')).encode('utf-8')
+    package.put(name, Entry(updated, old.mode))
+    build = package.value('helene-build.json', {})
+    build['runtime_path_config_sha256'] = sha(updated)
+    package.put_value('helene-build.json', build)
+    return dict(path=name[len(PREFIX):], sha256=sha(updated), changed=updated != old.data)
+
+
 def _windows_bootstrap(package,source,binary=None):
     """Require current source/icon binding; compilation is a separate build."""
     source_file=source/'desk/installer/windows_launcher.rs'
@@ -402,7 +419,9 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
         # Preconfigured distribution defaults are not the selected user's state.
         for name in ('helene.json', 'source-admission-state.json', 'python-migration.json', 'owner-stop.json'):
             p.put(PREFIX + name, None)
+        path_identity = None
         if platform=='windows':
+            path_identity = _windows_script_paths(p, core)
             bootstrap=_windows_bootstrap(p,source,windows_bootstrap)
             from windows_archive_entry import OBSOLETE_ENTRIES,OBSOLETE_INSTRUCTIONS,INSTRUCTION_FILES,instructions
             for name in (*OBSOLETE_ENTRIES,*OBSOLETE_INSTRUCTIONS):p.put(PREFIX+name,None)
@@ -432,7 +451,8 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
             'optional_artifacts': optional.get('artifacts', {}),
             'replacements': {n: e.identity() for n, e in sorted(p.replacements.items())},
             'removed': sorted(p.removed), 'native_runtime_rebuilt': False,
-            'native_qualified': False, 'runtime_changed': bool(overlay_identity)}
+            'native_qualified': False, 'runtime_changed': bool(overlay_identity or path_identity and path_identity['changed']),
+            'runtime_path_config': path_identity}
         if platform=='windows':report['windows_bootstrap']=bootstrap
         report['sha256'] = sha(encoded(report))
         return report, dict(p.replacements), set(p.removed)
