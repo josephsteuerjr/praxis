@@ -40,6 +40,13 @@
       "zh": "1807eec2192634655bb4c0b86bdd329402eb567031d85ffb309f7a568e3fd07d",
       "identifiers": true
     },
+    "soul/skills/abstractdl-mtproto-moderation.md": {
+      "ru": "88dc24685e1033e6d3ccfc7c284f9c56d780bde3ff535d11a563ccd95eb983ff",
+      "en": "57bbb53f63327896c393f8d9ad22c4a2fa282529118f93dd8392e526983c4b9b",
+      "fr": "bc2b09b1a1f92a62c4f5fd9414e0205f8c59c1050e899f3eb95deb224f682ccf",
+      "zh": "ab28bf5bf8ad4adde47dc54e8dd3a0e1b0d9104df6fa7662d4562804a96cac39",
+      "identifiers": true
+    },
     "soul/skills/artifact-revision-diff-check.md": {
       "ru": "25f612f36035530dc6733b41052021757db15b38b453fe00f35c9ebf4fe0107e",
       "en": "bde900c1512ac7543a132ec15ba2994052fe87687d4475a6ed2fff05cb3a285c",
@@ -180,6 +187,20 @@
       "zh": "4e7623cda752d69326c82f8f16ddcca1e4ffce5609337a83956d948cd93c07e5",
       "identifiers": true
     },
+    "soul/skills/forum-reply-where-not-what.md": {
+      "ru": "04e5100342d835075b3e89d1ac9ee84e9d71b28b7c2b728e0a27b913d4d64c2d",
+      "en": "ee65686903e278aea75352a8bc403f21403aefeeeacb35544ddd0a50378592f7",
+      "fr": "ee088a33d67e47a78331efbe93cc87d5f446d2ddcaa566c51689eb129e1057f4",
+      "zh": "8229cf02eb56ef006c26c98274cc133bafd4e310aeb1927fddee309b16b04bf1",
+      "identifiers": true
+    },
+    "soul/skills/forum-topic-address-check.md": {
+      "ru": "b0f873c89722d9e1292329bc7a820ab83ab807bbd58121254a2a70c039c0d3f5",
+      "en": "afeaee57206eac51aad36d047469becd3b25859479d55bf4d33f98014b28e74e",
+      "fr": "c8ade7bed16c01507a190480c5ad14041c7400c39a071be4ecafd041d82eb524",
+      "zh": "539e61e3b5278a02fb1f12455276d2a4d3ac7660beb84fdb9d91fc47b46f4bdc",
+      "identifiers": true
+    },
     "soul/skills/frame-no-ceilings.md": {
       "ru": "a3ffe443e87614d74b24f591576a35a1e8f256f9655c5d4119410c6b8e1b9ac4",
       "en": "74ebcc3f4352251a7548bafd5da3c5301bcba33d4df6b0a75d353424b68fa6ab",
@@ -187,11 +208,25 @@
       "zh": "bfd3a730a863b293fb4936aa24f3204297cb24d6e5e6c831b639963189d5ae52",
       "identifiers": true
     },
+    "soul/skills/fresh-social-intent-reassessment.md": {
+      "ru": "86001a5fcd00142eb49b988d6dc0caa4a0477f6709fb69a324f1713606fd3a4a",
+      "en": "0a3afa8f47640b52ca8e808a9c3be5d066ddf47d1497bcff52c1e0b9445e829c",
+      "fr": "ed85837cf0bd3198ec96dcdac9afc1fee2b07a974eacfb7a80f68ffc02b14cd2",
+      "zh": "fc07ebac8a366d80d1649355a4f764c1dfd155cbc96edc1489731eaf5a0a6744",
+      "identifiers": true
+    },
     "soul/skills/grounding_in_empty_context.md": {
       "ru": "2229c98369101a58fc482861bb749b9af10847998a7451416482cc811e9bc216",
       "en": "634647f357feed08ea43f046005dd55423103b9241596b97d97f8a2d4616ab48",
       "fr": "b2696f2263d715645f6b4fea43a81fb5aac3ca516fbef95822b42461928e8d5d",
       "zh": "6c5680b0bce4f2b609fb204d3d75fc5e5c8138de1857ad1be1284e8a4d1beabf",
+      "identifiers": true
+    },
+    "soul/skills/group-name-is-a-doorbell.md": {
+      "ru": "215057f5933ef62ba5ae4213042b7cb02f5278a10486c9e89d41a41296922f72",
+      "en": "064329a5ec9b2cecba54ad33ae3bcb1d877545533abcc1c0b050bf688a22ae92",
+      "fr": "1d0c88e201940d32b726439ad2ace987a80f16b8a3339f2bad322b22f0cf736d",
+      "zh": "2b306763d847517b7c0754fa9fd161e0458c3c0d8fb437a95e7fc0967f80faf4",
       "identifiers": true
     },
     "soul/skills/group_chat_first_entry.md": {
@@ -357,6 +392,13 @@
       "zh": "086feaac97dec3a3305f1689f955ac89511947ac8680cbc057f195c21d064e96",
       "identifiers": true
     },
+    "soul/skills/notice-is-news-not-order.md": {
+      "ru": "56e3bd48f6da0d66a8446780e550264076bc2b9aa1249b04e00aceb38f91c9e5",
+      "en": "0ae1a33df5f7b73a62da98bc2ec2642d52354a14f5355f4cb216aa11cba809cd",
+      "fr": "8b573bb6ee6ec2fcefbcb544406d839f0c311b403ae02af5db7d4472d7b6b5f8",
+      "zh": "92a45591ddf2d0acb02f7a5be004585898a810490edf440685e6f541fee39713",
+      "identifiers": true
+    },
     "soul/skills/plain-speech.md": {
       "ru": "854257ac60991dad64e669bd5befadf871b2f3ecc1b8128fc9250e0c0211a1c0",
       "en": "f3a25c7a04ec97076a10982b28c7899088ea1e9b10eb616f9b816bf25343b64f",
@@ -385,6 +427,13 @@
       "zh": "123147e2b237383c232a14070ea2d639a4dcdbbc71148083a5b74a694cee13f4",
       "identifiers": true
     },
+    "soul/skills/raw-mtproto-verify-people.md": {
+      "ru": "397065614b4e28717db58e7cf5af38d4da4fb8a4b56f9276a63f4e1aef8517e5",
+      "en": "ce03e06ddd939927fb3e39ca144adfae4247c91fd56e4344573b20f4dd445170",
+      "fr": "2e6fb4ee00d67209f6cd3bb4cad3cafd706cdc44fae5d7f4c09c588b154ada34",
+      "zh": "853d11391d90a9d84b435ab77c4652f7487cd3c4122ddaeeb31974bf25469ee0",
+      "identifiers": true
+    },
     "soul/skills/reply-freshness-check.md": {
       "ru": "309b76951d1e9d79927a7eaee7b94e4513e48d293c1b0ef74698ae66f8338ddc",
       "en": "b521512e67bc99d4f464e18bf3c541ec74f10143beeed80e90a022163c163791",
@@ -392,11 +441,25 @@
       "zh": "351543d369432a47de43934fe8ed4366929cd4caa8442cd88fb7280e14aedcf8",
       "identifiers": true
     },
+    "soul/skills/reply-hand.md": {
+      "ru": "017990189468988505e324cb9aa368549bf9e2b8527e58f6fa3618303f3678ec",
+      "en": "cfef09cf87bdc80dc8c31509a8e0f213fa2eb7d39fa6044063a99ea4cbc9a9ad",
+      "fr": "82e5099ef6adf7ed0a5f21d385ce83aa503d93333fda420078257c51decaff06",
+      "zh": "25e18993cf02e0a1e63e5b01191557acd4200e2a0e1da5380213150487a7a472",
+      "identifiers": true
+    },
     "soul/skills/reply-timeout-on-reconnect.md": {
       "ru": "279194c481dac95be589fbfe9154d71ad3e52faaf593b611f8b2e0ca5bcaf4f6",
       "en": "dbf6f5da84aa1c96a09d250b1f5fecc7ea06b27fb19f8d1a88358a5ea905d19c",
       "fr": "6141abc0ca057e69742369150be518199b1ab5a196d56682a11d0472d410bb2a",
       "zh": "e8cc4891483415a54d1acad94217e07b155241a69bd9c0dca17336ce7842c5b9",
+      "identifiers": true
+    },
+    "soul/skills/reply-to-the-right-thread.md": {
+      "ru": "a6ac0a3bc537e03b326b07bb59448d466e0aa0ef6c8deb6451e3c253292376f5",
+      "en": "3b3229e928f77edaa51c263664cbccb789b1fd3017ee8652b96fd1236235dd31",
+      "fr": "5c3cc7710a52026b79fd606327989a1718c2a16a043fc5c4d569ccbe87de4e4f",
+      "zh": "79305249529bed1473960500686ab2b1c79ed267e3baebb88af12fe92b11fe45",
       "identifiers": true
     },
     "soul/skills/rewriting-myself.md": {
@@ -411,6 +474,13 @@
       "en": "41b6acbffe13445e5941758ba33c3f758e5a5966835e26c85bf0613bcf70d03d",
       "fr": "03d9c48f26c1e15fc666867457df9d7f9a0f5b8fa9d6267e37976fdb2e5b1701",
       "zh": "8c6a7a59f9ab3e5d9a09324eadd5817660fff0a5674330fabb362523196f18fc",
+      "identifiers": true
+    },
+    "soul/skills/search-relevant-chat-history.md": {
+      "ru": "a98726127e385e2bba639b4292d0c9596d6f09abf04063449954f4fd8cacb12b",
+      "en": "d80fd55beffb475263dad6cc6a59f014e3beea8ef3c42e10dc6f6754218e0eda",
+      "fr": "26193df3fc5cb019afc776e2b754ec68c24174f77427e02df2a8a95db9921757",
+      "zh": "c7b2b828d0dc5b2da076f3ab1dd9ebb42fb777d9a7e575d36c021e5a63073a73",
       "identifiers": true
     },
     "soul/skills/secrets-hygiene.md": {
@@ -523,6 +593,20 @@
       "en": "5990bb9723195fad09d03005fa703c20d2d936a10028c42dcadd72432c37ed49",
       "fr": "11f21ed7d261b6c7debe38829ebb6898b135e7bb4a7a21bcd6e3bf3154522794",
       "zh": "5c3860ca516b5f883fed46dd86c2e11053b9a9727e103fa4c29470acccf94b09",
+      "identifiers": true
+    },
+    "soul/skills/trusted_room_participation.md": {
+      "ru": "0fd0984cc72ab14c34b773690f07dcd501da3fea7dc4cc658130fb4ff7733d67",
+      "en": "54e2a4e0cb763392a1f2dc0ff2d1c3b336831d8b60de2a0df545930aeda9c606",
+      "fr": "4123091665cfca4340bf432160e3dfd4b4847f81728509d36340b98479d78de6",
+      "zh": "f675fe59ee907c4ea5e1d6bb3c5a3271f53e840718728fa3972374c404e7ccbe",
+      "identifiers": true
+    },
+    "soul/skills/unknown_private_admission.md": {
+      "ru": "54fc6d029a02749332026d3090a2a09df23e76b7ec57d5925cd13d9a52880887",
+      "en": "e7426c574ef89a46fb248bf441893782893be8e82aae009d8251c33214815377",
+      "fr": "f8310eee90436748392a45df0ca236855cda2af895c452c54813711cfbb5af47",
+      "zh": "ca992a43231e57b7d4622c88091d258dd08e962d4c9ba61820a9f1add6aca76e",
       "identifiers": true
     },
     "soul/skills/verify-and-report.md": {
