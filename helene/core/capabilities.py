@@ -525,6 +525,7 @@ def skill_navigation(index_path: Path) -> str:
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def snapshot() -> dict:
     """Полный снимок возможностей (owner-взгляд). Кэш по отпечатку; модель не зовётся."""
     fp = _fingerprint()
@@ -666,6 +667,7 @@ def _resident_line(skills: list[dict]) -> str:
     return frame_language.text('skills.resident_list', rows=" | ".join(shown), how=how)
 
 
+@frame_language.pinned
 def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
     """Текст для my_capabilities: аудитория и руки — РАЗНЫЕ измерения (контракт A1).
 

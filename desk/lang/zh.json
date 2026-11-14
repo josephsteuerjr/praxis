@@ -184,7 +184,7 @@
   "language.frame_hint": "用于模型上下文中的程序指令和初始技能，与界面语言无关。个人文本和历史记录保持原样。",
   "language.agent_section": "语言与表达",
   "language.living_prose": "自然表达",
-  "language.living_prose_hint": "在智能体上下文所选语言中提供清晰、自然表达的常驻提示。关闭后仍保留技能及其修改。从下一次模型请求开始生效。",
+  "language.living_prose_hint": "在上下文中持续提供清晰、自然表达的常驻提示，语言与智能体上下文一致。关闭后仍保留技能及其修改。从下一个新回合开始生效。",
   "ui.miniapp.src.main.6b2057f65a": "重试登录",
   "ui.miniapp.src.main.92e90d993c": "打开你的 Telegram 机器人菜单，或发送 /app。",
   "ui.miniapp.src.main.7cb5154f85": "正在连接应用…",

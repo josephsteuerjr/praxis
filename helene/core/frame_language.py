@@ -10,13 +10,14 @@ import contextvars
 import hashlib
 import json
 import os
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
 from string import Formatter
 
 LANGUAGES = ("ru", "en", "fr", "zh")
 _ROOT = Path(__file__).with_name("frame_text")
 _override = contextvars.ContextVar("helene_frame_language", default=None)
+_pinned = contextvars.ContextVar("helene_frame_settings", default=None)
 _last_settings: dict[str, dict] = {}
 
 
@@ -45,14 +46,50 @@ def language() -> str:
     selected = _override.get()
     if selected is not None:
         return selected
+    pinned = _pinned.get()
+    if pinned is not None:
+        return pinned['language']
     agent = settings().get("agent")
     selected = agent.get("frame_language", "ru") if isinstance(agent, dict) else "ru"
     return selected if selected in LANGUAGES else "ru"
 
 
 def living_prose_enabled() -> bool:
+    pinned = _pinned.get()
+    if pinned is not None:
+        return pinned['living_prose']
     agent = settings().get("agent")
     return not isinstance(agent, dict) or agent.get("living_prose", True) is not False
+
+
+@contextlib.contextmanager
+def pin():
+    """One coherent language choice for a turn or standalone frame read.
+
+    A saved change belongs to the next turn; it cannot produce a half-translated
+    frame or re-enable a resident halfway through an existing tool loop.
+    Nested builders share the snapshot and avoid repeated config I/O per label.
+    """
+    if _pinned.get() is not None:
+        yield
+        return
+    agent = settings().get('agent')
+    agent = agent if isinstance(agent, dict) else {}
+    selected = _override.get() or agent.get('frame_language', 'ru')
+    token = _pinned.set({'language': selected if selected in LANGUAGES else 'ru',
+                         'living_prose': agent.get('living_prose', True) is not False})
+    try:
+        yield
+    finally:
+        _pinned.reset(token)
+
+
+def pinned(function):
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        with pin():
+            return function(*args, **kwargs)
+    return invoke
 
 
 @contextlib.contextmanager

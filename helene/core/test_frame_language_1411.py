@@ -49,6 +49,29 @@ class FrameLanguages(unittest.TestCase):
             for key,value in canonical.items():
                 self.assertEqual(parameters(value),parameters(catalog[key]),f'{lang}:{key}')
 
+    def test_turn_pins_both_choices_once_and_next_turn_uses_saved_change(self):
+        self.write_config('fr',True)
+        with patch.object(frame_language,'settings',wraps=frame_language.settings) as read:
+            with frame_language.pin():
+                first=frame_language.fingerprint()
+                self.write_config('zh',False)
+                with frame_language.pin():
+                    for _ in range(5):
+                        self.assertEqual(frame_language.language(),'fr')
+                        self.assertTrue(frame_language.living_prose_enabled())
+                        self.assertEqual(frame_language.fingerprint(),first)
+                        self.assertIn('dans le contexte',frame_language.text('skills.in_frame'))
+                self.assertEqual(read.call_count,1)
+        with frame_language.pin():
+            self.assertEqual(frame_language.language(),'zh')
+            self.assertFalse(frame_language.living_prose_enabled())
+        self.write_config('en',True)
+        with self.assertRaises(RuntimeError):
+            with frame_language.pin():raise RuntimeError('fixture')
+        self.write_config('ru',False)
+        self.assertEqual(frame_language.language(),'ru')
+        self.assertFalse(frame_language.living_prose_enabled())
+
     def test_toggle_removes_only_living_prose_without_touching_files(self):
         self.add_skill('living-prose','AUTHORED Русский prose')
         self.add_skill('another-skill','OTHER RESIDENT')

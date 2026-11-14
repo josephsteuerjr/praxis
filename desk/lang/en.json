@@ -184,7 +184,7 @@
   "language.frame_hint": "The language of product instructions in the model’s context and starter skills. Independent of the interface language. Personal texts and history are preserved.",
   "language.agent_section": "Language and expression",
   "language.living_prose": "Natural expression",
-  "language.living_prose_hint": "An ongoing guide to clear, natural expression in the agent’s context language. Turning it off preserves the skill and edits. Applies from the next model request.",
+  "language.living_prose_hint": "A persistent guide to clear, natural expression in the agent’s context language. Turning it off preserves the skill and its edits. Takes effect from the next new turn.",
   "ui.miniapp.src.main.6b2057f65a": "Try signing in again",
   "ui.miniapp.src.main.92e90d993c": "Open your Telegram bot’s menu or send /app.",
   "ui.miniapp.src.main.7cb5154f85": "Connecting to the application…",

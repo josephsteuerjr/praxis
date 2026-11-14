@@ -18461,6 +18461,7 @@ def _with_context_evidence(user_msg: str | list[dict], evidence: str,
     return current if blocks is None else blocks
 
 
+@frame_language.pinned
 def _voice_impl(
     user_msg: str | list[dict],
     history: list[dict],

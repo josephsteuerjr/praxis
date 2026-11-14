@@ -184,7 +184,7 @@
   "language.frame_hint": "Langue des instructions du programme dans le contexte du modèle et des compétences initiales. Indépendante de celle de l’interface. Les textes personnels et l’historique sont conservés.",
   "language.agent_section": "Langue et expression",
   "language.living_prose": "Expression vivante",
-  "language.living_prose_hint": "Un guide permanent pour une expression claire et naturelle dans la langue du contexte de l’agent. Le désactiver conserve la compétence et ses modifications. S’applique dès la prochaine requête au modèle.",
+  "language.living_prose_hint": "Un guide permanent pour une expression claire et naturelle dans la langue du contexte de l’agent. Le désactiver conserve la compétence et ses modifications. S’applique dès le prochain nouveau tour.",
   "ui.miniapp.src.main.6b2057f65a": "Réessayer la connexion",
   "ui.miniapp.src.main.92e90d993c": "Ouvre le menu de ton bot Telegram ou envoie /app.",
   "ui.miniapp.src.main.7cb5154f85": "Connexion à l’application…",

@@ -2389,6 +2389,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
     return saved, drift, None, {"count": fold_count, "by": by, "line": line}, stuck
 
 
+@frame_language.pinned
 def capture(*, ctx, history, speaker, user_msg, tools,
             live_sections=(), now: datetime | None = None) -> dict | None:
     """Собрать тень, положить на диск, снять метрики. Возврат — строка метрик; вызывающий
