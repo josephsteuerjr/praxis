@@ -1,5 +1,6 @@
 """Task-owned remote synchronous commands: admission is short, polling is unlocked."""
 import hashlib
+from pathlib import Path
 import json
 import ntpath
 import os
@@ -8,6 +9,7 @@ import time
 import uuid
 
 TERMINAL = {'done', 'failed', 'error', 'stopped', 'timed_out'}
+ACTIVE = {'queued', 'starting', 'running', 'finishing', 'stopping'}
 STATUS_ALIASES = {'ok': 'done', 'completed': 'done', 'succeeded': 'done',
                   'cancelled': 'stopped', 'timeout': 'timed_out',
                   # hostproc.poll / body process.status: no proven outcome.
@@ -145,8 +147,13 @@ def project_result(directory,request,result,scope=None):
 def refresh(forge, directory, task, *, stop=False):
     request = forge._read_json(directory / 'request.json', {}) or {}
     result = forge._read_json(directory / 'result.json', {}) or {}
-    if result.get('status') in TERMINAL:
-        return result
+    if not isinstance(request,dict) or not isinstance(result,dict):
+        return {'status':'unknown','error':'remote custody metadata is malformed; no RPC admitted'}
+    scope=str(task.get('scope') or 'self')
+    if scope not in {'host','windows'} or (request.get('scope') and request['scope']!=scope):
+        return {**request,'status':'unknown','error':'remote scope contradicts owning task; no RPC admitted'}
+    projected=project_result(directory,request,result,task.get('scope')) if result else {}
+    if projected.get('status') in TERMINAL:return projected
     expected = request.get('backend_operation_id')
     if not request.get('remote_id') and not expected:
         return {**request, 'status': 'unknown', 'error': 'Remote admission has no confirmed operation identity'}
@@ -155,6 +162,7 @@ def refresh(forge, directory, task, *, stop=False):
         row = _call(forge, task, 'poll', request)
     except Exception as exc:
         row = {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+    if not isinstance(row,dict):row={'ok':False,'error':'remote reply is not an object; custody unknown'}
     if not request.get('remote_id') and expected:
         identity = row.get('id') if task['scope'] == 'host' else row.get('operation_id')
         if row.get('ok') and identity == expected:
@@ -163,17 +171,31 @@ def refresh(forge, directory, task, *, stop=False):
         else:
             # A missing operation is still ambiguous; never replay admission.
             row = {**row, 'ok': False}
-    terminal = row.get('terminal') or {}
-    if not isinstance(terminal, dict): terminal = {}
-    status = str(terminal.get('status') or row.get('status') or 'unknown') if row.get('ok') else 'unknown'
+    terminal = row.get('terminal')
+    terminal_valid = terminal is None or isinstance(terminal,dict)
+    terminal = terminal if isinstance(terminal,dict) else {}
+    observed = terminal.get('status') if 'status' in terminal else row.get('status')
+    status = observed if row.get('ok') and terminal_valid and isinstance(observed,str) else 'unknown'
     if status == 'exited':
-        status = 'done' if terminal.get('exit_code', row.get('exit_code')) == 0 else 'failed'
+        code=terminal.get('exit_code',row.get('exit_code'))
+        status = ('done' if code==0 else 'failed') if type(code) is int else 'unknown'
     status = STATUS_ALIASES.get(status, status)
+    if status not in TERMINAL|ACTIVE|{'unknown'}:status='unknown'
+    if task['scope']=='host' and status in TERMINAL and not tree_settled(row,request.get('remote_id') or expected or ''):
+        status='unknown'
+        row={**row,'custody_error':'backend terminal lacks command-tree-v1 settlement proof'}
     # A cancel request alone never proves termination. Only a subsequent poll does.
     value = {**request, 'status': status, 'remote_result': row}
     forge._atomic_json(directory / 'state.json', value)
     if row.get('ok') and status in TERMINAL:
-        forge._atomic_json(directory / 'result.json', value)
+        original=directory/'result.json'
+        if original.exists():
+            forge._atomic_json(directory/'exit-reconciliation.json',{
+                'original_result_sha256':hashlib.sha256(original.read_bytes()).hexdigest(),
+                'operation_id':request.get('remote_id') or request.get('backend_operation_id'),
+                'observation':value,'at':forge._now()})
+            value=project_result(directory,request,result,task.get('scope'))
+        else:forge._atomic_json(original, value)
     return value
 
 
@@ -182,6 +204,12 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
     task_id = task['id']
     unit = forge._id('proc')
     directory = forge._unit_dir(task_id, 'processes', unit)
+    return start_at(forge,task,directory,unit,command,cwd,timeout,parent_unit_id=parent_unit_id,name=name)
+
+
+def start_at(forge,task,directory,unit,command,cwd,timeout,*,parent_unit_id='',name=''):
+    if (directory/'request.json').exists():raise ValueError('remote admission identity already exists; reconcile instead of replay')
+    task_id=task['id']
     request = {'id': unit, 'task_id': task_id, 'remote': True, 'scope': task['scope'],
                'parent_unit_id': parent_unit_id, 'name': name, 'command': command, 'cwd': cwd,
                'created': forge._now(), 'status': 'unknown'}
@@ -218,10 +246,11 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
             request['status'] = 'running'
         elif (not row.get('ok') and not identity and task['scope'] == 'host'
               and ((row.get('type') == 'result' and not row.get('code'))
-                   or row.get('code') in {'unavailable', 'operation_cap', 'disk_low'})):
+                   or row.get('code') in {'unavailable', 'operation_cap', 'disk_low','root_binding_changed'})):
             # op.start's typed result refusal is pre-launch. Protocol/transport
             # errors can follow a spawn and must remain unknown.
             request['status'] = 'failed'
+            request['prelaunch_refused'] = True
             forge._atomic_json(directory / 'result.json', request)
     except Exception as exc:
         request['error'] = f'{type(exc).__name__}: {exc}'

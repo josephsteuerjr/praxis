@@ -7,6 +7,13 @@ from unittest import mock
 import forge
 import test_forge_coordination_2610 as fixtures
 
+def tree_proof(operation_id='remote-123'):
+    import hashlib
+    receipt={'nonce':'test-custodian','settled':True,'exit_code':0}
+    return {'contract':'command-tree-v1','operation_id':operation_id,'settled':True,
+            'receipt_sha256':hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'receipt':receipt}
+
 class RemoteAdmission(unittest.TestCase):
     def setUp(self):
         fixtures.Coordination.setUp(self)
@@ -70,7 +77,7 @@ class RemoteAdmission(unittest.TestCase):
                 allocated.append(ident)
                 return {'ok': False, 'code': 'timeout'}
             self.assertEqual(request['args']['operation_id'], allocated[0])
-            return {'ok': True, 'id': allocated[0], 'status': 'stopped'}
+            return {'ok': True, 'id': allocated[0], 'status': 'stopped','tree_exit':tree_proof(allocated[0])}
         with contextlib.ExitStack() as stack:
             for name, value in [('available', lambda: True), ('_token', lambda: 'test'),
                                 ('_exchange', exchange), ('_IN_DOUBT', {})]:
@@ -146,7 +153,7 @@ class RemoteAdmission(unittest.TestCase):
             if action == 'op.start': started.set(); return {'ok':True,'id':'remote-123'}
             self.assertEqual(params['operation_id'], 'remote-123')
             if action == 'op.stop': cancelled.set(); return {'ok':True}
-            return {'ok':True,'status':'stopped' if cancelled.is_set() else 'running'}
+            return {'ok':True,'status':'stopped' if cancelled.is_set() else 'running','tree_exit':tree_proof()}
         remote.call.side_effect=call
         result=[]; t=threading.Thread(target=lambda:result.append(forge.run(self.tid,'echo test',timeout=10)))
         t.start(); self.assertTrue(started.wait(2))

@@ -66,7 +66,11 @@ class Home(HomeFixture, unittest.TestCase):
         self.assertEqual(report['outcome'], 'ok')
 
     def test_bare_program_name_is_resolved_and_reported(self):
-        out, _ = self.call(argv=[Path(sys.executable).name, '--version'])
+        # Portable runtimes need not be installed on the host PATH.
+        path = os.pathsep.join((str(Path(sys.executable).parent), os.environ.get('PATH', '')))
+        with patch.dict(os.environ, PATH=path):
+            out, _ = self.call(argv=[Path(sys.executable).name, '--version'])
+        self.assertTrue(facts(out).get('started'), out)
         self.assertTrue(os.path.isabs(facts(out)['program']))
         self.assertTrue(out.endswith('[exit 0]'), out)
 

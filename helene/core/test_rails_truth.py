@@ -330,6 +330,11 @@ class Base(unittest.TestCase):
     """Тот же приём изоляции, что в test_rails: BASE и манифест — во временную папку."""
 
     def setUp(self):
+        # registry() may lazily import the edition agent, whose bootstrap adds
+        # pyhands to PYTHONPATH. Keep that import side effect inside this fixture.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix="praxis_rails_truth_"))
         self._orig = [(rails, "BASE", rails.BASE),
                       (rails, "RAILS_MD", rails.RAILS_MD),
@@ -657,7 +662,7 @@ SIGNATURE_LIMITS: dict[tuple[str, str], tuple[str | None, int]] = {
     ("tool_code_query", "limit"): (None, 40),
     ("tool_coding_inspect", "limit"): (None, 40),
     ("tool_coding_process", "timeout"): (None, 0),
-    ("tool_computer", "timeout_ms"): (None, 1500),
+    # Hélène derives per-action deadlines; None is not a hidden literal ceiling.
     # Не предел, а темп ввода; в таблице он затем, чтобы её изменение тоже требовало
     # перечитать случай, а не проезжало молча вместе с настоящими сроками.
     ("tool_computer", "inter_event_delay_ms"): (None, 0),

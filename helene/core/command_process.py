@@ -146,7 +146,9 @@ class CommandProcess:
             if not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'WEXITED', 'P_PID')):
                 raise OSError('Safe command custody requires waitid/WNOWAIT')
             kwargs['start_new_session'] = True
-            if self._deferred or (parent_lifeline and sys.platform.startswith('linux')):
+            # The Linux subreaper retains even setsid/double-fork descendants.
+            # Ordinary commands need the same custody as deferred/model calls.
+            if self._deferred or sys.platform.startswith('linux'):
                 if kwargs.get('preexec_fn') is not None:
                     raise ValueError('Deferred POSIX commands cannot use preexec_fn')
                 if sys.platform.startswith('linux') and (kwargs.get('pass_fds') or not kwargs.get('close_fds', True)):
