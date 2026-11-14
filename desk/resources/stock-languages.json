@@ -33,6 +33,13 @@
       "zh": "c6102cffc33565efbbf82ada4bce604b8301641fd59dbeb3dcbb810f2b12d2b3",
       "identifiers": true
     },
+    "soul/skills/error-is-a-class.md": {
+      "ru": "c58bdad7229d337e58d22948c51b823cdcbf4da48e457a81614e9cfcd71c48e4",
+      "en": "a4b809d283634cb828f9c19b53135826115aa524fdb3c1f822e8d480a723d163",
+      "fr": "8b3ed662c48b3896dffb8fba4b6a0d82fd24ef7562808da6c435f020c8adbfca",
+      "zh": "9e7e6d8973a2e72ae3314afa60d2112464a6cf834fec13ba91f4127a040a0bfe",
+      "identifiers": true
+    },
     "soul/skills/fence-and-broker.md": {
       "ru": "723e0734b8bc5b4cab2aca4fc742410c75d23c8fbd89a1dbbd01c43554a14dbd",
       "en": "3d7bce1c5f013cdb29a4ee350fe06d04e227a95510872c10c70b244297087990",
@@ -61,6 +68,13 @@
       "zh": "a0fc2427b4a4ecb2a9a1a08fe0498b8650e0c79af5eca5f53a8271538c5bc41b",
       "identifiers": true
     },
+    "soul/skills/frame-no-ceilings.md": {
+      "ru": "a3ffe443e87614d74b24f591576a35a1e8f256f9655c5d4119410c6b8e1b9ac4",
+      "en": "74ebcc3f4352251a7548bafd5da3c5301bcba33d4df6b0a75d353424b68fa6ab",
+      "fr": "4c8ab271280f0114585f4d5499b408295d47720eebca007400a908b89ee60e42",
+      "zh": "bfd3a730a863b293fb4936aa24f3204297cb24d6e5e6c831b639963189d5ae52",
+      "identifiers": true
+    },
     "soul/skills/hands-and-receipts.md": {
       "ru": "618601edf14d487b418c55235f9ba6a9b379cd73cc285e7cbd332b4b9eefede1",
       "en": "ad5e545901b1793897c188722a1cfe0b38808a1778eb931ba72336307570f313",
@@ -73,6 +87,20 @@
       "en": "fe8b9090725794cdd6ef6fb3c7c00c80a7b02b39db24e07261cd22857e49ecd0",
       "fr": "3f378a217644dda97c934063bedbe66cd78b51d159cf60839f54515b5b6364de",
       "zh": "8381b35573ce5565c717e6cb2934e7aa0c612ee4d74104b97139782de3648bcf",
+      "identifiers": true
+    },
+    "soul/skills/infra-by-owner-word.md": {
+      "ru": "8a44dd9d6d4b8ce777eebe791c17b2b2115d43818e34aa5ac02fc8886a2e1cb4",
+      "en": "642610bd89241593ac22c5178524cef185c75d5ef47cd35b513ec606f820ac63",
+      "fr": "ab665f1921575310784a583403bf84cef2359a6e6bb1859e879fc4e114cb1df9",
+      "zh": "e5a1ca55171668d37a65d7845c218cd97652d7ebf279438c387ce2c6b6dd1f2d",
+      "identifiers": true
+    },
+    "soul/skills/inherited-names.md": {
+      "ru": "5c03cf67a41ef2863d999c4440c5c2af1dd8a1d1c61a470590f4be8a0db41e69",
+      "en": "4407b68dd6d75b3cddbe576e7e0d0914d8df35175684853b4f41465a86906634",
+      "fr": "2fa07d7d614b2115fb66aed3a6aec6f556505809893fa19143fcd6ddc9c33313",
+      "zh": "2bddfec05cb474b63eb60827bc0990678a438775e4418c2da2cbf6a416cc39ae",
       "identifiers": true
     },
     "soul/skills/living-prose.md": {
@@ -112,6 +140,13 @@
       "zh": "0465b7c26efedda62518c98498db12b92750751d67cd6f1c0e48a92e6ea86bcc",
       "identifiers": true
     },
+    "soul/skills/memory-keeping.md": {
+      "ru": "cd3bbce8d0346b630e8006774e9d02dc9a3a529a65088bb43b9a8433799a07bb",
+      "en": "a1f6e70dd6ac9d0ca5ce848f7f3a8ecbd359efa438a5f866826ac0190ebb758d",
+      "fr": "ab41e4b0836562bf05c2474bef9b963fe59781575f09240417ad8b48fa6c0d76",
+      "zh": "961afb1552547721613f19db6269d4e93d1c19727ea4392e28bd69bbe3032d17",
+      "identifiers": true
+    },
     "soul/skills/my-own-code.md": {
       "ru": "35545ec0b351efe4f45461321905114a031f02b0c068da6664a730dad5fe93c4",
       "en": "f08ebb10d69e2acee41d882f30310063643e83a45e18765684f131ac6b629dad",
@@ -147,11 +182,25 @@
       "zh": "43e34924b98864c95c8bc807152c556b8ee9a496ed614f9653c20dd43b5721b1",
       "identifiers": true
     },
+    "soul/skills/secrets-hygiene.md": {
+      "ru": "4f067823d85dae2cbdacadacb4a0bcfec23ca944c6c91dee83145144f64ee6e3",
+      "en": "af25367130da9cebf4ae7c5c26b0e9b023e9a402e309d1a966eb65792cc20a47",
+      "fr": "81127c871fb398268bd10b76f1f6dd7ea43fb255f2e48dd7943707c240d96211",
+      "zh": "865dd6101bc291b9fe41c30b69adef0635c23f183c2f526cab1992cd3f021eb3",
+      "identifiers": true
+    },
     "soul/skills/take-shape.md": {
       "ru": "6f631ea66e11162fa5bea344f6e291cc12eb9851d32ac95b7c8f5661e3a76433",
       "en": "70ee713bdd6020c3679e4bec7fe2ededfebfd9c582e88a155d8f7ba55118c6c3",
       "fr": "11d605d18019b6c9c9a45f8b766eb3794ca05177285e5a04ee251deb75a0404b",
       "zh": "44f9fc3f423dc296359058e1ac42d1a03fd1c7119870dd8656416ae14b50f988",
+      "identifiers": true
+    },
+    "soul/skills/tool-workflow-design.md": {
+      "ru": "be6b1285cb2e541dd11b0e097f11be3b0beaf04a77a3eace0ea0e9e140714eb5",
+      "en": "5990bb9723195fad09d03005fa703c20d2d936a10028c42dcadd72432c37ed49",
+      "fr": "11f21ed7d261b6c7debe38829ebb6898b135e7bb4a7a21bcd6e3bf3154522794",
+      "zh": "5c3860ca516b5f883fed46dd86c2e11053b9a9727e103fa4c29470acccf94b09",
       "identifiers": true
     },
     "soul/skills/verify-and-report.md": {
@@ -173,6 +222,13 @@
       "en": "5a4559b58bb4490d432ad346d53f4deed1d08ca7e4cab3c6bfcc7c9270a6bb7c",
       "fr": "194403355c0f836303391da7bf7836c8e9858f07f9984cfd7fa1752dfb426b3b",
       "zh": "56782af80a0cbfc1843da0bb11c0dbc054bb9f365c891a1407b3b9a371d3aeb5",
+      "identifiers": true
+    },
+    "soul/skills/windows-paths.md": {
+      "ru": "29aacdbdc259e85c0a4a5f9887ebdc946db098de1759c51443057cba5312097f",
+      "en": "1c6ecebec1fc76f8bcf8d2a2c99031592f8db41eff72e2bf7dcdde043435e23c",
+      "fr": "e5dd21a19496de7789b873e4ddb0ee0ad218479529a2d4a500c42ab0db15569c",
+      "zh": "3964c1368fd1b2a1dce59987a1b0e46dec4156f9d431264011b2ae5e0c7525a5",
       "identifiers": true
     },
     "soul/skills/write-your-skills.md": {
