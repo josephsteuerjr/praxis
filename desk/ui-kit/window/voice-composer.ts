@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 import { VoiceSession, type VoiceTarget } from './voice-session';
 import { voiceHelp, voicePreferences, shortcutFromEvent, setVoiceNativeState, type VoiceNativeState } from './voice-preferences';
 import { electron, shell } from './api';
@@ -26,7 +27,7 @@ export async function drawVoiceWave(canvas: HTMLCanvasElement, blob: Blob) {
 export function mountVoiceAttachment(node: HTMLElement, url: string) {
   const audio=new Audio(url), play=node.querySelector<HTMLButtonElement>('[data-voice-play]')!, canvas=node.querySelector<HTMLCanvasElement>('canvas')!, time=node.querySelector<HTMLElement>('[data-voice-time]')!;
   let disposed=false;
-  const paint=()=>{play.textContent=audio.paused?'▶':'Ⅱ';play.setAttribute('aria-label',audio.paused?'Прослушать':'Пауза');time.textContent=clock(audio.currentTime)+' / '+clock(Number.isFinite(audio.duration)?audio.duration:0);};
+  const paint=()=>{play.textContent=audio.paused?'▶':'Ⅱ';play.setAttribute('aria-label',audio.paused?uiText("ui.ui.kit.window.voice.composer.a738a353ee"):uiText("ui.ui.kit.window.voice.composer.65530fd463"));time.textContent=clock(audio.currentTime)+' / '+clock(Number.isFinite(audio.duration)?audio.duration:0);};
   play.onclick=()=>{if(audio.paused){pausePaperAudio();void audio.play().catch(e=>toast(String(e)));}else audio.pause();};
   audio.addEventListener('timeupdate',paint);audio.addEventListener('loadedmetadata',paint);audio.addEventListener('pause',paint);audio.addEventListener('play',paint);
   canvas.onclick=e=>{if(Number.isFinite(audio.duration))audio.currentTime=Math.max(0,Math.min(1,e.offsetX/canvas.clientWidth))*audio.duration;};
@@ -35,13 +36,13 @@ export function mountVoiceAttachment(node: HTMLElement, url: string) {
   return ()=>{disposed=true;audio.pause();audio.removeAttribute('src');audio.load();removeEventListener('helene:recording',quiet);};
 }
 export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: HTMLElement; target(): VoiceTarget | null; send(blob: Blob,target: VoiceTarget): Promise<void> }) {
-  const bar=document.createElement('section');bar.className='voice-draft';bar.hidden=true;bar.setAttribute('aria-label','Голосовое сообщение');
-  bar.innerHTML='<button type="button" class="voice-round" data-preview aria-label="Прослушать">▶</button><div class="voice-draft-main"><div class="voice-draft-heading"><span data-state role="status"></span><span data-time>0:00</span></div><canvas width="384" height="36" aria-label="Звуковая волна"></canvas><span class="voice-recipient" data-target></span></div><button type="button" data-resume class="voice-round" aria-label="Продолжить запись">●</button><button type="button" data-send class="voice-round voice-send" aria-label="Отправить голосовое">↑</button><button type="button" data-cancel class="voice-round" aria-label="Удалить запись">×</button>';
+  const bar=document.createElement('section');bar.className='voice-draft';bar.hidden=true;bar.setAttribute('aria-label',uiText("ui.ui.kit.window.voice.composer.6e70042869"));
+  bar.innerHTML=uiText("ui.ui.kit.window.voice.composer.39bca49fae");
   options.composer.before(bar);
   const hint=document.createElement('p');hint.className='voice-hint';
   // A phone in the MiniApp has no keyboard shortcuts; the microphone is the phone's own.
-  if(electron?.presentation==='miniapp')hint.textContent='Для записи голосом нажмите на значок микрофона.';
-  else{hint.innerHTML='Для записи голосом нажмите на значок микрофона или используйте <button type="button">горячие клавиши</button>.';hint.querySelector('button')!.onclick=voiceHelp;}
+  if(electron?.presentation==='miniapp')hint.textContent=uiText("ui.ui.kit.window.voice.composer.ed4fa58311");
+  else{hint.innerHTML=uiText("ui.ui.kit.window.voice.composer.70faa69c55");hint.querySelector('button')!.onclick=voiceHelp;}
   options.composer.after(hint);
   const canvas=bar.querySelector<HTMLCanvasElement>('canvas')!, preview=new Audio();
   let previewUrl='', previewBlob: Blob | null=null, native=false, held=false, heldCode='', disposed=false;
@@ -50,15 +51,16 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
     if(disposed)return;
     bar.hidden=session.state==='idle';bar.dataset.state=session.state;bar.dataset.mode=session.sendsOnRelease?'send':'pause';
     options.mic.classList.toggle('recording',session.state==='recording');
-    options.mic.title=`Записать голосовое · ${voicePreferences().hotkey}`;
+    options.mic.title=uiText("ui.ui.kit.window.voice.composer.dc1d3c0f13", {p0: String(voicePreferences().hotkey)});
     options.mic.disabled=session.state==='starting'||session.state==='sending';
-    bar.querySelector('[data-state]')!.textContent=({idle:'',starting:'Включаю микрофон…',recording:'Запись',paused:'Можно послушать или продолжить',sending:'Отправляю…'})[session.state];
+    bar.querySelector('[data-state]')!.textContent=({idle:'',starting:uiText("ui.ui.kit.window.voice.composer.a3c68c7211"),recording:uiText("ui.ui.kit.window.voice.composer.1d80e1757a"),paused:uiText("ui.ui.kit.window.voice.composer.77826c4ea6"),sending:uiText("ui.ui.kit.window.voice.composer.c6c218822e")})[session.state];
     bar.querySelector('[data-time]')!.textContent=clock(session.seconds);
-    bar.querySelector('[data-target]')!.textContent=session.target?'Для '+session.target.name:'';
+    bar.querySelector('[data-target]')!.textContent=session.target?uiText("ui.ui.kit.window.voice.composer.9e82783b4e")+session.target.name:'';
     const busy=session.state==='starting'||session.state==='sending';
     bar.querySelector<HTMLButtonElement>('[data-preview]')!.disabled=session.state!=='paused'||!session.blob;
     bar.querySelector<HTMLButtonElement>('[data-resume]')!.disabled=busy;
     bar.querySelector('[data-resume]')!.textContent=session.state==='recording'?'Ⅱ':'●';
+    bar.querySelector('[data-resume]')!.setAttribute('aria-label',session.state==='recording'?uiText('ui.ui.kit.window.voice.composer.65530fd463'):uiText('ui.voice.continue_recording'));
     bar.querySelector<HTMLButtonElement>('[data-send]')!.disabled=busy;
     bar.querySelector<HTMLButtonElement>('[data-cancel]')!.disabled=session.state==='sending';
     if(session.state==='recording') {
@@ -76,17 +78,17 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
     if(electron?.shell==='python')void shell('voice_status',{state:session.state,seconds:Math.floor(session.seconds),target:session.target?.name||''}).catch(()=>{});
   };
   const session=new VoiceSession({
-    media:()=>{if(!navigator.mediaDevices?.getUserMedia)throw Error('В этом окне микрофон недоступен');return navigator.mediaDevices.getUserMedia({audio:true});},
+    media:()=>{if(!navigator.mediaDevices?.getUserMedia)throw Error(uiText("ui.ui.kit.window.voice.composer.0f086ed2fb"));return navigator.mediaDevices.getUserMedia({audio:true});},
     recorder:stream=>{const mime=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m));return new MediaRecorder(stream,mime?{mimeType:mime}:undefined);},
     send:options.send,changed:paint,error:toast,
   });
-  const start=(mode:'pause'|'send')=>{const target=options.target();if(!target){toast('Выбери доступный чат для записи.');return;}void session.hold(target,mode);};
+  const start=(mode:'pause'|'send')=>{const target=options.target();if(!target){toast(uiText("ui.ui.kit.window.voice.composer.5601abbdfb"));return;}void session.hold(target,mode);};
   options.mic.onclick=()=>{if(session.state==='recording')void session.send();else start('send');};
   bar.querySelector<HTMLButtonElement>('[data-resume]')!.onclick=()=>{if(session.state==='recording')session.pause();else start('send');};
   bar.querySelector<HTMLButtonElement>('[data-send]')!.onclick=()=>void session.send();
   bar.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick=()=>session.cancel();
   bar.querySelector<HTMLButtonElement>('[data-preview]')!.onclick=()=>{if(preview.paused){pausePaperAudio();void preview.play().catch(e=>toast(String(e)));}else preview.pause();};
-  for(const event of ['play','pause','ended'])preview.addEventListener(event,()=>{bar.querySelector('[data-preview]')!.textContent=preview.paused?'▶':'Ⅱ';});
+  for(const event of ['play','pause','ended'])preview.addEventListener(event,()=>{bar.querySelector('[data-preview]')!.textContent=preview.paused?'▶':'Ⅱ';bar.querySelector('[data-preview]')!.setAttribute('aria-label',preview.paused?uiText('ui.ui.kit.window.voice.composer.a738a353ee'):uiText('ui.ui.kit.window.voice.composer.65530fd463'));});
   const down=(e:KeyboardEvent)=>{
     if((e.target as Element)?.closest?.('[data-hotkey]'))return;
     if(e.key==='Escape'&&session.state!=='idle'){e.preventDefault();session.cancel();return;}
@@ -106,7 +108,7 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
   const configure=async()=>{
     if(electron?.shell!=='python')return;
     try{const state=await shell<VoiceNativeState>('voice_shortcuts',{...voicePreferences()});native=state.active;setVoiceNativeState(state);}catch{native=false;}
-    options.mic.title=`Записать голосовое · ${voicePreferences().hotkey}`;
+    options.mic.title=uiText("ui.ui.kit.window.voice.composer.dc1d3c0f13", {p0: String(voicePreferences().hotkey)});
   };
   addEventListener('keydown',down);addEventListener('keyup',up);addEventListener('blur',blur);
   addEventListener('helene:voice-shortcut',shortcut);addEventListener('helene:voice-preferences',configure);
@@ -115,7 +117,7 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
   const timer=setInterval(()=>{
     if(session.state!=='recording')return;
     bar.querySelector('[data-time]')!.textContent=clock(session.seconds);
-    if(session.seconds>=300){session.pause();toast('Пять минут — предел одного сообщения. Запись осталась на паузе.');}
+    if(session.seconds>=300){session.pause();toast(uiText("ui.ui.kit.window.voice.composer.afdfce51fe"));}
     if(analyser){const values=new Uint8Array(analyser.frequencyBinCount);analyser.getByteTimeDomainData(values);const ctx=canvas.getContext('2d');if(ctx){ctx.clearRect(0,0,384,36);ctx.fillStyle=getComputedStyle(canvas).color;for(let i=0;i<64;i++){const h=Math.max(2,Math.abs(values[i*2]-128)/128*36);ctx.fillRect(i*6,(36-h)/2,3,h);}}}
   },100);
   void configure();

@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../lang/lang";
 import { esc } from './text';
 import type { PaperMedia, MediaClient } from './paper-media';
 
@@ -8,10 +9,10 @@ export function setAudioPlayer(load: () => Promise<WaveModule>) { loader = load;
 const activePlayers = new Set<HTMLAudioElement>();
 export function pausePaperAudio() { for (const player of activePlayers) player.pause(); }
 const clock = (n: number) => { n = Number.isFinite(n) ? Math.max(0, n) : 0; return `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`; };
-const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$|[a-f0-9]{32}\.)/i.test(media.name) ? 'Голосовое сообщение' : media.name;
+const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$|[a-f0-9]{32}\.)/i.test(media.name) ? uiText("ui.ui.kit.paper.audio.6e70042869") : media.name;
 
 export function audioHTML(m: PaperMedia, data: string) {
-  return `<figure class="paper-media paper-audio" ${data}><button type="button" class="paper-audio-toggle" data-audio-toggle aria-label="Воспроизвести">▶</button><div class="paper-audio-main"><div class="paper-audio-heading"><span class="paper-audio-name">${esc(title(m))}</span><span data-audio-time>0:00</span></div><span data-audio-status role="status"></span><div class="paper-audio-detail" hidden><div class="paper-wave" aria-hidden="true"></div><input class="paper-audio-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция воспроизведения"><div class="paper-audio-meta"><button type="button" class="paper-link" data-paper-save>Сохранить…</button></div><div class="paper-transcription" data-voice-state hidden></div><button type="button" class="paper-link" data-voice-retry hidden>Повторить расшифровку</button></div></div><button type="button" class="paper-audio-details" data-audio-details aria-label="Детали голосового" aria-expanded="false">⌄</button></figure>`;
+  return uiText("ui.ui.kit.paper.audio.02851ba6b9", {p0: String(data), p1: String(esc(title(m)))});
 }
 
 /** Audio belongs to the mounted conversation, not its scrolling/virtualized row. */
@@ -22,8 +23,13 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
   const retrying = new Set<string>();
   let polling = false;
   let active: Track | undefined, disposed = false, generation = 0, volume = 1, speed = 1;
-  const bar = document.createElement('section'); bar.className = 'paper-audio-bar'; bar.hidden = true; bar.setAttribute('aria-label', 'Текущая аудиозапись');
-  bar.innerHTML = '<button type="button" data-audio-prev aria-label="Предыдущая запись">◀</button><button type="button" data-audio-bar-play aria-label="Воспроизвести">▶</button><button type="button" data-audio-next aria-label="Следующая запись">▶|</button><span data-audio-title></span><span data-audio-bar-time></span><label>Громкость <input data-audio-volume aria-label="Громкость" type="range" min="0" max="1" step="0.05" value="1"></label><label>Скорость <select data-audio-speed aria-label="Скорость"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select></label><button type="button" data-audio-close aria-label="Закрыть проигрыватель">×</button>';
+  const bar = document.createElement('section'); bar.className = 'paper-audio-bar'; bar.hidden = true; bar.setAttribute('aria-label', uiText("ui.ui.kit.paper.audio.6d9854fd43"));
+  bar.innerHTML = uiText("ui.ui.kit.paper.audio.840c2f4232");
+  for (const option of bar.querySelectorAll<HTMLOptionElement>('[data-audio-speed] option')) {
+    const value = option.value;
+    option.value = value;
+    option.textContent = Number(value).toLocaleString(locale());
+  }
   // Outside the feed's replaceChildren/scroll transform; disposed with the owner.
   const composer=root.querySelector('#composer');
   if(composer?.parentElement) { bar.dataset.docked='true'; composer.before(bar); }
@@ -35,20 +41,20 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if (disposed) return;
     for (const node of nodes()) {
       const status = statuses.get(key(node));
-      const recognition=status?.status==='error'?'Не расшифровано · детали':status?.status==='transcribing'?'Распознаю речь…':status?.status==='unavailable'?'Расшифровка недоступна · детали':'';
+      const recognition=status?.status==='error'?uiText("ui.ui.kit.paper.audio.ec5aff00b9"):status?.status==='transcribing'?uiText("ui.ui.kit.paper.audio.87cc4f69bb"):status?.status==='unavailable'?uiText("ui.ui.kit.paper.audio.c026e68ee6"):'';
       node.querySelector('[data-audio-status]')!.textContent=recognition;
       if (status) {
         const label = node.querySelector<HTMLElement>('[data-voice-state]')!, retry = node.querySelector<HTMLButtonElement>('[data-voice-retry]')!;
         label.hidden = false;
-        label.textContent = status.status === 'ready' ? '[Транскрипт голосового]: '+status.transcript : status.status === 'error' ? 'Не расшифровано: '+status.error : status.status === 'transcribing' ? 'Распознаю речь…' : status.status === 'unavailable' ? 'Состояние расшифровки недоступно' : 'Ожидает распознавания';
+        label.textContent = status.status === 'ready' ? uiText("ui.ui.kit.paper.audio.fb7a8ccf64")+status.transcript : status.status === 'error' ? uiText("ui.ui.kit.paper.audio.dbaa576b22")+status.error : status.status === 'transcribing' ? uiText("ui.ui.kit.paper.audio.87cc4f69bb") : status.status === 'unavailable' ? uiText("ui.ui.kit.paper.audio.95d1502bee") : uiText("ui.ui.kit.paper.audio.690dd9bee4");
         retry.hidden = status.status !== 'error'; retry.disabled = retrying.has(key(node)) || !!status.retry_requested;
-        retry.textContent = status.retry_requested ? 'Повтор запрошен' : 'Повторить расшифровку';
+        retry.textContent = status.retry_requested ? uiText("ui.ui.kit.paper.audio.e13054c023") : uiText("ui.ui.kit.paper.audio.17c3ca65c4");
       }
       const track = tracks.get(key(node)); if (!track) continue;
       const a = track.audio, toggle = node.querySelector<HTMLButtonElement>('[data-audio-toggle]')!;
-      toggle.textContent = a.paused ? '▶' : 'Ⅱ'; toggle.setAttribute('aria-label', a.paused ? 'Воспроизвести' : 'Пауза');
+      toggle.textContent = a.paused ? '▶' : 'Ⅱ'; toggle.setAttribute('aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
       node.querySelector('[data-audio-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
-      node.querySelector('[data-audio-status]')!.textContent = track.error || (track.loading ? 'Загружаю…' : recognition);
+      node.querySelector('[data-audio-status]')!.textContent = track.error || (track.loading ? uiText("ui.ui.kit.paper.audio.1679ed8669") : recognition);
       const seek = node.querySelector<HTMLInputElement>('.paper-audio-seek')!; seek.value = String(Number.isFinite(a.duration) && a.duration ? a.currentTime / a.duration * 1000 : 0);
       const slot = node.querySelector<HTMLElement>('.paper-wave')!;
       if (track.waveform.parentElement !== slot) slot.replaceChildren(track.waveform);
@@ -62,7 +68,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       const a = active.audio;
       bar.querySelector('[data-audio-title]')!.textContent = title(active.media);
       bar.querySelector('[data-audio-bar-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
-      const b = bar.querySelector<HTMLButtonElement>('[data-audio-bar-play]')!; b.textContent = a.paused ? '▶' : 'Ⅱ'; b.setAttribute('aria-label', a.paused ? 'Воспроизвести' : 'Пауза');
+      const b = bar.querySelector<HTMLButtonElement>('[data-audio-bar-play]')!; b.textContent = a.paused ? '▶' : 'Ⅱ'; b.setAttribute('aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
       const queue = nodes(), i = queue.findIndex(n => key(n) === client.key(active!.media));
       bar.querySelector<HTMLButtonElement>('[data-audio-prev]')!.disabled = i <= 0;
       bar.querySelector<HTMLButtonElement>('[data-audio-next]')!.disabled = i < 0 || i >= queue.length - 1;
@@ -106,7 +112,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       const audio = new Audio(); audio.preload = 'metadata'; audio.volume = volume; audio.playbackRate = speed;
       t = {media:m, audio, waveform:document.createElement('div'), listeners:[]}; tracks.set(k,t);
       for (const event of ['play','pause','timeupdate','loadedmetadata','ended','error']) {
-        const update = () => { if(event === 'play') { for(const other of activePlayers) if(other !== audio) other.pause(); activePlayers.add(audio); } if(event === 'error') t!.error = 'Формат не воспроизводится'; paint(); };
+        const update = () => { if(event === 'play') { for(const other of activePlayers) if(other !== audio) other.pause(); activePlayers.add(audio); } if(event === 'error') t!.error = uiText("ui.ui.kit.paper.audio.35d8494f82"); paint(); };
         audio.addEventListener(event,update); t.listeners.push(() => audio.removeEventListener(event,update));
       }
     }
@@ -118,7 +124,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if (t.loading) return t.loading;
     t.error = undefined;
     t.loading = (async () => {
-      const blob = await client.bytes(t.media); if (!blob.size) throw new Error('Файл пуст');
+      const blob = await client.bytes(t.media); if (!blob.size) throw new Error(uiText("ui.ui.kit.paper.audio.3362268c24"));
       if (disposed || tracks.get(client.key(t.media))!==t) return;
       t.blob = blob;
       // Source first: neither a waveform import nor audio decoding gates play.
@@ -126,7 +132,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     })();
     try { await t.loading; } catch(e) {
       t.blob=undefined;
-      if(t.url) URL.revokeObjectURL(t.url); t.url=undefined; t.error = 'Не удалось открыть. Нажми, чтобы повторить.';
+      if(t.url) URL.revokeObjectURL(t.url); t.url=undefined; t.error = uiText("ui.ui.kit.paper.audio.67a73f4a55");
       throw e;
     } finally { t.loading=undefined; paint(); }
   }
@@ -165,7 +171,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     }
     if((e.target as Element).closest('[data-voice-retry]') && client.voice) {
       const k=key(node); if(retrying.has(k)) return; retrying.add(k); paint();
-      void client.voice(media(node),true).then(status=>{if(!disposed) statuses.set(k,status);},()=>{if(!disposed) statuses.set(k,{status:'unavailable',error:'Ответ о повторе не получен; проверь состояние.'});}).finally(()=>{retrying.delete(k);paint();});
+      void client.voice(media(node),true).then(status=>{if(!disposed) statuses.set(k,status);},()=>{if(!disposed) statuses.set(k,{status:'unavailable',error:uiText("ui.ui.kit.paper.audio.ed84939867")});}).finally(()=>{retrying.delete(k);paint();});
       return;
     }
     if(!(e.target as Element).closest('[data-audio-toggle]')) return;

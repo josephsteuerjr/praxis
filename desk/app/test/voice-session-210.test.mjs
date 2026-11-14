@@ -1,6 +1,7 @@
 import {strict as assert} from 'node:assert';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import './fixtures/ru-localization.mjs';
 const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
 const {VoiceSession}=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(read('../../ui-kit/window/voice-session.ts'),{mode:'transform'})).toString('base64'));
 const {VoiceArrivals}=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(read('../../ui-kit/window/voice-arrivals.ts'),{mode:'transform'})).toString('base64'));

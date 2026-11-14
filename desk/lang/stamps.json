@@ -11213,5 +11213,345 @@
     "en": "9e89e96c",
     "fr": "9e89e96c",
     "zh": "9e89e96c"
+  },
+  "ui.ui.kit.autonomy.a42aee58d6": {
+    "en": "a42aee58",
+    "fr": "a42aee58",
+    "zh": "a42aee58"
+  },
+  "ui.ui.kit.autonomy.65530fd463": {
+    "en": "65530fd4",
+    "fr": "65530fd4",
+    "zh": "65530fd4"
+  },
+  "ui.ui.kit.autonomy.1a142cbea7": {
+    "en": "1a142cbe",
+    "fr": "1a142cbe",
+    "zh": "1a142cbe"
+  },
+  "ui.ui.kit.autonomy.605649c4db": {
+    "en": "605649c4",
+    "fr": "605649c4",
+    "zh": "605649c4"
+  },
+  "ui.ui.kit.autonomy.a9d6e7647a": {
+    "en": "a9d6e764",
+    "fr": "a9d6e764",
+    "zh": "a9d6e764"
+  },
+  "ui.ui.kit.autonomy.caf91b5daf": {
+    "en": "caf91b5d",
+    "fr": "caf91b5d",
+    "zh": "caf91b5d"
+  },
+  "ui.ui.kit.autonomy.59b6e570ab": {
+    "en": "59b6e570",
+    "fr": "59b6e570",
+    "zh": "59b6e570"
+  },
+  "ui.ui.kit.autonomy.39e74d43c1": {
+    "en": "39e74d43",
+    "fr": "39e74d43",
+    "zh": "39e74d43"
+  },
+  "ui.ui.kit.autonomy.6f6bba56e5": {
+    "en": "6f6bba56",
+    "fr": "6f6bba56",
+    "zh": "6f6bba56"
+  },
+  "ui.ui.kit.autonomy.7c68889f13": {
+    "en": "7c68889f",
+    "fr": "7c68889f",
+    "zh": "7c68889f"
+  },
+  "ui.ui.kit.autonomy.91ec39acbb": {
+    "en": "91ec39ac",
+    "fr": "91ec39ac",
+    "zh": "91ec39ac"
+  },
+  "ui.ui.kit.autonomy.604f949284": {
+    "en": "604f9492",
+    "fr": "604f9492",
+    "zh": "604f9492"
+  },
+  "ui.ui.kit.autonomy.71f9b0bcbe": {
+    "en": "71f9b0bc",
+    "fr": "71f9b0bc",
+    "zh": "71f9b0bc"
+  },
+  "ui.ui.kit.autonomy.0ee88d14e9": {
+    "en": "0ee88d14",
+    "fr": "0ee88d14",
+    "zh": "0ee88d14"
+  },
+  "ui.ui.kit.window.cleanup.notice.4511b73c27": {
+    "en": "4511b73c",
+    "fr": "4511b73c",
+    "zh": "4511b73c"
+  },
+  "ui.ui.kit.window.cleanup.notice.97afe11426": {
+    "en": "97afe114",
+    "fr": "97afe114",
+    "zh": "97afe114"
+  },
+  "ui.ui.kit.window.cleanup.notice.6f398304da": {
+    "en": "6f398304",
+    "fr": "6f398304",
+    "zh": "6f398304"
+  },
+  "ui.ui.kit.paper.audio.6e70042869": {
+    "en": "6e700428",
+    "fr": "6e700428",
+    "zh": "6e700428"
+  },
+  "ui.ui.kit.paper.audio.02851ba6b9": {
+    "en": "02851ba6",
+    "fr": "02851ba6",
+    "zh": "02851ba6"
+  },
+  "ui.ui.kit.paper.audio.6d9854fd43": {
+    "en": "6d9854fd",
+    "fr": "6d9854fd",
+    "zh": "6d9854fd"
+  },
+  "ui.ui.kit.paper.audio.840c2f4232": {
+    "en": "840c2f42",
+    "fr": "840c2f42",
+    "zh": "840c2f42"
+  },
+  "ui.ui.kit.paper.audio.ec5aff00b9": {
+    "en": "ec5aff00",
+    "fr": "ec5aff00",
+    "zh": "ec5aff00"
+  },
+  "ui.ui.kit.paper.audio.87cc4f69bb": {
+    "en": "87cc4f69",
+    "fr": "87cc4f69",
+    "zh": "87cc4f69"
+  },
+  "ui.ui.kit.paper.audio.c026e68ee6": {
+    "en": "c026e68e",
+    "fr": "c026e68e",
+    "zh": "c026e68e"
+  },
+  "ui.ui.kit.paper.audio.fb7a8ccf64": {
+    "en": "fb7a8ccf",
+    "fr": "fb7a8ccf",
+    "zh": "fb7a8ccf"
+  },
+  "ui.ui.kit.paper.audio.dbaa576b22": {
+    "en": "dbaa576b",
+    "fr": "dbaa576b",
+    "zh": "dbaa576b"
+  },
+  "ui.ui.kit.paper.audio.95d1502bee": {
+    "en": "95d1502b",
+    "fr": "95d1502b",
+    "zh": "95d1502b"
+  },
+  "ui.ui.kit.paper.audio.690dd9bee4": {
+    "en": "690dd9be",
+    "fr": "690dd9be",
+    "zh": "690dd9be"
+  },
+  "ui.ui.kit.paper.audio.e13054c023": {
+    "en": "e13054c0",
+    "fr": "e13054c0",
+    "zh": "e13054c0"
+  },
+  "ui.ui.kit.paper.audio.17c3ca65c4": {
+    "en": "17c3ca65",
+    "fr": "17c3ca65",
+    "zh": "17c3ca65"
+  },
+  "ui.ui.kit.paper.audio.bdd37eb217": {
+    "en": "bdd37eb2",
+    "fr": "bdd37eb2",
+    "zh": "bdd37eb2"
+  },
+  "ui.ui.kit.paper.audio.65530fd463": {
+    "en": "65530fd4",
+    "fr": "65530fd4",
+    "zh": "65530fd4"
+  },
+  "ui.ui.kit.paper.audio.1679ed8669": {
+    "en": "1679ed86",
+    "fr": "1679ed86",
+    "zh": "1679ed86"
+  },
+  "ui.ui.kit.paper.audio.35d8494f82": {
+    "en": "35d8494f",
+    "fr": "35d8494f",
+    "zh": "35d8494f"
+  },
+  "ui.ui.kit.paper.audio.3362268c24": {
+    "en": "3362268c",
+    "fr": "3362268c",
+    "zh": "3362268c"
+  },
+  "ui.ui.kit.paper.audio.67a73f4a55": {
+    "en": "67a73f4a",
+    "fr": "67a73f4a",
+    "zh": "67a73f4a"
+  },
+  "ui.ui.kit.paper.audio.ed84939867": {
+    "en": "ed849398",
+    "fr": "ed849398",
+    "zh": "ed849398"
+  },
+  "ui.ui.kit.window.voice.composer.a738a353ee": {
+    "en": "a738a353",
+    "fr": "a738a353",
+    "zh": "a738a353"
+  },
+  "ui.ui.kit.window.voice.composer.65530fd463": {
+    "en": "65530fd4",
+    "fr": "65530fd4",
+    "zh": "65530fd4"
+  },
+  "ui.ui.kit.window.voice.composer.6e70042869": {
+    "en": "6e700428",
+    "fr": "6e700428",
+    "zh": "6e700428"
+  },
+  "ui.ui.kit.window.voice.composer.39bca49fae": {
+    "en": "39bca49f",
+    "fr": "39bca49f",
+    "zh": "39bca49f"
+  },
+  "ui.ui.kit.window.voice.composer.ed4fa58311": {
+    "en": "ed4fa583",
+    "fr": "ed4fa583",
+    "zh": "ed4fa583"
+  },
+  "ui.ui.kit.window.voice.composer.70faa69c55": {
+    "en": "70faa69c",
+    "fr": "70faa69c",
+    "zh": "70faa69c"
+  },
+  "ui.ui.kit.window.voice.composer.dc1d3c0f13": {
+    "en": "dc1d3c0f",
+    "fr": "dc1d3c0f",
+    "zh": "dc1d3c0f"
+  },
+  "ui.ui.kit.window.voice.composer.a3c68c7211": {
+    "en": "a3c68c72",
+    "fr": "a3c68c72",
+    "zh": "a3c68c72"
+  },
+  "ui.ui.kit.window.voice.composer.1d80e1757a": {
+    "en": "1d80e175",
+    "fr": "1d80e175",
+    "zh": "1d80e175"
+  },
+  "ui.ui.kit.window.voice.composer.77826c4ea6": {
+    "en": "77826c4e",
+    "fr": "77826c4e",
+    "zh": "77826c4e"
+  },
+  "ui.ui.kit.window.voice.composer.c6c218822e": {
+    "en": "c6c21882",
+    "fr": "c6c21882",
+    "zh": "c6c21882"
+  },
+  "ui.ui.kit.window.voice.composer.9e82783b4e": {
+    "en": "9e82783b",
+    "fr": "9e82783b",
+    "zh": "9e82783b"
+  },
+  "ui.ui.kit.window.voice.composer.0f086ed2fb": {
+    "en": "0f086ed2",
+    "fr": "0f086ed2",
+    "zh": "0f086ed2"
+  },
+  "ui.ui.kit.window.voice.composer.5601abbdfb": {
+    "en": "5601abbd",
+    "fr": "5601abbd",
+    "zh": "5601abbd"
+  },
+  "ui.ui.kit.window.voice.composer.afdfce51fe": {
+    "en": "afdfce51",
+    "fr": "afdfce51",
+    "zh": "afdfce51"
+  },
+  "ui.ui.kit.window.voice.preferences.2dde0576c1": {
+    "en": "2dde0576",
+    "fr": "2dde0576",
+    "zh": "2dde0576"
+  },
+  "ui.ui.kit.window.voice.preferences.8aa82fd2af": {
+    "en": "8aa82fd2",
+    "fr": "8aa82fd2",
+    "zh": "8aa82fd2"
+  },
+  "ui.ui.kit.window.voice.preferences.bc8e451cb1": {
+    "en": "bc8e451c",
+    "fr": "bc8e451c",
+    "zh": "bc8e451c"
+  },
+  "ui.ui.kit.window.voice.preferences.597e5e1221": {
+    "en": "597e5e12",
+    "fr": "597e5e12",
+    "zh": "597e5e12"
+  },
+  "ui.ui.kit.window.voice.preferences.490f1e858c": {
+    "en": "490f1e85",
+    "fr": "490f1e85",
+    "zh": "490f1e85"
+  },
+  "ui.ui.kit.window.voice.preferences.856c9542f0": {
+    "en": "856c9542",
+    "fr": "856c9542",
+    "zh": "856c9542"
+  },
+  "ui.ui.kit.window.voice.preferences.8ef9b14661": {
+    "en": "8ef9b146",
+    "fr": "8ef9b146",
+    "zh": "8ef9b146"
+  },
+  "ui.ui.kit.window.voice.preferences.1890d2e15b": {
+    "en": "1890d2e1",
+    "fr": "1890d2e1",
+    "zh": "1890d2e1"
+  },
+  "ui.ui.kit.window.voice.preferences.faa7fb3308": {
+    "en": "faa7fb33",
+    "fr": "faa7fb33",
+    "zh": "faa7fb33"
+  },
+  "ui.ui.kit.window.voice.preferences.6f27dac8ee": {
+    "en": "6f27dac8",
+    "fr": "6f27dac8",
+    "zh": "6f27dac8"
+  },
+  "ui.ui.kit.window.voice.session.ffd107ae62": {
+    "en": "b5d5d6f5",
+    "fr": "b5d5d6f5",
+    "zh": "b5d5d6f5"
+  },
+  "ui.ui.kit.window.voice.session.719fc167e0": {
+    "en": "719fc167",
+    "fr": "719fc167",
+    "zh": "719fc167"
+  },
+  "ui.ui.kit.window.voice.session.3244b12fe4": {
+    "en": "3244b12f",
+    "fr": "3244b12f",
+    "zh": "3244b12f"
+  },
+  "ui.ui.kit.window.voice.session.4a456241fc": {
+    "en": "4a456241",
+    "fr": "4a456241",
+    "zh": "4a456241"
+  },
+  "ui.ui.kit.window.voice.session.2620403739": {
+    "en": "26204037",
+    "fr": "26204037",
+    "zh": "26204037"
+  },
+  "ui.voice.continue_recording": {
+    "en": "0ca518d3",
+    "fr": "0ca518d3",
+    "zh": "0ca518d3"
   }
 }

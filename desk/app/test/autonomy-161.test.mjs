@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import './fixtures/ru-localization.mjs';
 const code=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/autonomy.ts',import.meta.url),'utf8').replace('import { esc } from "./text";','const esc=s=>String(s).replaceAll("<","&lt;").replaceAll("\\\"","&quot;");'));
 const {autonomyWords,mountAutonomy}=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 const active={supported:true,available:true,paused:false,stopped:false,note:'active',receipt:null,pending:null};

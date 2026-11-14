@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 /** One recording, pinned recipient, explicit pause/send/cancel. No keyboard or DOM ownership. */
 export type VoiceState = 'idle' | 'starting' | 'recording' | 'paused' | 'sending';
 export interface VoiceTarget { agent: string; room: string; name: string; route?: string }
@@ -30,7 +31,7 @@ export class VoiceSession {
   async hold(target: VoiceTarget, mode: 'pause' | 'send') {
     if (this.state === 'sending' || this.state === 'starting' || this.state === 'recording') return;
     if (this.target && (this.target.agent !== target.agent || this.target.room !== target.room || this.target.route !== target.route)) {
-      this.deps.error('Сначала отправь или удали запись для «' + this.target.name + '».'); return;
+      this.deps.error(uiText("ui.ui.kit.window.voice.session.ffd107ae62", {recipient: this.target.name})); return;
     }
     this.parked = false; this.mode = mode;
     if (this.recorder?.state === 'paused') {
@@ -54,11 +55,11 @@ export class VoiceSession {
         for (const resolve of this.flushes) resolve(); this.flushes.clear();
         this.changed();
       };
-      recorder.onerror = () => { if (epoch === this.epoch) { this.cancel(); this.deps.error('Микрофон отключился. Запиши сообщение заново.'); } };
+      recorder.onerror = () => { if (epoch === this.epoch) { this.cancel(); this.deps.error(uiText("ui.ui.kit.window.voice.session.719fc167e0")); } };
       recorder.start(250); this.since = this.now(); this.state = 'recording'; this.changed();
     } catch (error) {
       stream?.getTracks().forEach(t => t.stop());
-      if (epoch === this.epoch) { this.cancel(); this.deps.error('Не удалось включить микрофон: ' + String(error)); }
+      if (epoch === this.epoch) { this.cancel(); this.deps.error(uiText("ui.ui.kit.window.voice.session.3244b12fe4") + String(error)); }
     }
   }
   release() {
@@ -91,12 +92,12 @@ export class VoiceSession {
     try {
       await new Promise<void>((resolve, reject) => {
         const finish = () => { clearTimeout(timer); this.flushes.delete(finish); resolve(); };
-        const timer = setTimeout(() => { this.flushes.delete(finish); reject(Error('Запись ещё не готова. Повтори отправку.')); }, 5000);
+        const timer = setTimeout(() => { this.flushes.delete(finish); reject(Error(uiText("ui.ui.kit.window.voice.session.4a456241fc"))); }, 5000);
         this.flushes.add(finish);
         this.recorder!.requestData();
       });
       if (epoch !== this.epoch) return;
-      if (!this.blob || this.blob.size < 128 || this.seconds < .25) throw Error('Запись слишком короткая. Продолжи её.');
+      if (!this.blob || this.blob.size < 128 || this.seconds < .25) throw Error(uiText("ui.ui.kit.window.voice.session.2620403739"));
       await this.deps.send(this.blob, target);
       if (epoch === this.epoch) this.reset();
     } catch (error) {
