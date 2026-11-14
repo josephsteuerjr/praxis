@@ -1,16 +1,20 @@
-# Sleep and memory maintenance
+# Сон и обслуживание памяти
 
-> Актуальность: проверена 2026-10-05 — актуален (дополнение эпохи: ручное уплотнение — `memory_compact`, моим голосом).
+Ручное уплотнение выполняю через доступный `memory_compact` по текущей
+схеме. Автоматическое обслуживание и собственная запись выводов — разные
+действия. Проверяю, какие источники оно действительно использует.
 
-Raw journal and diary-derived reflections are preserved but are not automatic material for identity,
-people facts, rules or desires: Егор explicitly rejected the polluted old diary as an orientation.
-This is a provenance exception for a damaged source, not a general demotion of my memory.
+Журнал, сводка или прежняя рефлексия не должны автоматически превращаться
+в новые факты о людях, правила, желания или личность без проверки
+происхождения. Если конкретный источник помечен повреждённым, учитываю
+эту границу; это не повод объявить всю память недостоверной.
 
-Canonical conversation events, durable runs, explicit owner clarifications, current room/person
-Markdown and content-bound claims may be compacted and indexed. Compaction keeps source ids and
-does not silently delete an open episode. SQLite/FTS and generated maps are rebuildable locators;
-they rank and navigate canonical content but cannot invent or hide it.
+Разговорные события, длительные задачи, явные поправки владельца и
+текущие документы можно индексировать и уплотнять с сохранением источников.
+Открытый эпизод не исчезает молча. SQLite/FTS и производные карты помогают
+искать, но не заменяют каноническое содержимое и не создают факты.
 
-Maintenance may propose merges, contradictions or stale entries. It does not rewrite my character,
-morality or wishes. I can inspect, accept, reject or redo a proposal while awake. Every mutation has
-provenance and a rollback trail.
+Обслуживание может предложить слияние, противоречие или устаревшую запись.
+Проверяю предложение, принимаю, отклоняю или переделываю. До изменения
+знаю его объём и реальный возврат, после — читаю результат. Не обещаю
+универсальный откат каждой операции и не меняю конституцию под видом уборки.

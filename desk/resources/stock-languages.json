@@ -33,6 +33,13 @@
       "zh": "6ce838390b1fb37498cf96e303df089e5aa5ad269aa60e6a5d63e1a76cf9be20",
       "identifiers": true
     },
+    "soul/skills/check-by-factual-name.md": {
+      "ru": "3f6fce1fe5e5f5835065538551573806b1877955417aa00e4aeebd770f72ae59",
+      "en": "0db0720078764eb641396f763d7d29dda186b3fce446a027699dca989661583c",
+      "fr": "a6ab13d3934c7da2503822d7ea4cef1f84465c3d7ca9d6bd2280101463f7b6da",
+      "zh": "ee89516c314424c0655940bc91b01980fca5f80e3f9c0c21012e98159c7d29a9",
+      "identifiers": true
+    },
     "soul/skills/closing-a-topic-kills-its-machines.md": {
       "ru": "7cc769c51f87b47305a63fbbc21c595a930864d4b24889d76e269c0b3927bc04",
       "en": "f1ae4b399f4c66142624bce7e8f913987b1088d614a9d1e6bee1552575cfaf04",
@@ -45,6 +52,20 @@
       "en": "dfd061b4bb28d3d45c75c5acda9d081db831ea4c9d6993a9ff90f9bbd889346f",
       "fr": "6b1cb277b2407dfb82525362160ceb2bc90b309809e941425e0e7ade5657e8f0",
       "zh": "c6102cffc33565efbbf82ada4bce604b8301641fd59dbeb3dcbb810f2b12d2b3",
+      "identifiers": true
+    },
+    "soul/skills/code_proposals.md": {
+      "ru": "a997efbf514ac2117d285413023dccd20cd2fb112cca6fde583bf57f997878b5",
+      "en": "7c9f9077a66e1b6655415848ff9c56bd59879db15b95f27034111c19e0804a89",
+      "fr": "9ee4d5bc45cc690640557e1ebbb4eefb5ffb58251871c4928e39f28a376f9f71",
+      "zh": "195343d3471035c4899f4fb733013daaccf9972695af31c6825f83853a54bb71",
+      "identifiers": true
+    },
+    "soul/skills/complexity-routing-terra-sol.md": {
+      "ru": "e043bd87f33342bbfcc97de2c1d7638ec070853317c44fcfd95577eef9371265",
+      "en": "b2eeabe1a7fa67506d29074d417a300792b8f715248103f2480ea2733363dd52",
+      "fr": "9d14b139c897cb2793828f30bafa7e8a81e5bfacd866dc9180b859a87145705d",
+      "zh": "21b9694a59dcba9d54e7696d8f48fc2ce39e02cc78e0c7f814d3be956ec58508",
       "identifiers": true
     },
     "soul/skills/email.md": {
@@ -124,6 +145,13 @@
       "zh": "8381b35573ce5565c717e6cb2934e7aa0c612ee4d74104b97139782de3648bcf",
       "identifiers": true
     },
+    "soul/skills/incoming-voice-messages-transcribe.md": {
+      "ru": "cd36851563121ff4b913f29ecfcd195827cf0676808516d8fb8807bfc73b04d4",
+      "en": "256db0394dc62ae5d6a48b16f7f25c11eb59f4e30b71099f28bf935dc3dc13aa",
+      "fr": "bf1df036b3a66c6f7853c2b8e9e990018bb7ac8f5f3d41e5e884960adcdd2dcf",
+      "zh": "538b5ed242de75ac1cc71c41da51fd20c860c223ca5dd3d8406239e94b7cf212",
+      "identifiers": true
+    },
     "soul/skills/infra-by-owner-word.md": {
       "ru": "8a44dd9d6d4b8ce777eebe791c17b2b2115d43818e34aa5ac02fc8886a2e1cb4",
       "en": "642610bd89241593ac22c5178524cef185c75d5ef47cd35b513ec606f820ac63",
@@ -136,6 +164,13 @@
       "en": "4407b68dd6d75b3cddbe576e7e0d0914d8df35175684853b4f41465a86906634",
       "fr": "2fa07d7d614b2115fb66aed3a6aec6f556505809893fa19143fcd6ddc9c33313",
       "zh": "2bddfec05cb474b63eb60827bc0990678a438775e4418c2da2cbf6a416cc39ae",
+      "identifiers": true
+    },
+    "soul/skills/journal-live-flow.md": {
+      "ru": "d8f2bbbdb76e89484f628265d9fef8fcf064c2dd5196e28501a16f4066740b30",
+      "en": "2e0b3520daeb2a109f0bf22e65e40b600ce01561771ad904e0f9cd4ad1d40acb",
+      "fr": "5aae3e0848ab0f004367f3a0804ad2fa938a0718923210c0ff150925391de2d2",
+      "zh": "6605b4835ec31d2a540941d5e5300e05a8bb5bae3d896745aef888b71c323589",
       "identifiers": true
     },
     "soul/skills/living-prose.md": {
@@ -189,6 +224,13 @@
       "zh": "961afb1552547721613f19db6269d4e93d1c19727ea4392e28bd69bbe3032d17",
       "identifiers": true
     },
+    "soul/skills/merge-gates-gnome-review.md": {
+      "ru": "1060d18b2766d194fc58244f2e52c0ece884e4474bdb835757c0d31870db3591",
+      "en": "79e3fc29f34fe1afff2b5a4ed1f103dd1824d86c75f46843e127000a8edff58c",
+      "fr": "c4fc21809f80f5f2cf2370d8b6f6343e98c3e1479f10e879f20ae6797920ce5d",
+      "zh": "bf5c4b2c6029fcf24ec5c5da2e55a4e3ccf3c922cecfeb8ad2ae6dd98d6984ab",
+      "identifiers": true
+    },
     "soul/skills/mode_ratchet.md": {
       "ru": "bfbd7211ae24a439a203a7dae1dd3b35f398f0e87ef4d5d81abbef82b578921a",
       "en": "edd75fd4f12bb096b69f74b499d21b6b4dc966fd510bff8f5b789e8b59d1c61e",
@@ -238,6 +280,13 @@
       "zh": "43e34924b98864c95c8bc807152c556b8ee9a496ed614f9653c20dd43b5721b1",
       "identifiers": true
     },
+    "soul/skills/same-numbers-are-copies.md": {
+      "ru": "34e0455a19a0b82598c34fa9bd4c48e3da674d88a55b115055aade9eb5c398cf",
+      "en": "41b6acbffe13445e5941758ba33c3f758e5a5966835e26c85bf0613bcf70d03d",
+      "fr": "03d9c48f26c1e15fc666867457df9d7f9a0f5b8fa9d6267e37976fdb2e5b1701",
+      "zh": "8c6a7a59f9ab3e5d9a09324eadd5817660fff0a5674330fabb362523196f18fc",
+      "identifiers": true
+    },
     "soul/skills/secrets-hygiene.md": {
       "ru": "4f067823d85dae2cbdacadacb4a0bcfec23ca944c6c91dee83145144f64ee6e3",
       "en": "af25367130da9cebf4ae7c5c26b0e9b023e9a402e309d1a966eb65792cc20a47",
@@ -245,11 +294,39 @@
       "zh": "865dd6101bc291b9fe41c30b69adef0635c23f183c2f526cab1992cd3f021eb3",
       "identifiers": true
     },
+    "soul/skills/self_disclosure.md": {
+      "ru": "6f93591aa88ffde3617b4ffefa09daa26369e6d446a6449b431239394a09a0e2",
+      "en": "0d285a1867b923b49704b3e45146ecea028f5f0ae875732e47ca8f83abe1483a",
+      "fr": "fdb2656034cab061add6707878805c0066b1c56450febcd4c7701fe80d5ed8bb",
+      "zh": "794924d55101af77d56ec105f3973487b6d29e57131d24cb5cdb442e3d5092fc",
+      "identifiers": true
+    },
+    "soul/skills/sleep.md": {
+      "ru": "5ec4a31d9c350bc06880f3687d5ea000021764f4e78fc264a871275e83b6d05d",
+      "en": "c8cd78c785f3dd2c5ff2a1452b8f46a792910cc11bf6041659b55b4914cf8094",
+      "fr": "c7bb4f4e790ef63fa221f216fba0923f5c35559b1c4eba3a4ad605ce9047a447",
+      "zh": "d069c500318533942b8ecd62ba2ecaa2e868ac7eae512329e293006ceeeb009f",
+      "identifiers": true
+    },
+    "soul/skills/source_transparency.md": {
+      "ru": "bc8924135fec8c03df7519d3be864b6cca3c3eb281f891c5cc936d480c17ee96",
+      "en": "6b1537deecd2f6d7d33c79b949cb74f414024a960116a2f31fd93a2c9cf803d4",
+      "fr": "ecf1e8d05f13360c83ccd8643c786531e57ec1351e243161cd8e80a5f31b658c",
+      "zh": "de094de23e23d02e73f1b8e2a76e007d88c729ced4f6e8117ad0e94040f99fe2",
+      "identifiers": true
+    },
     "soul/skills/take-shape.md": {
       "ru": "6f631ea66e11162fa5bea344f6e291cc12eb9851d32ac95b7c8f5661e3a76433",
       "en": "70ee713bdd6020c3679e4bec7fe2ededfebfd9c582e88a155d8f7ba55118c6c3",
       "fr": "11d605d18019b6c9c9a45f8b766eb3794ca05177285e5a04ee251deb75a0404b",
       "zh": "44f9fc3f423dc296359058e1ac42d1a03fd1c7119870dd8656416ae14b50f988",
+      "identifiers": true
+    },
+    "soul/skills/tasking.md": {
+      "ru": "a528da266a78fdbb539e9854826c202ecc0a731b012faad0ccef8589750ced7a",
+      "en": "bc2ce6cb6b567eb49334c4afd4b79d6dadd433f88ab0b21d34f5454a2eeda6fc",
+      "fr": "477492964497b089bae19862e81e8fbc6163de35c8580e378e43398402254127",
+      "zh": "cc26598133d0697a37310a93667b056661cff333a63fb3b4d8c2377be8eeddbe",
       "identifiers": true
     },
     "soul/skills/telegram-reconnect-delivery.md": {
@@ -292,6 +369,13 @@
       "en": "071be504289d18adb4009864165e05a7f37c1368d0059c445aa8296217f8c2a4",
       "fr": "1d4e8585c7704d4b2bb1bcdfd6385ce67ff6706b9796697283841b1dc2760bbb",
       "zh": "13047a79aeef630c29388a927c593ee2fff4d548b14b61e8144b690cfa170783",
+      "identifiers": true
+    },
+    "soul/skills/web_search_reader.md": {
+      "ru": "91c6129cb6d2d3002e0ab2505a8f5eb066bbec0bdafe342bacceb9e7ecceb6a2",
+      "en": "84ee4bfb5dd081879004e4bc8a19db341f25b3b89c1521e2176701bebc993d0d",
+      "fr": "b2a1cc40548da13815a7db77b5c74b5794885d83bfdbe0458c48177231cc2a5b",
+      "zh": "b3cb12133c97e1bbc642dde00ba05ca02b85ffd7e8feaa0b568364e2d2d410a1",
       "identifiers": true
     },
     "soul/skills/who-i-am-today.md": {
