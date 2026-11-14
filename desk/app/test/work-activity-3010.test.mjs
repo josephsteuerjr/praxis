@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
@@ -9,7 +10,7 @@ class Element {
   remove() {this.parent.children=this.parent.children.filter(child=>child!==this);}
 }
 const source=readFileSync(new URL('../../ui-kit/window/work-activity.ts',import.meta.url),'utf8');
-const code=stripTypeScriptTypes(source).replace(/export /g,'');
+const code=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
 const document={createElement:tag=>new Element(tag)};
 const {workActivity,publishActivity,observeActivity}=new Function('document',code+';return {workActivity,publishActivity,observeActivity}')(document);
 const root=new Element('section'),render=workActivity(root);

@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../../lang/lang";
 // Колонка ходов справа от переписки — переделана целиком 28.09 (слово Егора: «правая
 // вкладка как была ублюдской неразличимой и с неудобно разворачиваемыми шагами… там
 // вообще всё надо менять»).
@@ -52,10 +53,10 @@ interface TurnRow {
 }
 
 const EV_KIND: Record<string, string> = {
-  chat_turn: "сообщение",
-  wake: "пробуждение",
-  task_window: "окно",
-  moderation: "модерация",
+  get chat_turn() { return uiText("ui.ui.kit.window.panel.8eb484df7b"); },
+  get wake() { return uiText("ui.ui.kit.window.panel.0f3c3b6b95"); },
+  get task_window() { return uiText("ui.ui.kit.window.panel.5943c4045e"); },
+  get moderation() { return uiText("ui.ui.kit.window.panel.5cb789e9aa"); },
 };
 
 // ---------------------------------------------------------------- значки (линия, как облик)
@@ -94,7 +95,7 @@ function noteWords(note: string): string {
   const n = String(note || "").trim();
   const m = n.match(/^(done|wait|blocked|silence)\s*:\s*(.*)$/i);
   const body = m ? m[2] : n;
-  const head = m ? (m[1].toLowerCase() === "wait" ? "Жду: " : m[1].toLowerCase() === "blocked" ? "Препятствие: " : "") : "";
+  const head = m ? (m[1].toLowerCase() === "wait" ? uiText("ui.ui.kit.window.panel.eb451ec6a0") : m[1].toLowerCase() === "blocked" ? uiText("ui.ui.kit.window.panel.82a25559f5") : "") : "";
   return body.trim() ? head + clean(body) : "";
 }
 
@@ -112,8 +113,8 @@ function rowOf(t: Turn, run: Run | undefined, liveId: string): TurnRow {
   const live = t.run_id === liveId;
   const failed = run?.terminal_status === "failed" || run?.status === "failed" || t.delivery === "failed";
   const status: Status = live ? "live" : failed ? "failed" : t.held === "unspoken" ? "silent" : "done";
-  const title = out || note || (t.held === "unspoken" ? "Решила промолчать" : "") || `${EV_KIND[run?.kind || t.kind || ""] || "сообщение"} · ${fmtTime(turnAt(t, run))}`;
-  const cause = inn ? `${who || "Кто-то"}: «${clip(inn, 140)}»` : who ? `${EV_KIND[run?.kind || t.kind || ""] || "сообщение"} · ${who}` : "";
+  const title = out || note || (t.held === "unspoken" ? uiText("ui.ui.kit.window.panel.13f655a697") : "") || `${EV_KIND[run?.kind || t.kind || ""] || uiText("ui.ui.kit.window.panel.8eb484df7b")} · ${fmtTime(turnAt(t, run))}`;
+  const cause = inn ? `${who || uiText("ui.ui.kit.window.panel.bdde6ebee2")}: «${clip(inn, 140)}»` : who ? `${EV_KIND[run?.kind || t.kind || ""] || uiText("ui.ui.kit.window.panel.8eb484df7b")} · ${who}` : "";
   return { id: t.run_id, status, at: turnAt(t, run), title: clip(title, 220), cause, live };
 }
 
@@ -127,25 +128,23 @@ function metaOf(d: RunDetail | undefined): string {
     ms += it.ms || 0;
     for (const t of it.tools || []) {
       if (["reply", "end_turn", "telegram.deliver"].includes(t.tool || "")) continue;
-      const name = (ACTIONS[t.tool || ""] || t.tool || "рука").toLowerCase();
+      const name = (ACTIONS[t.tool || ""] || t.tool || uiText("ui.ui.kit.window.panel.d7121c802d")).toLowerCase();
       tools.set(name, (tools.get(name) || 0) + 1);
     }
   }
   const parts: string[] = [];
-  if (its.length) parts.push(`${its.length} ${plural(its.length, "шаг", "шага", "шагов")}`);
+  if (its.length) parts.push(`${its.length} ${plural(its.length, uiText("ui.ui.kit.window.panel.7b5a510cc0"), uiText("ui.ui.kit.window.panel.4fa5f41732"), uiText("ui.ui.kit.window.panel.45bca79036"))}`);
   const top = [...tools.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
   for (const [name, n] of top) parts.push(n > 1 ? `${name} ×${n}` : name);
   if (ms) parts.push(fmtDur(ms / 1000));
   const u = lastUsage(d);
-  if (u && u.in + u.cached) parts.push(`кэш ${Math.round((100 * u.cached) / (u.in + u.cached))}%`);
+  if (u && u.in + u.cached) parts.push(uiText("ui.ui.kit.window.panel.4f55e8449c", {p0: String(Math.round((100 * u.cached) / (u.in + u.cached)))}));
   return parts.join(" · ");
 }
 
 function plural(n: number, one: string, few: string, many: string): string {
-  const a = n % 10, b = n % 100;
-  if (a === 1 && b !== 11) return one;
-  if (a >= 2 && a <= 4 && (b < 12 || b > 14)) return few;
-  return many;
+  const form = new Intl.PluralRules(locale()).select(n);
+  return form === "one" ? one : form === "few" ? few : many;
 }
 
 // ---------------------------------------------------------------- шаги хода
@@ -160,7 +159,7 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
   const origin = clean(d.origin?.text || "");
   if (origin) {
     rows.push({ key: "origin", cls: "st st-origin", html:
-      `<div class="st-line">${icon("origin")}<span class="st-label">Повод</span><span class="st-what">${esc(clip(origin, 300))}</span></div>` +
+      uiText("ui.ui.kit.window.panel.f756532d1f", {p0: String(icon("origin")), p1: String(esc(clip(origin, 300)))}) +
       openLink(d) });
   }
   (d.iterations || []).forEach((it, i) => {
@@ -171,10 +170,10 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
     const complete = it.status === "completed" || (it.status !== "failed" && it.ms != null);
     const thinking = !complete && it.status !== "failed" && !it.tools?.length && live;
     const cut = complete && it.stop === "max_tokens";
-    const meta = [it.ms != null ? `${(it.ms / 1000).toFixed(1)} с` : "", u.in != null ? `${fmtK(total)} → ${fmtK(u.out || 0)}` : ""].filter(Boolean).join(" · ");
-    const state = it.status === "failed" ? "ошибка модели" : cut ? "оборван потолком" : thinking ? "думает…" : "";
+    const meta = [it.ms != null ? uiText("ui.ui.kit.window.panel.baf1ec7874", {p0: (it.ms / 1000).toLocaleString(locale(), {minimumFractionDigits: 1, maximumFractionDigits: 1})}) : "", u.in != null ? `${fmtK(total)} → ${fmtK(u.out || 0)}` : ""].filter(Boolean).join(" · ");
+    const state = it.status === "failed" ? uiText("ui.ui.kit.window.panel.286475bfb9") : cut ? uiText("ui.ui.kit.window.panel.515f508429") : thinking ? uiText("ui.ui.kit.window.panel.c3f9707361") : "";
     if(thinking || it.status === "failed" || cut) rows.push({ key: "it:" + key, cls: `st st-think${thinking ? " is-live" : ""}${it.status === "failed" || cut ? " is-failed" : ""}`, html:
-      `<div class="st-line">${icon(it.status === "failed" ? "fail" : "think")}<span class="st-label">Шаг ${i + 1}</span>` +
+      uiText("ui.ui.kit.window.panel.0991a54c95", {p0: String(icon(it.status === "failed" ? "fail" : "think")), p1: String(i + 1)}) +
       `<span class="st-meta">${esc(meta)}</span>${state ? `<span class="st-state">${esc(state)}</span>` : ""}</div>` +
       (thinking && modelProgressLabel(it) ? `<div class="muted" data-model-progress>${esc(modelProgressLabel(it))}</div>` : "") +
       (it.error ? `<div class="st-err">${esc(clip(it.error, 400))}</div>` : "") });
@@ -187,13 +186,13 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
       rows.push({key:tkey,cls:`st st-hand tool-row${summary.active?' is-live':''}${summary.failed?' is-failed':''}${summary.attention?' is-attention':''}`,html:
         `<button type="button" class="st-line st-toggle" aria-expanded="false">`+
         `<span class="tool-outcome" title="${esc(summary.label)}" aria-label="${esc(summary.label)}">${summary.icon}</span>`+
-        `<code class="st-label">${esc(t.tool || 'инструмент')}</code><span class="st-what" title="${esc(summary.target)}">${esc(clip(summary.target.replace(/\s+/g,' '),180))}</span>`+
+        `<code class="st-label">${esc(t.tool || uiText("ui.ui.kit.window.panel.ea299cc892"))}</code><span class="st-what" title="${esc(summary.target)}">${esc(clip(summary.target.replace(/\s+/g,' '),180))}</span>`+
         `<span class="st-state">${esc(summary.state)}</span><span class="st-duration">${esc(summary.duration)}</span></button>`+
-        `<div class="st-detail" hidden>${toolTraceHTML(t,tkey,runId)}<div class="tool-step-meta">Шаг ${i+1}${meta?' · '+esc(meta):''}</div></div>`});
+        uiText("ui.ui.kit.window.panel.1d741521b5", {p0: String(toolTraceHTML(t,tkey,runId)), p1: String(i+1), p2: String(meta?' · '+esc(meta):'')})});
     });
     if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:
-        `<div class="st-line">${icon("word")}<span class="st-label">Слово</span></div>` +
+        uiText("ui.ui.kit.window.panel.853e189b81", {p0: String(icon("word"))}) +
         textBox("text:" + key, it.text || "", { truncated: !it.text || !!it.text_truncated, ref: it.text_ref, run: runId }) });
     }
   });
@@ -204,9 +203,9 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
       `<div class="st-line">${icon(t.failed ? "fail" : "end")}<span class="st-label">${esc(t.label)}</span>` +
       `${term.reason ? `<span class="st-what">${esc(clip(term.reason, 160))}</span>` : ""}</div>` });
   } else if (!(d.iterations || []).length) {
-    rows.push({ key: "wait", cls: "st st-think is-live", html: `<div class="st-line">${icon("think")}<span class="st-label">${live ? "Работа началась — первые шаги ещё не записаны" : "Шаги не записаны"}</span></div>` });
+    rows.push({ key: "wait", cls: "st st-think is-live", html: `<div class="st-line">${icon("think")}<span class="st-label">${live ? uiText("ui.ui.kit.window.panel.51649a4714") : uiText("ui.ui.kit.window.panel.43c031d88f")}</span></div>` });
   }
-  const strip = withFrame ? frameStripHTML(d, "Кадр этого хода", '<a href="#" data-go="frame">зоны K·E·A·T →</a>') : "";
+  const strip = withFrame ? frameStripHTML(d, uiText("ui.ui.kit.window.panel.57a07279ab"), uiText("ui.ui.kit.window.panel.48c1ccd337")) : "";
   if (strip) rows.push({ key: "frame", cls: "st st-frame", html: strip });
   return rows;
 }
@@ -215,7 +214,7 @@ function openLink(d: RunDetail): string {
   const raw = String(d.manifest?.chat_id ?? "");
   const room = raw === LEGACY_WINDOW_KEY ? "window" : raw;
   if (!room) return "";
-  return `<a href="#" class="st-open" data-open-room="${esc(room)}" data-at="${esc(d.manifest?.created_at || "")}">открыть в чате</a>`;
+  return uiText("ui.ui.kit.window.panel.399adcd70a", {p0: String(esc(room)), p1: String(esc(d.manifest?.created_at || ""))});
 }
 
 // ---------------------------------------------------------------- колонка
@@ -265,12 +264,7 @@ function mountCol(): Col {
     const renderWork=workActivity(workRoot,{reviewers:false});
     observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,value=>{renderWork(value);forgeView?.setReviewers(value)});
   }
-  box.innerHTML = `<div class="turns-inner">
-    <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>
-    <details class="turns-context" hidden><summary>Контекст и расход</summary><div class="turns-strip"></div></details>
-    <div class="turns" role="list"></div>
-    <div class="turns-empty" hidden></div>
-  </div>`;
+  box.innerHTML = uiText("ui.ui.kit.window.panel.77c204938f");
   const inner = box.querySelector<HTMLElement>(".turns-inner")!;
   inner.prepend(forgeRoot);
   inner.prepend(workRoot);
@@ -332,7 +326,7 @@ function fillTurn(el: HTMLElement, r: TurnRow) {
   const cause = el.querySelector<HTMLElement>(".turn-cause")!;
   cause.textContent = r.cause;
   cause.hidden = !r.cause;
-  el.querySelector(".turn-dot")!.setAttribute("title", { live: "идёт сейчас", done: "завершён", failed: "не дошёл до конца", silent: "промолчала" }[r.status]);
+  el.querySelector(".turn-dot")!.setAttribute("title", { live: uiText("ui.ui.kit.window.panel.3fc5a17431"), done: uiText("ui.ui.kit.window.panel.450efe162e"), failed: uiText("ui.ui.kit.window.panel.53bfff06e4"), silent: uiText("ui.ui.kit.window.panel.06253fce37") }[r.status]);
 }
 
 function liveTurnCause(id: string, detail?: RunDetail): string {
@@ -417,7 +411,7 @@ async function openTurn(el: HTMLElement, id: string, animate: boolean) {
   if (!d) {
     slide(body, true, { animate, mutate: () => {
       body.classList.remove("loading");
-      if (!cached) { openSteps.delete(id); body.innerHTML = `<div class="muted st-none">Шаги не прочитались.</div>`; }
+      if (!cached) { openSteps.delete(id); body.innerHTML = uiText("ui.ui.kit.window.panel.38ffbd4a82"); }
     } });
     return;
   }
@@ -429,7 +423,7 @@ async function openTurn(el: HTMLElement, id: string, animate: boolean) {
     let full = body.querySelector<HTMLDetailsElement>(".turn-full");
     if (!full) {
       full = document.createElement("details"); full.className = "turn-full";
-      full.innerHTML = '<summary>Полный ход</summary><div class="turn-full-body"></div>';
+      full.innerHTML = uiText("ui.ui.kit.window.panel.bde953eb09");
       body.append(full);
       full.addEventListener("toggle", () => { if (full!.open) renderSteps(full!.querySelector<HTMLElement>(".turn-full-body")!, S.evCache.get(id) as RunDetail || d); });
     }
@@ -577,7 +571,7 @@ export async function render(): Promise<void> {
   // Идущий ход, которого ещё нет в chat-turns (слово не сказано), — сверху.
   if (liveId && !rows.some((r) => r.id === liveId)) {
     const run = byRun.get(liveId);
-    rows.unshift({ id: liveId, status: "live", at: run?.created_at || new Date().toISOString(), title: "Работает…", cause: liveTurnCause(liveId, S.evCache.get(liveId) as RunDetail | undefined), live: true });
+    rows.unshift({ id: liveId, status: "live", at: run?.created_at || new Date().toISOString(), title: uiText("ui.ui.kit.window.panel.364ebeb2cb"), cause: liveTurnCause(liveId, S.evCache.get(liveId) as RunDetail | undefined), live: true });
   }
   // Silent runs disappear instead of receiving a completed row. KeyedList
   // removes their DOM, but these maps would retain the detached steps and the
@@ -589,7 +583,7 @@ export async function render(): Promise<void> {
   for (const key of openedHands) if (!visible.has(key.slice(0, key.indexOf('/')))) openedHands.delete(key);
   c.head.querySelector(".turns-n")!.textContent = rows.length ? String(rows.length) : "";
   c.empty.hidden = rows.length > 0;
-  if (!rows.length) c.empty.innerHTML = `<div class="empty">Ходов ещё нет</div>`;
+  if (!rows.length) c.empty.innerHTML = uiText("ui.ui.kit.window.panel.a94414bd84");
   c.scroller.preserve(() => c.list.set(rows, { animate: c.painted }));
   c.painted = true;
   void paintStrip(rows);
@@ -608,7 +602,7 @@ async function paintStrip(rows: TurnRow[]) {
   }
   const d = await runDetail(first.id, first.live);
   if (col !== c) return;
-  const html = frameStripHTML(d, first.live ? "Кадр сейчас" : "Кадр последнего хода", '<a href="#" data-go="frame">зоны K·E·A·T →</a>');
+  const html = frameStripHTML(d, first.live ? uiText("ui.ui.kit.window.panel.7ef2fb1e98") : uiText("ui.ui.kit.window.panel.938930aa56"), uiText("ui.ui.kit.window.panel.48c1ccd337"));
   c.strip.parentElement!.hidden = !html;
   if (html === c.stripHTML) return;
   c.stripHTML = html;
@@ -647,7 +641,7 @@ async function refreshLive() {
       });
       const last = d.iterations?.at(-1);
       const tool = last?.tools?.find(t => !t.result && !t.error);
-      const label = tool ? (ACTIONS[tool.tool || ""] || tool.tool || "выполняет действие") : last && !last.text && !last.tools?.length ? "думает" : "ведёт ход";
+      const label = tool ? (ACTIONS[tool.tool || ""] || tool.tool || uiText("ui.ui.kit.window.panel.c2f9a3201f")) : last && !last.text && !last.tools?.length ? uiText("ui.ui.kit.window.panel.8176f94e66") : uiText("ui.ui.kit.window.panel.2abe828bb4");
       dispatchEvent(new CustomEvent("frame-live-action", { detail: label }));
     }
   } catch {
