@@ -2834,5 +2834,13 @@
   "ui.ui.kit.memory.line.609c5ac413": "记忆已压缩",
   "ui.ui.kit.memory.line.99c5b03249": "记忆暂不可用",
   "ui.ui.kit.memory.line.a6aa9390b8": "记忆中：{p0}",
-  "ui.ui.kit.memory.line.a53faedcbe": "智能体已暂停"
+  "ui.ui.kit.memory.line.a53faedcbe": "智能体已暂停",
+  "forge.recovery.title": "恢复写入所有权",
+  "forge.recovery.help": "如果 Stop 无法确认旧 Windows 任务已结束，请保存证明记录。然后自行重启运行该任务的原计算机，再在此验证恢复。",
+  "forge.recovery.confirmHost": "我确认此任务曾在运行此 Hélène 的原 Windows 计算机上执行。",
+  "forge.recovery.preserve": "工作副本、结果和历史均会保留。应用不会重启计算机。释放写入所有权不代表可以安全地重试中断的调用。",
+  "forge.recovery.prepare": "保存证明记录",
+  "forge.recovery.verify": "重启后验证",
+  "forge.recovery.prepared": "证明记录已保存。请重启原 Windows 计算机，然后选择“重启后验证”。",
+  "forge.recovery.recovered": " · 进程树已结束；写入所有权已释放；历史结果已保留"
 }

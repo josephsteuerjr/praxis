@@ -2834,5 +2834,13 @@
   "ui.ui.kit.memory.line.609c5ac413": "Memory summarized",
   "ui.ui.kit.memory.line.99c5b03249": "Memory not yet available",
   "ui.ui.kit.memory.line.a6aa9390b8": "In memory: {p0}",
-  "ui.ui.kit.memory.line.a53faedcbe": "Agent paused"
+  "ui.ui.kit.memory.line.a53faedcbe": "Agent paused",
+  "forge.recovery.title": "Recover write ownership",
+  "forge.recovery.help": "If Stop cannot confirm that an old Windows task has ended, save a witness record. Then restart its original computer yourself and verify recovery here.",
+  "forge.recovery.confirmHost": "I confirm that this task ran on the original Windows computer running this Hélène.",
+  "forge.recovery.preserve": "The working copy, results and history are preserved. The app does not restart the computer. Releasing ownership does not make an interrupted call safe to replay.",
+  "forge.recovery.prepare": "Save witness record",
+  "forge.recovery.verify": "Verify after restart",
+  "forge.recovery.prepared": "Witness record saved. Restart the original Windows computer, then select “Verify after restart”.",
+  "forge.recovery.recovered": " · process tree ended; write ownership released; historical outcome retained"
 }

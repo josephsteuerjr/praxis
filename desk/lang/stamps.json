@@ -14178,5 +14178,45 @@
     "en": "a53faedc",
     "fr": "a53faedc",
     "zh": "a53faedc"
+  },
+  "forge.recovery.title": {
+    "en": "1d45f6a2",
+    "fr": "1d45f6a2",
+    "zh": "1d45f6a2"
+  },
+  "forge.recovery.help": {
+    "en": "1520da1b",
+    "fr": "1520da1b",
+    "zh": "1520da1b"
+  },
+  "forge.recovery.confirmHost": {
+    "en": "351752f2",
+    "fr": "351752f2",
+    "zh": "351752f2"
+  },
+  "forge.recovery.preserve": {
+    "en": "24003731",
+    "fr": "24003731",
+    "zh": "24003731"
+  },
+  "forge.recovery.prepare": {
+    "en": "b6c9d9ad",
+    "fr": "b6c9d9ad",
+    "zh": "b6c9d9ad"
+  },
+  "forge.recovery.verify": {
+    "en": "b44955e5",
+    "fr": "b44955e5",
+    "zh": "b44955e5"
+  },
+  "forge.recovery.prepared": {
+    "en": "c3c4812d",
+    "fr": "c3c4812d",
+    "zh": "c3c4812d"
+  },
+  "forge.recovery.recovered": {
+    "en": "8d104399",
+    "fr": "8d104399",
+    "zh": "8d104399"
   }
 }

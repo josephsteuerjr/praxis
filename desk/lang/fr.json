@@ -2834,5 +2834,13 @@
   "ui.ui.kit.memory.line.609c5ac413": "Mémoire résumée",
   "ui.ui.kit.memory.line.99c5b03249": "Mémoire encore indisponible",
   "ui.ui.kit.memory.line.a6aa9390b8": "En mémoire : {p0}",
-  "ui.ui.kit.memory.line.a53faedcbe": "Agent en pause"
+  "ui.ui.kit.memory.line.a53faedcbe": "Agent en pause",
+  "forge.recovery.title": "Rétablir la propriété d’écriture",
+  "forge.recovery.help": "Si Stop ne peut pas confirmer la fin d’une ancienne tâche Windows, enregistrez un témoin. Redémarrez ensuite vous-même l’ordinateur d’origine, puis vérifiez la récupération ici.",
+  "forge.recovery.confirmHost": "Je confirme que cette tâche s’exécutait sur l’ordinateur Windows d’origine où fonctionne cette Hélène.",
+  "forge.recovery.preserve": "La copie de travail, les résultats et l’historique sont conservés. L’application ne redémarre pas l’ordinateur. Libérer l’écriture ne rend pas sûr le rejeu d’un appel interrompu.",
+  "forge.recovery.prepare": "Enregistrer le témoin",
+  "forge.recovery.verify": "Vérifier après redémarrage",
+  "forge.recovery.prepared": "Témoin enregistré. Redémarrez l’ordinateur Windows d’origine, puis choisissez « Vérifier après redémarrage ».",
+  "forge.recovery.recovered": " · arborescence des processus terminée ; écriture libérée ; résultat historique conservé"
 }

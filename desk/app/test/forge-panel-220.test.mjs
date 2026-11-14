@@ -356,3 +356,27 @@ console.log('Praxis-style Forge task nesting, observed model identity, complete 
   t.panel.stop();
 }
 console.log('Generic producer transport errors retain inert, Unicode-paged, event-local partial outputs PASS');
+
+{
+  const t=stand({compact:true});t.state.tasks[0].agents[0].recovery={available:true,witness_recorded:false};
+  t.state.commandState='observed';t.panel.start();await tick();const {unit}=await open(t);
+  const details=unit.querySelector('.forge-recovery'),checkbox=details.querySelector('input');
+  const prepare=find(details,'Сохранить свидетельство');
+  assert.equal(find(unit,'Остановить участника'),undefined,'compact recovery does not duplicate ordinary actions');
+  assert.equal(details.hidden,false);assert.equal(prepare.disabled,true);
+  await prepare.click();await tick();assert.equal(t.calls.filter(c=>c.body).length,0);
+  checkbox.checked=true;checkbox.dispatchEvent(new DOMEvent('change'));
+  assert.equal(prepare.disabled,false);await prepare.click();await tick();
+  const saved=t.calls.find(c=>c.body)?.body;
+  assert.equal(saved.action,'prepare_recovery');assert.equal(saved.agent_id,'agent-fixture');
+  assert.equal(saved.expected_generation,'g-one');assert.equal(saved.host_binding,'verified-local-execution-host');
+  assert.ok(saved.reason); // Observed POST must immediately admit the next owner action.
+  await find(details,'Проверить после перезагрузки').click();await tick();
+  const verify=t.calls.filter(c=>c.body).at(-1).body;
+  assert.equal(verify.action,'recover');assert.equal(verify.host_binding,undefined);
+  const row=t.state.tasks[0].agents[0];row.custody='recovered_boundary';row.status='lost';
+  row.recovery={available:false,witness_recorded:true};await t.panel.refresh();await tick();
+  assert.equal(details.hidden,true);assert.match(unit.textContent,/право записи освобождено/);
+  t.panel.stop();assert.equal(t.timers.size,0);
+}
+console.log('Legacy recovery needs explicit host confirmation and retains actual recovery state PASS');

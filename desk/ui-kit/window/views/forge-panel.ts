@@ -9,6 +9,7 @@ export interface ForgeUnit {
   id: string; parent_unit_id?: string; depth?: number; ancestry_unknown?: boolean;
   role?: string; model?: string; subtask?: string; status?: string; request_status?: string;
   custody?: string; current_disposition?: string; stale_dispositions?: number;
+  recovery?: {available: boolean; witness_recorded: boolean};
   started?: number; created?: string; finished?: string;
   observation?: { generation?: string; phase?: string; tool?: string; observed_at?: string; iteration?: number };
   result_ref?: ForgeRef; request_ref?: ForgeRef; payload_refs?: Record<string, ForgeRef>;
@@ -122,9 +123,12 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (c.state === "processing") return uiText("ui.ui.kit.window.views.forge.panel.d693eebb8c");
     if (c.state === "unknown") return uiText("ui.ui.kit.window.views.forge.panel.6c024486c5") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.a2d76e8c24"));
     if (c.state === "rejected") return uiText("ui.ui.kit.window.views.forge.panel.ee11bf92cc") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.321069cccf"));
+    if (c.state === 'observed' && (c.result as {status?: string})?.status === 'prepared')
+      return uiText('forge.recovery.prepared');
     return uiText("ui.ui.kit.window.views.forge.panel.5e54270023") + JSON.stringify(c.result ?? c.state);
   }
-  async function control(task: ForgeTask, unit: ForgeUnit | undefined, action: string, target: HTMLElement) {
+  async function control(task: ForgeTask, unit: ForgeUnit | undefined, action: string, target: HTMLElement,
+                         recovery: {host_binding?: string; reason?: string} = {}) {
     const captured = epoch;
     const key = task.id + "/" + (unit?.id || "");
     if (pending.has(key)) return;
@@ -136,10 +140,12 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (!document.hidden) timer = setTimeout(() => void refresh(), pollMs);
     target.textContent = uiText("ui.ui.kit.window.views.forge.panel.cd23e7d4b3");
     try {
-      const response = await request<Command>("/api/forge/control", { ...command, expected_generation: unit?.observation?.generation || "" });
+      const response = await request<Command>("/api/forge/control", { ...command, ...recovery, expected_generation: unit?.observation?.generation || "" });
       if (!valid(captured)) return;
       if (response.command_id !== command.command_id) throw Error(uiText("ui.ui.kit.window.views.forge.panel.2857cdd48d"));
-      pending.set(key, { command: response, feedback: target }); target.textContent = commandText(response);
+      if (['observed', 'rejected'].includes(response.state)) pending.delete(key);
+      else pending.set(key, { command: response, feedback: target });
+      target.textContent = commandText(response);
     } catch (e) {
       if (!valid(captured)) return;
       // Keep exact ID: uncertain delivery must not silently become another stop.
@@ -152,15 +158,46 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if(options.readOnly)return;
     const feedback = el("p", "muted"); feedback.setAttribute("role", "status");
     const [task, unit] = current();
+    const standard = !options.compact || options.controls;
+    if (!standard && !(unit ? [unit] : task.agents).some(row => row.recovery?.available)) return;
     const terminal = ["done", "completed", "cancelled", "abandoned"].includes(task.status || "");
     const row = el("div", "forge-actions");
-    for (const [action, title] of [["pause", uiText("ui.ui.kit.window.views.forge.panel.6aab9e2cb4")], ["stop", unit ? uiText("ui.ui.kit.window.views.forge.panel.f09a4f6adc") : uiText("ui.ui.kit.window.views.forge.panel.47d3bf45cf")], ["resume", uiText("ui.ui.kit.window.views.forge.panel.07c7b8b814")]]) {
+    for (const [action, title] of (standard ? [["pause", uiText("ui.ui.kit.window.views.forge.panel.6aab9e2cb4")], ["stop", unit ? uiText("ui.ui.kit.window.views.forge.panel.f09a4f6adc") : uiText("ui.ui.kit.window.views.forge.panel.47d3bf45cf")], ["resume", uiText("ui.ui.kit.window.views.forge.panel.07c7b8b814")]] : [])) {
       const b = button(title, () => { const [task, unit] = current(); void control(task, unit, action, feedback); });
       // Core remains the authority for safe continuation/old generation fences.
       b.disabled = terminal && action === "resume";
       row.append(b);
     }
-    host.append(row, feedback);
+    if (standard) host.append(row);
+    host.append(feedback);
+    const details = document.createElement('details'); details.className = 'forge-recovery';
+    details.append(el('summary', '', uiText('forge.recovery.title')));
+    details.append(el('p', 'muted', uiText('forge.recovery.help')));
+    const confirmation = document.createElement('label');
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+    confirmation.append(checkbox, document.createTextNode(uiText('forge.recovery.confirmHost')));
+    const prepare = button(uiText('forge.recovery.prepare'), () => {
+      if (!checkbox.checked) return;
+      const [task, unit] = current();
+      void control(task, unit, 'prepare_recovery', feedback, {
+        host_binding: 'verified-local-execution-host', reason: 'Owner confirmed original Windows execution host after unresolved Stop',
+      });
+    });
+    prepare.disabled = true;
+    checkbox.addEventListener('change', () => { prepare.disabled = !checkbox.checked; });
+    const verify = button(uiText('forge.recovery.verify'), () => {
+      const [task, unit] = current(); void control(task, unit, 'recover', feedback);
+    });
+    details.append(confirmation, el('p', 'muted', uiText('forge.recovery.preserve')), prepare, verify);
+    host.append(details);
+    updateRecoveryControls(task, unit, host);
+  }
+  function updateRecoveryControls(task: ForgeTask, unit: ForgeUnit | undefined, host: HTMLElement) {
+    const details = host.querySelector<HTMLElement>('.forge-recovery');
+    if (!details) return;
+    const rows = unit ? [unit] : task.agents;
+    details.hidden = !rows.some(row => row.recovery?.available &&
+      (row.recovery.witness_recorded || ['unknown', 'lost', 'stop_pending'].includes(row.status || '')));
   }
   function refButton(view: UnitView, title: string, ref: ForgeRef, target: PayloadView = view) {
     return button(title, () => {
@@ -412,10 +449,12 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       uiText("ui.ui.kit.window.views.forge.panel.c7c8925c7a", {p0: String(o.phase ? (PHASE[o.phase] || o.phase) + (o.tool ? ": " + o.tool : "") : uiText("ui.ui.kit.window.views.forge.panel.f7607ec31a")), p1: String(label(unit.request_status)), p2: String(o.observed_at || uiText("ui.ui.kit.window.views.forge.panel.dc9337ff5b")), p3: String(liveText), p4: String(live?.observed_at ? ': ' + live.observed_at : '')}) +
       (unit.current_disposition ? uiText("ui.ui.kit.window.views.forge.panel.69517383a8") + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? uiText("ui.ui.kit.window.views.forge.panel.06811cd0d8") : "") +
       (unit.custody === "unresolved_stop" ? uiText("ui.ui.kit.window.views.forge.panel.e49b1be6cb") : "") +
+      (unit.custody === 'recovered_boundary' ? uiText('forge.recovery.recovered') : '') +
       (unit.stale_dispositions ? uiText("ui.ui.kit.window.views.forge.panel.bba46ad410", {p0: String(unit.stale_dispositions)}) : "");
     view.brief.textContent = unit.subtask || uiText("ui.ui.kit.window.views.forge.panel.0d6bd2b100");
     // Controls keep their in-flight feedback while the next observation arrives.
-    if ((!options.compact || options.controls) && !view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
+    if (!view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
+    updateRecoveryControls(view.task, view.unit, view.controls);
     const refsKey = JSON.stringify([unit.result_ref, unit.request_ref, unit.payload_refs]);
     if (refsKey !== view.refsKey) {
       view.refsKey = refsKey; view.refs.replaceChildren();
@@ -445,7 +484,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     view.title.textContent = options.compact ? shortGoal(task.goal || task.id) : (task.goal || task.id).split("\n")[0];
     view.state.textContent = uiText("ui.ui.kit.window.views.forge.panel.819b636e71", {p0: String(label(task.status)), p1: String(task.control?.action === "pause" ? uiText("ui.ui.kit.window.views.forge.panel.600d141940") : ""), p2: String(task.agents.length)});
     view.goal.textContent = task.goal || task.id;
-    if ((!options.compact || options.controls) && !view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
+    if (!view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
+    updateRecoveryControls(view.task, undefined, view.controls);
     const present = new Set(task.agents.map(a => a.id));
     for (const [id, unit] of view.views) if (!present.has(id)) { unit.details.remove(); view.views.delete(id); }
     for (const unit of task.agents) {
