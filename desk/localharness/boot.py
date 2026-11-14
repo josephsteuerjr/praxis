@@ -34,6 +34,12 @@ import threading
 import time
 from pathlib import Path
 
+# Both packaged first-start and the transplanted runner use this module.
+if __package__:
+    from .language_settings import frame_language as _frame_language
+else:
+    from language_settings import frame_language as _frame_language
+
 log = logging.getLogger("frame.boot")
 
 # Порт как есть: значения рычагов = боевые (live/.env прода на 30.08). Продукт не
@@ -137,14 +143,12 @@ def agent_name(cfg: dict) -> str:
     agent = cfg.get("agent") or {}
     telegram = cfg.get("telegram") or {}
     name = str(agent.get("name") or telegram.get("agent_name") or "").strip()
-    from language_settings import frame_language
-    return name or {'ru': 'Агент', 'en': 'Agent', 'fr': 'Agent', 'zh': '智能体'}[frame_language(cfg)]
+    return name or {'ru': 'Агент', 'en': 'Agent', 'fr': 'Agent', 'zh': '智能体'}[_frame_language(cfg)]
 
 
 def owner_name(cfg: dict) -> str:
-    from language_settings import frame_language
     return str((cfg.get("owner") or {}).get("name") or "").strip() or {
-        'ru': 'владелец', 'en': 'owner', 'fr': 'propriétaire', 'zh': '所有者'}[frame_language(cfg)]
+        'ru': 'владелец', 'en': 'owner', 'fr': 'propriétaire', 'zh': '所有者'}[_frame_language(cfg)]
 
 
 def _names(text: str, cfg: dict) -> str:
@@ -235,8 +239,7 @@ def _stock_path(relative: str, cfg: dict) -> Path:
     absent. Release coverage checks must account for every owned stock file.
     Existing home files are never selected or rewritten by this helper.
     """
-    from language_settings import frame_language
-    lang = frame_language(cfg)
+    lang = _frame_language(cfg)
     default = (_SOUL_CANON if relative == 'SOUL.md' else
                _SELF_DAY_ZERO if relative == 'self-day-zero.md' else _RESOURCES / relative)
     if lang == 'ru':
@@ -252,9 +255,8 @@ def _stock_path(relative: str, cfg: dict) -> Path:
 
 def _stock_files(section: str, cfg: dict) -> list[tuple[Path, Path]]:
     """Overlay translations by relative path; preserve the full stock inventory."""
-    from language_settings import frame_language
     roots = [_RESOURCES / section]
-    lang = frame_language(cfg)
+    lang = _frame_language(cfg)
     if lang != 'ru':
         roots.append(_RESOURCES / f'{section}.{lang}')
     files: dict[Path, Path] = {}

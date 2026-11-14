@@ -1104,6 +1104,30 @@ def handover(root,*,places=None):
     return admitted or state=='alive'
 
 
+def creation_config(previous, values):
+    """Keep interface, frame and personal fields independent at primary birth.
+
+    Old callers omit the new choices and retain the legacy defaults. Validation
+    happens before the one-use birth admission or any credential publication.
+    """
+    from .language_settings import validate
+    config = copy.deepcopy(previous)
+    agent = config.get('agent')
+    owner = config.get('owner')
+    config['agent'] = dict(agent if isinstance(agent, dict) else {},
+                           name=str(values.get('name') or '').strip())
+    config['owner'] = dict(owner if isinstance(owner, dict) else {},
+                           name=str(values.get('owner') or '').strip())
+    config['setup_complete'] = True
+    if 'lang' in values:
+        config['lang'] = values['lang']
+    for key in ('frame_language', 'living_prose'):
+        if key in values:
+            config['agent'][key] = values[key]
+    validate(config)
+    return config
+
+
 def create_agent(root,values,*,places=None,progress=None):
     from contextlib import nullcontext
     places=places or Places.current()
@@ -1129,8 +1153,7 @@ def _create_agent_locked(root,values,*,places,progress=None):
     if not name or not model or provider not in ('openai','anthropic','chatgpt'):
         raise ValueError('Введи имя агента и модель, выбери подключение')
     if provider!='chatgpt' and not key:raise ValueError('Введи ключ доступа к API')
-    previous=load(root/'helene.json');config=copy.deepcopy(previous)
-    config.update(setup_complete=True,agent={'name':name},owner={'name':owner})
+    previous=load(root/'helene.json');config=creation_config(previous,values)
     # Explicit birth choice lives with the profile, even while subscription
     # sign-in is pending and before the first runner has created soul/SOUL.md.
     # Legacy callers that omit this field retain their existing canonical path.
