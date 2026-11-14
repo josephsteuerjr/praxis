@@ -175,7 +175,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     details.append(el('p', 'muted', uiText('forge.recovery.help')));
     const confirmation = document.createElement('label');
     const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
-    confirmation.append(checkbox, document.createTextNode(uiText('forge.recovery.confirmHost')));
+    confirmation.append(checkbox, document.createTextNode(uiText('forge.recovery.confirm_host')));
     const prepare = button(uiText('forge.recovery.prepare'), () => {
       if (!checkbox.checked) return;
       const [task, unit] = current();

@@ -55,6 +55,11 @@ class Fixture:
         put(self.source, 'desk/shell/icons/icon.ico', (INSTALLER.parent / 'shell/icons/icon.ico').read_bytes())
         put(self.source, 'desk/resources/first-start.html',
             (INSTALLER.parent / 'resources/first-start.html').read_bytes())
+        put(self.source, 'desk/resources/ui-language.js',
+            (INSTALLER.parent / 'resources/ui-language.js').read_bytes())
+        for language in ('ru', 'en', 'fr', 'zh'):
+            put(self.source, 'desk/lang/' + language + '.json',
+                (INSTALLER.parent / 'lang' / (language + '.json')).read_bytes())
         put(self.source, 'desk/deskpkg.py', 'def requirements(flavor):\n return ["aiohttp", "pywebview==6.2.1"]\n')
         put(self.source, 'desk/localharness/new.py', 'CHANGED = True\n')
         put(self.source, 'desk/deskd/reader.py', 'READER = True\n')
@@ -196,6 +201,12 @@ class PortableRefreshTests(unittest.TestCase):
                     self.assertNotIn(PREFIX+'app/static/assets/old.js',z.namelist())
                     self.assertNotIn(PREFIX+'helene.json',z.namelist())
                     self.assertEqual(z.read(PREFIX+'app/resources/soul/skills/review.md'),b'Optional critic')
+                    for language in ('ru','en','fr','zh'):
+                        name='app/lang/'+language+'.json'
+                        self.assertEqual(z.read(PREFIX+name),(INSTALLER.parent/'lang'/(language+'.json')).read_bytes())
+                    self.assertEqual(z.read(PREFIX+'app/resources/ui-language.js'),
+                                     (INSTALLER.parent/'resources/ui-language.js').read_bytes())
+                    self.assertNotIn(PREFIX+'app/lang/stamps.json',z.namelist())
                     self.assertEqual(mode(z.getinfo(PREFIX+'app/python_app.py')),'100755')
                     for name in ('static','mobile','miniapp'):
                         self.assertIn(PREFIX+'app/'+name+'/assets/current.js',z.namelist())

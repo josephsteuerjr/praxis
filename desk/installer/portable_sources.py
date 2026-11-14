@@ -225,6 +225,15 @@ def application(source):
         for name, entry in scan(desk / folder, exclude={'soul'}).items():
             dest = 'app/' + folder + '/' + name
             selected[dest], origins[dest] = entry, 'desk/' + folder + '/' + name
+    # Native startup/tray captions use the same canonical catalogs as the web
+    # views. Carry only runtime JSON, not generated copies or a second catalog.
+    languages = scan(desk / 'lang')
+    for language in ('ru', 'en', 'fr', 'zh'):
+        name = language + '.json'
+        if name not in languages:
+            raise ValueError('Missing native interface catalog: ' + language)
+        dest = 'app/lang/' + name
+        selected[dest], origins[dest] = languages[name], 'desk/lang/' + name
     # Seed skills/soul are application-owned templates, never the agent's soul.
     if (desk / 'resources/soul').is_dir():
         for name, entry in scan(desk / 'resources/soul').items():

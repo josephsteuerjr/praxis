@@ -27,6 +27,10 @@ class FirstStartWindow(Application):
     def status(self):
         with self.value_lock:return copy.deepcopy(self.value)
 
+    def bridge(self):
+        from localharness.ui_language import bootstrap_script
+        return super().bridge()+'\n'+bootstrap_script(self.root)
+
     def prepare(self):
         try:
             result=self.flow.prepare(self.root,places=self.places,progress=self.publish)

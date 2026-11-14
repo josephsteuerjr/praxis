@@ -4,12 +4,15 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const html=readFileSync(new URL('../../resources/first-start.html',import.meta.url),'utf8');
+const captions=readFileSync(new URL('../../resources/ui-language.js',import.meta.url),'utf8');
+const catalogs=Object.fromEntries(['ru','en','fr','zh'].map(lang=>[lang,JSON.parse(readFileSync(new URL(`../../lang/${lang}.json`,import.meta.url),'utf8'))]));
 function fixture(){
   const elements={},calls=[],timers=[];
-  const document={getElementById(id){return elements[id]??={value:'',hidden:false,disabled:false,textContent:'',attributes:{},setAttribute(name,value){this.attributes[name]=value},focus(){this.focused=true}};}};
-  const context=vm.createContext({document,setTimeout(fn,delay){timers.push({fn,delay})},window:{__HELENE__:{
+  const document={documentElement:{},querySelectorAll(){return []},getElementById(id){return elements[id]??={value:'',checked:id==='living-prose',hidden:false,disabled:false,textContent:'',attributes:{},setAttribute(name,value){this.attributes[name]=value},removeAttribute(name){delete this.attributes[name]},focus(){this.focused=true}};}};
+  const context=vm.createContext({document,setTimeout(fn,delay){timers.push({fn,delay})},window:{HELENE_UI:{preference:'',system_language:'ru',catalogs},__HELENE__:{
     async invoke(command,args){calls.push({command,args});return command==='first_start'?{stage:'starting'}:{created:true};}
   }}});
+  vm.runInContext(captions,context);
   const source=html.match(/<script>([\s\S]*?)<\/script>/)[1];vm.runInContext(source,context);
   return {elements,calls,timers,context,show:value=>context.show(value)};
 }
@@ -34,7 +37,7 @@ test('minimal credential form sends only its values and clears the key before op
   }
   await view.elements.form.onsubmit({preventDefault(){}});
   const created=view.calls.find(c=>c.command==='first_create');
-  assert.deepEqual(JSON.parse(JSON.stringify(created.args)),{name:'Вера',owner:'Марк',provider:'openai',model:'fixture',key:'private-fixture',base_url:'',soul:{kind:'canonical'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(created.args)),{name:'Вера',owner:'Марк',provider:'openai',model:'fixture',key:'private-fixture',base_url:'',lang:'',frame_language:'ru',living_prose:true,soul:{kind:'canonical'}});
   assert.equal(view.elements.key.value,'');
   assert.equal(view.calls.filter(c=>c.command==='first_open').length,1);
   assert.ok(!Object.values(view.elements).some(el=>el.textContent.includes('private-fixture')));
