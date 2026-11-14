@@ -32,12 +32,11 @@ class TelegramInputs(unittest.TestCase):
     def test_origin_binds_exact_selected_message_and_preserves_recognized_text(self):
         record={'room':'123','message_id':'71','sender_id':'11','nonce':'fixture'}
         item={'record':record,'message':{'content':incoming.marker(record)+'selected request\n[Транскрипт голосового]: heard'}}
-        context=SimpleNamespace(origin_text='older buffer head')
-        incoming.bind_origin(context,item)
+        context=agent.ChannelContext(**incoming.origin_fields(item))
         self.assertEqual(context.origin_message_id,71)
         self.assertEqual(context.origin_text,'selected request\n[Транскрипт голосового]: heard')
         item['message']['content']='foreign receipt'
-        with self.assertRaises(ValueError):incoming.bind_origin(context,item)
+        with self.assertRaises(ValueError):incoming.origin_fields(item)
 
     def setUp(self):
         OwnerInputBoundary.setUp(self)

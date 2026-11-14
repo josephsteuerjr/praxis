@@ -281,8 +281,8 @@ class NetRetries(unittest.TestCase):
 class Wiring(unittest.TestCase):
     def test_voice_call_goes_through_the_watch(self):
         src = (TREE / "agent.py").read_text(encoding="utf-8")
-        self.assertIn('response = _chat_cancellable(\n            "voice",',
-                      src, "прямой llm.chat голоса вернулся — стоп снова ждёт сети")
+        self.assertRegex(src, r'response\s*=\s*_chat_cancellable\(\s*"voice",',
+                         "прямой llm.chat голоса вернулся — стоп снова ждёт сети")
         self.assertIn("model_watch.call_with_stop", src)
         self.assertIn("llm.abandon_call, on_settle=llm.settle_call",
                       src, "призрак перестал помечаться — его сбой отравит канал")

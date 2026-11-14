@@ -1485,14 +1485,14 @@ def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_sourc
     # отправителя пришёл транспортом и досье вяжется именно по нему.
     # `known` тоже перестал быть константой: человек, которого владелец не
     # заводил, не «известный» (гейт входящих — в botapi._ingest).
+    origin = (telegram_inputs.origin_fields(pending_batch[0]) if pending_batch
+              else {'origin_text':origin_text})
     ctx = _agent.ChannelContext(chat_id=chat_id, is_dm=is_dm, owner=owner,
                                 principal_id=str(sender_id or "") or None,
                                 known=bool(owner or _bot.is_allowed(sender_id)),
                                 addressed=True,
-                                origin_text=origin_text,
+                                **origin,
                                 title=_room_title(chat_id) or str(chat_id))
-    if pending_batch:
-        telegram_inputs.bind_origin(ctx,pending_batch[0])
     _bot.sent_now.clear()
     import addressing as _addressing
     all_priorities = _bot.take_priorities(chat_id)

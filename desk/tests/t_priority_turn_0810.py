@@ -51,7 +51,7 @@ class Priority(unittest.TestCase):
         raise Captured()
     def test_real_turn_preserves_priorities_for_selected_principal_and_restores_on_failure(self):
         pulse = types.SimpleNamespace(start=lambda: pulse,stop=lambda **kw:None)
-        with patch.multiple(runner,_bot=self.bot,_agent=types.SimpleNamespace(ChannelContext=lambda **kw:kw),
+        with patch.multiple(runner,_bot=self.bot,_agent=types.SimpleNamespace(ChannelContext=types.SimpleNamespace),
                             _tree=None,_continuity=types.SimpleNamespace(activation=lambda before:contextlib.nullcontext()),
                             _set_busy=lambda *a,**kw:None,_room_title=lambda chat:'Test',_run_turn=self.capture), \
              patch.dict(sys.modules,{'turn_pulse':types.SimpleNamespace(TurnPulse=lambda *a,**kw:pulse)}):
