@@ -137,11 +137,14 @@ def agent_name(cfg: dict) -> str:
     agent = cfg.get("agent") or {}
     telegram = cfg.get("telegram") or {}
     name = str(agent.get("name") or telegram.get("agent_name") or "").strip()
-    return name or "Агент"
+    from language_settings import frame_language
+    return name or {'ru': 'Агент', 'en': 'Agent', 'fr': 'Agent', 'zh': '智能体'}[frame_language(cfg)]
 
 
 def owner_name(cfg: dict) -> str:
-    return str((cfg.get("owner") or {}).get("name") or "").strip() or "владелец"
+    from language_settings import frame_language
+    return str((cfg.get("owner") or {}).get("name") or "").strip() or {
+        'ru': 'владелец', 'en': 'owner', 'fr': 'propriétaire', 'zh': '所有者'}[frame_language(cfg)]
 
 
 def _names(text: str, cfg: dict) -> str:
@@ -177,7 +180,7 @@ def initial_soul_seed(config_path: Path, tree: Path) -> str | None:
 def soul_text(cfg: dict) -> str:
     """Каноническая конституция с подставленными именами."""
     try:
-        canon = _SOUL_CANON.read_text(encoding="utf-8")
+        canon = _stock_path('SOUL.md', cfg).read_text(encoding="utf-8")
     except OSError:
         log.warning("ресурса конституции нет (%s) — пишу короткий запасной текст",
                     _SOUL_CANON)
@@ -225,6 +228,47 @@ class LayoutError(RuntimeError):
     """Раскладку завести не удалось — причина в тексте, для лога и для оболочки."""
 
 
+def _stock_path(relative: str, cfg: dict) -> Path:
+    """Select product stock by the agent's language, never the UI preference.
+
+    The canonical path remains the fallback while a translated resource is
+    absent. Release coverage checks must account for every owned stock file.
+    Existing home files are never selected or rewritten by this helper.
+    """
+    from language_settings import frame_language
+    lang = frame_language(cfg)
+    default = (_SOUL_CANON if relative == 'SOUL.md' else
+               _SELF_DAY_ZERO if relative == 'self-day-zero.md' else _RESOURCES / relative)
+    if lang == 'ru':
+        return default
+    parts = Path(relative).parts
+    if parts[0] in ('soul', 'memory'):
+        candidate = _RESOURCES / (parts[0]+'.'+lang) / Path(*parts[1:])
+    else:
+        original = Path(relative)
+        candidate = _RESOURCES / original.with_name(original.stem+'.'+lang+original.suffix)
+    return candidate if candidate.is_file() else default
+
+
+def _stock_files(section: str, cfg: dict) -> list[tuple[Path, Path]]:
+    """Overlay translations by relative path; preserve the full stock inventory."""
+    from language_settings import frame_language
+    roots = [_RESOURCES / section]
+    lang = frame_language(cfg)
+    if lang != 'ru':
+        roots.append(_RESOURCES / f'{section}.{lang}')
+    files: dict[Path, Path] = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for source in sorted(root.rglob('*')):
+            relative = source.relative_to(root)
+            if source.is_dir() or any(part.startswith(('.', '__')) for part in relative.parts):
+                continue
+            files[relative] = source
+    return sorted(files.items())
+
+
 def _seed_kit(tree: Path, cfg: dict, *, birth: bool = True,
               skill_overrides: frozenset[str] = frozenset(),
               proposals: set[str] | None = None) -> int:
@@ -241,22 +285,17 @@ def _seed_kit(tree: Path, cfg: dict, *, birth: bool = True,
     он называется в логе, остальные едут.
     """
     planted = 0
-    for src_root, dst_root in ((_RESOURCES / "soul", tree / "soul"),
-                               (_RESOURCES / "memory", tree / "memory")):
-        if not src_root.is_dir():
-            continue
-        for src in sorted(src_root.rglob("*")):
-            rel = src.relative_to(src_root)
-            if src.is_dir() or any(part.startswith((".", "__")) for part in rel.parts):
-                continue
-            if src_root.name == "soul" and rel.parts[0] == "skills" and rel.name in skill_overrides:
+    for section in ('soul', 'memory'):
+        dst_root = tree / section
+        for rel, src in _stock_files(section, cfg):
+            if section == "soul" and rel.parts[0] == "skills" and rel.name in skill_overrides:
                 continue
             dst = dst_root / rel
             if dst.exists() and birth:
                 continue
             try:
                 data = src.read_bytes()
-                if src_root.name == "soul" and not birth:
+                if section == "soul" and not birth:
                     import kit_proposals
                     text = data.decode("utf-8")
                     selected = kit_proposals.stage(tree, f"soul/{rel.as_posix()}",
@@ -274,7 +313,7 @@ def _seed_kit(tree: Path, cfg: dict, *, birth: bool = True,
                 else:
                     dst.write_text(_names(text, cfg), encoding="utf-8", newline="\n")
             except (OSError, UnicodeError) as exc:
-                if src_root.name == "soul" and not birth:
+                if section == "soul" and not birth:
                     raise LayoutError(f"кандидат soul/{rel} не сохранён: {exc}") from exc
                 log.warning("стартовый файл %s не лёг в дерево: %s", rel, exc)
                 continue
@@ -316,7 +355,7 @@ def refresh_kit(tree: Path, cfg: dict, *, birth: bool = False,
             continue
         if rel.startswith("soul/skills/") and Path(rel).name in skill_overrides:
             continue
-        src = _SOUL_CANON if rel == "SOUL.md" else _RESOURCES / rel
+        src = _stock_path(rel, cfg)
         dst = tree / "soul" / "SOUL.md" if rel == "SOUL.md" else tree / rel
         if not src.is_file() or not dst.is_file():
             continue
@@ -344,14 +383,14 @@ def refresh_kit(tree: Path, cfg: dict, *, birth: bool = False,
         done.append(str(dst.relative_to(tree)).replace("\\", "/"))
     if birth and _refresh_day_zero(tree, cfg, history.get("self-day-zero.md") or []):
         done.append("soul/self/CURRENT.md")
-    elif not birth and _SELF_DAY_ZERO.is_file():
+    elif not birth and _stock_path('self-day-zero.md', cfg).is_file():
         # The old revision-0 shortcut was still an installer-authored identity
         # revision. Keep the proposed body outside CURRENT until the agent acts.
         current = tree / "soul" / "self" / "CURRENT.md"
         if not current.exists() and (tree / "soul" / "self.md").is_file():
             import kit_proposals
             selected = kit_proposals.stage(tree, "soul/self/CURRENT.md",
-                                           _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg).encode("utf-8"),
+                                           _names(_stock_path('self-day-zero.md', cfg).read_text(encoding="utf-8"), cfg).encode("utf-8"),
                                            source="kit:day-zero-body")
             if selected and proposals is not None:
                 proposals.add(selected)
@@ -360,7 +399,7 @@ def refresh_kit(tree: Path, cfg: dict, *, birth: bool = False,
             if model is not None:
                 try:
                     meta, body = model._store(tree)._split_current(current.read_text(encoding="utf-8"))
-                    proposal = _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg)
+                    proposal = _names(_stock_path('self-day-zero.md', cfg).read_text(encoding="utf-8"), cfg)
                     olds = {_names(old, cfg).strip() for old in history["self-day-zero.md"]}
                     if str(meta.get("revision")) == "0" and body.strip() in olds \
                             and body.strip() != proposal.strip():
@@ -376,7 +415,7 @@ def refresh_kit(tree: Path, cfg: dict, *, birth: bool = False,
 
 def _refresh_day_zero(tree: Path, cfg: dict, olds: list[str]) -> bool:
     """Запись о себе дня ноль, которую агент ещё не правил, — новой ревизией."""
-    if not olds or not _SELF_DAY_ZERO.is_file():
+    if not olds or not _stock_path('self-day-zero.md', cfg).is_file():
         return False
     current = tree / "soul" / "self" / "CURRENT.md"
     if not current.is_file():
@@ -391,7 +430,7 @@ def _refresh_day_zero(tree: Path, cfg: dict, olds: list[str]) -> bool:
             return False                      # агент уже переписывал — его слово
         if body.strip() not in {_names(old, cfg).strip() for old in olds}:
             return False
-        new = _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg)
+        new = _names(_stock_path('self-day-zero.md', cfg).read_text(encoding="utf-8"), cfg)
         result = store.revise(
             new, reason="поставка 1.2.5: запись дня ноль теми же словами, только без рода "
                         "и без чужих имён (агент её ещё не правил)",
@@ -451,7 +490,7 @@ def seed_self(tree: Path, cfg: dict) -> bool:
     без ядра (тесты, чужой запуск) не падала на нём.
     """
     legacy = tree / "soul" / "self.md"
-    if not legacy.is_file() or not _SELF_DAY_ZERO.is_file():
+    if not legacy.is_file() or not _stock_path('self-day-zero.md', cfg).is_file():
         return False
     self_model = _import_self_model()
     if self_model is None:
@@ -459,7 +498,7 @@ def seed_self(tree: Path, cfg: dict) -> bool:
     try:
         if self_model.current_prompt_info(tree).source == "current":
             return False
-        text = _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg)
+        text = _names(_stock_path('self-day-zero.md', cfg).read_text(encoding="utf-8"), cfg)
         result = self_model.migrate(
             base=tree,
             reason="день ноль: запись о себе положена теми, кто собрал дом; "
@@ -887,13 +926,15 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
         # legacy seed helpers warn and return on failure). Never certify such
         # a home complete or silently retry installing persona on next boot.
         gaps = []
-        for source in sorted((_RESOURCES / "soul").rglob("*.md")):
-            target = tree / "soul" / source.relative_to(_RESOURCES / "soul")
+        for relative, source in _stock_files('soul', cfg):
+            if source.suffix != '.md':
+                continue
+            target = tree / "soul" / relative
             if not target.is_file():
                 gaps.append(target.relative_to(tree).as_posix())
         if not soul.is_file():
             gaps.append("soul/SOUL.md")
-        if _SELF_DAY_ZERO.is_file():
+        if _stock_path('self-day-zero.md', cfg).is_file():
             model = _import_self_model()
             try:
                 valid_self = (model is not None and
