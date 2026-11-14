@@ -183,7 +183,6 @@ class EndpointPolicy(unittest.TestCase):
                     mock.patch.object(llm,'_STATE',copy.deepcopy(llm._STATE)), \
                     mock.patch.object(llm,'_usage_add'), mock.patch.object(llm,'_journal'), \
                     mock.patch.object(agent,'_build_prompt_parts',return_value=('synthetic persona','','evidence')), \
-                    mock.patch.object(agent,'_arm_private_floor',return_value=0), \
                     mock.patch.object(agent,'_work_loop_continue',return_value=False), \
                     mock.patch.object(agent,'_terminal_tool_loop',side_effect=loop):
                 ctx=agent.ChannelContext(chat_id='named-alias',is_dm=True,owner=True,principal_id='1')

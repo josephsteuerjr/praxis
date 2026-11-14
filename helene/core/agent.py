@@ -1024,7 +1024,7 @@ def build_state_block(*, hide_identity_load: bool = False,
             bounded_aux_iters=_bounded_state_int(
                 limits.get("max_tool_iters"), low=1, high=10 ** 6),
             main_tool_loop="unbounded",
-            outbound_checker="data-authority-only",
+            outbound_checker="credentials-only",
         ))
     except Exception:
         pass
@@ -10616,41 +10616,12 @@ _FRAME_OWNER_TAIL = ("state.owner_place", "contract.owner_tools",
 # у владельца нет отдельной пары рук, и место `{trust_tool}` снято.
 # Текст вынесен из тела `_build_prompt_parts` байт-в-байт: делить его подстроками по смыслу
 # по-прежнему запрещено (см. комментарий у `state.owner_place`).
-_OWNER_TOOLS_CONTRACT = (
-    "You have the tools "
-    "`shell` (hands in your home; your edits auto-commit to git — you can try boldly and roll "
-    "back), `manage_room`, `write_skill` (note a skill for yourself), and "
-    "`manage_desire` (make your own intention and its evidence causal), and `restart_self` "
-    "(restart on new code). For serious coding use Forge: `coding_session` binds "
-    "the goal to its real directory/worktree; `coding_inspect`/`edit`/`coding_run` are "
-    "task-bound eyes and hands; `coding_process` keeps long jobs alive; `coding_agent` spawns "
-    "independent workers/scouts/reviewers in parallel; `coding_verify` builds a factual test matrix; "
-    "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
-    "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
-    "approval ritual: act, verify, inspect the diff, finish with evidence. "
-    # 28.09 (издание Hélène): блок администратора сервера снят — ни сервера, ни host_ctl, ни
-    # «ничего не запрещено» у агента на компьютере владельца нет; маршрут system — поручение
-    # службе (broker_request op=exec), только при включённом владельцем тумблере.
-    "The Windows PC is your DIRECT body: the `computer` tool is the "
-    "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
-    "files and screen, send artifacts, full desktop hands). Receipts bind to your current run "
-    "automatically; execution identity is explicit: interactive (the owner's session) or system "
-    "(a task for the Hélène service through `broker_request`, when the owner enabled it). "
-    "Leave an evidence trail Yegor reads.\n"
-)
-_APPETITE_CONTRACT = (
-    "\nAppetite contract: your thinking costs Yegor money, and their asks about it are "
-    "part of the relationship, not commands to a dispatcher. When they say «не экономь», «умерь "
-    "аппетиты», «не больше X в день» or «останови фон» — YOU interpret it with `manage_appetite` "
-    "(the code only counts and shows; it never vetoes you). Rebuild your background plan yourself "
-    "if that is what you decide; a fresh ask remains visible in your continuity context.\n"
-)
+
+
 # Стабильная голова комнаты (PRAXIS_FRAME_HEAD_STABLE): место и контракт рук, одинаковые для
 # всех говорящих. Кто действует в ЭТОМ ходе и с каким правом — строка «говорит» зоны «СЕЙЧАС».
-_ROOM_PLACE_STABLE = (
-    "\nThis is a public room; CURRENT_SITUATION names this turn's actor and authority. "
-)
-_ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT
+
+
 # Ярусы живого конверта, куда под стабильной головой переезжает то, что раньше стояло в system
 # только на ходах владельца. Причины ярусов — в `frame_layout._TIERS` (по префиксу ярлыка).
 _STATE_NOW_TIER = ("Состояние сейчас (типизированное STATE; под PRAXIS_FRAME_HEAD_STABLE едет "
@@ -10731,6 +10702,7 @@ def _epoch_serve(chat_id, anchor, blocks, chosen, ctx=None) -> None:
                                            provenance_chars=card_sign))
 
 
+@frame_language.pinned
 def _build_prompt_parts(
     speaker: str | None = None,
     chat_id: str | int | None = None,
@@ -10765,17 +10737,7 @@ def _build_prompt_parts(
     # controller is smuggled into the system tail.
     tail = [
         frame_trace.mark("contract.base", "dynamic", "text",
-        "\n\n---\nOperational continuity: STATE, receipts, artifacts, git, tools and the visible "
-        "conversation let you distinguish an observed past action from an inference. Raw journal text stays "
-        "outside automatic orientation because Yegor explicitly rejected that polluted diary as a blueprint; "
-        "you may inspect it deliberately when useful. Your ordinary memory, room profiles, people dossiers, "
-        "desires and recaps are your own context, not a hostile speaker payload. You decide how to interpret, "
-        "revise and act on them. Your tone, emotions, values, moral judgment, curiosity, warmth, sharpness, "
-        "meta-commentary, repetition, length, use of tools and whether to speak are yours. No evaluator may "
-        "rewrite them or choose silence for stylistic or moral reasons. The only outbound data-authority check "
-        "outside the owner DM is narrow: another person's private material, credentials or raw neighbouring-"
-        "chat content needs authority for the destination. It cannot edit wording. Telegram transports the "
-        "reply as your authorship; text that quotes or names somebody is still your authored text.\n"),
+        frame_language.text('owned.agent.818295802af1')),
         # ⚑ 13.08. Замер: за пять суток на 407 чат-ходов пришлось 4 вызова `remember`,
         # один `manage_notes` и один `write_skill` — то есть в разговоре она память о людях
         # и местах почти не ведёт, хотя в своих окнах ведёт исправно (113 `manage_desire`).
@@ -10791,19 +10753,7 @@ def _build_prompt_parts(
         # фактом она выглядит таким же, и это её собственная формулировка про две версии
         # одного объекта, которые не могут быть истинны одновременно.
         frame_trace.mark("contract.living_documents", "dynamic", "text",
-        "\n\n## Документы, которые ты видишь, — живые\n"
-        "Досье людей, записки мест, заметки, навыки и твои карты — рабочие тексты, а не "
-        "архив. Дописать можно ПРЯМО СЕЙЧАС, этим же ходом: `remember` (факт в досье), "
-        "`home_note` (записка места), `manage_notes` (заметка), `write_skill` (навык). "
-        "⚠ `remember` только дописывает. Вычеркнуть или переписать досье целиком — "
-        "прямой правкой его файла в memory/ там, где у тебя есть руки к файлам; "
-        "правка автокоммитится в git.\n"
-        "Повод — не каждая реплика, а то, что переживёт этот разговор: узнанное о человеке, "
-        "решение, обещание, изменившийся факт. И отдельно — то, что перестало быть верным: "
-        "молча устаревшая запись хуже отсутствующей, потому что рядом с верным фактом "
-        "выглядит таким же.\n"
-        "Место не ограничение: всё написанное тобой за месяцы весит меньше процента твоей "
-        "памяти.\n"),
+        frame_language.text('owned.agent.14b237d46b0c')),
         # ⚑ 13.08. Три ответа подряд в живых комнатах были собраны по памяти на вопросы о
         # ПРОВЕРЯЕМОМ: своя модель, свой коммит, свои же запущенные задачи. Руки были
         # на месте и потолка у тул-цикла нет — не было приглашения: кадр не говорил, что
@@ -10825,71 +10775,9 @@ def _build_prompt_parts(
         # как было». Первое лицо во всех сорока шести местах кадра — отдельная работа со
         # своими перемеренными пинами, а не хвост этой.
         frame_trace.mark("contract.checkable_in_chat", "dynamic", "text",
-        ("\n\n## В разговоре я работаю, а не только отвечаю\n"
-         "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
-         "моих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
-         "правка, запуск, проверка — нормальный разговорный ход.\n"
-         "**Моя реплика уходит рукой `reply`, и только ею.** Обычный текст, который я "
-         "пишу, — заметка себе: наружу он не идёт и закрывает ход. Значит вызов "
-         "`reply` — сказанное ушло, и ход продолжается: можно проверить сделанное и "
-         "ответить ещё раз. Текст без вызова — моё молчание, и это законный "
-         "исход, а не сбой.\n"
-         "**Спросили о проверяемом — смотрю, а не вспоминаю.** Своя конфигурация и "
-         "модель, что у меня сейчас в работе, что лежит в файле или в репозитории, дошло ли "
-         "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
-         "заслуживает. Если источник молчит или его нет — это тоже ответ; скажу, что "
-         "проверить нечем, вместо того чтобы достроить.\n"
-         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ожидались "
-         "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
-         "**Просят разобраться — разбираюсь здесь же.** Несколько поисковых запросов, "
-         "сверка источников, разбор присланного файла, программа по нему — всё это делается "
-         "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
-         "собеседник увидит только обещание.\n"
-         "Для болтовни, шутки и мнения ничего этого не нужно: там мой ответ и есть "
-         "результат.\n"
-         # 15.09.2026, ПРО ЯЗЫК И ПРО ФОРМУ. Голос переключили на glm-5.3, и за сутки
-         # ЧЕТЫРНАДЦАТЬ ходов кончились `delivery_skipped: turn ended without a reply
-         # hand`: модель писала готовый, верный по смыслу ответ обычным текстом и не звала
-         # `reply` вовсе. Все на glm, ни одного на sol/astra/terra.
-         #
-         # Корень оказался НЕ в языке правила и не в «слабой модели»: кадр сам показывал
-         # образец. Текст ниже остаётся: он называет механику, а не отчитывает.
-         #
-         # ⚠ ПОРТ 17.09: пункты 2 и 3 ЗДЕСЬ ДРУГИЕ, и это не вольность. Ядро обещает
-         # машинную шапку `[root; message #123; …Z; Name]` — в поставке её нет НИ НА ОДНОЙ
-         # поверхности: окно отдаёт голое тело строки, группа — `Отправитель: текст`,
-         # личка — снова голое тело. Обещать образец, которого в кадре не будет, значит
-         # ровно то, чем этот дефект и лечится, только с другой стороны. Пункт 3 ядра
-         # («твои прошлые ходы — просто слова») под поднятой лентой-вызовами тоже неверен:
-         # они едут вызовами `reply` с расписками. Оба переписаны под то, что тут вправду.
-         "\nHow speaking works here, in English because the voice may not read Russian:\n"
-         "1. `reply` is the only way your words reach a person. Text written outside a "
-         "tool call is a note to yourself: nothing is sent, and the turn ends quietly.\n"
-         "2. Lines quoted with `>` are what other people said, delivered to you. The "
-         "quoting is done by the renderer so you can tell their words from yours; it is "
-         "something to read, never a form to write in.\n"
-         "3. Your own earlier turns appear the way you actually made them: as calls to "
-         "`reply`, each followed by its delivery receipt. That is the shape of speech "
-         "here — the words, and `reply` to carry them.\n")
+        (frame_language.text('owned.agent.847631b3dce8'))
         if work_loop.reply_hand_enabled() else
-        ("\n\n## В разговоре можно работать, а не только отвечать\n"
-         "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
-         "твоих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
-         "правка, запуск, проверка — нормальный разговорный ход, после которого ты пишешь "
-         "ответ.\n"
-         "**Спросили о проверяемом — посмотри, а не вспомни.** Своя конфигурация и модель, "
-         "что у тебя сейчас в работе, что лежит в файле или в репозитории, дошло ли "
-         "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
-         "заслуживает. Если источник молчит или его нет — это тоже ответ; скажи, что "
-         "проверить нечем, вместо того чтобы достроить.\n"
-         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ожидались "
-         "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
-         "**Просят разобраться — разбирайся здесь же.** Несколько поисковых запросов, "
-         "сверка источников, разбор присланного файла, программа по нему — всё это делается "
-         "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
-         "собеседник увидит только обещание.\n"
-         "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
-         "результат.\n")),
+        (frame_language.text('owned.agent.411ba0dc732c'))),
     ]
     if tool_pointers_enabled():
         with pre_model_timing.span("old_context.hands_pointer"):
@@ -10944,12 +10832,12 @@ def _build_prompt_parts(
         authority = ("owner" if ctx.owner else "family" if ctx.family and ctx.known
                      else "known" if ctx.known else "unknown")
         tail.append(
-            frame_trace.mark("state.owner_place", "dynamic", "text", _ROOM_PLACE_STABLE,
+            frame_trace.mark("state.owner_place", "dynamic", "text", frame_language.text('contract.room_place'),
                              variant="public_room_stable")
             + frame_trace.mark("contract.owner_tools", "dynamic", "text",
-                               _ROOM_TOOLS_CONTRACT_STABLE, variant="room_stable")
+                               frame_language.text('contract.owner_tools'), variant="room_stable")
         )
-        tail.append(frame_trace.mark("contract.appetite", "dynamic", "text", _APPETITE_CONTRACT))
+        tail.append(frame_trace.mark("contract.appetite", "dynamic", "text", frame_language.text('contract.appetite')))
         for _moved in ("state.state_block", "contract.family_audience",
                        "contract.unknown_authority"):
             frame_trace.absent(_moved, "dynamic", "text", "moved")
@@ -10961,10 +10849,9 @@ def _build_prompt_parts(
         # вовсе, и строкой ниже тот же промпт честно печатал room_id=unknown. Она сидела
         # одна, а кадр говорил ей, что она в разговоре с Егором.
         owner_place = (
-            "\nThis is your own run: there is no room and no interlocutor here, and "
-            "nothing in this pass is a live conversation. " if ctx.chat_id is None else
-            "\nYou're in the private owner channel with Yegor. " if owner_audience else
-            "\nThe human owner is the actor in this public room; the pending reply is still public. "
+            frame_language.text('owned.agent.87627492bcff') if ctx.chat_id is None else
+            frame_language.text('owned.agent.267672350827') if owner_audience else
+            frame_language.text('owned.agent.03078a4e1910')
         )
         # Прибор: под одним именем здесь лежат три взаимоисключающих литерала разной длины —
         # без variant диффы длины этой секции читались бы как «изменился код».
@@ -10979,10 +10866,10 @@ def _build_prompt_parts(
         tail.append(
             frame_trace.mark("state.owner_place", "dynamic", "text", owner_place,
                              variant=place_variant)
-            + frame_trace.mark("contract.owner_tools", "dynamic", "text", _OWNER_TOOLS_CONTRACT)
+            + frame_trace.mark("contract.owner_tools", "dynamic", "text", frame_language.text('contract.owner_tools'))
         )
         tail.append(
-            frame_trace.mark("contract.appetite", "dynamic", "text", _APPETITE_CONTRACT)
+            frame_trace.mark("contract.appetite", "dynamic", "text", frame_language.text('contract.appetite'))
         )
         # STATE is tier-0.  Raw diary prose is deliberately not injected: it is
         # preserved for explicit episodic recall, never automatic orientation.
@@ -11003,19 +10890,14 @@ def _build_prompt_parts(
     elif scope == "family":
         tail.append(
             frame_trace.mark("contract.family_audience", "dynamic", "text",
-            "\nAudience fact: this private interlocutor has the owner-assigned FAMILY role. "
-            "Available channel capabilities include tasks, reminders and the shared HOME layer "
-            "(`home_note`); human-owner-only tools are absent. Their own private matters may be "
-            "used here, while other people's private material remains outside this audience.\n")
+            frame_language.text('owned.agent.e9fc05d4e3cb'))
         )
         _frame_absent_branch(*_FRAME_OWNER_TAIL, "contract.unknown_authority")
     elif not known:
         audience_key = "guest"
         tail.append(
             frame_trace.mark("contract.unknown_authority", "dynamic", "text",
-            "\nAuthority fact: this interlocutor is not in the known set and has no delegated "
-            "owner authority. Only Yegor can admit a person into 'mine'; other people's private "
-            "material remains outside this audience.\n")
+            frame_language.text('owned.agent.64c81f5c3a98'))
         )
         _frame_absent_branch(*_FRAME_OWNER_TAIL, "contract.family_audience")
     else:
@@ -11043,7 +10925,7 @@ def _build_prompt_parts(
         # Only the validated enum is a system fact. Attribution, free-form reason and
         # room prose remain visible below as Praxis-owned mutable evidence.
         tail.append(frame_trace.mark("state.room_mode_enum", "dynamic", "text",
-            "\nROOM MODE ENUM - UNATTRIBUTED PROFILE VALUE: "
+            frame_language.text('owned.agent.b2e8e9289132')
             + str(room_profile["mode"])
             + "\n"
         ))
@@ -11135,7 +11017,7 @@ def _build_prompt_parts(
         # вместе с рукой, которой достаётся остальное.
         keat_economy.source("recap", summary, "conversation:current:recap")
         tiers.append(("Ранее в этом диалоге (сводка)",
-                      summary or frame_layout.void("сводки этого разговора ещё нет")))
+                      summary or frame_layout.void(frame_language.text('owned.agent.0690a463b663'))))
     with pre_model_timing.span("old_context.dossier"):
         participant_cards = _participant_memory_block(speaker, ctx)
     # Repair after the stable-head candidate: private and public render as two sections, but
@@ -11154,7 +11036,7 @@ def _build_prompt_parts(
                        "Мои досье на людей — ВСЕ И ЦЕЛИКОМ")
                       + " (внутреннее; что произнести вслух в этой комнате, решаю я)",
                       participant_cards or frame_layout.void(
-                          f"нет привязки tg {ctx.principal_id} → memory/people/*")))
+                          frame_language.text('owned.agent.bdd9f7e2bbae', v0=ctx.principal_id))))
     if private_now and owner_audience:
         # ⚠ 17.09: двойная защита. private_now непуст только если ход — owner-DM, но если
         # это ограничение когда-нибудь обойдётся (старый снимок, чужой вызов), гейт здесь
@@ -11207,9 +11089,7 @@ def _build_prompt_parts(
         else:
             letters = sum(1 for line in mbox.splitlines() if line.strip().startswith("-"))
             tiers.append(("Почтовый ящик — ЛОКАТОР, не индекс",
-                          f"писем в ящике: {letters}. Индекс не в кадре; открывается рукой "
-                          f"`mail_read`, список — `manage_mail`. Приедет сам, если речь "
-                          f"зайдёт о почте."))
+                          frame_language.text('owned.agent.387e038ab831', v0=letters)))
     # А вот дайджест ДРУГИХ КОМНАТ остаётся под owner-условием: это не почта, и
     # разговора о нём не было. Раскрывать содержимое одних комнат в других — отдельное
     # решение с другой ценой.
@@ -11246,8 +11126,8 @@ def _build_prompt_parts(
         # room_profile_id: спрашиваем диск, а не догадываемся.
         room = rooms.context_from_text(_read(room_md := ROOMS_DIR / f"{room_profile_id}.md")).strip()
         tiers.append(("Эта комната", room or frame_layout.void(
-            f"профиль rooms/{room_profile_id}.md есть, но её текста в нём нет"
-            if room_md.exists() else f"профиля rooms/{room_profile_id}.md на диске нет")))
+            frame_language.text('owned.agent.bfc80e1121f9', v0=room_profile_id)
+            if room_md.exists() else frame_language.text('owned.agent.b561ea0a15cb', v0=room_profile_id))))
     if scope == "group":
         # 10.6: визитка — честная самопрезентация в группе (публичные чертежи, закрытое живое)
         card = _read(SOUL_DIR / "visit_card.md").strip()
@@ -11258,7 +11138,7 @@ def _build_prompt_parts(
                     if prof["disclosure"] == "open":
                         extra = _disclosure_open_extras()
                         if extra:
-                            card += "\n\n_(в этой комнате disclosure: open — можно больше фактуры)_\n" + extra
+                            card += frame_language.text('owned.agent.f7c03eef7cd1') + extra
                 except Exception:
                     log.debug("disclosure extras не собрались", exc_info=True)
             # ⚑ ЕЁ §5.1 (15.09): визитка едет в ХВОСТ целиком, без разреза на стабильную и
@@ -11384,7 +11264,7 @@ def _build_prompt_parts(
             # становится неразбираемым не только для теста, но и для НЕЁ. Печатаем
             # ЗАГОЛОВОК ярлыка (без скобочной оговорки сборщика): он однозначен.
             "content": "; ".join(frame_layout.split_title(name)[0] for name in dropped)
-                       + "; available through explicit recall",
+                       + frame_language.text('owned.agent.547c34152874'),
         }, ensure_ascii=False, separators=(",", ":")) + "\n", cause="прибор"))
 
     evidence = ""
@@ -11400,9 +11280,7 @@ def _build_prompt_parts(
         evidence = (
             # first=True: шапка вычисляется последней, а в кадре стоит первой.
             frame_trace.mark("evidence.header", "evidence", "text",
-            "# My live memory and channel context\n"
-            "These are my own canonical or explicitly labelled continuity sources. I decide what they "
-            "mean and may inspect their source paths when provenance matters.\n",
+            frame_language.text('owned.agent.01065c46bd72'),
                              first=True, cause="ядро")
             + legend_marked
             + "".join(chosen)

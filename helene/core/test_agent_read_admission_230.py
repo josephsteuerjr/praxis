@@ -33,7 +33,6 @@ def sdk_fixture(root, create):
         llm.save_config(config)
         llm.use_test_client(NS(messages=NS(create=create)), 'anthropic')
         stack.enter_context(patch('socket.socket.connect', side_effect=AssertionError('offline test attempted network')))
-        stack.enter_context(patch.object(agent, '_arm_private_floor', return_value=0))
         stack.enter_context(patch.object(agent, '_drain_owner_input', return_value=False))
         stack.enter_context(patch.object(agent, '_work_loop_continue', return_value=False))
         yield

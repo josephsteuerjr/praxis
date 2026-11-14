@@ -53,7 +53,6 @@ class EditionEpoch(unittest.TestCase):
         self.enterContext(mock.patch.object(agent, '_persona_text', return_value='synthetic persona'))
         self.enterContext(mock.patch.object(agent, '_active_desires_block', return_value=''))
         self.enterContext(mock.patch.object(agent, '_work_loop_continue', return_value=False))
-        self.enterContext(mock.patch.object(agent, '_arm_private_floor', return_value=0))
         self.enterContext(mock.patch.object(agent, '_pre_shell_dirt', return_value=set()))
         self.enterContext(mock.patch.object(agent, '_autocommit_self_edit'))
         self.enterContext(mock.patch.object(agent, '_runs', return_value=RunManager(self.base)))

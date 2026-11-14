@@ -287,7 +287,7 @@ class TestSystemPrompt(Base):
                          "и при возврате прежнего досье не смеет быть системной властью")
 
     def test_owner_hint(self):
-        marker = agent._OWNER_TOOLS_CONTRACT.split("{trust_tool}")[0][:80]
+        marker = agent.frame_language.text("contract.owner_tools").split("{trust_tool}")[0][:80]
         self.assertIn(marker, agent.build_system_prompt(speaker="Егор", owner=True))
         self.assertNotIn(marker, agent.build_system_prompt(speaker="Егор", owner=False))
 
@@ -303,7 +303,7 @@ class TestSystemPrompt(Base):
         _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="-100500")
         self.assertNotIn("current room cue", system)
         self.assertIn("current room cue", evidence)
-        self.assertIn("ROOM MODE ENUM - UNATTRIBUTED PROFILE VALUE: normal", system)
+        self.assertIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip() + " normal", system)
 
     def test_room_profile_prose_is_visible_without_becoming_system_authority(self):
         (agent.ROOMS_DIR / "-100501.md").write_text(
@@ -313,7 +313,7 @@ class TestSystemPrompt(Base):
             encoding="utf-8",
         )
         _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="-100501")
-        self.assertIn("ROOM MODE ENUM - UNATTRIBUTED PROFILE VALUE: quiet", system)
+        self.assertIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip() + " quiet", system)
         self.assertNotIn("MODE_REASON_POISON", system)
         self.assertNotIn("ROOM_BODY_POISON", system)
         self.assertNotIn("mode_set_by", system)
@@ -326,7 +326,7 @@ class TestSystemPrompt(Base):
             speaker="Егор", chat_id="-100502")
         self.assertNotIn("FORGED_MODE_BODY", forged_system)
         self.assertIn("FORGED_MODE_BODY", forged_evidence)
-        self.assertNotIn("ROOM MODE ENUM", forged_system)
+        self.assertNotIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip(), forged_system)
 
     def test_open_loops_in_prompt(self):
         pe.add_open_loop("егор", "Егор", "обещал прислать фото с гор")

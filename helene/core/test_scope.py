@@ -74,7 +74,7 @@ class TestChannelContext(unittest.TestCase):
         self.assertTrue(cc.praxis_self)
         self.assertIn("with Yegor", agent._presence_frame(cc))
         _, dynamic = agent.build_system_parts(speaker="Егор", ctx=cc)
-        self.assertIn("private owner channel", dynamic)
+        self.assertIn(agent.frame_language.text("owned.agent.267672350827").strip(), dynamic)
 
     def test_scope_override_alone_cannot_forge_owner_audience(self):
         cc = agent.ChannelContext(
@@ -102,7 +102,7 @@ class TestChannelContext(unittest.TestCase):
                 agent.build_state_block = old_state
                 agent.HOME_MD = old_home
         self.assertIn("STATE_OWNER_GROUP_MARKER", dynamic)
-        self.assertIn("pending reply is still public", dynamic)
+        self.assertIn(agent.frame_language.text("owned.agent.03078a4e1910").strip(), dynamic)
         self.assertNotIn("PRIVATE_HOME_GROUP_MARKER", dynamic)
         self.assertFalse(cc.owner_audience)
 

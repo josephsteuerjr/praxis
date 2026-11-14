@@ -74,8 +74,8 @@ class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
         owner = frame_for(room_ctx(owner=True))
         guest = frame_for(room_ctx(owner=False, known=False))
         self.assertNotEqual(owner[1], guest[1])
-        self.assertIn("The human owner is the actor in this public room", owner[1])
-        self.assertIn("Authority fact: this interlocutor is not in the known set", guest[1])
+        self.assertIn(agent.frame_language.text("owned.agent.03078a4e1910").strip(), owner[1])
+        self.assertIn(agent.frame_language.text("owned.agent.64c81f5c3a98").strip(), guest[1])
         self.assertIn("members=", owner[1])
         self.assertEqual(names(room_ctx(owner=True)), names(room_ctx(owner=False, known=False)))
         self.assertNotIn("admit", names(room_ctx(owner=True)))
@@ -90,12 +90,12 @@ class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
         self.assertEqual(owner[1], known[1], "system[1] владельца и знакомого расходится")
         self.assertEqual(owner[1], guest[1], "system[1] владельца и чужого расходится")
         dynamic = owner[1]
-        self.assertIn("This is a public room; CURRENT_SITUATION names", dynamic)
+        self.assertIn(agent.frame_language.text("contract.room_place").strip(), dynamic)
         self.assertNotIn("`admit`", dynamic)
-        self.assertIn("Appetite contract", dynamic)
+        self.assertIn(agent.frame_language.text("contract.appetite").strip(), dynamic)
         self.assertNotIn("members=", dynamic)
-        self.assertNotIn("Authority fact", dynamic)
-        self.assertNotIn("The human owner is the actor", dynamic)
+        self.assertNotIn(agent.frame_language.text("owned.agent.64c81f5c3a98").strip(), dynamic)
+        self.assertNotIn(agent.frame_language.text("owned.agent.03078a4e1910").strip(), dynamic)
         self.assertIn("audience_key=room", dynamic)
         # адрес кэша один — как и раньше
         self.assertEqual(llm.cache_address("gpt-5.6-terra", owner[0] + owner[1]),

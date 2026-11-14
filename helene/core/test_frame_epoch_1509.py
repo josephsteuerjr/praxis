@@ -506,7 +506,7 @@ class OwnRunHeadStable(unittest.TestCase):
             b = self.frame('{"fact":"loops","open":4}')
         self.assertEqual(a[0] + a[1], b[0] + b[1], "голова окна зависит от живого STATE")
         self.assertNotIn('"open":3', a[1])
-        self.assertIn("This is your own run", a[1])
+        self.assertIn(agent.frame_language.text("owned.agent.87627492bcff").strip(), a[1])
         self.assertIn("СОСТОЯНИЕ СЕЙЧАС", a[2])
         self.assertIn('"open":3', a[2])
         self.assertIn('"open":4', b[2])

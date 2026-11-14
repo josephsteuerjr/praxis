@@ -425,7 +425,7 @@ class TheBudgetIsMeasuredWithTheSameRuler(FrameBase):
         traced = {frame_layout.split_title(r["label"])[0] for r in rows
                   if r.get("reason") == "context_budget" and r.get("label")}
         named = {part.strip() for part in spoken.split(";")
-                 if part.strip() and part.strip() != "available through explicit recall"}
+                 if part.strip() and part.strip() != agent.frame_language.text("owned.agent.547c34152874").lstrip("; ")}
         self.assertEqual(traced, named, "след и кадр называют разное выброшенным")
         counts = {"included": len([r for r in rows if r["name"] == "evidence.tier"
                                    and r["included"]])}
@@ -1157,7 +1157,7 @@ class TheEnvelopeGeometryNamesItsShape(FrameBase):
         self.assertEqual(embed["fold_chars"] + embed["closing_chars"], embed["suffix_chars"])
         flat = seen["messages"][-1]["content"]
         cut = flat[embed["prefix_chars"]:embed["prefix_chars"] + embed["material_chars"]]
-        self.assertTrue(cut.startswith("# My live memory"),
+        self.assertTrue(cut.startswith(agent.frame_language.text("owned.agent.01065c46bd72").splitlines()[0]),
                         "рецепт вырезания материала по опубликованным числам не работает")
 
     def test_a_multimodal_turn_says_it_is_not_flat(self):
@@ -1169,7 +1169,7 @@ class TheEnvelopeGeometryNamesItsShape(FrameBase):
         self.assertIsInstance(blocks, list)
         head = blocks[0]["text"]
         cut = head[embed["prefix_chars"]:embed["prefix_chars"] + embed["material_chars"]]
-        self.assertTrue(cut.startswith("# My live memory"))
+        self.assertTrue(cut.startswith(agent.frame_language.text("owned.agent.01065c46bd72").splitlines()[0]))
         self.assertEqual(len(blocks[-1]["text"]), embed["closing_chars"],
                          "closing_chars не описывает последний блок")
 

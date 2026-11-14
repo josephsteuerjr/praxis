@@ -264,7 +264,6 @@ class ContinuationTests(unittest.TestCase):
         with mock.patch.object(agent, '_build_prompt_parts', return_value=('persona', '', 'live evidence')), \
                 mock.patch.object(agent, '_system', return_value=self.system), \
                 mock.patch.object(agent, '_terminal_tool_loop', side_effect=loop), \
-                mock.patch.object(agent, '_arm_private_floor', return_value=0), \
                 mock.patch.object(agent.llm, 'chat', return_value=response), \
                 mock.patch.object(agent.llm, '_resolve_model', return_value='offline'):
             for selected in (self.selection, self.next_selection()):
