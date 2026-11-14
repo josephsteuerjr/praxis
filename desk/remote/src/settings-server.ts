@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Издание настроек Praxis: агент живёт НА СЕРВЕРЕ.
 //
 // ⚠ Что здесь есть и чего нет. Карточек модели, Telegram, режима, ограды,
@@ -27,14 +28,12 @@ export async function serverEdition({ draft, saved }: EditionContext): Promise<E
   const box = el("div");
   box.append(el("p", "field-hint",
     base
-      ? `Окно ходит к харнессу по адресу ${base}. Настройки самого агента — модель и ключ, Telegram, ` +
-        "имена и режим рук записываются кнопкой «Сохранить на сервере» в карточке ниже. " +
-        "Разрешение на root-команды хосту VPS отдельно выдаёт владелец на сервере."
-      : "Адрес сервера ещё не вписан. Пока его нет, окно ни к чему не подключено: впиши адрес и ключ канала " +
-        "в карточке «Перенос» ниже."));
+      ? uiText("ui.remote.src.settings.server.0d3576adb3", {p0: String(base)}) +
+        uiText("ui.remote.src.settings.server.c8289557c1") +
+        uiText("ui.remote.src.settings.server.14b1677c26")
+      : uiText("ui.remote.src.settings.server.339b3e5e37")));
   box.append(el("p", "field-hint",
-    "Здесь остаётся то, что относится к этому окну: имена в подписи, подключение телефона к серверному " +
-    "каналу, адрес сервера и обновления программы. Данные агента лежат на сервере, а не в папке рядом с окном."));
+    uiText("ui.remote.src.settings.server.764b83c99f")));
 
   return {
     // ⚠ С 11.09 карточек две. Первая говорит, где живёт агент; вторая правит
@@ -42,11 +41,10 @@ export async function serverEdition({ draft, saved }: EditionContext): Promise<E
     // собственном конфиге на сервере (). Это не возвращение
     // карточек Элен: те правят файл рядом с окном через оболочку, которой здесь
     // нет вовсе.
-    cards: [card("Агент живёт на сервере", box), serverAgentCard().el, serverSpeechCard()],
+    cards: [card(uiText("ui.remote.src.settings.server.3b2f8c23dd"), box), serverAgentCard().el, serverSpeechCard()],
     // Подпись у изданий разная: здесь имена — подписи ОКНА, а не агента.
     namesHint:
-      "Это подписи ЭТОГО окна: как оно зовёт агента и тебя. Сам агент живёт на сервере и своих имён отсюда не узнает — " +
-      "они правятся там, где он живёт.",
+      uiText("ui.remote.src.settings.server.705d43e97f"),
     // Телефон подключается к СЕРВЕРУ: QR ведёт туда, а не на адрес этой машины,
     // куда телефону идти незачем. Правило брандмауэра здесь ни при чём.
     phoneBase: base,

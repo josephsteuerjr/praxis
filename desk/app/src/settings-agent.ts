@@ -392,7 +392,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     pick.el.setAttribute('aria-label', uiText("ui.app.src.settings.agent.c081cbfe41"));
     pick.el.style.setProperty('--fast-mode-columns', String(options.length));
     fastChoices.replaceChildren(pick.el);
-    fastHint.textContent = FAST_MODE_HINT + (available === null
+    fastHint.textContent = FAST_MODE_HINT() + (available === null
       ? uiText("ui.app.src.settings.agent.662a16b1bb") : available === false
         ? uiText("ui.app.src.settings.agent.926cda0497")
         : uiText("ui.app.src.settings.agent.692bc1c9c0"));

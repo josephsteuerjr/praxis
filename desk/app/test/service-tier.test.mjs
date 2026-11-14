@@ -1,6 +1,7 @@
+import './fixtures/ru-localization.mjs';
 import assert from 'node:assert/strict';
-import {collectServiceTier, serviceTierChoices, serviceTierLabel, serviceTierReceipt} from '../../ui-kit/service-tier.ts';
-import {effortPlan, fastModeAvailability} from '../../ui-kit/providers.ts';
+const {collectServiceTier, serviceTierChoices, serviceTierLabel, serviceTierReceipt} = await import('../../ui-kit/service-tier.ts');
+const {effortPlan, fastModeAvailability} = await import('../../ui-kit/providers.ts');
 
 const absent = {reasoning_effort:'high',custom:{preserve:true}};
 collectServiceTier(absent,'',false);

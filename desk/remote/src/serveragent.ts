@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Настройки агента, который живёт НА СЕРВЕРЕ, — прямо из окна.
 //
 // Что это и чем отличается от карточек Элен. У Элен агент рядом: её экран
@@ -34,12 +35,12 @@ interface AgentConfigState {
 /** Карточка настроек серверного агента. Пустая, если канал их не отдаёт. */
 export function serverAgentCard(): { el: HTMLElement } {
   const box = el("div");
-  const status = el("p", "field-hint", "спрашиваю канал…");
+  const status = el("p", "field-hint", uiText("ui.remote.src.serveragent.61bd6769dc"));
   const fields = el("div");
   const actions = el("div", "actions");
   const note = el("span", "receipt");
-  const save = button("Сохранить на сервере", "primary", () => void store());
-  const reload = button("Перечитать настройки", "quiet", () => void load());
+  const save = button(uiText("ui.remote.src.serveragent.190e3e09f5"), "primary", () => void store());
+  const reload = button(uiText("ui.remote.src.serveragent.c2f2c8963e"), "quiet", () => void load());
   save.disabled = true;
   actions.append(save, reload, note);
   box.append(status, fields, actions);
@@ -75,34 +76,34 @@ export function serverAgentCard(): { el: HTMLElement } {
     const agent = cfg.agent || {};
     const owner = cfg.owner || {};
     status.textContent =
-      `Правится файл агента на сервере: ${state.path}. Раскладка установки ` +
-      `(где код, порт канала, служба, реле) отсюда не правится — она кладётся там, где агента разворачивали.`;
+      uiText("ui.remote.src.serveragent.8f0c052232", {p0: String(state.path)}) +
+      uiText("ui.remote.src.serveragent.24a788252e");
     fields.append(
-      field("Адрес мозга", String(model.base_url || ""), (v) => put("model", "base_url", v.trim()),
+      field(uiText("ui.remote.src.serveragent.e57be2905b"), String(model.base_url || ""), (v) => put("model", "base_url", v.trim()),
             { mono: true, placeholder: "https://api.openai.com/v1" }),
-      field("Модель", String(model.model || ""), (v) => put("model", "model", v.trim()),
+      field(uiText("ui.remote.src.serveragent.f3bdf7cce3"), String(model.model || ""), (v) => put("model", "model", v.trim()),
             { mono: true }),
-      field("Ключ мозга", String(model.key || ""), (v) => put("model", "key", v.trim()),
-            { mono: true, hint: "Уезжает на сервер по тому же каналу, которым идёт переписка." }),
-      field("Токен бота Telegram", String(tg.bot_token || ""), (v) => put("telegram", "bot_token", v.trim()),
+      field(uiText("ui.remote.src.serveragent.94cd64daed"), String(model.key || ""), (v) => put("model", "key", v.trim()),
+            { mono: true, hint: uiText("ui.remote.src.serveragent.1ff0a03981") }),
+      field(uiText("ui.remote.src.serveragent.2946c631e3"), String(tg.bot_token || ""), (v) => put("telegram", "bot_token", v.trim()),
             { mono: true }),
-      field("Твой Telegram-id", String(tg.owner_id || ""), (v) => put("telegram", "owner_id", Number(v.trim()) || 0),
-            { mono: true, hint: "Только цифры. Ноль — гейт агента не пустит никого, и бот будет молчать на всё." }),
-      field("Имя агента", String(agent.name || ""), (v) => put("agent", "name", v.trim())),
-      field("Имя владельца", String(owner.name || ""), (v) => put("owner", "name", v.trim())),
+      field(uiText("ui.remote.src.serveragent.4779b7e41b"), String(tg.owner_id || ""), (v) => put("telegram", "owner_id", Number(v.trim()) || 0),
+            { mono: true, hint: uiText("ui.remote.src.serveragent.c74052289f") }),
+      field(uiText("ui.remote.src.serveragent.ba527ef131"), String(agent.name || ""), (v) => put("agent", "name", v.trim())),
+      field(uiText("ui.remote.src.serveragent.02a21de733"), String(owner.name || ""), (v) => put("owner", "name", v.trim())),
     );
     if (state.access) {
       const access = state.access;
       const mode = el("div");
-      chips(mode, [{ value: "sandbox", label: "Песочница" }, { value: "interactive", label: "Интерактивный" }],
-        access.agent_mode, (value) => put("access", "agent_mode", value), "Режим рук серверного агента");
+      chips(mode, [{ value: "sandbox", label: uiText("ui.remote.src.serveragent.060a298fa5") }, { value: "interactive", label: uiText("ui.remote.src.serveragent.da6bb17f38") }],
+        access.agent_mode, (value) => put("access", "agent_mode", value), uiText("ui.remote.src.serveragent.6ed93f78ed"));
       fields.append(mode, el("p", "field-hint",
-        "Интерактивный режим открывает обычные руки в контейнере. Настройка применяется после перезапуска агента."));
-      const root = toggle("Использовать выданный владельцем root-доступ к VPS", access.session0,
+        uiText("ui.remote.src.serveragent.8429400190")));
+      const root = toggle(uiText("ui.remote.src.serveragent.20ed8ee57d"), access.session0,
         (value) => put("access", "session0", value));
       fields.append(root, el("p", "field-hint", access.socket_present
-        ? "Сокет сервера подключён. Действующее разрешение и исполнение команд проверяются брокером."
-        : "Владелец ещё не подключил root-брокер на сервере. Этот выбор сохраняет запрос доступа; разрешение выдаётся на VPS."));
+        ? uiText("ui.remote.src.serveragent.fd1cfff87a")
+        : uiText("ui.remote.src.serveragent.b7f27fe132")));
     }
     save.disabled = false;
   };
@@ -110,24 +111,24 @@ export function serverAgentCard(): { el: HTMLElement } {
   const store = async () => {
     if (busy || !available) return;
     if (!Object.keys(draft).length) {
-      receipt(note, "нечего сохранять — ничего не менялось");
+      receipt(note, uiText("ui.remote.src.serveragent.1246152180"));
       return;
     }
     busy = true;
     save.disabled = reload.disabled = true;
     const submitted = structuredClone(draft);
     const submittedRevision = revision;
-    receipt(note, "пишу на сервере…");
+    receipt(note, uiText("ui.remote.src.serveragent.bc8617d8b9"));
     try {
       const got = await post<{ saved: string[]; dropped: string[]; note: string; mtime_ns: string }>(
         "/api/agent-config", { config: submitted, mtime_ns: seen });
       seen = got.mtime_ns;
       loaded = { ...loaded, ...submitted };
       if (revision === submittedRevision) draft = {};
-      const dropped = got.dropped?.length ? ` Отброшено (не правится отсюда): ${got.dropped.join(", ")}.` : "";
+      const dropped = got.dropped?.length ? uiText("ui.remote.src.serveragent.7329173f79", {p0: String(got.dropped.join(", "))}) : "";
       receipt(note,
-        `Сохранено: ${got.saved.join(", ")}.${dropped} ${got.note}` +
-        (Object.keys(draft).length ? " Новые правки ещё не сохранены." : ""), "ok");
+        uiText("ui.remote.src.serveragent.0be3cc7044", {p0: String(got.saved.join(", ")), p1: String(dropped), p2: String(got.note)}) +
+        (Object.keys(draft).length ? uiText("ui.remote.src.serveragent.43913ab7a8") : ""), "ok");
     } catch (e) {
       const said = humanError(e);
       // 409 — не поломка, а ответ: конфиг на сервере изменился под нами (агент
@@ -150,7 +151,7 @@ export function serverAgentCard(): { el: HTMLElement } {
       draw(await api<AgentConfigState>("/api/agent-config"));
     } catch (e) {
       available = false;
-      status.textContent = "канал не ответил про настройки агента: " + humanError(e).text;
+      status.textContent = uiText("ui.remote.src.serveragent.d5f8348039") + humanError(e).text;
     } finally {
       busy = false;
       save.disabled = !available;
@@ -160,8 +161,7 @@ export function serverAgentCard(): { el: HTMLElement } {
   void load();
 
   return {
-    el: card("Агент на сервере", box,
-      "Мозг, Telegram, имена и режим серверного агента записываются в его файл на сервере. " +
-      "Дерево читает файл на старте — после сохранения перезапусти агента на экране «Система»."),
+    el: card(uiText("ui.remote.src.serveragent.9176ce0a09"), box,
+      uiText("ui.remote.src.serveragent.8279096d4d")),
   };
 }

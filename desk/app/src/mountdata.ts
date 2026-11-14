@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Монтирование: ПРАВИЛА разбора и записи списка папок. Ни строчки DOM.
 //
 // Отдельный файл от карточки (`mounts.ts`) по одной причине: это то, что
@@ -80,7 +81,7 @@ export interface LiveSandbox {
 // Слова доступа — те же, которыми харнесс отвечает агенту (fence._ACCESS_WORDS).
 // Две строки, но разойтись им нельзя: владелец даёт «чтение и запись», а агент
 // читает про себя то же самое.
-export const ACCESS_WORDS: Record<string, string> = { read: "чтение", write: "чтение и запись" };
+export const ACCESS_WORDS: Record<string, string> = { get read() {return uiText("mount.access.read");}, get write() {return uiText("mount.access.write");} };
 
 /** Слово из конфига -> "read" | "write". Незнакомое — чтение: опечатка не должна давать запись. */
 export function mountAccess(value: unknown): "read" | "write" {
@@ -165,14 +166,14 @@ export function pathProblem(raw: string, platform = ""): string {
   const text = String(raw || "").trim().replace(/^"+|"+$/g, "");
   const mac = platform === "macos";
   const posix = mac || platform === "linux";
-  if (!text) return posix ? `Впиши путь к папке — например ${mac ? "/Users/имя/Documents" : "/home/имя/Documents"}.` : "Впиши путь к папке — например C:\\Users\\Имя\\Документы.";
+  if (!text) return posix ? uiText("ui.app.src.mountdata.08690fd330", {p0: String(mac ? uiText("ui.app.src.mountdata.826a161eb0") : uiText("ui.app.src.mountdata.e3578e4bf4"))}) : uiText("ui.app.src.mountdata.12c55bb565");
   const looksAbsolute = posix
     ? text.startsWith("/") || text.startsWith("~")
     : /^[a-zA-Z]:[\\/]/.test(text) || /^\\\\/.test(text) || /^%[^%]+%/.test(text) || text.startsWith("~");
   if (!looksAbsolute) {
     return posix
-      ? `Нужен полный путь: от корня (${mac ? "/Users/имя/Documents" : "/home/имя/Documents"}) или от домашней папки (~/Documents).`
-      : "Нужен полный путь: с буквой диска (C:\\Users\\Имя\\Документы), сетевой (\\\\сервер\\папка) или через %USERPROFILE%.";
+      ? uiText("ui.app.src.mountdata.20ae68cad0", {p0: String(mac ? uiText("ui.app.src.mountdata.826a161eb0") : uiText("ui.app.src.mountdata.e3578e4bf4"))})
+      : uiText("ui.app.src.mountdata.a485ceeaab");
   }
   return "";
 }

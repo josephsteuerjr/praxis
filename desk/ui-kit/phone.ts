@@ -961,7 +961,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = interruptHTML +
       uiText("ui.ui.kit.phone.ed15ed17b2", {p0: String(boxes.containers.length), p1: String(rows)}) +
       uiText("ui.ui.kit.phone.0be498f1ba") +
-      uiText("ui.ui.kit.phone.f25403400c", {p0: String(esc(FAST_MODE_HINT)), p1: String(brainRows), p2: String(imageRows)}) +
+      uiText("ui.ui.kit.phone.f25403400c", {p0: String(esc(FAST_MODE_HINT())), p1: String(brainRows), p2: String(imageRows)}) +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
     bindBrainModelControls(screen, models?.by_framework || {});

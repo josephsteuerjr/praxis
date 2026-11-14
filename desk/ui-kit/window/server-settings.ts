@@ -20,7 +20,7 @@ export function serverBridgeCard(onUse:(bridge:ServerBridge)=>void|string|Promis
     el('p','field-hint',uiText("ui.ui.kit.window.server.settings.f52c607e61")),
     el('p','field-hint',uiText("ui.ui.kit.window.server.settings.7079f609f4")));
   info.append(button(uiText("ui.ui.kit.window.server.settings.e0bb6718d5"),'quiet',()=>{
-    const url=URL.createObjectURL(new Blob([serverBridgeManual],{type:'text/markdown;charset=utf-8'}));
+    const url=URL.createObjectURL(new Blob([serverBridgeManual()],{type:'text/markdown;charset=utf-8'}));
     const link=el('a');link.href=url;link.download='Helene-server-bridge.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
   }));
   const install=button(uiText("ui.ui.kit.window.server.settings.0383a1ea48"),'quiet',async()=>{

@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Правила монтирования на стороне окна — прогоном, а не чтением исходника.
 //
 // Экран монтирования читает и пишет `sandbox.mounts` и `sandbox.mounts_denied`,
@@ -10,7 +11,7 @@
 
 import { strict as assert } from "node:assert";
 
-import { mountAccess, mountKey, parseDenied, parseMounts, pathProblem, stamp } from "../src/mountdata.ts";
+const { mountAccess, mountKey, parseDenied, parseMounts, pathProblem, stamp } = await import("../src/mountdata.ts");
 
 // --- 1. формы строки, которые допускает файл ------------------------------- #
 // fence.parse_mounts принимает три формы, потому что файл пишут руками. Окно

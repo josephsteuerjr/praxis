@@ -1,3 +1,4 @@
+import { t as uiText, UiError } from "../../lang/lang";
 // Связь с харнессом: канал frame.desk.v1 (WebSocket: запросы + живые события)
 // с HTTP-фолбэком, и мост к нативной оболочке (Tauri) там, где она есть.
 
@@ -140,7 +141,7 @@ async function discover() {
   if(!cfg.discover_server||originVerified)return;
   if(!discovery)discovery=(async()=>{
     const result=await shell<{ok:boolean;base?:string;message?:string}>("server_transfer",{action:"locate",request:"{}"});
-    if(!result.ok||!result.base)throw new Error(result.message||"Сервер ещё не ответил. Повторяю подключение.");
+    if(!result.ok||!result.base)throw new Error(result.message||uiText("ui.ui.kit.window.api.37b903f431"));
     cfg.base=result.base;originVerified=true;
   })().finally(()=>{discovery=null;});
   return discovery;
@@ -182,7 +183,7 @@ export async function connect() {
       // Ответ без поля status давал владельцу литеральное « (undefined)».
       // Код отказа несём отдельным полем: по нему окно отличает конфликт
       // правок от любой другой неудачи.
-      else w.rej(new ApiError((d.error || "канал ответил отказом") + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
+      else w.rej(new ApiError((d.error || uiText("ui.ui.kit.window.api.f059e25aea")) + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
     }
   };
   s.onclose = s.onerror = () => {
@@ -191,7 +192,7 @@ export async function connect() {
     sock = null;
     ready = false;
     for (const fn of connHandlers) fn(false);
-    for (const w of waiting.values()) w.rej(new Error("связь оборвалась"));
+    for (const w of waiting.values()) w.rej(new UiError(uiText("ui.ui.kit.window.api.52a1e5fc79")));
     waiting.clear();
     setTimeout(connect, 4000);
   };
@@ -209,7 +210,7 @@ function tunnelCall<T>(path: string, method: string, body: unknown): Promise<T> 
       return;
     }
     setTimeout(() => {
-      if (waiting.delete(id)) rej(new Error(path + ": нет ответа"));
+      if (waiting.delete(id)) rej(new Error(path + uiText("ui.ui.kit.window.api.a2a3b237e2")));
     }, 25000);
   });
 }
@@ -255,6 +256,6 @@ async function request<T>(method: string, path: string, body: unknown): Promise<
 
 /** Python/Electron bridge; a plain browser has no desktop command surface. */
 export async function shell<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!electron) throw new Error("доступно только в приложении Hélène");
+  if (!electron) throw new UiError(uiText("ui.ui.kit.window.api.153ade219f"));
   return electron.invoke(cmd, args) as Promise<T>;
 }

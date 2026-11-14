@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 
 export type ProviderKind = "api" | "anthropic" | "chatgpt" | "local";
 
@@ -14,9 +15,9 @@ export interface Preset {
 }
 
 export const BILLING_LABEL: Record<Preset["billing"], string> = {
-  sub: "подписка",
-  pay: "по счётчику",
-  both: "подписка или по счётчику",
+  get sub() {return uiText("ui.ui.kit.providers.b81189dcda");},
+  get pay() {return uiText("ui.ui.kit.providers.cd7a8020bc");},
+  get both() {return uiText("ui.ui.kit.providers.f713a42c04");},
 };
 
 export const ANTHROPIC_PRESETS: Preset[] = [
@@ -26,7 +27,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.z.ai/api/anthropic",
     model: "glm-5.3",
     billing: "both",
-    note: "Тип ключа определяет Coding Plan или оплату по счётчику; проверь его в кабинете Z.ai. GLM-5.3: low / high / max; доступность моделей зависит от плана.",
+    get note() {return uiText("ui.ui.kit.providers.a860a267c7");},
   },
   {
     id: "minimax",
@@ -34,7 +35,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.minimax.io/anthropic",
     model: "MiniMax-M3.1-Flash",
     billing: "both",
-    note: "Coding Plan и оплата по счётчику используют разные ключи. Для материкового Китая — api.minimaxi.com. M3.1: low / medium / high / xhigh / max; M3 использует adaptive thinking.",
+    get note() {return uiText("ui.ui.kit.providers.e772798c09");},
   },
   {
     id: "kimi",
@@ -42,7 +43,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.kimi.com/coding",
     model: "k3",
     billing: "both",
-    note: "Kimi Code: Китай — api.kimi.com/coding, международный — api.kimi.ai/coding. По счётчику — api.moonshot.ai/anthropic. Шкала low / high / max, модели и доступ зависят от аккаунта.",
+    get note() {return uiText("ui.ui.kit.providers.9a34791794");},
   },
   {
     id: "anthropic",
@@ -50,7 +51,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.anthropic.com",
     model: "",
     billing: "pay",
-    note: "Claude по счётчику. Новые модели используют adaptive thinking и output_config.effort; допустимые ступени зависят от версии модели. Каталог не проверяет генерацию.",
+    get note() {return uiText("ui.ui.kit.providers.a464f03d7e");},
   },
   {
     id: "deepseek",
@@ -58,7 +59,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.deepseek.com/anthropic",
     model: "deepseek-flash",
     billing: "pay",
-    note: "По счётчику. Текущий Flash и V4 Pro поддерживают рассуждение; серверное умолчание — high. Ступени low / high / max. Старый V4 Flash может быть алиасом более новой модели.",
+    get note() {return uiText("ui.ui.kit.providers.1e869d5853");},
   },
   {
     id: "qwen",
@@ -66,7 +67,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
     model: "qwen3.8-max",
     billing: "both",
-    note: "Этот адрес — китайский Coding Plan; международный план и API по счётчику имеют другие адреса и каталоги из кабинета Model Studio. Для Qwen3.8: low / medium / xhigh. Отсутствие /models не доказывает отказ генерации.",
+    get note() {return uiText("ui.ui.kit.providers.37addf6eff");},
   },
 ];
 
@@ -77,7 +78,7 @@ export const OPENAI_PRESETS: Preset[] = [
     url: "https://api.openai.com/v1",
     model: "gpt-5.4",
     billing: "pay",
-    note: "По счётчику. Прямой API использует Responses; effort передаётся в reasoning.effort и зависит от модели.",
+    get note() {return uiText("ui.ui.kit.providers.951f6fab42");},
   },
 ];
 
@@ -118,53 +119,53 @@ export function effortPlan(provider: ProviderKind, model: string, baseUrl = "", 
   let host = "";
   try { host = new URL(baseUrl).hostname; } catch {}
   const max: EffortChip = { value: "max", label: "max" };
-  const defaults: EffortChip = { value: "", label: "не задавать" };
+  const defaults: EffortChip = { value: "", get label() {return uiText("ui.ui.kit.providers.33a2024abd");} };
   if (provider === "chatgpt") {
     const allowed = [...new Set((reasoningEfforts || []).filter(value => (CODEX_REASONING_LEVELS as readonly string[]).includes(value)))];
     return {
-      chips: [{value:'',label:'По умолчанию'}, ...allowed.map(value => ({value,label:value}))],
+      chips: [{value:'',get label() {return uiText("ui.ui.kit.providers.fd0560ebbf");}}, ...allowed.map(value => ({value,label:value}))],
       hint: reasoningEfforts === undefined
-        ? 'Допустимые ступени выбранной модели ещё не подтверждены каталогом Codex. По умолчанию используется настройка модели.'
-        : 'Ступени получены из каталога выбранной модели Codex. По умолчанию используется её настройка рассуждения.',
+        ? uiText("ui.ui.kit.providers.143871cd4c")
+        : uiText("ui.ui.kit.providers.d4d7b2c0f2"),
     };
   }
   if (provider === "anthropic") {
     if (host === "api.z.ai" || (!baseUrl && m.startsWith("glm-"))) {
       return {
-        chips: [{ value: "", label: "по умолчанию (max)" }, LOW, HIGH, max],
-        hint: "Z.ai: шкала low / high / max, у GLM-5.3 рассуждение не выключается. Пустое — серверное умолчание max: самое глубокое и самое дорогое.",
+        chips: [{ value: "", get label() {return uiText("ui.ui.kit.providers.be3e6666ea");} }, LOW, HIGH, max],
+        get hint() {return uiText("ui.ui.kit.providers.dd02284875");},
       };
     }
     if (["api.kimi.com", "api.kimi.ai", "api.moonshot.ai", "api.moonshot.cn", "api.deepseek.com"].includes(host)) {
-      return { chips: [defaults, LOW, HIGH, max], hint: "output_config.effort: low / high / max. Умолчание и доступность определяет конкретная модель провайдера." };
+      return { chips: [defaults, LOW, HIGH, max], get hint() {return uiText("ui.ui.kit.providers.cbf311c005");} };
     }
     if (["api.minimax.io", "api.minimaxi.com"].includes(host) && m.startsWith("minimax-m3.1")) {
-      return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], hint: "MiniMax M3.1: output_config.effort; серверное умолчание max." };
+      return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], get hint() {return uiText("ui.ui.kit.providers.16526a8c13");} };
     }
     if (host.endsWith(".aliyuncs.com") && m.startsWith("qwen3.8")) {
-      return { chips: [defaults, LOW, MEDIUM, XHIGH], hint: "Qwen3.8: output_config.effort low / medium / xhigh, серверное умолчание xhigh." };
+      return { chips: [defaults, LOW, MEDIUM, XHIGH], get hint() {return uiText("ui.ui.kit.providers.f12e1cbbf6");} };
     }
     if (host === "api.anthropic.com") {
       const version = /claude-(?:opus|sonnet|haiku)-(\d+)[.-](\d+)/.exec(m);
       const major = Number(version?.[1] || 0), minor = Number(version?.[2] || 0);
-      if (major > 4 || (major === 4 && minor >= 7)) return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], hint: "Claude 4.7+: adaptive thinking и output_config.effort; поддержка зависит от модели." };
+      if (major > 4 || (major === 4 && minor >= 7)) return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], get hint() {return uiText("ui.ui.kit.providers.384325b23c");} };
       if (major === 4 && minor === 6) return { chips: [defaults, LOW, MEDIUM, HIGH, max], hint: "Claude 4.6: adaptive thinking; effort low / medium / high / max." };
       if (m.startsWith("claude-opus-4-5") || m.startsWith("claude-opus-4.5")) return { chips: [defaults, LOW, MEDIUM, HIGH], hint: "Claude Opus 4.5: effort low / medium / high." };
     }
     return {
       chips: [],
-      hint: "Для этого адреса и модели шкала не подтверждена. Совместимость с Messages сама по себе не задаёт effort; неизвестное значение не отправляется вслепую.",
+      get hint() {return uiText("ui.ui.kit.providers.7fff0b45aa");},
     };
   }
   if (provider === "local") {
     return {
-      chips: [{ value: "", label: "не задавать" }, LOW, MEDIUM, HIGH],
-      hint: "reasoning_effort передаётся совместимому серверу; поддержку определяет загруженная модель и сервер, а не название Ollama или LM Studio. Каталог не подтверждает инструменты или зрение.",
+      chips: [{ value: "", get label() {return uiText("ui.ui.kit.providers.33a2024abd");} }, LOW, MEDIUM, HIGH],
+      get hint() {return uiText("ui.ui.kit.providers.0d92e787cc");},
     };
   }
   return {
-    chips: [{ value: "", label: "не задавать" }, LOW, MEDIUM, HIGH, XHIGH],
-    hint: "Поле reasoning_effort зависит от модели. Прямой OpenAI использует Responses, совместимые адреса — Chat Completions, если в конфиге не выбран api_mode. Каталог не доказывает поддержку инструментов или изображений.",
+    chips: [{ value: "", get label() {return uiText("ui.ui.kit.providers.33a2024abd");} }, LOW, MEDIUM, HIGH, XHIGH],
+    get hint() {return uiText("ui.ui.kit.providers.b7664bd7f4");},
   };
 }
 

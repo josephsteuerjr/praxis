@@ -1,7 +1,8 @@
+import './fixtures/ru-localization.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { launchIntent, forwardLaunch } from '../../electron/src/launch.ts';
-import { pathProblem } from '../src/mountdata.ts';
+const { pathProblem } = await import('../src/mountdata.ts');
 
 assert.equal(pathProblem('/home/owner/Documents', 'linux'), '');
 assert.equal(pathProblem('~/Documents', 'linux'), '');

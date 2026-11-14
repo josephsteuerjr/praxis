@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 import { api, post, shell } from "./api";
 import { el, humanError } from "./lib";
 import { button, card } from "../dom";
@@ -9,16 +10,16 @@ export function relayAuthCard(base: string): HTMLElement {
   const out = el("p", "receipt");
   let host = base;
   try { host = new URL(base).host; } catch { /* native validates destination */ }
-  body.append(el("p", "field-hint", `Вход на сервере ${host}: запроси код и подтверди его на телефоне или ПК. Сервер сам получит и сохранит вход; браузер и SSH-туннель на сервере не нужны.`));
+  body.append(el("p", "field-hint", uiText("ui.ui.kit.window.relay.auth.card.4974f159fa", {p0: String(host)})));
   const accounts = relayAccounts(subscriptionTransport(<T>(path: string, payload?: unknown) => payload === undefined ? api<T>(path) : post<T>(path, payload)));
   body.append(accounts.element);
-  const transfer = el('details'); transfer.append(el('summary', '', 'Передать уже сохранённый вход с этого компьютера'));
-  transfer.append(el('p', 'field-hint', 'Сервер получит доступ к подписке из слота 1 этого приложения. Передача идёт по защищённому подключению.'));
-  const replace = button("Заменить существующий вход на сервере", "quiet", () => void send(true));
+  const transfer = el('details'); transfer.append(el('summary', '', uiText("ui.ui.kit.window.relay.auth.card.d39291e3c2")));
+  transfer.append(el('p', 'field-hint', uiText("ui.ui.kit.window.relay.auth.card.6e4ad76d56")));
+  const replace = button(uiText("ui.ui.kit.window.relay.auth.card.fb3ffce378"), "quiet", () => void send(true));
   replace.hidden = true;
   const send = async (overwrite: boolean) => {
     start.disabled = replace.disabled = true;
-    out.textContent = "Передаю вход выбранному серверу…";
+    out.textContent = uiText("ui.ui.kit.window.relay.auth.card.78a43bae8d");
     try {
       let receipt = await shell<{ id: string; phase: string; note: string }>("relay_auth_transfer", { replace: overwrite });
       for (let n = 0; n < 120; n++) {
@@ -35,8 +36,8 @@ export function relayAuthCard(base: string): HTMLElement {
       out.textContent = humanError(e).text;
     } finally { start.disabled = replace.disabled = false; }
   };
-  const start = button("Передать вход ChatGPT на сервер", "quiet", () => void send(false));
+  const start = button(uiText("ui.ui.kit.window.relay.auth.card.37fd287f32"), "quiet", () => void send(false));
   transfer.append(start, replace, out); body.append(transfer);
-  body.append(el("p", "field-hint", "После входа SSH-туннель не нужен. Для обновлений контейнера сохрани папку данных сервера в постоянном томе. Доктор покажет результат приёма и состояние хранения входа."));
-  return card("ChatGPT на сервере", body);
+  body.append(el("p", "field-hint", uiText("ui.ui.kit.window.relay.auth.card.e1052df0a1")));
+  return card(uiText("ui.ui.kit.window.relay.auth.card.6f22f52402"), body);
 }

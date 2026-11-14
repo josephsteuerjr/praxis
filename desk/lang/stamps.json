@@ -18593,5 +18593,530 @@
     "en": "758e9b69",
     "fr": "758e9b69",
     "zh": "758e9b69"
+  },
+  "ui.remote.src.serveragent.61bd6769dc": {
+    "en": "61bd6769",
+    "fr": "61bd6769",
+    "zh": "61bd6769"
+  },
+  "ui.remote.src.serveragent.190e3e09f5": {
+    "en": "190e3e09",
+    "fr": "190e3e09",
+    "zh": "190e3e09"
+  },
+  "ui.remote.src.serveragent.c2f2c8963e": {
+    "en": "c2f2c896",
+    "fr": "c2f2c896",
+    "zh": "c2f2c896"
+  },
+  "ui.remote.src.serveragent.8f0c052232": {
+    "en": "8f0c0522",
+    "fr": "8f0c0522",
+    "zh": "8f0c0522"
+  },
+  "ui.remote.src.serveragent.24a788252e": {
+    "en": "24a78825",
+    "fr": "24a78825",
+    "zh": "24a78825"
+  },
+  "ui.remote.src.serveragent.e57be2905b": {
+    "en": "e57be290",
+    "fr": "e57be290",
+    "zh": "e57be290"
+  },
+  "ui.remote.src.serveragent.f3bdf7cce3": {
+    "en": "f3bdf7cc",
+    "fr": "f3bdf7cc",
+    "zh": "f3bdf7cc"
+  },
+  "ui.remote.src.serveragent.94cd64daed": {
+    "en": "94cd64da",
+    "fr": "94cd64da",
+    "zh": "94cd64da"
+  },
+  "ui.remote.src.serveragent.1ff0a03981": {
+    "en": "1ff0a039",
+    "fr": "1ff0a039",
+    "zh": "1ff0a039"
+  },
+  "ui.remote.src.serveragent.2946c631e3": {
+    "en": "2946c631",
+    "fr": "2946c631",
+    "zh": "2946c631"
+  },
+  "ui.remote.src.serveragent.4779b7e41b": {
+    "en": "4779b7e4",
+    "fr": "4779b7e4",
+    "zh": "4779b7e4"
+  },
+  "ui.remote.src.serveragent.c74052289f": {
+    "en": "c7405228",
+    "fr": "c7405228",
+    "zh": "c7405228"
+  },
+  "ui.remote.src.serveragent.ba527ef131": {
+    "en": "ba527ef1",
+    "fr": "ba527ef1",
+    "zh": "ba527ef1"
+  },
+  "ui.remote.src.serveragent.02a21de733": {
+    "en": "02a21de7",
+    "fr": "02a21de7",
+    "zh": "02a21de7"
+  },
+  "ui.remote.src.serveragent.060a298fa5": {
+    "en": "060a298f",
+    "fr": "060a298f",
+    "zh": "060a298f"
+  },
+  "ui.remote.src.serveragent.da6bb17f38": {
+    "en": "da6bb17f",
+    "fr": "da6bb17f",
+    "zh": "da6bb17f"
+  },
+  "ui.remote.src.serveragent.6ed93f78ed": {
+    "en": "6ed93f78",
+    "fr": "6ed93f78",
+    "zh": "6ed93f78"
+  },
+  "ui.remote.src.serveragent.8429400190": {
+    "en": "84294001",
+    "fr": "84294001",
+    "zh": "84294001"
+  },
+  "ui.remote.src.serveragent.20ed8ee57d": {
+    "en": "20ed8ee5",
+    "fr": "20ed8ee5",
+    "zh": "20ed8ee5"
+  },
+  "ui.remote.src.serveragent.fd1cfff87a": {
+    "en": "fd1cfff8",
+    "fr": "fd1cfff8",
+    "zh": "fd1cfff8"
+  },
+  "ui.remote.src.serveragent.b7f27fe132": {
+    "en": "b7f27fe1",
+    "fr": "b7f27fe1",
+    "zh": "b7f27fe1"
+  },
+  "ui.remote.src.serveragent.1246152180": {
+    "en": "12461521",
+    "fr": "12461521",
+    "zh": "12461521"
+  },
+  "ui.remote.src.serveragent.bc8617d8b9": {
+    "en": "bc8617d8",
+    "fr": "bc8617d8",
+    "zh": "bc8617d8"
+  },
+  "ui.remote.src.serveragent.7329173f79": {
+    "en": "7329173f",
+    "fr": "7329173f",
+    "zh": "7329173f"
+  },
+  "ui.remote.src.serveragent.0be3cc7044": {
+    "en": "0be3cc70",
+    "fr": "0be3cc70",
+    "zh": "0be3cc70"
+  },
+  "ui.remote.src.serveragent.43913ab7a8": {
+    "en": "43913ab7",
+    "fr": "43913ab7",
+    "zh": "43913ab7"
+  },
+  "ui.remote.src.serveragent.d5f8348039": {
+    "en": "d5f83480",
+    "fr": "d5f83480",
+    "zh": "d5f83480"
+  },
+  "ui.remote.src.serveragent.9176ce0a09": {
+    "en": "9176ce0a",
+    "fr": "9176ce0a",
+    "zh": "9176ce0a"
+  },
+  "ui.remote.src.serveragent.8279096d4d": {
+    "en": "8279096d",
+    "fr": "8279096d",
+    "zh": "8279096d"
+  },
+  "ui.remote.src.settings.server.0d3576adb3": {
+    "en": "0d3576ad",
+    "fr": "0d3576ad",
+    "zh": "0d3576ad"
+  },
+  "ui.remote.src.settings.server.c8289557c1": {
+    "en": "c8289557",
+    "fr": "c8289557",
+    "zh": "c8289557"
+  },
+  "ui.remote.src.settings.server.14b1677c26": {
+    "en": "14b1677c",
+    "fr": "14b1677c",
+    "zh": "14b1677c"
+  },
+  "ui.remote.src.settings.server.339b3e5e37": {
+    "en": "339b3e5e",
+    "fr": "339b3e5e",
+    "zh": "339b3e5e"
+  },
+  "ui.remote.src.settings.server.764b83c99f": {
+    "en": "764b83c9",
+    "fr": "764b83c9",
+    "zh": "764b83c9"
+  },
+  "ui.remote.src.settings.server.3b2f8c23dd": {
+    "en": "3b2f8c23",
+    "fr": "3b2f8c23",
+    "zh": "3b2f8c23"
+  },
+  "ui.remote.src.settings.server.705d43e97f": {
+    "en": "705d43e9",
+    "fr": "705d43e9",
+    "zh": "705d43e9"
+  },
+  "ui.ui.kit.service.tier.e8081661d3": {
+    "en": "e8081661",
+    "fr": "e8081661",
+    "zh": "e8081661"
+  },
+  "ui.ui.kit.service.tier.cfab7eeca6": {
+    "en": "cfab7eec",
+    "fr": "cfab7eec",
+    "zh": "cfab7eec"
+  },
+  "ui.ui.kit.service.tier.7c0ef1469b": {
+    "en": "7c0ef146",
+    "fr": "7c0ef146",
+    "zh": "7c0ef146"
+  },
+  "ui.ui.kit.service.tier.7d451f2a29": {
+    "en": "7d451f2a",
+    "fr": "7d451f2a",
+    "zh": "7d451f2a"
+  },
+  "ui.ui.kit.service.tier.2b02acb14e": {
+    "en": "2b02acb1",
+    "fr": "2b02acb1",
+    "zh": "2b02acb1"
+  },
+  "ui.ui.kit.service.tier.74c72fe320": {
+    "en": "74c72fe3",
+    "fr": "74c72fe3",
+    "zh": "74c72fe3"
+  },
+  "ui.ui.kit.service.tier.6b28f1f93f": {
+    "en": "6b28f1f9",
+    "fr": "6b28f1f9",
+    "zh": "6b28f1f9"
+  },
+  "ui.ui.kit.service.tier.3abd259c90": {
+    "en": "3abd259c",
+    "fr": "3abd259c",
+    "zh": "3abd259c"
+  },
+  "ui.ui.kit.window.views.wakes.c74a2e92dd": {
+    "en": "c74a2e92",
+    "fr": "c74a2e92",
+    "zh": "c74a2e92"
+  },
+  "ui.ui.kit.window.views.wakes.b432327026": {
+    "en": "b4323270",
+    "fr": "b4323270",
+    "zh": "b4323270"
+  },
+  "ui.ui.kit.window.views.wakes.d308c0f245": {
+    "en": "d308c0f2",
+    "fr": "d308c0f2",
+    "zh": "d308c0f2"
+  },
+  "ui.setup.ui.src.tips.d30888a630": {
+    "en": "d30888a6",
+    "fr": "d30888a6",
+    "zh": "d30888a6"
+  },
+  "ui.setup.ui.src.tips.b0a1aada10": {
+    "en": "b0a1aada",
+    "fr": "b0a1aada",
+    "zh": "b0a1aada"
+  },
+  "ui.setup.ui.src.tips.b891c64037": {
+    "en": "26e2de41",
+    "fr": "26e2de41",
+    "zh": "26e2de41"
+  },
+  "ui.setup.ui.src.tips.e6ca3ef9bb": {
+    "en": "e6ca3ef9",
+    "fr": "e6ca3ef9",
+    "zh": "e6ca3ef9"
+  },
+  "ui.ui.kit.window.api.37b903f431": {
+    "en": "37b903f4",
+    "fr": "37b903f4",
+    "zh": "37b903f4"
+  },
+  "ui.ui.kit.window.api.f059e25aea": {
+    "en": "f059e25a",
+    "fr": "f059e25a",
+    "zh": "f059e25a"
+  },
+  "ui.ui.kit.window.api.52a1e5fc79": {
+    "en": "52a1e5fc",
+    "fr": "52a1e5fc",
+    "zh": "52a1e5fc"
+  },
+  "ui.ui.kit.window.api.a2a3b237e2": {
+    "en": "a2a3b237",
+    "fr": "a2a3b237",
+    "zh": "a2a3b237"
+  },
+  "ui.ui.kit.window.api.153ade219f": {
+    "en": "153ade21",
+    "fr": "153ade21",
+    "zh": "153ade21"
+  },
+  "ui.ui.kit.providers.b81189dcda": {
+    "en": "b81189dc",
+    "fr": "b81189dc",
+    "zh": "b81189dc"
+  },
+  "ui.ui.kit.providers.cd7a8020bc": {
+    "en": "cd7a8020",
+    "fr": "cd7a8020",
+    "zh": "cd7a8020"
+  },
+  "ui.ui.kit.providers.f713a42c04": {
+    "en": "f713a42c",
+    "fr": "f713a42c",
+    "zh": "f713a42c"
+  },
+  "ui.ui.kit.providers.a860a267c7": {
+    "en": "a860a267",
+    "fr": "a860a267",
+    "zh": "a860a267"
+  },
+  "ui.ui.kit.providers.e772798c09": {
+    "en": "e772798c",
+    "fr": "e772798c",
+    "zh": "e772798c"
+  },
+  "ui.ui.kit.providers.9a34791794": {
+    "en": "9a347917",
+    "fr": "9a347917",
+    "zh": "9a347917"
+  },
+  "ui.ui.kit.providers.a464f03d7e": {
+    "en": "a464f03d",
+    "fr": "a464f03d",
+    "zh": "a464f03d"
+  },
+  "ui.ui.kit.providers.1e869d5853": {
+    "en": "1e869d58",
+    "fr": "1e869d58",
+    "zh": "1e869d58"
+  },
+  "ui.ui.kit.providers.37addf6eff": {
+    "en": "37addf6e",
+    "fr": "37addf6e",
+    "zh": "37addf6e"
+  },
+  "ui.ui.kit.providers.951f6fab42": {
+    "en": "951f6fab",
+    "fr": "951f6fab",
+    "zh": "951f6fab"
+  },
+  "ui.ui.kit.providers.33a2024abd": {
+    "en": "33a2024a",
+    "fr": "33a2024a",
+    "zh": "33a2024a"
+  },
+  "ui.ui.kit.providers.fd0560ebbf": {
+    "en": "fd0560eb",
+    "fr": "fd0560eb",
+    "zh": "fd0560eb"
+  },
+  "ui.ui.kit.providers.143871cd4c": {
+    "en": "143871cd",
+    "fr": "143871cd",
+    "zh": "143871cd"
+  },
+  "ui.ui.kit.providers.d4d7b2c0f2": {
+    "en": "d4d7b2c0",
+    "fr": "d4d7b2c0",
+    "zh": "d4d7b2c0"
+  },
+  "ui.ui.kit.providers.be3e6666ea": {
+    "en": "be3e6666",
+    "fr": "be3e6666",
+    "zh": "be3e6666"
+  },
+  "ui.ui.kit.providers.dd02284875": {
+    "en": "11f771c4",
+    "fr": "11f771c4",
+    "zh": "11f771c4"
+  },
+  "ui.ui.kit.providers.cbf311c005": {
+    "en": "cbf311c0",
+    "fr": "cbf311c0",
+    "zh": "cbf311c0"
+  },
+  "ui.ui.kit.providers.16526a8c13": {
+    "en": "16526a8c",
+    "fr": "16526a8c",
+    "zh": "16526a8c"
+  },
+  "ui.ui.kit.providers.f12e1cbbf6": {
+    "en": "f12e1cbb",
+    "fr": "f12e1cbb",
+    "zh": "f12e1cbb"
+  },
+  "ui.ui.kit.providers.384325b23c": {
+    "en": "384325b2",
+    "fr": "384325b2",
+    "zh": "384325b2"
+  },
+  "ui.ui.kit.providers.7fff0b45aa": {
+    "en": "7fff0b45",
+    "fr": "7fff0b45",
+    "zh": "7fff0b45"
+  },
+  "ui.ui.kit.providers.0d92e787cc": {
+    "en": "0d92e787",
+    "fr": "0d92e787",
+    "zh": "0d92e787"
+  },
+  "ui.ui.kit.providers.b7664bd7f4": {
+    "en": "b7664bd7",
+    "fr": "b7664bd7",
+    "zh": "b7664bd7"
+  },
+  "ui.remote.src.first.run.9d83e043be": {
+    "en": "9d83e043",
+    "fr": "9d83e043",
+    "zh": "9d83e043"
+  },
+  "ui.remote.src.first.run.10341306ea": {
+    "en": "10341306",
+    "fr": "10341306",
+    "zh": "10341306"
+  },
+  "ui.remote.src.first.run.1bdd492f1c": {
+    "en": "1bdd492f",
+    "fr": "1bdd492f",
+    "zh": "1bdd492f"
+  },
+  "ui.remote.src.first.run.f30c24da05": {
+    "en": "f30c24da",
+    "fr": "f30c24da",
+    "zh": "f30c24da"
+  },
+  "ui.remote.src.first.run.603d36c7c4": {
+    "en": "603d36c7",
+    "fr": "603d36c7",
+    "zh": "603d36c7"
+  },
+  "ui.remote.src.first.run.dcbdc3688a": {
+    "en": "dcbdc368",
+    "fr": "dcbdc368",
+    "zh": "dcbdc368"
+  },
+  "ui.remote.src.first.run.bd4afc7c0d": {
+    "en": "bd4afc7c",
+    "fr": "bd4afc7c",
+    "zh": "bd4afc7c"
+  },
+  "ui.remote.src.first.run.9b9cf53783": {
+    "en": "9b9cf537",
+    "fr": "9b9cf537",
+    "zh": "9b9cf537"
+  },
+  "ui.remote.src.first.run.356e6bf4c0": {
+    "en": "356e6bf4",
+    "fr": "356e6bf4",
+    "zh": "356e6bf4"
+  },
+  "ui.app.src.mountdata.08690fd330": {
+    "en": "08690fd3",
+    "fr": "08690fd3",
+    "zh": "08690fd3"
+  },
+  "ui.app.src.mountdata.826a161eb0": {
+    "en": "826a161e",
+    "fr": "826a161e",
+    "zh": "826a161e"
+  },
+  "ui.app.src.mountdata.e3578e4bf4": {
+    "en": "e3578e4b",
+    "fr": "e3578e4b",
+    "zh": "e3578e4b"
+  },
+  "ui.app.src.mountdata.12c55bb565": {
+    "en": "12c55bb5",
+    "fr": "12c55bb5",
+    "zh": "12c55bb5"
+  },
+  "ui.app.src.mountdata.20ae68cad0": {
+    "en": "20ae68ca",
+    "fr": "20ae68ca",
+    "zh": "20ae68ca"
+  },
+  "ui.app.src.mountdata.a485ceeaab": {
+    "en": "a485ceea",
+    "fr": "a485ceea",
+    "zh": "a485ceea"
+  },
+  "mount.access.read": {
+    "en": "7d6d9951",
+    "fr": "7d6d9951",
+    "zh": "7d6d9951"
+  },
+  "mount.access.write": {
+    "en": "8db9014b",
+    "fr": "8db9014b",
+    "zh": "8db9014b"
+  },
+  "ui.ui.kit.window.relay.auth.card.4974f159fa": {
+    "en": "4974f159",
+    "fr": "4974f159",
+    "zh": "4974f159"
+  },
+  "ui.ui.kit.window.relay.auth.card.d39291e3c2": {
+    "en": "d39291e3",
+    "fr": "d39291e3",
+    "zh": "d39291e3"
+  },
+  "ui.ui.kit.window.relay.auth.card.6e4ad76d56": {
+    "en": "6e4ad76d",
+    "fr": "6e4ad76d",
+    "zh": "6e4ad76d"
+  },
+  "ui.ui.kit.window.relay.auth.card.fb3ffce378": {
+    "en": "fb3ffce3",
+    "fr": "fb3ffce3",
+    "zh": "fb3ffce3"
+  },
+  "ui.ui.kit.window.relay.auth.card.78a43bae8d": {
+    "en": "78a43bae",
+    "fr": "78a43bae",
+    "zh": "78a43bae"
+  },
+  "ui.ui.kit.window.relay.auth.card.37fd287f32": {
+    "en": "37fd287f",
+    "fr": "37fd287f",
+    "zh": "37fd287f"
+  },
+  "ui.ui.kit.window.relay.auth.card.e1052df0a1": {
+    "en": "e1052df0",
+    "fr": "e1052df0",
+    "zh": "e1052df0"
+  },
+  "ui.ui.kit.window.relay.auth.card.6f22f52402": {
+    "en": "6f22f524",
+    "fr": "6f22f524",
+    "zh": "6f22f524"
+  },
+  "ui.ui.kit.window.server.bridge.manual.2d9c769830": {
+    "en": "2d9c7698",
+    "fr": "2d9c7698",
+    "zh": "2d9c7698"
   }
 }

@@ -257,7 +257,7 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
   const liveNote = live.length
     ? uiText("ui.ui.kit.window.views.supervisor.6c3d475e48", {p0: String(live.length)})
     : uiText("ui.ui.kit.window.views.supervisor.04dfe118a9");
-  return uiText("ui.ui.kit.window.views.supervisor.4c32adb469", {p0: String(esc(liveNote)), p1: String(esc(FAST_MODE_HINT)), p2: String(datalist), p3: String(rows)});
+  return uiText("ui.ui.kit.window.views.supervisor.4c32adb469", {p0: String(esc(liveNote)), p1: String(esc(FAST_MODE_HINT())), p2: String(datalist), p3: String(rows)});
 }
 
 

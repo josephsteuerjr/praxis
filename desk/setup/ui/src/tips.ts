@@ -1,15 +1,16 @@
-export const SETUP_TIPS = [
-  'После установки открой «Онбординг» внизу боковой панели: там первые шаги, примеры поручений и настройка подключений.',
-  'Горячая память — свежая часть разговора. Счётчик и «Как работает память» находятся под лентой чата; весь архив сохраняется.',
-  'Закрытие окна оставляет агента работать. Чтобы остановить его полностью, используй «Аварийный стоп» или аварийный ярлык.',
-  'Телефон и Telegram Mini App обращаются к тому же агенту. Подключение и QR можно настроить в «Онбординге».',
-];
+import { t as uiText } from "../../../lang/lang";
+export function setupTips(): string[] { return [
+  uiText("ui.setup.ui.src.tips.d30888a630"),
+  uiText("ui.setup.ui.src.tips.b0a1aada10"),
+  uiText("ui.setup.ui.src.tips.b891c64037"),
+  uiText("ui.setup.ui.src.tips.e6ca3ef9bb"),
+]; }
 
 export function startSetupTips(parent: HTMLElement, paused: () => boolean): () => void {
   const box = document.createElement("p");
   box.id = "setup-tips";
   box.setAttribute("aria-live", "off");
-  box.textContent = SETUP_TIPS[0];
+  box.textContent = setupTips()[0];
   parent.append(box);
   let index = 0, stopped = false;
   let timer: ReturnType<typeof setTimeout>;
@@ -20,7 +21,7 @@ export function startSetupTips(parent: HTMLElement, paused: () => boolean): () =
     box.classList.add("changing");
     timer = setTimeout(() => {
       if (stopped || !box.isConnected) return;
-      if (!paused()) box.textContent = SETUP_TIPS[++index % SETUP_TIPS.length];
+      if (!paused()) box.textContent = setupTips()[++index % setupTips().length];
       box.classList.remove("changing");
       schedule();
     }, 300);
