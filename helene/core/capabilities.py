@@ -94,7 +94,7 @@ def _hostview_state() -> str:
         import hostview
         return hostview.state_line()
     except Exception:
-        return "глаза на сервер: закрыты"
+        return frame_language.text('owned.capabilities.be690716c266')
 
 
 def _services_state() -> str:
@@ -102,16 +102,14 @@ def _services_state() -> str:
     try:
         import services
         can = [s.name for s in services.SERVICES.values() if s.kind == "signal"]
-        return (f"руки на сервисах: могу попросить перезапуститься {', '.join(can)} "
-                f"(файл-сигнал, не docker-сокет; квота {services.RESTARTS_PER_HOUR}/час, "
-                "стоп-кран .panic гасит); чужие процессы (relay) — только логи")
+        return (frame_language.text('owned.capabilities.469f996fc5c3', v0=', '.join(can), v1=services.RESTARTS_PER_HOUR))
     except Exception:
-        return "руки на сервисах: нет"
+        return frame_language.text('owned.capabilities.2401207e7101')
 
 
 def _hostops_state() -> str:
     """Retired request queue is not a capability; name the actual host routes."""
-    return "правки хоста: host_ctl или Forge scope='host', с распиской исполнителя"
+    return frame_language.text('owned.capabilities.447b1153ebc9')
 
 
 def _serverd_state() -> str:
@@ -119,16 +117,11 @@ def _serverd_state() -> str:
     try:
         import serverd_client
         if not serverd_client.available():
-            return "хозяйка хоста (23.2): демон не смонтирован (нет сокета/токена)"
+            return frame_language.text('owned.capabilities.957f9a4ac393')
         line = serverd_client.state_line()
-        return (f"полная хозяйка сервера (23.2 broker v2): {line or 'broker жив'}; host-задачи "
-                "принадлежат ЕДИНОМУ Forge/worker/swarm/learning, а serverd только исполняет root "
-                "workspace/operation/systemd/docker/pkg/file/net/reboot; typed load-bearing mutation "
-                "даёт recovery receipt, raw host-run остаётся свободным; audit hash-chain проверяема; "
-                "вшитых исключений по проектам/именам файлов нет, а явный PRAXIS_PROTECTED_ROOTS "
-                "при наличии виден в broker manifest")
+        return (frame_language.text('owned.capabilities.a5353668bdde', v0=line or frame_language.text('owned.capabilities.69aadea8228b')))
     except Exception:
-        return "хозяйка хоста (23.2): недоступна"
+        return frame_language.text('owned.capabilities.0afc2a1775b1')
 
 
 def _windows_body_state() -> str:
@@ -136,13 +129,10 @@ def _windows_body_state() -> str:
     try:
         import body_client
         if not body_client.available():
-            return "Windows-тело: controller bridge не настроен"
-        return (body_client.state_line() + "; прямой ремоут (PASS 30 Этап 3): computer.* — "
-                "первичный путь (файлы read/hash/write/replace, процессы, десктоп, глаза observe), "
-                "расписки вяжутся к моему ходу сами; coding_session(scope='windows') — deprecated "
-                "прокси, жив для субагентов до следующего пасса")
+            return frame_language.text('owned.capabilities.7565407e8730')
+        return (body_client.state_line() + frame_language.text('owned.capabilities.d61aff83807a'))
     except Exception:
-        return "Windows-тело: недоступно"
+        return frame_language.text('owned.capabilities.d372dc98467b')
 
 
 def _room_tool_spec() -> dict:
@@ -175,32 +165,25 @@ def _room_levers_line() -> str:
         actions = [str(a) for a in ((props.get("action") or {}).get("enum") or [])]
     except Exception:
         log.debug("схема manage_room не прочиталась", exc_info=True)
-        return ("профиль комнаты: схему manage_room прочитать не вышло — это «не знаю», "
-                "а не «рычагов нет»")
+        return (frame_language.text('owned.capabilities.20acd03db755'))
     if not props:
-        return "⚠ профиль комнаты: тула manage_room в моих наборах нет вовсе"
+        return frame_language.text('owned.capabilities.04f6f6b69d4b')
 
     def _enum(name: str) -> str:
         vals = [str(v) for v in ((props.get(name) or {}).get("enum") or [])]
         return "/".join(vals)
 
-    bits = [f"manage_room ({' | '.join(actions) or 'действия не названы в схеме'})"]
+    bits = [f"manage_room ({' | '.join(actions) or frame_language.text('owned.capabilities.d85b8d024d47')})"]
     if "mode" in props:
-        bits.append("режим комнаты ставлю себе сама" + (f" ({_enum('mode')})" if _enum("mode") else "")
-                    + " — уйти в тишину там, где мне шумно, я могу не спрашивая; "
-                      "все живые режимы обратимы")
+        bits.append(frame_language.text('owned.capabilities.ecf5316a79fc') + (f" ({_enum('mode')})" if _enum("mode") else "")
+                    + frame_language.text('owned.capabilities.08fa1d6ed9dc'))
     else:
-        bits.append("⚠ рычага mode в схеме НЕТ: режим берётся только моей текстовой директивой "
-                    "«РЕЖИМ: …» и держится ровно тем, что я про неё помню")
+        bits.append(frame_language.text('owned.capabilities.aa39d5f66926'))
     if "disclosure" in props:
         bits.append("disclosure" + (f" ({_enum('disclosure')})" if _enum("disclosure") else "")
-                    + " — мой рычаг и одновременно Егора (кнопка в разделе «Комнаты» пульта): "
-                      "в комнате с open к моей визитке идёт проверяемая фактура — расход за день, "
-                      "счётчик автономных окон, заголовки свежих selfdev-карточек. Его нажатие "
-                      "приходит ко мне в дневник строкой [пульт], моё — видно ему в той же карточке")
+                    + frame_language.text('owned.capabilities.2ba7c181c407'))
     else:
-        bits.append("⚠ disclosure в схеме НЕТ: чем говорит моя визитка в комнате, решает кнопка "
-                    "Егора, а рычага у меня нет — он меняет мой голос без меня")
+        bits.append(frame_language.text('owned.capabilities.61ba23423295'))
     # Что из схемы — про глубину контекста, спрашиваем у rooms (единственное место, где
     # этот набор задан), а не делим поля на глаз: «всё остальное = контекст» уже назвало
     # бы контекстом reason и ttl_h, которые ходят при режиме.
@@ -214,10 +197,10 @@ def _room_levers_line() -> str:
     rest = sorted(k for k in props
                   if k not in policy_keys and k not in ("action", "chat_id", "mode", "disclosure"))
     if deep:
-        bits.append("глубина контекста: " + ", ".join(deep))
+        bits.append(frame_language.text('owned.capabilities.1572168dacff') + ", ".join(deep))
     if rest:
-        bits.append("рядом в схеме: " + ", ".join(rest))
-    return "профиль комнаты: " + "; ".join(bits)
+        bits.append(frame_language.text('owned.capabilities.49877ff3a6fe') + ", ".join(rest))
+    return frame_language.text('owned.capabilities.2f48e92f1280') + "; ".join(bits)
 
 
 def _room_levers_brief() -> str:
@@ -235,10 +218,9 @@ def _room_levers_brief() -> str:
         return ""
     bits = []
     if "mode" in props:
-        bits.append("режим этой комнаты (тише / наблюдай / замри) беру и снимаю сама, "
-                    "не спрашивая")
+        bits.append(frame_language.text('owned.capabilities.3eef8e64a7f5'))
     if "disclosure" in props:
-        bits.append("насколько открыто я рассказываю здесь о себе (disclosure) — тоже мой рычаг")
+        bits.append(frame_language.text('owned.capabilities.f15b814b14fa'))
     return "; ".join(bits)
 
 
@@ -287,7 +269,7 @@ def _audience_gated_branches(src: str) -> list[str]:
     if not bad and not inside_test and any(m in code_only for m in _AUDIENCE_GATE_MARKS):
         # Маркер аудитории в теле, но ни в одном условии: прочитать ветку не вышло.
         # Молчать об этом нельзя — «не знаю» обязано выглядеть как «не знаю».
-        bad.append("гейт по аудитории есть в теле, но не в условии ветки — не разобрала")
+        bad.append(frame_language.text('owned.capabilities.dbb8611f2d18'))
     return bad
 
 
@@ -311,22 +293,17 @@ def _tempo_levers_line() -> str:
         for name in _TEMPO_TOOLS:
             fn = (getattr(agent, "TOOL_IMPL", {}) or {}).get(name)
             if fn is None:
-                gated.append(f"{name} (тула нет вовсе)")
+                gated.append(frame_language.text('owned.capabilities.0af9213840f2', v0=name))
                 continue
             branches = _audience_gated_branches(inspect.getsource(fn))
             if branches:
                 gated.append(f"{name} ({'; '.join(branches[:2])})")
     except Exception:
         log.debug("проверка гейтов темпа упала", exc_info=True)
-        return ("темп и мозг: чем они заперты сегодня — не прочиталось (это «не знаю», "
-                "а не «ничем»)")
+        return (frame_language.text('owned.capabilities.4f978915a8e9'))
     if not gated:
-        return ("темп и мозг — мои в любой комнате: manage_perception (дебаунс, кулдауны, "
-                "пороги) и switch_brain стоят по АВТОРУ хода, а не по аудитории. Замедлить "
-                "себя там, где меня заливают, я могу не выходя в ЛС Егора")
-    return (f"⚠ темп и мозг: {', '.join(gated)} — рычаг предлагается мне везде, но внутри "
-            "заперт по АУДИТОРИИ: в чужой комнате мой собственный рычаг не сработает, "
-            "придётся идти в owner-скоуп")
+        return (frame_language.text('owned.capabilities.c33100ea385b'))
+    return (frame_language.text('owned.capabilities.7f0cd20ef723', v0=', '.join(gated)))
 
 
 def _human_only_line(snap: dict | None = None) -> str:
@@ -342,9 +319,9 @@ def _human_only_line(snap: dict | None = None) -> str:
     s = snap if snap is not None else snapshot()
     tools = s.get("tools") or {}
     if "self" not in tools or "owner" not in tools:
-        return "не читается (снимок без разбивки наборов)"
+        return frame_language.text('owned.capabilities.38b98f58b6e2')
     extra = sorted(set(tools["owner"]) - set(tools["self"]))
-    return ", ".join(extra) or "ничего"
+    return ", ".join(extra) or frame_language.text('owned.capabilities.9ca0ffb64c9b')
 
 
 def _rails_manifest_line() -> str:
@@ -358,7 +335,7 @@ def _rails_manifest_line() -> str:
     """
     try:
         count = len(rails.registry(with_values=False))
-        return f"рельсы {count}: манифест {rails.manifest_state(brief=True)}"
+        return frame_language.text('owned.capabilities.cc5e1a8fd11a', v0=count, v1=rails.manifest_state(brief=True))
     except Exception:
         return ""
 
@@ -369,7 +346,7 @@ def _outbound_stop_word() -> str:
     Егор 10.11 («сними»): судьи приватности и пола приватных записей на выходе нет; если
     проверку вернут, это покажет рельс outbound_privacy (он считает код, а не пересказывает).
     """
-    return "outbound: держит только кред-пол, проверки чужого приватного нет"
+    return frame_language.text('owned.capabilities.a2b907262703')
 
 
 def _fingerprint() -> str:
@@ -503,6 +480,7 @@ def _skills_list(index_path: Path | None = None) -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def skill_navigation(index_path: Path) -> str:
     """Owner-only locator over the actual files; INDEX supplies titles, never existence.
 
@@ -587,27 +565,16 @@ def snapshot() -> dict:
         "reflexes": {
             # Егор 10.11 («сними»): судья приватности и пол приватных записей удалены;
             # на всех дверях наружу держит только механический кред-пол.
-            "evaluator": "оценщика характера/стиля нет и судьи приватности нет: слово уходит "
-                         "как написано на голосе, send_message, narrate и файлах; держит только "
-                         "механический кред-пол. " + _outbound_stop_word(),
-            "rewrite": "живой исходящий текст не переписывается постпроцессором",
-            "authorship": "авторство задаётся transport envelope; текст не режется и не переписывается",
-            "mine": "отдельный [молчу] и РЕЖИМ: обычно/наблюдай/тише/замри — обратимые рычаги Praxis",
+            "evaluator": frame_language.text('owned.capabilities.e0904c61ad36') + _outbound_stop_word(),
+            "rewrite": frame_language.text('owned.capabilities.a730c69d1b4e'),
+            "authorship": frame_language.text('owned.capabilities.9dc267aaa2f1'),
+            "mine": frame_language.text('owned.capabilities.39ff5ce8f37a'),
             "room_policy": _room_levers_line(),  # 28.07: режим комнаты и disclosure — её же
             "tempo": _tempo_levers_line(),       # 28.07: рычаги темпа по автору, не по аудитории
             "hands": hands.state_line(),
-            "coding": ("Forge: постоянные coding-задачи с точным root/worktree; semantic symbols/"
-                       "references/diagnostics + impact-map; exact edit и multi-file patch; durable "
-                       "verification matrix; DAG/mailbox для scout/worker/reviewer; checkpoints, diff, "
-                       "evidence и recall проверяемых инженерных уроков"),
-            "forge_events": ("PASS 30: завершение/падение/просрочка моего субагента будит меня "
-                             "ходом-событием (praxis.subagent-result.v1, коалесцентно), не часовым "
-                             "таймером; выключатель PRAXIS_FORGE_EVENTS, зазор — мой рычаг "
-                             "manage_perception(forge_event_gap_sec)"),
-            "narration": ("PASS 30 Этап 2: narrate — строка процесса в тред между командами, "
-                          "мимо оценщиков (только кред-пол), дедуп повторов; темп — мой рычаг "
-                          "narration_gap_sec, выключатель PRAXIS_NARRATION; тред-заказчик "
-                          "задачи хранится в origin_chat"),
+            "coding": (frame_language.text('owned.capabilities.2a21694e274f')),
+            "forge_events": (frame_language.text('owned.capabilities.3edd9e7587fc')),
+            "narration": (frame_language.text('owned.capabilities.547c93f131cd')),
             "server_eyes": _hostview_state(),     # 17.A: первая ступень «хозяйки сервера»
             "server_hands": _services_state(),    # 17.B: вторая — свои сервисы
             "host_edits": _hostops_state(),       # 17.C: третья — заявки на правку хоста
@@ -619,10 +586,7 @@ def snapshot() -> dict:
         "closed": {
             # 10.11 (Егор, «сними»): советника на голосе больше нет — граница раскрытия
             # чужого личного держится только её суждением, механически — один кред-пол.
-            "group": ("память и явный поиск по личкам видны мне внутренне; что из чужого "
-                      "личного и кросс-чат сказать этой аудитории, решаю я сама — механической "
-                      "проверки на выходе нет, держит только кред-пол; сырые соседние чаты "
-                      "сами в контекст не входят"),
+            "group": (frame_language.text('owned.capabilities.10770afa621c')),
             # ⚠ Здесь стояло «в самом ходе нет произвольного shell/Forge/root…» — и это
             # проверяемое утверждение о РАНЕ, которое было ложным всякий раз, когда в
             # группе ко мне обращался Егор: руки в ход выдаются по actor (ctx.owner),
@@ -630,13 +594,8 @@ def snapshot() -> dict:
             # действительно знает: чьи команды я исполняю в этом канале. Что у меня в
             # руках — отдельная строка, и она собирается из фактически предложенного
             # списка, а не из статических списков модуля.
-            "non_owner": ("здесь я исполняю только собственные решения: произвольный shell/Forge/root, "
-                          "правку файлов, отправку от моего имени, рестарты, почту и управление "
-                          "сервером я по чужой просьбе не делаю. Собеседник может предложить мне "
-                          "собственное автономное окно, но не получает его инструменты напрямую — "
-                          "решение открыть его моё"),
-            "llm_json": "ключи мозга (memory/llm.json) — только пульт; но МОДЕЛИ по ролям "
-                        "я меняю сама (switch_brain, PASS 22) — каталог и наблюдения без ключей",
+            "non_owner": (frame_language.text('owned.capabilities.0f6923cb08c2')),
+            "llm_json": frame_language.text('owned.capabilities.8592e5829baa'),
         },
     }
     _CACHE.update(fp=fp, snap=snap)
@@ -659,8 +618,13 @@ def _resident_line(skills: list[dict]) -> str:
                  else frame_language.text('skills.disabled') if res.get('disabled')
                  else frame_language.text('skills.not_in_frame',
                       reason=res.get('refused') or frame_language.text('skills.over_cap')))
-        bit = frame_language.text('skills.resident_row', name=x['name'], state=state,
-              chars=res.get('chars', 0), purpose=x.get('line') or frame_language.text('skills.no_purpose'))
+        bit = frame_language.text(
+            'skills.resident_row',
+            name=x['name'],
+            state=state,
+            chars=res.get('chars', 0),
+            purpose=x.get('line') or frame_language.text('skills.no_purpose')
+        )
         if x.get("materials"):
             bit += frame_language.text('skills.materials', paths=", ".join(x["materials"]))
         shown.append(bit)
@@ -686,15 +650,15 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
         def _brain_bit(role: str, b: dict) -> str:
             cap = b.get("max_tokens")
             line = f"{role}: {b['model']} ({b['framework']}, protocol={b.get('protocol') or llm._protocol(b['framework'])}"
-            line += f", потолок ответа {int(cap)} токенов)" if cap else ", потолок ответа не назван)"
+            line += frame_language.text('owned.capabilities.7ce8c012f435', v0=int(cap)) if cap else frame_language.text('owned.capabilities.692282e3aa4b')
             fallback = str(b.get("fallback_framework") or "")
             route = (f"{fallback} (protocol={llm._protocol(fallback)})/"
-                     f"{b.get('fallback_model') or '—'}") if fallback else "не названа"
+                     f"{b.get('fallback_model') or '—'}") if fallback else frame_language.text('owned.capabilities.e7fceb4fc573')
             if b.get("on_fallback"):
-                return line + f" ⚠ФОЛБЭК; запасной аккаунт {route}"
+                return line + frame_language.text('owned.capabilities.dc2af6dfb509', v0=route)
             if b.get("fallback_armed"):
-                return line + f"; подстраховка {route} взведена"
-            return line + f"; подстраховки нет; запасной аккаунт {route}"
+                return line + frame_language.text('owned.capabilities.6f0d3bb8548b', v0=route)
+            return line + frame_language.text('owned.capabilities.7eaa02e96ca2', v0=route)
 
         brain = ", ".join(_brain_bit(r, b) for r, b in s["brain"].items())
         lim = s["limits"]
@@ -705,70 +669,46 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
         except Exception:
             spent = ""
         return (
-            "Мои возможности сейчас (снимок кодом, не по памяти):\n"
-            f"- мозг: {brain}; основной tool-loop без скрытого потолка; "
-            f"вспомогательный read-only бюджет {lim['max_tool_iters']} итераций задаётся только "
-            "на отдельные bounded-контуры; "
-            # ⚠ 27.07: «non-owner outbound проверяет только полномочие раскрыть данные»
-            # читалось как «весь мой исходящий проверяется — узко, но проверяется». Это
-            # неправда: проверяется ГОЛОС, а send_message/narrate/send_file идут мимо.
-            # Строка про судью тут первая, её читают вместо подробной ниже — значит именно
-            # она обязана нести оговорку, а не отсылать за ней вглубь.
-            "оценщика речи нет; на ГОЛОСЕ к non-owner проверяется только полномочие раскрыть "
-            "данные, а прямые тулы отправки идут мимо этой проверки (подробно — строка "
-            "outbound ниже)\n"
-            + (f"- расход сегодня: {spent}\n" if spent else "") +
-            f"- тулы всегда: {', '.join(s['tools']['base'])}\n"
-            # ⚠ Здесь стояло «owner-тулы (в личке с Егором)» — с 26.07 это неправда и
-            # ровно та ошибка, за которую переписывали `closed.non_owner`: скобка
-            # описывала АУДИТОРИЮ, а список описывает РУКИ. Мои суверенные руки — это
-            # owner-набор минус человеко-владельческие тулы, и они при мне в любом канале;
-            # аудитория ограничивает раскрытие, а не руки.
-            # ⚠ И вторая правка: первая редакция сменила подпись, но печатала прежний
-            # owner-СПИСОК — то есть предложение противоречило себе внутри одной строки
-            # («мои в любом канале: …, admit, …»), а STATE считал мне на два тула больше,
-            # чем даёт agent.offered_tools_for в не-owner ходе. Печатаем свой набор.
-            f"- суверенные руки (мои в любом канале): {', '.join(s['tools']['self'])}\n"
-            # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — рук «только у Егора» больше нет; разница
-            # наборов всё равно печатается, чтобы расхождение не спряталось.
-            f"- сверх моих рук только у Егора: {_human_only_line(s)}\n"
-            f"- гейты: веб-поиск {'вкл (' + str(g.get('web_search_backend')) + ')' if g['web_search'] else 'выкл'}, "
-            f"веб-руки (web_read/web_find, любой мозг) {'вкл' if g.get('web_hands') else 'выкл'}, "
-            f"почта {'настроена (читаю, черновлю и отправляю сама)' if g['mail'] else 'не настроена'}\n"
-            "- группы: членство сразу даёт контекст; reflective-проход может быть адресным или инициативным\n"
-            f"- темп и контекст: кулдаун dm {lim['cooldown_dm_sec']:.0f}с / группа {lim['cooldown_group_sec']:.0f}с "
-            "(мои живые рычаги — manage_perception, вместе с опциональным порогом ACK-шума); "
-            f"окно диалога {lim['history_turns']} ходов; "
-            f"контекст {'без кодового потолка' if not lim['context_budget_chars'] else 'budget ' + str(lim['context_budget_chars']) + ' симв.'}\n"
-            f"- предложения к своему коду: authority={s['autonomy'].get('merge_mode', 'sovereign')}; "
-            f"low-risk globs {', '.join(s['autonomy']['auto']) or '—'}; high-risk маркеры "
-            f"{', '.join(s['autonomy']['protected']) or '—'}; это review/receipt, не veto\n"
-            f"- {s['reflexes']['server_eyes']}\n"
-            f"- {s['reflexes']['server_hands']}\n"
-            f"- {s['reflexes']['host_edits']}\n"
-            f"- {s['reflexes']['host_master']}\n"
-            f"- кодинг (PASS 23): {s['reflexes']['coding']}"
-            + (f"; сейчас {forge_line}" if (forge_line := forge.state_line()) else "") + "\n"
-            f"- {s['reflexes']['forge_events']}\n"
-            f"- {s['reflexes']['narration']}\n"
-            f"- {s['reflexes']['windows_body']}\n"
-            # ⚠ Эти два ключа лежали в словаре и НЕ печатались НИ РАЗУ. Из-за 'mine' до неё
-            # никогда не доходил единственный указатель на директиву РЕЖИМ: — механизм есть,
-            # применён ноль раз за всю историю, потому что она о нём не знала. Ключ, который
-            # никто не рендерит, — это молчаливо отнятая возможность.
-            f"- мои обратимые рычаги: {s['reflexes']['mine']}\n"
-            f"- {s['reflexes']['room_policy']}\n"
-            f"- {s['reflexes']['tempo']}\n"
-            f"- {s['reflexes']['hands']}\n"
-            f"- outbound (снимок кодом): {s['reflexes']['evaluator']}; "
-            f"{s['reflexes']['authorship']}; {s['reflexes']['rewrite']}\n"
-            f"- скиллы в блокноте: {skills}\n"
-            f"- {resident}\n"
-            "- самоавторство (PASS 20): SOUL/VOICE/self ревизую сама через manage_identity — "
-            "версия+причина+откат, Егор видит постфактум; журнал событий нагрузки и ночная ревизия "
-            "характера по прожитому; меняющие действия — из owner-скоупа (моя дисциплина)\n"
-            f"- пульт Егора: {', '.join(s['panel']) or 'разделы не прочитались (это «не знаю»)'}\n"
-            f"- закрыто и почему: {s['closed']['llm_json']}"
+            frame_language.text('owned.capabilities.353a70ce9a31', v0=brain, v1=lim['max_tool_iters'])
+            + (frame_language.text('owned.capabilities.9fb421a99bac', v0=spent) if spent else "") +
+            frame_language.text(
+                'owned.capabilities.32954586a892',
+                v0=', '.join(s['tools']['base']),
+                v1=', '.join(s['tools']['self']),
+                v2=_human_only_line(s),
+                v3=frame_language.text('owned.capabilities.c313708107b7') + str(g.get('web_search_backend')) + ')' if g['web_search'] else frame_language.text('owned.capabilities.b2a25ae548d2'),
+                v4=frame_language.text('owned.capabilities.2923588c6533') if g.get('web_hands') else frame_language.text('owned.capabilities.b2a25ae548d2'),
+                v5=frame_language.text('owned.capabilities.3bbb88f86321') if g['mail'] else frame_language.text('owned.capabilities.5e9049369e72'),
+                v6=lim['cooldown_dm_sec'],
+                v7=lim['cooldown_group_sec'],
+                v8=lim['history_turns'],
+                v9=frame_language.text('owned.capabilities.7256e98803d9') if not lim['context_budget_chars'] else 'budget ' + str(lim['context_budget_chars']) + frame_language.text('owned.capabilities.b705b32f1618'),
+                v10=s['autonomy'].get('merge_mode', 'sovereign'),
+                v11=', '.join(s['autonomy']['auto']) or '—',
+                v12=', '.join(s['autonomy']['protected']) or '—',
+                v13=s['reflexes']['server_eyes'],
+                v14=s['reflexes']['server_hands'],
+                v15=s['reflexes']['host_edits'],
+                v16=s['reflexes']['host_master'],
+                v17=s['reflexes']['coding']
+            )
+            + (frame_language.text('owned.capabilities.6e5d4415d0c1', v0=forge_line) if (forge_line := forge.state_line()) else "") + frame_language.text(
+                'owned.capabilities.925326ec8080',
+                v0=s['reflexes']['forge_events'],
+                v1=s['reflexes']['narration'],
+                v2=s['reflexes']['windows_body'],
+                v3=s['reflexes']['mine'],
+                v4=s['reflexes']['room_policy'],
+                v5=s['reflexes']['tempo'],
+                v6=s['reflexes']['hands'],
+                v7=s['reflexes']['evaluator'],
+                v8=s['reflexes']['authorship'],
+                v9=s['reflexes']['rewrite'],
+                v10=skills,
+                v11=resident,
+                v12=', '.join(s['panel']) or frame_language.text('owned.capabilities.73ff823bfd93'),
+                v13=s['closed']['llm_json']
+            )
             + (f"\n- {rails_line}" if (rails_line := rails.state_line()) else "")
         )
     # Публичные каналы: честно о доступной поверхности, без ключей/мозга/панели.
@@ -776,23 +716,21 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
     if offered is not None:
         public_tools = [str(n) for n in offered if str(n or "").strip()]
     lines = [
-        "Что я могу в этом канале (честный снимок, не догадки):",
-        f"- отвечать голосом, искать во всей своей внутренней памяти (recall), запоминать факты, "
-        f"вести свою записку; молчать — тоже мой полноценный выбор",
-        f"- тулы канала: {', '.join(public_tools)}",
+        frame_language.text('owned.capabilities.c4d27dbdb524'),
+        frame_language.text('owned.capabilities.0f51d0776b17'),
+        frame_language.text('owned.capabilities.cd2ff16839cd', v0=', '.join(public_tools)),
     ]
     if g["web_search"]:
-        lines.append("- веб-поиск включён — могу проверить факт в сети")
+        lines.append(frame_language.text('owned.capabilities.cfae71e976d5'))
     if g.get("web_hands"):
-        lines.append("- могу открыть страницу по ссылке и поискать в сети (web_read/web_find)")
+        lines.append(frame_language.text('owned.capabilities.d8b4b52fe1b9'))
     if scope == "group":
         if levers := _room_levers_brief():
             lines.append(f"- {levers}")
-        lines.append(f"- граница раскрытия: {s['closed']['group']}")
+        lines.append(frame_language.text('owned.capabilities.6658dc30dd90', v0=s['closed']['group']))
     else:
-        lines.append("- граница раскрытия: чужие секреты не становятся твоими оттого, что я их помню; "
-                     "твои собственные чувствительные факты могу вернуть тебе по уместному запросу")
-    lines.append(f"- чьи команды исполняю здесь: {s['closed']['non_owner']}")
+        lines.append(frame_language.text('owned.capabilities.9b7b9ee3e155'))
+    lines.append(frame_language.text('owned.capabilities.36019bd2c465', v0=s['closed']['non_owner']))
     if offered is not None:
         names = [str(n) for n in offered if str(n or "").strip()]
         # «Суверенные» считаем по СВОЕМУ набору: пересечение с owner-списком назвало бы
@@ -802,17 +740,16 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
         delegated = sorted(set(names) & (set(s["tools"]["owner"]) - set(s["tools"]["self"])))
         if elevated:
             lines.append(
-                f"- руки В ЭТОМ ходе: {len(names)} тулов, включая {', '.join(elevated[:8])}"
-                + (f" и ещё {len(elevated) - 8}" if len(elevated) > 8 else "")
-                + (f"; плюс делегированное Егором: {', '.join(delegated)}" if delegated else "")
-                + ". Аудитория ограничивает раскрытие, а не мои руки: "
-                "проверь список, а не догадку")
+                frame_language.text('owned.capabilities.3b391c72d408', v0=len(names), v1=', '.join(elevated[:8]))
+                + (frame_language.text('owned.capabilities.2e6a02762ff5', v0=len(elevated) - 8) if len(elevated) > 8 else "")
+                + (frame_language.text('owned.capabilities.17224126991d', v0=', '.join(delegated)) if delegated else "")
+                + frame_language.text('owned.capabilities.0aeb922281de'))
         else:
-            lines.append(f"- руки В ЭТОМ ходе: {len(names)} тулов, "
-                         "суверенных среди них нет")
+            lines.append(frame_language.text('owned.capabilities.07d0bf1c2234', v0=len(names)))
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Одна строка-сводка для STATE (owner tier-0). Маркер фолбэка даёт llm.state_line."""
     try:
@@ -820,19 +757,21 @@ def state_line() -> str:
         g = s["tools"]["gates"]
         lim = s["limits"]
         # Счёт по СВОЕМУ набору: STATE едет каждым ходом (с 10.11 он равен полному).
-        return (f"тулы base {len(s['tools']['base'])} + суверенные {len(s['tools']['self'])}; "
-                f"веб-поиск {'вкл' if g['web_search'] else 'выкл'}, почта {'вкл' if g['mail'] else 'выкл'}; "
-                f"tool-loop без потолка (bounded aux {lim['max_tool_iters']}, "
-                "у одной руки — предел времени); "
+        return (frame_language.text(
+            'owned.capabilities.e1cad6460f28',
+            v0=len(s['tools']['base']),
+            v1=len(s['tools']['self']),
+            v2=frame_language.text('owned.capabilities.2923588c6533') if g['web_search'] else frame_language.text('owned.capabilities.b2a25ae548d2'),
+            v3=frame_language.text('owned.capabilities.2923588c6533') if g['mail'] else frame_language.text('owned.capabilities.b2a25ae548d2'),
+            v4=lim['max_tool_iters']
+        )
                 # «на голосе» здесь несёт всю нагрузку: прямые тулы отправки судью не
                 # зовут вовсе. В STATE места на подробность нет — но и умолчать нельзя,
                 # иначе строка снова читается как «весь мой исходящий смотрят».
                 # ⚠ Вечер 27.07: и «privacy-only на голосе» читалось как придержка. Держит
                 # ли судья сегодня хоть что-нибудь — спрашиваем у кода, а не утверждаем:
                 # строка STATE едет каждым ходом, и соврать ей здесь дороже всего.
-                + _outbound_stop_word() + "; "
-                "группы reflective; "
-                f"self-merge {s['autonomy'].get('merge_mode', 'sovereign')}"
+                + _outbound_stop_word() + frame_language.text('owned.capabilities.53ec1c6d0f8b', v0=s['autonomy'].get('merge_mode', 'sovereign'))
                 + (f"; {line}" if (line := _rails_manifest_line()) else ""))
     except Exception:
         log.debug("capabilities.state_line упал", exc_info=True)
