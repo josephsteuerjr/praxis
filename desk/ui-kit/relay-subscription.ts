@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 import { electron, shell } from './window/api';
 import type { AccountView, RelayLogin } from '../app/src/relay-accounts';
 
@@ -25,15 +26,15 @@ export function subscriptionTransport(request: Request, observed: (state: Subscr
     if (command === 'open_login_page') {
       const login = state.login;
       if (!login?.pending || login.slot !== (args.slot || 'primary') || !login.url || login.expired
-          || login.device_code && login.device_code.expires_at * 1000 <= Date.now()) throw Error('Страница этого входа уже недоступна');
+          || login.device_code && login.device_code.expires_at * 1000 <= Date.now()) throw Error(uiText("ui.ui.kit.relay.subscription.26fa520d56"));
       const url = new URL(login.url);
-      if (url.protocol !== 'https:' || url.host !== 'auth.openai.com' || url.username || url.password || url.hash) throw Error('Неверный адрес входа');
+      if (url.protocol !== 'https:' || url.host !== 'auth.openai.com' || url.username || url.password || url.hash) throw Error(uiText("ui.ui.kit.relay.subscription.6fc0e6b954"));
       if (electron) await shell('open_path', { path: url.href });
       else window.open(url.href, '_blank', 'noopener,noreferrer');
       return undefined as T;
     }
     const action = ({relay_login:'login', relay_logout:'logout', relay_switch:'switch', relay_cancel_login:'cancel_login'} as Record<string,string>)[command];
-    if (!action) throw Error('Недоступное действие подписки');
+    if (!action) throw Error(uiText("ui.ui.kit.relay.subscription.5942f626d4"));
     return await request('/api/phone/subscription', {action, slot: args.slot || 'primary', method: args.method, login_id: args.login_id}) as T;
   };
 }

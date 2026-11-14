@@ -2,10 +2,11 @@
 // Проверяется контракт карточки по исходнику (паттерн agents-card.test.mjs):
 // кнопка зовёт agent_add с soul:{kind:"doctor"} — канон и знания читает
 // программа, окно ничего не тащит через argv.
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../src/agentscard.ts", import.meta.url), "utf8");
+const src = resolvedUiLiterals(readFileSync(new URL("../src/agentscard.ts", import.meta.url), "utf8"));
 
 // Кнопка есть и зовёт агент-доктора ровно одним словом вида.
 assert.ok(src.includes('"Завести доктора"'), "кнопка «Завести доктора» есть");
@@ -16,9 +17,11 @@ assert.ok(src.includes('name: "Доктор"'), "имя доктору — «Д�
 // 12.11: the Python supervisor re-reads the roster at once (t_desktop_supervisor_1710
 // raises a re-enabled neighbour without a restart). The toast says when it appears —
 // the same promise as «Завести агента» — and never claims it already works.
-assert.ok(src.includes("Через несколько секунд он появится в переключателе на полке"),
+assert.ok(src.includes('uiText("ui.app.src.agentscard.69e56cb034"'), "doctor toast uses its localized template");
+const doctorToast=uiText('ui.app.src.agentscard.69e56cb034',{p0:'fixture'});
+assert.ok(doctorToast.includes("Через несколько секунд он появится в переключателе на полке"),
   "тост говорит, когда доктор появится, без перезапуска программы");
-assert.ok(!src.includes("Поднимется после перезапуска программы"),
+assert.ok(!doctorToast.includes("Поднимется после перезапуска программы"),
   "устаревшее обещание перезапуска вернулось");
 
 // Отказ — словами оболочки тем же shellToast (как у всех глаголов карточки).

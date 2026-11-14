@@ -13,6 +13,7 @@
 //
 // Запуск: node app/test/update-card.test.mjs (из корня desk/ или из app/).
 
+import './fixtures/ru-localization.mjs';
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -70,7 +71,7 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   assert.match(html, /data-update-confirm="yes" data-id="aaaa1111" data-nonce="n0nce">Обновить</);
   assert.match(html, /data-update-confirm="no" data-id="aaaa1111" data-nonce="n0nce">Не сейчас</);
   // технические подробности — есть, но свёрнуты
-  for (const detail of [/1\.1\.1 → 1\.1\.2/, /260 МБ/, /aaaaaaaaaaaaaaaa…/, /3\.0 ГБ/, /через 24 ч/, /tree\/agent\.py, tree\/yono\.py/]) {
+  for (const detail of [/1\.1\.1 → 1\.1\.2/, /260 МБ/, /aaaaaaaaaaaaaaaa…/, /3,0 ГБ/, /через 24 ч/, /tree\/agent\.py, tree\/yono\.py/]) {
     assert.match(html, detail);
     assert.doesNotMatch(visible(html), detail);
   }

@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Карточка «Агенты»: кто живёт в этой установке и как завести ещё одного.
 //
 // До 11.09 правило было «одна папка = один агент», и второго заводили второй
@@ -58,9 +59,9 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   const box = el("div", "agents-card");
   const list = el("div", "agents-list");
   const add = el("div", "actions");
-  const nameBox = field("Имя нового агента", "", (v) => (wanted = v), {
-    placeholder: "Мира",
-    hint: "Имя войдёт в его подписи и в название папки. Мозг и ограду он унаследует от этого агента, бот и тело — нет: они у каждого свои.",
+  const nameBox = field(uiText("ui.app.src.agentscard.799f531262"), "", (v) => (wanted = v), {
+    placeholder: uiText("ui.app.src.agentscard.de987a5f33"),
+    hint: uiText("ui.app.src.agentscard.a8c3eee0e8"),
   });
   let wanted = "";
   let busy = false;
@@ -81,7 +82,7 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   soulArea.style.minHeight = "300px";
   soulArea.spellcheck = false;
   soulArea.hidden = true;
-  const soulWarn = el("p", "field-hint", "Имена в тексте — от агента-донора, поправь, кто чьё.");
+  const soulWarn = el("p", "field-hint", uiText("ui.app.src.agentscard.cba4faec1b"));
   soulWarn.hidden = true;
   const soulLoad = el("span", "receipt");
   const syncSoul = () => {
@@ -90,9 +91,9 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
     soulWarn.hidden = soulKind !== "inherit";
   };
   for (const [value, title, text] of [
-    ["canon", () => "Каноническая Hélène", "как у всех: имена подставятся сами"],
-    ["inherit", () => (currentName ? `Унаследовать от „${currentName}“` : "Унаследовать от текущего"), "конституция этого агента — стартовая точка"],
-    ["text", () => "Свой текст", "начни с канона и перепиши под него"],
+    ["canon", () => uiText("ui.app.src.agentscard.2ed1947e35"), uiText("ui.app.src.agentscard.5d5fe9b0b2")],
+    ["inherit", () => (currentName ? uiText("ui.app.src.agentscard.d8b96c7703", {p0: String(currentName)}) : uiText("ui.app.src.agentscard.15c9f72893")), uiText("ui.app.src.agentscard.2f115e8d82")],
+    ["text", () => uiText("ui.app.src.agentscard.cb161e488b"), uiText("ui.app.src.agentscard.98df5d3b6c")],
   ] as Array<[SoulKind, () => string, string]>) {
     const b = el("button", "choice-item");
     b.type = "button";
@@ -112,7 +113,7 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
     // владельца дороже свежей копии файла.
     if (value === "canon" || soulTouched) return;
     soulLoad.className = "receipt";
-    soulLoad.textContent = "читаю конституцию…";
+    soulLoad.textContent = uiText("ui.app.src.agentscard.26261767c3");
     try {
       const doc = await api<{ error?: string; text?: string }>("/api/md?path=" + encodeURIComponent("soul/SOUL.md"));
       if (doc.error) throw new Error(doc.error);
@@ -120,13 +121,13 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
       soulLoad.textContent = "";
     } catch (e) {
       soulLoad.className = "receipt err";
-      soulLoad.textContent = "Не прочиталось: " + humanError(e).text + " — можно вписать текст руками.";
+      soulLoad.textContent = uiText("ui.app.src.agentscard.f750546f2d") + humanError(e).text + uiText("ui.app.src.agentscard.fbd750b137");
     }
   };
   soulArea.addEventListener("input", () => (soulTouched = true));
   const soulBox = el("div");
   soulBox.style.marginTop = "14px";
-  soulBox.append(el("span", "models-label", "Конституция"), soulPick, soulArea, soulWarn, soulLoad);
+  soulBox.append(el("span", "models-label", uiText("ui.app.src.agentscard.8a9346b6c0")), soulPick, soulArea, soulWarn, soulLoad);
   const resetSoul = () => {
     soulKind = "canon";
     soulTouched = false;
@@ -137,17 +138,17 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   };
 
   const made = el("div", "hint");
-  const addBtn = button("Завести агента", "primary", () => {
+  const addBtn = button(uiText("ui.app.src.agentscard.8b4e33200e"), "primary", () => {
     if (busy) return;
     const named = wanted.trim();
     if (!named) {
-      toast("У агента должно быть имя — им он подписывает свои слова.");
+      toast(uiText("ui.app.src.agentscard.ff1f5a0df2"));
       return;
     }
     if (soulKind !== "canon" && !soulArea.value.trim()) {
       toast(soulKind === "inherit"
-        ? "Текст конституции не прочитался или пуст — выбери каноническую или вписать руками."
-        : "Своя конституция пуста — впиши текст или выбери каноническую.");
+        ? uiText("ui.app.src.agentscard.3cd10aa97d")
+        : uiText("ui.app.src.agentscard.ecfb295da6"));
       return;
     }
     busy = true;
@@ -158,10 +159,10 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
     void shell<{ id: string; name: string; port: number; dir: string }>("agent_add", args)
       .then((got) => {
         made.textContent =
-          `Агент «${got.name}» заведён: папка ${got.dir}, порт ${got.port}. ` +
+          uiText("ui.app.src.agentscard.767305285b", {p0: String(got.name), p1: String(got.dir), p2: String(got.port)}) +
           // 12.11: the supervisor re-reads the roster at once; no programme restart is needed.
-          `Программа уже поднимает его — через несколько секунд он появится в переключателе на полке. ` +
-          `Мозг у него уже есть, а бота и владельца впиши в его собственных настройках.`;
+          uiText("ui.app.src.agentscard.bcaad1a197") +
+          uiText("ui.app.src.agentscard.fbb2521e39");
         made.classList.add("ok");
         resetSoul();
         void paint();
@@ -179,16 +180,16 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   // окно шлёт одно слово, никаких текстов через argv. Имя — «Доктор»: его
   // подписи и папка; занято — оболочка откажет словами, и это честнее
   // тихого «доктор-2» без спроса.
-  const docBtn = button("Завести доктора", "quiet", () => {
+  const docBtn = button(uiText("ui.app.src.agentscard.6bccc9c8ba"), "quiet", () => {
     if (busy) return;
     busy = true;
     docBtn.disabled = true;
     void shell<{ id: string; name: string; port: number; dir: string }>("agent_add", {
-      name: "Доктор",
+      name: uiText("ui.app.src.agentscard.5d2a0ca52f"),
       soul: { kind: "doctor" },
     })
       .then((got) => {
-        toast(`Доктор заведён: папка ${got.dir}. Через несколько секунд он появится в переключателе на полке — спроси его о состоянии харнесса.`);
+        toast(uiText("ui.app.src.agentscard.69e56cb034", {p0: String(got.dir)}));
         void paint();
       })
       .catch(shellToast)
@@ -205,7 +206,7 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
       const cur = got.agents.find((a) => a.current);
       if (cur && cur.name !== currentName) {
         currentName = cur.name;
-        for (const it of soulBtns) if (it.value === "inherit") it.title.textContent = `Унаследовать от „${currentName}“`;
+        for (const it of soulBtns) if (it.value === "inherit") it.title.textContent = uiText("ui.app.src.agentscard.d8b96c7703", {p0: String(currentName)});
       }
       list.innerHTML = "";
       for (const a of got.agents) {
@@ -213,14 +214,14 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
         // Состояние словами, а не значком: «поднят» здесь означает живого
         // ребёнка этой оболочки, а не строчку в конфиге.
         const state = a.conflict
-          ? `спорит за порт ${a.port} с «${a.conflict}» — не поднимаю`
+          ? uiText("ui.app.src.agentscard.3c3edca899", {p0: String(a.port), p1: String(a.conflict)})
           : !a.enabled
-            ? "снят в его настройках"
+            ? uiText("ui.app.src.agentscard.d5c6e04f24")
             : a.raised
-              ? `поднят, порт ${a.port}`
-              : `порт ${a.port} — поднимется после перезапуска`;
+              ? uiText("ui.app.src.agentscard.c46c4046bb", {p0: String(a.port)})
+              : uiText("ui.app.src.agentscard.fc25be0b86", {p0: String(a.port)});
         row.innerHTML =
-          `<span class="agent-line-name">${esc(a.name)}${a.current ? " · сейчас в окне" : ""}${a.default ? " · открывается по умолчанию" : ""}</span>` +
+          `<span class="agent-line-name">${esc(a.name)}${a.current ? uiText("ui.app.src.agentscard.3342b5fbdf") : ""}${a.default ? uiText("ui.app.src.agentscard.44e83973dd") : ""}</span>` +
           `<span class="agent-line-state">${esc(state)}</span>` +
           `<span class="mono agent-line-home">${esc(a.tree)}</span>`;
         const acts = el("div", "actions");
@@ -230,12 +231,12 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
           // Снятый агент открывается той же кнопкой: «снять» — не «удалить», а
           // отказ «он погашен» скажет оболочка словами — окно покажет их тостом.
           acts.append(
-            button("Открыть", "quiet", () => {
+            button(uiText("ui.app.src.agentscard.ea1f408246"), "quiet", () => {
               void shell("switch_agent", { id: a.id }).catch(shellToast);
             }),
           );
         }
-        const defBtn = button(a.default ? "Открывается по умолчанию" : "Открывать по умолчанию", "quiet", () => {
+        const defBtn = button(a.default ? uiText("ui.app.src.agentscard.3ea9532599") : uiText("ui.app.src.agentscard.4a61535915"), "quiet", () => {
           if (a.default) return;
           void shell("agent_default_set", { id: a.id })
             .then(() => void paint())
@@ -245,7 +246,7 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
         if (a.default) defBtn.disabled = true;
         acts.append(
           defBtn,
-          button(a.enabled ? "Погасить" : "Поднять", "quiet", () => {
+          button(a.enabled ? uiText("ui.app.src.agentscard.7998606a95") : uiText("ui.app.src.agentscard.3fc4751f57"), "quiet", () => {
             void shell("agent_enabled_set", { id: a.id, enabled: !a.enabled })
               .then(() => void paint())
               .catch(shellToast);
@@ -258,13 +259,13 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
           kill.hidden = true;
           kill.style.gridColumn = "1/-1";
           let typed = "";
-          const killField = field(`id агента: ${a.id}`, "", (v) => (typed = v), { mono: true });
+          const killField = field(uiText("ui.app.src.agentscard.4078205525", {p0: String(a.id)}), "", (v) => (typed = v), { mono: true });
           const killRow = el("div", "actions");
           killRow.style.marginTop = "8px";
           killRow.append(
-            button("Удалить навсегда", "danger", () => {
+            button(uiText("ui.app.src.agentscard.abac4685c6"), "danger", () => {
               if (typed.trim().toLowerCase() !== a.id) {
-                toast(`Не совпало: введи id «${a.id}» точно — удаление неотвратимо.`);
+                toast(uiText("ui.app.src.agentscard.ebdb71c214", {p0: String(a.id)}));
                 return;
               }
               // Путь чердака — из ОТВЕТА оболочки (фикс-волна 06.10, F5):
@@ -274,9 +275,9 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
               void shell<{ attic?: string }>("agent_remove", { id: a.id })
                 .then((made) => {
                   const where = made && typeof made.attic === "string" && made.attic.trim()
-                    ? `данные перемещены в ${made.attic}`
-                    : "данные перемещены в agents-attic";
-                  toast(`Агент «${a.name}» удалён: ${where}.`);
+                    ? uiText("ui.app.src.agentscard.60f9499cea", {p0: String(made.attic)})
+                    : uiText("ui.app.src.agentscard.e86533f422");
+                  toast(uiText("ui.app.src.agentscard.b358bfac6f", {p0: String(a.name), p1: String(where)}));
                   void paint();
                 })
                 .catch((error) => {
@@ -287,16 +288,16 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
                   void paint();
                 });
             }),
-            button("Отмена", "quiet", () => (kill.hidden = true)),
+            button(uiText("ui.app.src.agentscard.8fbe9b75cb"), "quiet", () => (kill.hidden = true)),
           );
           kill.append(
             el("p", "field-hint",
-              `Данные будут перемещены в agents-attic. Восстановить их можно вручную. ` +
-              `Перед удалением останови агента.`),
+              uiText("ui.app.src.agentscard.9b1010e57f") +
+              uiText("ui.app.src.agentscard.0610e6bc2f")),
             killField,
             killRow,
           );
-          acts.append(button("Удалить…", "danger", () => (kill.hidden = false)));
+          acts.append(button(uiText("ui.app.src.agentscard.94a38117f5"), "danger", () => (kill.hidden = false)));
           row.append(acts, kill);
         } else {
           row.append(acts);
@@ -312,9 +313,9 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   box.append(list, nameBox, soulBox, add, made);
   return {
     el: card(
-      "Агенты",
+      uiText("ui.app.src.agentscard.96b789f637"),
       box,
-      "У каждого агента свои данные и настройки. Переключайся между ними в списке слева.",
+      uiText("ui.app.src.agentscard.d31daf2180"),
     ),
   };
 }
