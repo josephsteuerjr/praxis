@@ -129,7 +129,8 @@ def _kit_entry(root: str, language: str) -> dict | None:
     for row in entries(selected, include_kit=False):
         if row['slug'] == 'living-prose':
             row['source'] = 'kit'
-            row['path'] = f"resources/{selected.parent.name}/skills/living-prose/resident.md"
+            row['path'] = f"kit://{selected.parent.name}/skills/living-prose/resident.md"
+            row['skill_path'] = f"kit://{selected.parent.name}/skills/living-prose.md"
             return row
     return None
 

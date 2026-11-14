@@ -5078,7 +5078,8 @@ def tool_fs_read(path: str = "", start: int = 0, end: int = 0, task_id: str = ""
         if target is None or not target.is_file():
             return workshop.fs_read(path, start, end)
         return forge.noted(forge._read_page(target, workshop.BASE, target.read_bytes(), start=start, end=end,
-                                            start_char=start_char, expected_sha256=expected_sha256), "ok")
+                                            start_char=start_char, expected_sha256=expected_sha256,
+                                            **({'display_path': path} if path.startswith('kit://') else {})), "ok")
     return _home_fs_read(path, start, end)
 
 
@@ -7833,7 +7834,9 @@ WORKSHOP_TOOLS = [
     {'name': 'fs_read',
  'description': 'Read one path or a batch of paths, each with its whole-file SHA version. Omit task_id for '
                 'your home (including .env/session/llm.json); task_id selects the Forge task root, '
-                'including its remote backend. Home text has numbered lines, up to 400 by default. Local '
+                'including its remote backend. Packaged skill references use read-only kit://soul[.lang]/ '
+                'paths without task_id (for example kit://soul.en/skills/living-prose/practice.md). '
+                'Home text has numbered lines, up to 400 by default. Local '
                 'task text uses its 500-line or source-bound character paging; remote paging requires '
                 'backend support. Home images (PNG/JPEG/WebP/GIF up to 8MB) return real pixels, also in '
                 'batches. Each failed read names its path. Pass a read SHA or a confirmed edit '

@@ -2475,7 +2475,7 @@ def list_tasks(limit: int = 12) -> str:
 
 
 def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
-               start_char: int, expected_sha256: str) -> str:
+               start_char: int, expected_sha256: str, display_path: str = "") -> str:
     """Return an exact, source-bound UTF-8 slice that fits the worker's result budget.
 
     Offsets count Unicode code points within physical lines (including their newline).
@@ -2491,7 +2491,7 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
     try:
         lines = raw.decode("utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
-        return InspectReply(f"{path.relative_to(root)}: paging requires valid UTF-8; "
+        return InspectReply(f"{display_path or path.relative_to(root)}: paging requires valid UTF-8; "
                             f"{len(raw)} bytes, sha256={digest}. No lossy page was delivered.", "refused")
     s = max(1, int(start or 1))
     offset = int(start_char or 0)
@@ -2505,7 +2505,7 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
     if s <= len(lines) and offset == len(lines[s - 1]):
         s, offset = s + 1, 0
     stop = min(len(lines), int(end or len(lines)))
-    base = {"path": str(path.relative_to(root)), "sha256": digest,
+    base = {"path": display_path or str(path.relative_to(root)), "sha256": digest,
             "start": s, "start_char": offset, "total_lines": len(lines),
             "requested_end": int(end or 0)}
 

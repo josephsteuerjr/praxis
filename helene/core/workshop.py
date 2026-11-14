@@ -95,6 +95,26 @@ def _resolve_read(path: str) -> Path | None:
     raw = str(path or "").strip()
     if not raw:
         return None
+    if raw.startswith('kit://'):
+        # Public packaged stock has a stable read-only address even when an
+        # existing agent has not adopted the corresponding soul proposal.
+        # The runner, not model input, supplies the trusted installation root.
+        root = os.environ.get('HELENE_SKILLS_KIT_ROOT', '')
+        relative = raw[6:].replace('\\', '/')
+        parts = relative.split('/')
+        if (not root or not parts or parts[0] not in ('soul', 'soul.en', 'soul.fr', 'soul.zh')
+                or any(part in ('', '.', '..') or ':' in part for part in parts)):
+            return None
+        try:
+            stock_root = Path(root).resolve()
+            candidate = stock_root.joinpath(*parts).resolve()
+            candidate.relative_to(stock_root)
+            # A symlink to another resource tree cannot widen this namespace.
+            if candidate.relative_to(stock_root).parts[0] != parts[0]:
+                return None
+            return candidate
+        except (OSError, RuntimeError, ValueError, IndexError):
+            return None
     p = Path(raw)
     cand = p if p.is_absolute() else (BASE / p)
     try:
@@ -118,6 +138,8 @@ def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
     raw = str(path or "").strip()
     if not raw:
         return None, "пустой путь"
+    if raw.startswith('kit://'):
+        return None, "Packaged kit is read-only; revise your own soul file or review its kit proposal."
     if proposal_id:
         wt = selfdev.worktree_path(str(proposal_id).strip())
         if not wt.exists():

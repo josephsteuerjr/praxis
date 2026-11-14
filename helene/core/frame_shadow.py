@@ -559,9 +559,9 @@ def _block_self() -> str:
     except Exception:
         log.exception("frame_shadow: current_prompt отказал; эпоха без «кто я сейчас»")
     if not current_self:
-        current_self = "(кто я сейчас: источник не прочитался — это отказ прибора, не пустота меня)"
+        current_self = frame_language.text('epoch.self_unreadable')
     return (current_self
-            + "\n[из: soul/self/CURRENT.md · отбор: её · зачем: ядро ориентации эпохи]")
+            + frame_language.text('epoch.self_source'))
 
 
 _HAND_CLAUSE = re.compile(r"[.:;(]|\s—\s|\s-\s")

@@ -28,6 +28,7 @@ import llm
 import mailer
 import rails
 import resident_skills
+import frame_language
 import selfdev
 import work_loop
 
@@ -470,10 +471,10 @@ def _skills_list(index_path: Path | None = None) -> list[dict]:
     except OSError:
         on_disk = []
     out = [{"name": slug, "title": titles.get(slug, slug),
-            "line": described.get(slug) or NO_PURPOSE} for slug in on_disk]
+            "line": described.get(slug) or frame_language.text('skills.no_purpose')} for slug in on_disk]
     for slug in sorted(named - set(on_disk)):
         out.append({"name": slug, "title": titles.get(slug, slug),
-                    "line": "⚠ назван в индексе, но файла нет",
+                    "line": frame_language.text('skills.orphan'),
                     "orphan": True})
     # 14.11: постоянная часть навыка (soul/skills/<slug>/resident.md) стоит в кадре каждого
     # хода, папка навыка — материалы по потребности. Ключи появляются только там, где это
@@ -483,8 +484,12 @@ def _skills_list(index_path: Path | None = None) -> list[dict]:
     for res in resident_rows:
         row = by_name.get(res["slug"])
         if row is None:
-            row = {"name": res["slug"], "title": res["slug"], "line": "⚠ постоянная часть есть, файла навыка нет",
-                   "orphan": True}
+            if res.get('source') == 'kit' and res.get('skill_file'):
+                row = {'name': res['slug'], 'title': res['slug'], 'source': 'kit',
+                       'path': res['skill_path'], 'line': frame_language.text('skills.kit')}
+            else:
+                row = {"name": res["slug"], "title": res["slug"],
+                       "line": frame_language.text('skills.resident_orphan'), "orphan": True}
             out.append(row)
             by_name[res["slug"]] = row
         row["resident"] = {"path": res["path"], "chars": res.get("chars", 0),
@@ -505,17 +510,16 @@ def skill_navigation(index_path: Path) -> str:
     The caller owns the audience check. Missing index text cannot erase disk paths.
     """
     index = Path(index_path)
-    if not index.parent.is_dir():
-        return "soul/skills/ не прочитался — список навыков неизвестен"
     rows = _skills_list(index)
-    header = ("soul/skills/INDEX.md не найден — назначения неизвестны; пути с диска:"
-              if not index.is_file() else "Навыки с диска (тела не загружены; открыть fs_read):")
+    if not index.parent.is_dir() and not rows:
+        return frame_language.text('skills.unreadable')
+    header = frame_language.text('skills.no_index' if not index.is_file() else 'skills.navigation')
     lines = [header]
     for row in rows:
         slug = row["name"]
-        path = f"soul/skills/{slug}.md"
+        path = row.get('path') or f"soul/skills/{slug}.md"
         if row.get("orphan"):
-            lines.append(f"- {row['title']} · {path} — в INDEX, файла нет")
+            lines.append(frame_language.text('skills.orphan_row', title=row['title'], path=path))
         else:
             lines.append(f"- {row['title']} · {path} — {row['line']}")
     return "\n".join(lines)
@@ -643,22 +647,23 @@ def _resident_line(skills: list[dict]) -> str:
 
     Механизм называется и тогда, когда постоянных навыков нет: иначе о нём не узнать."""
     rows = [x for x in skills if isinstance(x.get("resident"), dict)]
-    how = ("постоянная часть навыка — soul/skills/<slug>/resident.md, стоит в персоне каждого "
-           "хода сразу после VOICE, во всех чатах; потолок суммы "
-           f"{resident_skills.max_chars() or 'не задан'} знаков")
+    how = frame_language.text('skills.resident_how',
+            cap=resident_skills.max_chars() or frame_language.text('skills.unlimited'))
     if not rows:
-        return f"постоянные навыки: нет ({how})"
+        return frame_language.text('skills.resident_none', how=how)
     shown = []
     for x in rows:
         res = x["resident"]
-        state = ("в кадре" if res.get("in_frame")
-                 else "выключена в настройках агента" if res.get('disabled')
-                 else f"НЕ в кадре: {res.get('refused') or 'не поместилась в потолок'}")
-        bit = f"{x['name']} ({state}, {res.get('chars', 0)} зн.) — {x.get('line') or NO_PURPOSE}"
+        state = (frame_language.text('skills.in_frame') if res.get("in_frame")
+                 else frame_language.text('skills.disabled') if res.get('disabled')
+                 else frame_language.text('skills.not_in_frame',
+                      reason=res.get('refused') or frame_language.text('skills.over_cap')))
+        bit = frame_language.text('skills.resident_row', name=x['name'], state=state,
+              chars=res.get('chars', 0), purpose=x.get('line') or frame_language.text('skills.no_purpose'))
         if x.get("materials"):
-            bit += "; материалы по потребности: " + ", ".join(x["materials"])
+            bit += frame_language.text('skills.materials', paths=", ".join(x["materials"]))
         shown.append(bit)
-    return "постоянные навыки: " + " | ".join(shown) + f" ({how})"
+    return frame_language.text('skills.resident_list', rows=" | ".join(shown), how=how)
 
 
 def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from string import Formatter
 
 import frame_language
 import resident_skills
@@ -38,6 +39,15 @@ class FrameLanguages(unittest.TestCase):
             fingerprints.append(frame_language.fingerprint())
         self.assertEqual(len(set(fingerprints)),4)
         with self.assertRaises(ValueError):frame_language.text('resident.source',path='missing slug')
+
+    def test_every_frame_catalog_has_identical_keys_and_parameters(self):
+        canonical=frame_language.catalog('ru')
+        parameters=lambda value: sorted(name for _,name,_,_ in Formatter().parse(value) if name is not None)
+        for lang in frame_language.LANGUAGES:
+            catalog=frame_language.catalog(lang)
+            self.assertEqual(set(catalog),set(canonical))
+            for key,value in canonical.items():
+                self.assertEqual(parameters(value),parameters(catalog[key]),f'{lang}:{key}')
 
     def test_toggle_removes_only_living_prose_without_touching_files(self):
         self.add_skill('living-prose','AUTHORED Русский prose')
