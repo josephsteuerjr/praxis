@@ -1,4 +1,5 @@
 """Actual stock seeding keeps UI/frame settings and authored files independent."""
+import json
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,9 @@ class StockLanguage(unittest.TestCase):
                 tree=self.root/(ui+'-'+frame)
                 boot._seed_kit(tree,config)
                 self.assertEqual({str(p.relative_to(tree/'soul')) for p in (tree/'soul').rglob('*') if p.is_file()},expected)
-                for relative in ('VOICE.md','self.md','skills/living-prose/resident.md'):
+                reviewed=json.loads((boot._RESOURCES/'stock-languages.json').read_text(encoding='utf-8'))['files']
+                relatives=[name.removeprefix('soul/') for name in reviewed if name.startswith('soul/')]
+                for relative in relatives:
                     source=boot._RESOURCES/('soul' if frame=='ru' else 'soul.'+frame)/relative
                     self.assertEqual((tree/'soul'/relative).read_text(encoding='utf-8'),boot._names(source.read_text(encoding='utf-8'),config))
                 self.assertNotIn('{{',(tree/'soul/VOICE.md').read_text(encoding='utf-8'))
