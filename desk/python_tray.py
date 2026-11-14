@@ -2,7 +2,18 @@
 import sys
 
 
-def _popup(native,restore,exit_app):
+def _captions(root):
+    from localharness.ui_language import for_root,text
+    language=for_root(root)
+    return (text('native.tray.open',language),text('native.tray.exit',language))
+
+
+def _refresh_captions(menu,root):
+    for button,caption in zip(menu.Controls,_captions(root)):
+        button.Text=caption;button.AccessibleName=caption
+
+
+def _popup(native,restore,exit_app,root=None):
     """Application-owned beige tiles, not the Windows context-menu renderer."""
     from System.Drawing import Color,Font,Point,Size,Region
     from System.Drawing.Drawing2D import GraphicsPath
@@ -26,7 +37,9 @@ def _popup(native,restore,exit_app):
         path.AddArc(0,control.Height-diameter,diameter,diameter,90,90)
         path.CloseFigure();control.Region=Region(path);path.Dispose()
     rounded(menu,px(12))
-    for index,(text,action) in enumerate((('Открыть Hélène',restore),('Выйти',exit_app))):
+    from pathlib import Path
+    captions=_captions(root or Path(__file__).resolve().parents[1])
+    for index,(text,action) in enumerate(zip(captions,(restore,exit_app))):
         button=Button();button.Text=text;button.AccessibleName=text
         button.Location=Point(px(8),px(8+index*48));button.Size=Size(px(208),px(44))
         button.FlatStyle=FlatStyle.Flat;button.FlatAppearance.BorderSize=0
@@ -177,9 +190,10 @@ def install(app):
             image = Icon(str(icon_path)) if icon_path.is_file() else None
             tray.Icon = image if image is not None else SystemIcons.Application
             tray.Text = 'Hélène'
-            menu=_popup(native,restore,exit_app)
+            menu=_popup(native,restore,exit_app,app.root)
             def mouse_up(sender,event):
                 if event.Button==MouseButtons.Right:
+                    _refresh_captions(menu,app.root)
                     position=Cursor.Position;area=Screen.FromPoint(position).WorkingArea
                     menu.Location=Point(max(area.Left,min(position.X,area.Right-menu.Width)),
                                         max(area.Top,min(position.Y,area.Bottom-menu.Height)))

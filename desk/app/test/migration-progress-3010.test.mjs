@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
+function nativeContext(values,language='ru'){
+  const catalogs=Object.fromEntries(['ru','en','fr','zh'].map(lang=>[lang,
+    JSON.parse(readFileSync(new URL('../../lang/'+lang+'.json',import.meta.url),'utf8'))]));
+  const document={documentElement:{lang:language},querySelectorAll:()=>[]};
+  const context=vm.createContext({document,window:{HELENE_UI:{
+    preference:language,system_language:language,catalogs}},...values});
+  vm.runInContext(readFileSync(new URL('../../resources/ui-language.js',import.meta.url),'utf8'),context);
+  context.I18N=context.window.HELENE_I18N;
+  vm.runInContext('const number=value=>new Intl.NumberFormat(document.documentElement.lang,{maximumFractionDigits:1}).format(value);',context);
+  return context;
+}
+
 test('migration counters show measured work, not an idle zero on every phase',()=>{
   const html=readFileSync(new URL('../../resources/python-migration.html',import.meta.url),'utf8');
   const fn=html.match(/^function progress\(v\)\{[^\n]+\}$/m)?.[0];
@@ -10,7 +22,7 @@ test('migration counters show measured work, not an idle zero on every phase',()
   const elements=Object.fromEntries(['work','status','detail','progress'].map(id=>[id,{
     textContent:'',value:null,removeAttribute(name){delete this[name];}
   }]));
-  const context=vm.createContext({$:id=>elements[id],labels:{}});
+  const context=nativeContext({$:id=>elements[id],labels:{}});
   vm.runInContext(fn,context);
   context.progress({stage:'uninstalling_old',files:0,total_files:null,bytes:0});
   assert.equal(elements.detail.textContent,'');
@@ -21,7 +33,7 @@ test('migration counters show measured work, not an idle zero on every phase',()
   context.progress({stage:'removing_old',files:8,file:'old.exe'});
   assert.equal(elements.detail.textContent,'old.exe · 8 файлов');
   context.progress({stage:'preparing_relay',files:0,bytes:1048576,total_bytes:2097152});
-  assert.equal(elements.detail.textContent,'1.0 МиБ');assert.equal(elements.progress.value,1048576);
+  assert.equal(elements.detail.textContent,'1 МиБ');assert.equal(elements.progress.value,1048576);
   context.progress({stage:'connecting_data',files:0,total_files:null,bytes:0});
   assert.equal(elements.detail.textContent,'');assert.equal(elements.progress.value,undefined);
 });
@@ -30,7 +42,7 @@ function observer(invoke){
   const html=readFileSync(new URL('../../resources/python-migration.html',import.meta.url),'utf8');
   const source=html.slice(html.indexOf('async function observeMigration()'),html.indexOf("window.addEventListener('helene:migration-progress'"));
   const elements={},timers=[];
-  const context=vm.createContext({$:id=>elements[id]??={hidden:true,textContent:''},invoke,labels:{},
+  const context=nativeContext({$:id=>elements[id]??={hidden:true,textContent:''},invoke,labels:{},
     progress(){},step(){},showError(error){(elements['error-box']??={}).hidden=false;elements.error={textContent:String(error)};},
     setTimeout(fn,delay){timers.push({fn,delay});}});
   vm.runInContext("let observedJob='admitted';"+source,context);
@@ -52,6 +64,23 @@ test('an observer read failure keeps following the same job and never claims the
   assert.equal(view.current(),'admitted');assert.equal(view.elements['error-box'].hidden,true);
   assert.equal(view.elements.status.textContent,'Установка продолжается');
   assert.equal(view.timers.length,1);
+});
+
+test('new agent after selecting a Python update requests clean code; an update preserves edits',async()=>{
+  const html=readFileSync(new URL('../../resources/python-migration.html',import.meta.url),'utf8');
+  const handler=html.split('\n').find(line=>line.startsWith("$('install').onclick="));
+  assert.ok(handler);
+  for(const [mode,pythonUpdate,expected] of [['fresh',true,'clean'],['connect',true,'preserve'],['connect',false,'clean']]){
+    const elements={mode:{value:mode},old:{value:'old'},destination:{value:'target'},
+      data:{value:'AUTHORED 日本語 $&'},'data-destination':{value:'unused'},'move-data':{checked:false}};
+    let request;
+    const context=nativeContext({$:id=>elements[id]??={},pythonUpdate,observedJob:'',
+      busy(){},progress(){},showError(error){throw error;},observeMigration(){},setTimeout(){},
+      async invoke(command,args){assert.equal(command,'migration_install');request=args;return {state:'admitted',job:{id:'test'}};}});
+    vm.runInContext(handler,context);await elements.install.onclick();
+    assert.equal(request.sourceMode,expected);assert.equal(request.data,'AUTHORED 日本語 $&');
+    assert.equal(Object.hasOwn(request,'frame_language'),false);
+  }
 });
 
 test('only actual durable failure or completion ends migration observation',async()=>{

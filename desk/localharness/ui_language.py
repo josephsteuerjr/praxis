@@ -89,6 +89,11 @@ def _settings(root: Path) -> dict:
         return {}
 
 
+def for_root(root: Path) -> str:
+    """Resolve the current preference on each native gesture, without caching it."""
+    return interface_language(_settings(root), system_tags())
+
+
 PROGRESS_CAPTIONS = [
   {
     "stage": "starting",

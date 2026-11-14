@@ -24,6 +24,14 @@ class MigrationWindow(Application):
         self.control_file=window_control(root,os.getpid(),role='migrator',create=True)
         self.source_mode=source_mode;self.review_cancelled=threading.Event()
         self.force_extensions=force_extensions
+    def _ui_root(self):
+        return self.root if (self.root/'helene.json').is_file() or not self.old else Path(self.old)
+    def caption(self,key):
+        from localharness.ui_language import for_root,text
+        return text(key,for_root(self._ui_root()))
+    def bridge(self):
+        from localharness.ui_language import bootstrap_script
+        return super().bridge()+'\n'+bootstrap_script(self._ui_root())
     def invoke(self,command,args):
         if command=='migration_defaults':
             from localharness import windows_installation as installation
@@ -47,7 +55,7 @@ class MigrationWindow(Application):
                     'data_default':str(new_data_default()),'observed_job':(self.admitted_request or {}).get('id')}
         if command=='migration_restore':
             from localharness.upstream_recovery import launch
-            if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+            if args.get('confirmed') is not True:raise ValueError(self.caption('native.migration.confirm_restore'))
             return launch(self.root)
         if command=='migration_recovery_status':
             from localharness.upstream_recovery import receipt
@@ -56,13 +64,13 @@ class MigrationWindow(Application):
         if command=='migration_status':
             from localharness.migration_job import observation
             value=getattr(self,'admitted_request',None)
-            if not value or args.get('id')!=value['id']:raise ValueError('No matching admitted migration in this window')
+            if not value or args.get('id')!=value['id']:raise ValueError(self.caption('native.migration.no_job'))
             return observation(self.root,value)
         if command=='migration_inspect':
             from localharness import windows_installation as installation
             from localharness.migration_job import failed_session
             old=Path(args.get('old','')).resolve()
-            if not (old/'helene.json').is_file():raise ValueError('Настройки прежней программы не найдены. Если она уже удалена, очисти поле «Прежняя программа» и укажи существующую папку данных.')
+            if not (old/'helene.json').is_file():raise ValueError(self.caption('native.migration.missing_old'))
             data=installation.default_data(old)
             return {'data':data,'version':installation.version(old),'failed_session':failed_session(old),
                     'python_update':installation.is_python_program(old),
@@ -70,8 +78,8 @@ class MigrationWindow(Application):
                     'data_transfer_recommended':installation.relocation_recommended(data) or (installation.is_python_program(old) and Path(data).resolve().is_relative_to(old))}
         if command=='migration_release_failed_session':
             from localharness.migration_job import release_failed_session
-            if args.get('confirmed') is not True:raise ValueError('Confirm stopping the failed migration session')
-            if not self.running.acquire(blocking=False):raise RuntimeError('Migration admission is already in progress')
+            if args.get('confirmed') is not True:raise ValueError(self.caption('native.migration.confirm_stop'))
+            if not self.running.acquire(blocking=False):raise RuntimeError(self.caption('native.migration.admission_busy'))
             try:return release_failed_session(Path(args['old']),str(args['id']))
             finally:self.running.release()
         if command=='migration_pick_path':
@@ -79,17 +87,17 @@ class MigrationWindow(Application):
             chosen=self.window.create_file_dialog(webview.FOLDER_DIALOG)
             return str(chosen[0]) if chosen else None
         if command in ('migration_install','migration_run','migration_fresh'):
-            if not self.running.acquire(blocking=False):raise RuntimeError('Перенос уже выполняется')
+            if not self.running.acquire(blocking=False):raise RuntimeError(self.caption('native.migration.busy'))
             try:
                 old=Path(args['old']).resolve() if args.get('old') else None
                 target=Path(args.get('target') or self.root).resolve()
                 fresh=command=='migration_fresh' or args.get('mode')=='fresh'
-                if old and not (old/'helene.json').is_file():raise ValueError('Выбери прежнюю папку Hélène или укажи только папку данных')
+                if old and not (old/'helene.json').is_file():raise ValueError(self.caption('native.migration.choose_old'))
                 if fresh:old=None
                 from localharness import windows_installation as installation
                 mode=args.get('sourceMode') or ('preserve' if old and installation.is_python_program(old) else 'clean')
                 if mode not in ('preserve','clean') or (mode=='preserve' and not (old and installation.is_python_program(old))):
-                    raise ValueError('Legacy migration installs clean code; Python updates may preserve edits')
+                    raise ValueError(self.caption('native.migration.source_mode'))
                 cancelled=getattr(self,'review_cancelled',None)
                 if cancelled:cancelled.clear()
                 self.progress('admitting')
@@ -107,7 +115,7 @@ class MigrationWindow(Application):
         if command=='python_window' and args.get('action') in ('close','exit') and self.running.locked():
             self.progress('admitting');return {'admission_pending':True}
         if command in ('python_window','appearance_read'):return super().invoke(command,args)
-        raise ValueError('Unavailable migration command')
+        raise ValueError(self.caption('native.migration.unavailable'))
     def progress(self,value):
         value=value if isinstance(value,dict) else {'stage':value};now=time.monotonic()
         if now-self.last_progress>=.1 or value.get('stage')in ('completed','starting_new','stopping_old'):
@@ -139,7 +147,7 @@ def main(argv=None):
     root=args.root.resolve();app=MigrationWindow(root,args.old,args.target,args.source_mode,args.force_extensions);app.serve()
     try:
         geometry=window_geometry(webview.screens[0]);geometry.update(width=min(720,geometry['width']),height=min(720,geometry['height']))
-        app.window=webview.create_window('Hélène · установка',app.origin,**geometry,min_size=(420,360),frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
+        app.window=webview.create_window(app.caption('native.migration.d0ba3816ae'),app.origin,**geometry,min_size=(420,360),frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
         app.window.events.shown+=app.publish_control
         from localharness.bootstrap_ready import signal
         app.window.events.loaded+=lambda:signal()
