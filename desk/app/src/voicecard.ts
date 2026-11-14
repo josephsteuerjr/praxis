@@ -1,3 +1,4 @@
+import { t as uiText, locale, UiError } from "../../lang/lang";
 // Карточка «Голос»: слышит ли агент голосовые на этом ПК.
 //
 // Что здесь особенного и почему это отдельный файл. Голос — единственная часть
@@ -9,6 +10,7 @@
 // Состояние спрашивается у КАНАЛА (`/api/voice`, тот же `localharness/voice.py`,
 // которым голос поднимает раннер), а не считается здесь: вторая правда о том,
 // скачана ли модель, разъехалась бы с первой молча.
+import { voiceOwnedText } from "../../ui-kit/window/voice-owned";
 import { voicePreferencesFields } from "../../ui-kit/window/voice-preferences";
 import { api, shell, channelURL } from "../../ui-kit/window/api";
 import { el, humanError } from "../../ui-kit/window/lib";
@@ -93,23 +95,23 @@ function voiceField(title: string): HTMLLabelElement {
 }
 
 export function speechStatusText(state: SpeechState): string {
-  if (!state.ready) return `Агент отвечает текстом: ${state.why}.`;
+  if (!state.ready) return uiText("ui.app.src.voicecard.5de99125d3", {p0: voiceOwnedText(state.why)});
   const device = state.device_actual ? ` · ${state.device_actual.toUpperCase()}` : '';
   switch (state.worker_phase) {
-    case 'loading': return 'XTTS загружает модель. Первый запуск займёт больше времени.';
-    case 'warming_voice': return 'XTTS подготавливает выбранный голос. Пробный синтез проходит без звука.';
-    case 'busy': return `XTTS озвучивает ответ${device}.`;
-    case 'paused': return 'Голос на паузе. Продолжи работу агента, чтобы он снова говорил.';
-    case 'error': return `Не удалось подготовить голос: ${state.worker_error || 'подробности в журнале XTTS'}`;
-    case 'unknown': return 'XTTS установлен. Не удалось проверить процесс; смотри журнал.';
+    case 'loading': return uiText("ui.app.src.voicecard.0eddc4ea8f");
+    case 'warming_voice': return uiText("ui.app.src.voicecard.66fcf1bfee");
+    case 'busy': return uiText("ui.app.src.voicecard.23576bb730", {p0: String(device)});
+    case 'paused': return uiText("ui.app.src.voicecard.4e17d5b586");
+    case 'error': return uiText("ui.app.src.voicecard.b82ce2bd3f", {p0: String(state.worker_error || uiText("ui.app.src.voicecard.6249494479"))});
+    case 'unknown': return uiText("ui.app.src.voicecard.5870d1370e");
   }
   return state.worker_ready === true
-    ? `Голос готов${device}. Модель и выбранный голос прогреты.`
-    : 'XTTS установлен. Ожидаю запуск голоса после сохранения настроек.';
+    ? uiText("ui.app.src.voicecard.250f0ee950", {p0: String(device)})
+    : uiText("ui.app.src.voicecard.b1f5cbd9d7");
 }
 
 function mb(bytes: number | undefined): string {
-  return bytes ? `${Math.round(bytes / MB)} МБ` : "0 МБ";
+  return bytes ? uiText("ui.app.src.voicecard.fb360df45f", {p0: new Intl.NumberFormat(locale()).format(Math.round(bytes / MB))}) : uiText("ui.app.src.voicecard.6eeb81327f");
 }
 
 /** Карточка голоса. Черновик правится на месте, как у соседей. */
@@ -127,19 +129,19 @@ export function voiceCard(draft: Config): VoiceCard {
   voice.voice = speakVoice;
 
   const box = el("div", "voice-settings");
-  const status = el("p", "field-hint", "спрашиваю канал…");
+  const status = el("p", "field-hint", uiText("ui.app.src.voicecard.61bd6769dc"));
   const pickBox = el("div");
   const actions = el("div", "actions");
   const note = el("span", "receipt");
-  const fetchBtn = button("Скачать модель", "quiet", () => void start());
+  const fetchBtn = button(uiText("ui.app.src.voicecard.3fcb297329"), "quiet", () => void start());
   actions.append(fetchBtn, note);
 
-  const onOff = toggle("Расшифровывать голосовые на этом ПК", enabled, (v) => {
+  const onOff = toggle(uiText("ui.app.src.voicecard.f837894d3e"), enabled, (v) => {
     enabled = v;
     voice.enabled = v;
     void refresh();
   });
-  const keepOff = toggle("Прогревать Whisper при запуске", keep, (v) => {
+  const keepOff = toggle(uiText("ui.app.src.voicecard.f036a094dd"), keep, (v) => {
     keep = v;
     voice.keep_loaded = v;
   });
@@ -152,8 +154,8 @@ export function voiceCard(draft: Config): VoiceCard {
   const drawPicker = (state: VoiceState) => {
     const items = state.catalog.map((m) => ({
       value: m.id,
-      title: m.title + (m.installed ? " · скачана" : ` · ${m.size_mb} МБ`),
-      text: m.note,
+      title: voiceOwnedText(m.title) + (m.installed ? uiText("ui.app.src.voicecard.280e5de27a") : uiText("ui.app.src.voicecard.2e27412068", {p0: new Intl.NumberFormat(locale()).format(m.size_mb)})),
+      text: voiceOwnedText(m.note),
     }));
     picker = choice<string>(items, model, (v) => {
       model = v;
@@ -170,40 +172,39 @@ export function voiceCard(draft: Config): VoiceCard {
     if (busy) {
       const total = down!.total_bytes || 1;
       note.className = "receipt";
-      note.textContent = `${down!.note || 'Скачиваю'} · ${down!.model}: ${mb(down!.got_bytes)} из ~${mb(total)}`;
+      note.textContent = uiText("ui.app.src.voicecard.440f9359db", {p0: String(down!.note || uiText("ui.app.src.voicecard.f2a84fd63b")), p1: String(down!.model), p2: String(mb(down!.got_bytes)), p3: String(mb(total))});
     } else if (down && down.state === "failed") {
       note.className = "receipt err";
-      note.textContent = down.note;
+      note.textContent = voiceOwnedText(down.note);
     } else if (down && down.state === "running") {
       // Помощник качал и пропал: окно закрыли, машину усыпили, процесс убит.
       // Вечное «качаю…» здесь было бы враньём, поэтому запись читается со
       // сроком годности.
       note.className = "receipt err";
-      note.textContent = "скачивание оборвалось — нажми ещё раз";
+      note.textContent = uiText("ui.app.src.voicecard.df695371d6");
     } else if (down && down.state === "done" && state.installed.path) {
       note.className = "receipt ok";
-      note.textContent = `модель на месте, ${mb(state.installed.bytes)}`;
+      note.textContent = uiText("ui.app.src.voicecard.ceffc39921", {p0: String(mb(state.installed.bytes))});
     }
     if (!state.library.present) {
       if (state.library.downloadable) {
         // 1.2.1: движок не в установщике — он приедет той же кнопкой, первым.
         status.textContent =
-          `Агент не слышит: движок голоса ещё не скачан. «Скачать модель» сначала скачает его ` +
-          `(~${state.library.size_mb ?? "?"} МБ, один раз на обе половины голоса), потом модель.`;
+          uiText("voice.recognition.runtime.missing", {size: state.library.size_mb === undefined ? "?" : new Intl.NumberFormat(locale()).format(state.library.size_mb)});
         return;
       }
-      status.textContent = state.library.why + ". Голос в этой сборке не поднимется.";
+      status.textContent = voiceOwnedText(state.library.why) + uiText("ui.app.src.voicecard.716d9344e9");
       fetchBtn.disabled = true;
       return;
     }
-    const where = `Модели лежат в ${state.dir}.`;
+    const where = uiText("ui.app.src.voicecard.6242d7fc2f", {p0: String(state.dir)});
     if (state.ready) {
       status.textContent =
-        `Агент слышит: модель ${state.installed.model || "?"} (${mb(state.installed.bytes)}) на диске. ` +
-        (state.why ? state.why + ". " : "") +
-        `Расшифровка идёт на процессоре, примерно за половину длительности записи. ${where}`;
+        uiText("ui.app.src.voicecard.94c1173bac", {p0: String(state.installed.model || "?"), p1: String(mb(state.installed.bytes))}) +
+        (state.why ? voiceOwnedText(state.why) + ". " : "") +
+        uiText("voice.recognition.cpu", {where});
     } else {
-      status.textContent = `Агент не слышит: ${state.why}. ${where}`;
+      status.textContent = uiText("ui.app.src.voicecard.c5fb148996", {p0: voiceOwnedText(state.why), p1: String(where)});
     }
   };
 
@@ -235,26 +236,26 @@ export function voiceCard(draft: Config): VoiceCard {
         sayVoice(mine);
         const names = speech.speakers || [];
         cudaOption.disabled=speech.library.cuda_supported===false;
-        deviceNote.textContent=speech.library.cuda_supported===false?'Этот runtime собран для CPU. Для CUDA нужен совместимый runtime и видеокарта; веса модели остаются теми же.':'CUDA требует совместимого runtime и видеокарты. На машине без GPU используй CPU; менять модель не нужно.';
+        deviceNote.textContent=speech.library.cuda_supported===false?uiText("ui.app.src.voicecard.f925355e29"):uiText("ui.app.src.voicecard.5b89d5d3be");
         if (names.join('\n') !== speakerSelect.dataset.catalog) {
           speakerSelect.replaceChildren(...names.map(name => new Option(name, name)));
           const selected = String(voice.tts_speaker || speech.speaker || 'Ana Florence');
-          if (!names.includes(selected)) speakerSelect.append(new Option(selected+' · недоступен в каталоге', selected));
+          if (!names.includes(selected)) speakerSelect.append(new Option(selected+uiText("ui.app.src.voicecard.cb0edfc0ab"), selected));
           speakerSelect.value = selected;
           speakerSelect.dataset.catalog = names.join('\n');
           speakerSelect.disabled = !names.length;
-          speakerCount.textContent = names.length ? `${names.length} голосов установленной модели` : 'Каталог появится после установки XTTS';
+          speakerCount.textContent = names.length ? uiText("ui.app.src.voicecard.d1e88822b5", {p0: String(names.length)}) : uiText("ui.app.src.voicecard.a06d1334b5");
         }
-        fishKeyNote.textContent = speech.fish?.configured ? 'Ключ сохранён приватно на этом ПК.' : 'Собственный ключ Fish ещё не добавлен.';
+        fishKeyNote.textContent = speech.fish?.configured ? uiText("ui.app.src.voicecard.857e85fc9f") : uiText("ui.app.src.voicecard.fa2e989285");
         if(!previewing&&speakVoice==='fish'&&speech.fish?.last_request?.status==='unknown'){
           const last=speech.fish.last_request;
-          previewNote.textContent='Fish · '+last.request_id+' · результат неизвестен'+(last.cancelled?' · аудио отменено':'')+'. Автоматического повтора нет.';
+          previewNote.textContent='Fish · '+last.request_id+uiText("ui.app.src.voicecard.0f53700da8")+(last.cancelled?uiText("ui.app.src.voicecard.531c2e12dd"):'')+uiText("ui.app.src.voicecard.ba8538676e");
         }
         previewBtn.disabled = previewing || !speak || speech.worker_phase === 'paused' || (speakVoice === 'xtts' && speech.worker_ready !== true)
           || (speakVoice === 'fish' && (!speech.fish?.configured || !voice.fish_model || !voice.fish_voice));
         if (!previewing && speakVoice === 'xtts') previewNote.textContent = speech.worker_ready === true ? '' : speechStatusText(mine);
       } else {
-        speechStatus.textContent = "этот канал про голос агента ничего не знает";
+        speechStatus.textContent = uiText("ui.app.src.voicecard.cf8c7ba38b");
         speechBtn.disabled = true;
       }
       const down = state.download;
@@ -265,7 +266,7 @@ export function voiceCard(draft: Config): VoiceCard {
         timer = setTimeout(() => void refresh(), 2000);
       }
     } catch (e) {
-      if (box.isConnected) status.textContent = "канал не ответил про голос: " + humanError(e).text;
+      if (box.isConnected) status.textContent = uiText("ui.app.src.voicecard.3142a17025") + humanError(e).text;
     } finally {
       refreshing = false;
       const again = refreshAgain;
@@ -279,7 +280,7 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const start = async () => {
     note.className = "receipt";
-    note.textContent = "запускаю помощника…";
+    note.textContent = uiText("ui.app.src.voicecard.7c9cef0739");
     fetchBtn.disabled = true;
     try {
       const said = await shell<string>("voice_fetch", { model });
@@ -294,65 +295,65 @@ export function voiceCard(draft: Config): VoiceCard {
   };
 
   // ---- вторая половина: агент говорит сам -----------------------------------
-  const speechStatus = el("p", "field-hint", "спрашиваю канал…");
+  const speechStatus = el("p", "field-hint", uiText("ui.app.src.voicecard.61bd6769dc"));
   const speechPickBox = el("div");
   const speechActions = el("div", "actions");
   const speechNote = el("span", "receipt");
-  const speechBtn = button("Скачать и установить XTTS", "quiet", () => void startVoice());
+  const speechBtn = button(uiText("ui.app.src.voicecard.af191218bf"), "quiet", () => void startVoice());
   speechActions.append(speechBtn, speechNote);
   const speechFields = el("div", "form-grid two voice-provider-fields");
   const fishFields = el('div', 'form-grid two voice-provider-fields');
   const fishKeyNote = el('small', 'field-hint');
   const fishKey = el('input', 'field-input') as HTMLInputElement;
   fishKey.type='password';fishKey.autocomplete='new-password';fishKey.maxLength=4096;
-  fishKey.setAttribute('aria-label','Собственный API-ключ Fish');
-  const keyLabel=voiceField('API-ключ Fish');keyLabel.classList.add('voice-full-row');keyLabel.append(fishKey,fishKeyNote);
+  fishKey.setAttribute('aria-label',uiText("ui.app.src.voicecard.0bee7e0dd7"));
+  const keyLabel=voiceField(uiText("ui.app.src.voicecard.76e747398c"));keyLabel.classList.add('voice-full-row');keyLabel.append(fishKey,fishKeyNote);
   const keyActions=el('div','actions voice-full-row');
-  const saveKey=button('Сохранить ключ','quiet',async()=>{
+  const saveKey=button(uiText("ui.app.src.voicecard.7beb1b70ac"),'quiet',async()=>{
     const key=fishKey.value;fishKey.value='';saveKey.disabled=true;
     try{const response=await fetch(channelURL('/api/voice/fish-key'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
-      if(!response.ok)throw new Error('Не удалось приватно сохранить ключ Fish');
-      fishKeyNote.textContent='Ключ сохранён приватно на этом ПК.';void refresh();
+      if(!response.ok)throw new UiError(uiText("ui.app.src.voicecard.a10dc3d24b"));
+      fishKeyNote.textContent=uiText("ui.app.src.voicecard.857e85fc9f");void refresh();
     }catch(e){fishKeyNote.textContent=humanError(e).text}finally{saveKey.disabled=false}
   });
-  const deleteKey=button('Удалить ключ','quiet',async()=>{
+  const deleteKey=button(uiText("ui.app.src.voicecard.43c89af66b"),'quiet',async()=>{
     cancelPreview();fishKey.value='';
     const response=await fetch(channelURL('/api/voice/fish-key'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delete:true})});
-    fishKeyNote.textContent=response.ok?'Ключ удалён.':'Не удалось удалить ключ.';void refresh();
+    fishKeyNote.textContent=response.ok?uiText("ui.app.src.voicecard.6d50dcd8f6"):uiText("ui.app.src.voicecard.777e1cc6b9");void refresh();
   });
   keyActions.append(saveKey,deleteKey);
-  const fishModelLabel=voiceField('Модель Fish');
+  const fishModelLabel=voiceField(uiText("ui.app.src.voicecard.f38c958f98"));
   const fishModel=document.createElement('select');fishModel.className='field-input';
-  fishModel.append(new Option('Выбери модель явно',''),...['s2.1-pro','s2.1-pro-free','s2-pro','drama-3','s1'].map(id=>new Option(id,id)));
+  fishModel.append(new Option(uiText("ui.app.src.voicecard.b1de32fa7b"),''),...['s2.1-pro','s2.1-pro-free','s2-pro','drama-3','s1'].map(id=>new Option(id,id)));
   fishModel.value=String(voice.fish_model||'');fishModel.onchange=()=>{cancelPreview();voice.fish_model=fishModel.value;void refresh()};fishModelLabel.append(fishModel);
-  const fishVoiceLabel=voiceField('Идентификатор голоса Fish');
+  const fishVoiceLabel=voiceField(uiText("ui.app.src.voicecard.10ec11c42f"));
   const fishVoice=el('input','field-input') as HTMLInputElement;
   fishVoice.value=String(voice.fish_voice||'');fishVoice.maxLength=128;
   fishVoice.oninput=()=>{cancelPreview();voice.fish_voice=fishVoice.value;void refresh()};fishVoiceLabel.append(fishVoice);
-  const fishDeliveryLabel=voiceField('Подача и интонация');fishDeliveryLabel.classList.add('voice-full-row');
+  const fishDeliveryLabel=voiceField(uiText("ui.app.src.voicecard.291f940f96"));fishDeliveryLabel.classList.add('voice-full-row');
   const fishDelivery=el('textarea','field-input') as HTMLTextAreaElement;
   fishDelivery.value=String(voice.fish_delivery||'');fishDelivery.maxLength=1000;
-  fishDelivery.placeholder='Например: спокойно, тепло, с лёгкой улыбкой';
+  fishDelivery.placeholder=uiText("ui.app.src.voicecard.0bf9086213");
   fishDelivery.oninput=()=>{cancelPreview();voice.fish_delivery=fishDelivery.value};fishDeliveryLabel.append(fishDelivery);
   fishFields.append(keyLabel,keyActions,fishModelLabel,fishVoiceLabel,fishDeliveryLabel,
-    el('p','field-hint voice-full-row','Текст и подача отправляются Fish. Каждый новый образец — отдельный запрос по тарифу Fish. При обрыве результат может остаться неизвестным; автоматического повтора нет. Ключ не входит в настройки агента.'));
-  const deviceLabel=voiceField('Вычисления XTTS');
+    el('p','field-hint voice-full-row',uiText("ui.app.src.voicecard.69f30070b9")));
+  const deviceLabel=voiceField(uiText("ui.app.src.voicecard.d0c6d84ba6"));
   const deviceSelect=document.createElement('select');deviceSelect.className='field-input';
-  const cudaOption=new Option('CUDA · совместимая NVIDIA GPU','cuda');
-  deviceSelect.append(new Option('CPU · работает без видеокарты','cpu'),cudaOption);
+  const cudaOption=new Option(uiText("ui.app.src.voicecard.c375551c50"),'cuda');
+  deviceSelect.append(new Option(uiText("ui.app.src.voicecard.3bac43abb9"),'cpu'),cudaOption);
   deviceSelect.value=String(voice.tts_device||'cpu');deviceSelect.onchange=()=>{cancelPreview();voice.tts_device=deviceSelect.value};
-  const deviceNote=el('small','field-hint','CPU — базовый путь; поддержку CUDA определяет runtime.');
+  const deviceNote=el('small','field-hint',uiText("ui.app.src.voicecard.de7e8c2d99"));
   deviceLabel.append(deviceSelect,deviceNote);speechFields.append(deviceLabel);
-  const speakerLabel = voiceField('Голос XTTS');
+  const speakerLabel = voiceField(uiText("ui.app.src.voicecard.4e5ea2e875"));
   const speakerSelect = document.createElement('select');speakerSelect.className='field-input';
   speakerSelect.onchange=()=>{cancelPreview();voice.tts_speaker=speakerSelect.value};
-  const speakerCount=el('small','field-hint','Читаю каталог установленной модели…');
+  const speakerCount=el('small','field-hint',uiText("ui.app.src.voicecard.ffa3ca7ed4"));
   speakerLabel.append(speakerSelect,speakerCount);speechFields.append(speakerLabel);
   const sample=el('input','field-input') as HTMLInputElement;
-  sample.value='Привет. Это мой голос. Его можно изменить.';sample.maxLength=300;
-  sample.setAttribute('aria-label','Текст для прослушивания голоса');
+  sample.value=uiText("ui.app.src.voicecard.f297e08df6");sample.maxLength=300;
+  sample.setAttribute('aria-label',uiText("ui.app.src.voicecard.8632e4e78a"));
   const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.hidden=true;
-  audio.setAttribute('aria-label','Образец выбранного голоса');
+  audio.setAttribute('aria-label',uiText("ui.app.src.voicecard.a79bac2572"));
   let previewing = false;
   let previewEpoch=0;
   let activePreview: {id:string; cancelURL:string; controller:AbortController}|null=null;
@@ -365,13 +366,13 @@ export function voiceCard(draft: Config): VoiceCard {
   };
   sample.oninput=()=>cancelPreview();
   const previewNote=el('span','receipt');
-  const previewBtn=button('Прослушать голос','quiet',async()=>{
+  const previewBtn=button(uiText("ui.app.src.voicecard.adc537d82c"),'quiet',async()=>{
     if (previewing) return;
     cancelPreview();const epoch=previewEpoch;const controller=new AbortController();
     const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
     const url=channelURL('/api/voice/preview');
     activePreview={id,cancelURL:channelURL('/api/voice/intent'),controller};
-    previewing=true;previewBtn.disabled=true;previewNote.textContent=speakVoice==='fish'?'Fish готовит образец · запрос '+id:'Готовлю образец локально…';
+    previewing=true;previewBtn.disabled=true;previewNote.textContent=speakVoice==='fish'?uiText("ui.app.src.voicecard.5cd6d88974")+id:uiText("ui.app.src.voicecard.58d6b0676e");
     try {
       // Synthesis can exceed the event tunnel's 25s. Use the same authenticated
       // HTTP channel, not a second service or the model/Telegram transport.
@@ -380,29 +381,29 @@ export function voiceCard(draft: Config): VoiceCard {
           reference:voice.tts_reference||'',fish_model:voice.fish_model,fish_voice:voice.fish_voice,fish_delivery:voice.fish_delivery,text:sample.value})});
       if(!response.ok)throw new Error(await response.text());
       const result=await response.json();
-      if(result.mime!=='audio/wav'||typeof result.base64!=='string')throw new Error('Нет аудио в ответе синтеза');
+      if(result.mime!=='audio/wav'||typeof result.base64!=='string')throw new UiError(uiText("ui.app.src.voicecard.c63362f114"));
       if(epoch!==previewEpoch||!box.isConnected||url!==channelURL('/api/voice/preview'))return;
       const live=await api<VoiceState>('/api/voice');
       if(epoch!==previewEpoch||!box.isConnected||url!==channelURL('/api/voice/preview')
         ||live.speech?.worker_phase==='paused'||live.speech?.enabled!==true)return;
       audio.src='data:audio/wav;base64,'+result.base64;audio.hidden=false;
-      await audio.play();previewNote.textContent='Образец готов. Выбор сохранится вместе с настройками.';
+      await audio.play();previewNote.textContent=uiText("ui.app.src.voicecard.49b2ffebcc");
     }catch(e){if(epoch===previewEpoch){
       let outcome='unknown';
       if(speakVoice==='fish')try{const response=await fetch(channelURL('/api/voice/intent?request_id='+id));
         if(response.ok){const receipt=await response.json();outcome=receipt.status||'unknown';}}catch{}
       if(epoch===previewEpoch)previewNote.textContent=speakVoice==='fish'
-        ? 'Запрос '+id+' · '+outcome+'. Автоматического повтора нет. '+humanError(e).text:humanError(e).text;
+        ? uiText("ui.app.src.voicecard.2ae59c2c0d")+id+' · '+outcome+uiText("ui.app.src.voicecard.c83a0b2921")+humanError(e).text:humanError(e).text;
     }
     }finally{if(epoch===previewEpoch){previewing=false;activePreview=null;void refresh()}}
   });
   previewBtn.disabled=true;
   speechActions.append(previewBtn,previewNote);
-  const stopPreview=button('Остановить образец','quiet',()=>{cancelPreview();previewNote.textContent='Прослушивание отменено. Уже принятый Fish запрос может быть оплачен.';void refresh()});
+  const stopPreview=button(uiText("ui.app.src.voicecard.069639047d"),'quiet',()=>{cancelPreview();previewNote.textContent=uiText("ui.app.src.voicecard.fc5ea4087d");void refresh()});
   speechActions.append(stopPreview);
   for (const [key, title, fallback] of [
-    ["tts_language", "Язык синтеза", "ru"],
-    ["tts_reference", "Свой образец голоса (локальный WAV, необязательно)", ""],
+    ["tts_language", uiText("ui.app.src.voicecard.bce937aa57"), "ru"],
+    ["tts_reference", uiText("ui.app.src.voicecard.34ba8077f3"), ""],
   ]) {
     const label = voiceField(title);
     const input = el("input", "field-input") as HTMLInputElement;
@@ -410,7 +411,7 @@ export function voiceCard(draft: Config): VoiceCard {
     input.oninput = () => { cancelPreview();voice[key] = input.value; };
     label.append(input); speechFields.append(label);
   }
-  const speakOff = toggle("Отвечать голосом, когда сочтёт нужным", speak, (v) => {
+  const speakOff = toggle(uiText("ui.app.src.voicecard.1551881f7b"), speak, (v) => {
     speak = v;
     cancelPreview();
     voice.speak = v;
@@ -421,8 +422,8 @@ export function voiceCard(draft: Config): VoiceCard {
   const drawVoices = (state: SpeechState) => {
     const items = state.catalog.map((one) => ({
       value: one.id,
-      title: one.title,
-      text: one.note,
+      title: voiceOwnedText(one.title),
+      text: voiceOwnedText(one.note),
     }));
     speechPicker = choice<string>(items, speakVoice, (v) => {
       speakVoice = v;
@@ -437,9 +438,9 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const sayVoice = (state: SpeechState) => {
     if(speakVoice==='fish'){
-      speechStatus.textContent=!speak?'Голос агента выключен.':state.fish?.configured
-        ? 'Fish озвучивает через твой API-ключ. Выбери модель, голос и подачу; сохрани настройки.'
-        : 'Добавь собственный API-ключ Fish, выбери модель и голос. Скачивать XTTS не требуется.';
+      speechStatus.textContent=!speak?uiText("ui.app.src.voicecard.6f8f7c0f25"):state.fish?.configured
+        ? uiText("ui.app.src.voicecard.49a28346a2")
+        : uiText("ui.app.src.voicecard.6a43684333");
       return;
     }
     const down = state.download;
@@ -447,24 +448,24 @@ export function voiceCard(draft: Config): VoiceCard {
     speechBtn.disabled = busy;
     if (busy) {
       speechNote.className = "receipt";
-      speechNote.textContent = (down!.note || 'Устанавливаю XTTS') + (down!.total_bytes ? ` · ${mb(down!.got_bytes)} из ${mb(down!.total_bytes)}` : '');
+      speechNote.textContent = (down!.note || uiText("ui.app.src.voicecard.c2f07fa924")) + (down!.total_bytes ? uiText("ui.app.src.voicecard.abf20d83fe", {p0: String(mb(down!.got_bytes)), p1: String(mb(down!.total_bytes))}) : '');
     } else if (down && down.state === "failed") {
       speechNote.className = "receipt err";
-      speechNote.textContent = String(down.error || "не скачалось");
+      speechNote.textContent = String(down.error || uiText("ui.app.src.voicecard.471c60e516"));
     } else if (down && down.state === "running") {
       speechNote.className = "receipt err";
-      speechNote.textContent = "скачивание оборвалось — нажми ещё раз";
+      speechNote.textContent = uiText("ui.app.src.voicecard.df695371d6");
     } else if (down && down.state === "done") {
       speechNote.className = "receipt ok";
-      speechNote.textContent = "голос на месте";
+      speechNote.textContent = uiText("ui.app.src.voicecard.0656632773");
     }
     if (!state.library.present) {
       if (state.library.downloadable) {
         speechStatus.textContent =
-          `XTTS ещё не установлен. Кнопка устанавливает отдельный runtime и модель из комплекта; Whisper остаётся независимым.`;
+          uiText("ui.app.src.voicecard.8515c659d3");
         return;
       }
-      speechStatus.textContent = state.library.why + ". Говорить в этой сборке нечем.";
+      speechStatus.textContent = voiceOwnedText(state.library.why) + uiText("ui.app.src.voicecard.39a3b81ae2");
       speechBtn.disabled = true;
       return;
     }
@@ -473,7 +474,7 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const startVoice = async () => {
     speechNote.className = "receipt";
-    speechNote.textContent = "запускаю помощника…";
+    speechNote.textContent = uiText("ui.app.src.voicecard.7c9cef0739");
     speechBtn.disabled = true;
     try {
       const said = await shell<string>("voice_fetch", { model: speakVoice, kind: "speak" });
@@ -489,13 +490,12 @@ export function voiceCard(draft: Config): VoiceCard {
 
   box.append(voicePreferencesFields(), onOff, status, pickBox, actions, keepOff,
     el("p", "field-hint",
-      "Whisper использует все доступные потоки CPU и остаётся в памяти 30 минут после последнего использования. " +
-      "Объём памяти зависит от выбранной модели. Прогрев при запуске готовит её заранее. Изменения применяются после перезапуска."),
+      uiText("ui.app.src.voicecard.193c1e810e")),
     el("hr", "card-split"),
     speakOff, speechPickBox, speechStatus, speechFields, fishFields,
-    (()=>{const field=voiceField('Текст для прослушивания');field.append(sample);return field})(), audio, speechActions,
+    (()=>{const field=voiceField(uiText("ui.app.src.voicecard.7e6a2f61ab"));field.append(sample);return field})(), audio, speechActions,
     el("p", "field-hint",
-      "Whisper распознаёт твои голосовые независимо от выбранного синтеза. XTTS работает локально, Fish — через API. Выбранный голос применяется после сохранения. XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License)."));
+      uiText("ui.app.src.voicecard.e729dcccfb")));
   const showProvider=()=>{speechFields.hidden=speakVoice!=='xtts';fishFields.hidden=speakVoice!=='fish';speechBtn.hidden=speakVoice!=='xtts';speechNote.hidden=speakVoice!=='xtts'};
   showProvider();
   const observer=new MutationObserver(()=>{if(!box.isConnected){cancelPreview();fishKey.value='';observer.disconnect();if(timer)clearTimeout(timer)}});
@@ -516,8 +516,8 @@ export function voiceCard(draft: Config): VoiceCard {
   void refresh();
 
   return {
-    el: card("Голос", box,
-      "Whisper распознаёт речь на этом ПК. Для озвучки выбери локальный XTTS или Fish с собственным API-ключом. Распознанный текст получает выбранная модель агента."),
+    el: card(uiText("ui.app.src.voicecard.24a0d703af"), box,
+      uiText("ui.app.src.voicecard.2dc4e89ae1")),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,

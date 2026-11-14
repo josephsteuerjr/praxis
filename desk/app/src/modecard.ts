@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Карточка «Режим» — только для окна Hélène: выбор ограды и опция службы правятся
 // там, где живёт харнесс. Praxis этой карточки не рисует вовсе (агент на сервере),
 // а ЧИТАЕТ режим он тем же `ui-kit/window/mode.ts`, что и экран «Система».
@@ -9,6 +10,7 @@ import { el, humanError, toast } from "../../ui-kit/window/lib";
 import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
 import { shell, electron } from "../../ui-kit/window/api";
 import { persistSession0 } from "./session0-persist";
+import { localizeMode } from '../../ui-kit/window/mode-owned';
 import { LEGACY_SERVICE, SESSION0_WARNING_FALLBACK,
          type ModeChoice, type ModeState, type StoredService } from "../../ui-kit/window/mode";
 
@@ -97,8 +99,9 @@ export function modeCard(
   linux = false,
   onConfigWrite: (base: string | null, fresh: string | null) => void = () => {},
 ): ModeCard {
+  live = localizeMode(live);
   const box = el("section", "card");
-  box.append(el("h3", "", "Режим"));
+  box.append(el("h3", "", uiText("ui.app.src.modecard.3f53fb8734")));
 
   // Portable Python owns the process tree without a service/elevation path.
   if (electron?.shell === 'python') {
@@ -115,8 +118,8 @@ export function modeCard(
       b.setAttribute('aria-checked', String(choice === selected));
       row.append(b);
     }
-    box.append(row, el('p', 'field-hint', 'Процессы агента держит Python-приложение с правами текущего пользователя. Применяется перезапуском движка.'));
-    if (!selected) box.append(el('p', 'receipt err', failure ? humanError(failure).text : 'Режим не прочитан.'));
+    box.append(row, el('p', 'field-hint', uiText("ui.app.src.modecard.938559d51f")));
+    if (!selected) box.append(el('p', 'receipt err', failure ? humanError(failure).text : uiText("ui.app.src.modecard.e400d0c6fb")));
     return { el: box, name: () => selected?.name || '', title: () => selected?.title || '',
       sandbox: () => !!selected?.sandbox, session0: () => false, firewall: () => false, note: () => '' };
   }
@@ -142,15 +145,14 @@ export function modeCard(
     const why = failure
       ? humanError(failure).text
       : !live || !live.name
-        ? live?.text || "Режим не прочитан."
-        : "Канал ответил, но списка режимов не прислал — выбирать не из чего. Похоже, код агента старее окна.";
+        ? live?.text || uiText("ui.app.src.modecard.e400d0c6fb")
+        : uiText("ui.app.src.modecard.01113cf34a");
     box.append(el("p", "receipt err", why));
     box.append(
       el(
         "p",
         "field-hint",
-        "Пока режим не прочитан, менять его отсюда нельзя: программа не знает, из чего переключает. " +
-          "Открой раздел заново, когда агент ответит; что записано в файле — видно на экране «Система».",
+        uiText("ui.app.src.modecard.dc08182ff4"),
       ),
     );
     for (const n of live?.notes || []) box.append(el("p", "receipt err", n));
@@ -220,7 +222,7 @@ export function modeCard(
           // его вместе с отказом первого, и файл не узнавал о втором решении.
           // Теперь отказ первого не мешает: цикл увидит живое желание и
           // запишет его; без желаний — выйдет. Повтор только по щелчку.
-          toast(`Выбор в файл не записался (${humanError(e).text}) — нажми «Сохранить», иначе ступень слетит при перезапуске.`);
+          toast(uiText("ui.app.src.modecard.882698ae2c", {p0: String(humanError(e).text)}));
         }
       }
       session0Busy = false;
@@ -249,23 +251,23 @@ export function modeCard(
   const togglesBox = el("div", "mode-block");
 
   const syncNow = () => {
-    const svc = installed === null ? "спросить не удалось" : installed ? "установлена" : "не установлена";
+    const svc = installed === null ? uiText("ui.app.src.modecard.cee7ccc4d3") : installed ? uiText("ui.app.src.modecard.e842608049") : uiText("ui.app.src.modecard.1149e6f59b");
     // Хвост про службу — только там, где служба бывает, и её собственным
     // именем: «Служба Windows» на Mac было бы словом не про эту машину.
-    const svcTail = ` ${posix ? "Служба" : "Служба Windows"}: ${svc}.`;
+    const svcTail = ` ${posix ? uiText("ui.app.src.modecard.dc43cb0ba6") : uiText("ui.app.src.modecard.36a571f31a")}: ${svc}.`;
     if (legacyPipe) {
       // Врать «Сейчас: Служба» нельзя: службы-режима не существует, а какая
       // ограда стоит на самом деле, этот харнесс не сказал.
-      now.textContent = `Сейчас: ограда не названа — код агента отвечает старой картиной, где режимом считалась служба.${svcTail}`;
+      now.textContent = uiText("ui.app.src.modecard.1c6e490d37", {p0: String(svcTail)});
       return;
     }
-    const src = live.explicit ? live.source : `записи в файле ещё нет, ограда выведена — ${live.source}`;
+    const src = live.explicit ? live.source : uiText("ui.app.src.modecard.aa9b624638", {p0: String(live.source)});
     // Верхняя ступень побеждает в словах: включённая нулевая сессия — главное
     // в «сейчас», называть вместо неё ограду значило бы умолчать о доверии.
     const ladder = live as ModeState & { ladder_title?: string };
     const nowTitle = ladder.ladder_title || live.title;
-    const root = nowTitle !== live.title ? ` (ограда — ${live.title})` : "";
-    now.textContent = `Сейчас: ${nowTitle}${root}.${svcTail} Источник: ${src}.`;
+    const root = nowTitle !== live.title ? uiText("ui.app.src.modecard.e2ebbe5eb5", {p0: String(live.title)}) : "";
+    now.textContent = uiText("ui.app.src.modecard.8a7333f8cf", {p0: String(nowTitle), p1: String(root), p2: String(svcTail), p3: String(src)});
   };
 
   const syncPick = () => {
@@ -327,7 +329,7 @@ export function modeCard(
     // один пароль администратора, ровно как договорились 04.10. Запирая
     // ступень, мы запирали единственную кнопку, которая службу ставит.
     if (installed === false) {
-      b.append(el("span", "choice-text", "Службы ещё нет — подтверждение ниже поставит её само."));
+      b.append(el("span", "choice-text", uiText("ui.app.src.modecard.b36da5fb98")));
     }
     b.addEventListener("click", () => {
       if (picked !== "session0") {
@@ -353,7 +355,7 @@ export function modeCard(
       // 04.10, слово владельца: подтверждение называется тем, что разрешает,
       // и ставит службу само, если её ещё нет (администратора спросят ОДИН
       // раз — при установке службы, словами оговорки).
-      btn(linux ? "Разрешить права root" : "Разрешить права СИСТЕМЫ", "danger", async () => {
+      btn(linux ? uiText("ui.app.src.modecard.bb373a4470") : uiText("ui.app.src.modecard.4797b03cf4"), "danger", async () => {
         askBox.hidden = true;
         session0 = true;
         syncToggles();
@@ -365,11 +367,11 @@ export function modeCard(
             toast(await shell<string>("install_service"));
             afterService();
           } catch (e) {
-            toast(`Служба не поставилась: ${humanError(e).text} — ступень останется словами в файле до следующей попытки.`);
+            toast(uiText("ui.app.src.modecard.7aea5c5472", {p0: String(humanError(e).text)}));
           }
         }
       }),
-      btn("Не разрешать", "quiet", () => {
+      btn(uiText("ui.app.src.modecard.621706f921"), "quiet", () => {
         askBox.hidden = true;
         picked = fencePicked;
         syncPick();
@@ -388,9 +390,7 @@ export function modeCard(
         el(
           "p",
           "receipt err",
-          "Этот код агента ещё считает службу режимом — старая картина, в которой ограда и служба были одним списком. " +
-            "Какая ограда стоит на самом деле, он не сказал, поэтому выбрана песочница: лишнюю ограду ты снимешь щелчком, " +
-            "а снятая молча — это то, ради чего всё и переделано. Проверь выбор и сохрани; служба от этого не тронется.",
+          uiText("ui.app.src.modecard.ca626c94ef"),
         ),
       );
       return;
@@ -407,15 +407,15 @@ export function modeCard(
       for (const n of live.notes) planBox.append(el("p", "receipt err", n));
       return;
     }
-    planBox.append(el("p", "receipt", "Ограда сменится после сохранения и перезапуска движка — окна это не трогает."));
+    planBox.append(el("p", "receipt", uiText("ui.app.src.modecard.c275a44dbc")));
     if (installed) {
       planBox.append(
         el(
           "p",
           "field-hint",
-          `${posix ? "Служба" : "Служба Windows"} останется на месте: она не режим, ограду не снимает и не включает. ` +
-            "Снимать её ради смены ограды не нужно — но настройки она читает при своём старте, " +
-            "поэтому после сохранения перезапусти её (кнопки ниже).",
+          uiText("ui.app.src.modecard.43fe1873ad", {p0: String(posix ? uiText("ui.app.src.modecard.dc43cb0ba6") : uiText("ui.app.src.modecard.36a571f31a"))}) +
+            uiText("ui.app.src.modecard.1d6c6319ba") +
+            uiText("ui.app.src.modecard.55db5012a2"),
         ),
       );
     }
@@ -427,7 +427,7 @@ export function modeCard(
   // старее окна: своих не пишем, говорим об этом прямо и галочки не трогаем —
   // они уедут в файл ровно такими, какими лежали.
   const option = live.service;
-  svcBox.append(el("h4", "", option?.title || live.service_title || (posix ? "Служба" : "Служба Windows")));
+  svcBox.append(el("h4", "", option?.title || live.service_title || (posix ? uiText("ui.app.src.modecard.dc43cb0ba6") : uiText("ui.app.src.modecard.36a571f31a"))));
   if (option?.notice) {
     const notice = el("p", "service-notice");
     notice.append(el("strong", "", option.notice));
@@ -446,8 +446,7 @@ export function modeCard(
       el(
         "p",
         "receipt err",
-        "Про службу код агента ничего не рассказал — похоже, он старее окна. Ставить и снимать её кнопками " +
-          "ниже можно, а тумблеры службы окно оставит в файле такими, какие они есть.",
+        uiText("ui.app.src.modecard.95bb34ddec"),
       ),
     );
   }
@@ -464,9 +463,7 @@ export function modeCard(
     // заранее. Запирать кнопку по нашей слепоте — отнимать выбор.
     if (posix) return "";
     if (admin.known && !admin.canElevate) {
-      return "Служба недоступна: у этой учётной записи нет прав администратора. Служба ставится один раз — " +
-        "попроси того, кто хозяин компьютера, или войди под его учётной записью. " +
-        "Ограда при этом работает как выбрана: службе она не подчиняется.";
+      return uiText("ui.app.src.modecard.15df39a313");
     }
     return "";
   };
@@ -477,23 +474,22 @@ export function modeCard(
       svcOut.className = "receipt " + (st === "running" ? "ok" : st === "unknown" ? "err" : "");
       svcOut.textContent =
         st === "running"
-          ? "Служба работает"
+          ? uiText("ui.app.src.modecard.c8a7a6cb24")
           : st === "stopped"
-            ? "Служба поставлена, но не запущена"
+            ? uiText("ui.app.src.modecard.dd1e3122fc")
             : st === "unknown"
               // Четвёртый ответ, а не третий: файл службы на месте, а спросить
               // систему о её состоянии не вышло. Назвать это «Службы нет» —
               // соврать владельцу про его же машину.
-              ? "Служба поставлена; спросить систему о её состоянии не вышло"
-              : "Службы нет";
+              ? uiText("ui.app.src.modecard.849966dac1")
+              : uiText("ui.app.src.modecard.96cdf28c55");
       svcClient.textContent =
         st === "running"
-          ? "Движок и канал держит служба — это окно работает клиентом: своих процессов оно не " +
-            "поднимает. Кнопки движка передают команды её надзору." +
+          ? uiText("ui.app.src.modecard.32aa9ef0f6") +
             // Кто поднимает тело под службой — разное на разных системах:
             // на macOS это окно (TCC живёт у Helene.app), на Windows тело
             // поднимает сам движок в интерактивной половине (`session-host`).
-            (posix ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
+            (posix ? uiText("ui.app.src.modecard.e830bde7fb") : "")
           : "";
       // Ответ оболочки свежее ответа трубы: пересобираем всё, что от него зависит.
       installed = st !== "absent";
@@ -514,7 +510,7 @@ export function modeCard(
       if (++tries > 10) clearInterval(poll);
     }, 2500);
   };
-  const installBtn = btn("Поставить службу", "quiet", async () => {
+  const installBtn = btn(uiText("ui.app.src.modecard.d661d6d74e"), "quiet", async () => {
     const why = lockedWhy();
     if (why) {
       toast(why);
@@ -527,7 +523,7 @@ export function modeCard(
       toast(humanError(e).text);
     }
   });
-  const removeBtn = btn("Снять службу", "quiet", async () => {
+  const removeBtn = btn(uiText("ui.app.src.modecard.2867701959"), "quiet", async () => {
     try {
       toast(await shell<string>("remove_service"));
       afterService();
@@ -544,17 +540,17 @@ export function modeCard(
     if (installed === true) {
       svcAdmin.className = "field-hint";
       svcAdmin.textContent = posix
-        ? "Служба уже стоит. Снять её можно кнопкой выше — система спросит пароль администратора."
-        : "Служба уже стоит. Снять её можно кнопкой выше — Windows спросит права администратора.";
+        ? uiText("ui.app.src.modecard.4ca08e8342")
+        : uiText("ui.app.src.modecard.3633f484b1");
       return;
     }
     if (posix) {
       svcAdmin.className = "field-hint";
       svcAdmin.textContent =
         (linux
-          ? "Система спросит пароль администратора для установки службы systemd."
-          : "Система спросит пароль администратора: положить описание службы в /Library/LaunchDaemons может только он.") +
-        " Больше ничего под этими правами не делается.";
+          ? uiText("ui.app.src.modecard.de8a4059ab")
+          : uiText("ui.app.src.modecard.22346149d3")) +
+        uiText("ui.app.src.modecard.dc1a40d4d1");
       return;
     }
     if (why) {
@@ -564,8 +560,8 @@ export function modeCard(
     }
     svcAdmin.className = "field-hint";
     svcAdmin.textContent = admin.known
-      ? "Права администратора у этой учётной записи есть — Windows всё равно спросит подтверждение окном UAC."
-      : "Есть ли у этой учётной записи права администратора, программа спросить не смогла. Windows попросит подтверждение при установке; без него служба не встанет.";
+      ? uiText("ui.app.src.modecard.6ce7a98dfc")
+      : uiText("ui.app.src.modecard.4893751cb7");
   };
 
   // --- галочки службы: две РАЗНЫЕ, и они не связаны друг с другом.
@@ -588,8 +584,8 @@ export function modeCard(
     const row = el("div", "mode-block");
     if (!hand) {
       row.append(
-        el("p", "receipt err", `${t.title || t.key}: эту тумблер окно писать не умеет — код агента новее окна.`),
-        el("p", "field-hint", `Правь её руками в helene.json, ключ ${t.key}. Что делает: ${t.text || "—"}`),
+        el("p", "receipt err", uiText("ui.app.src.modecard.5d73739851", {p0: String(t.title || t.key)})),
+        el("p", "field-hint", uiText("ui.app.src.modecard.fa7b9d355a", {p0: String(t.key), p1: String(t.text || "—")})),
       );
       togglesBox.append(row);
       continue;
@@ -614,13 +610,13 @@ export function modeCard(
     });
     ask.append(
       el("p", "receipt err", warn),
-      btn("Понимаю, включить", "danger", () => {
+      btn(uiText("ui.app.src.modecard.e6542d784b"), "danger", () => {
         ask.hidden = true;
         sw.setAttribute("aria-checked", "true");
         hand.set(true);
         syncToggles();
       }),
-      btn("Не включать", "quiet", () => {
+      btn(uiText("ui.app.src.modecard.4f215e5068"), "quiet", () => {
         ask.hidden = true;
       }),
     );
@@ -642,10 +638,10 @@ export function modeCard(
       if (s0.sw) s0.sw.setAttribute("aria-checked", String(!!session0));
       s0.note.className = session0 && installed === false ? "receipt err" : "field-hint";
       s0.note.textContent = !session0
-        ? `Выключено. Ключ service.session0 — его читает сама служба; на ограду «${choiceOf(picked)?.title || live.title}» не влияет.`
+        ? uiText("ui.app.src.modecard.163f85d5e0", {p0: String(choiceOf(picked)?.title || live.title)})
         : installed === false
-          ? "Включено, но службы нет — дать нулевую сессию некому. Поставь службу кнопкой выше, иначе тумблер остаётся словом в файле."
-          : "Включено: служба выполняет поручения агента правами системы сразу, без вопроса тебе. Журнал — broker.log.";
+          ? uiText("ui.app.src.modecard.69b260db47")
+          : uiText("ui.app.src.modecard.ee9c71b858");
     }
     const fw = toggleView.get("service.firewall");
     if (fw) {
@@ -654,8 +650,8 @@ export function modeCard(
       if (fw.sw) fw.sw.setAttribute("aria-checked", String(!!firewall));
       fw.note.className = "field-hint";
       fw.note.textContent = firewall
-        ? "Включено (умолчание). Кнопка «Телефон» откроет порт через службу; прав системы агенту это не даёт и с нулевой сессией не связано."
-        : "Выключено: правило брандмауэра для телефона будет спрашивать права окном Windows каждый раз.";
+        ? uiText("ui.app.src.modecard.63f29fc1fb")
+        : uiText("ui.app.src.modecard.6ddfc71505");
     }
   };
 
@@ -664,11 +660,11 @@ export function modeCard(
   if (session0Rung) {
     const jRow = el("div", "actions");
     jRow.append(
-      btn("Журнал поручений", "quiet", () => {
+      btn(uiText("ui.app.src.modecard.5700ba34b9"), "quiet", () => {
         void shell("reveal_path", { path: "data/broker.log" }).catch((e) =>
-          toast(`Журнал не открылся: ${humanError(e).text}`));
+          toast(uiText("ui.app.src.modecard.c3aa685c86", {p0: String(humanError(e).text)})));
       }),
-      el("span", "field-hint", "Каждая просьба агента к службе — с исходом."),
+      el("span", "field-hint", uiText("ui.app.src.modecard.92e04fa5ec")),
     );
     svcBox.append(jRow);
   }
@@ -683,9 +679,7 @@ export function modeCard(
     el(
       "p",
       "field-hint",
-      "Ограда и служба — два разных вопроса. Ограду выбираешь здесь, и она раскладывается в ручки сама " +
-        "(отдельного тумблера песочницы больше нет). Служба ставится поверх любой ограды и ни одну из них не снимает. " +
-        "Применяется перезапуском движка.",
+      uiText("ui.app.src.modecard.36ea8552f7"),
     ),
   );
   syncNow();
@@ -717,21 +711,21 @@ export function modeCard(
       const bits: string[] = [];
       if (live.legacy_service) {
         bits.push(
-          `В файле режимом была записана служба — так писала первая редакция. Записал ограду «${choiceOf(picked)?.title || ""}»; ` +
-            "саму службу это не тронуло.",
+          uiText("ui.app.src.modecard.4a19202249", {p0: String(choiceOf(picked)?.title || "")}) +
+            uiText("ui.app.src.modecard.6abef54c17"),
         );
       }
       // На macOS нулевой сессии нет — как и службы, которой её давать.
       if (!posix && session0 && installed === false) {
-        bits.push("Нулевая сессия включена, но служба не установлена — дать её некому.");
+        bits.push(uiText("ui.app.src.modecard.b75e75e70c"));
       }
       if (legacyPipe) {
         bits.push(
-          `Харнесс называл режимом службу — записал ограду «${choiceOf(picked)?.title || ""}». Проверь, та ли она.`,
+          uiText("ui.app.src.modecard.7ec4d4a46b", {p0: String(choiceOf(picked)?.title || "")}),
         );
       }
       if ((picked === "session0" ? fencePicked : picked) !== live.name && installed) {
-        bits.push("Служба читает настройки при своём старте — перезапусти её, иначе ограда сменится только в окне.");
+        bits.push(uiText("ui.app.src.modecard.10ad859f6f"));
       }
       return bits.length ? " " + bits.join(" ") : "";
     },

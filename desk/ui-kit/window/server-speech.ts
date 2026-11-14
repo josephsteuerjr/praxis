@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 /** Remote speech belongs to the selected channel; no vendor key or local worker. */
 import { cfg } from './api';
 import { S } from './state';
@@ -21,7 +22,7 @@ export function serverSpeechCard(): HTMLElement {
   const identity=scope();
   const storageKey='helene.speech-preview:'+sha256(new TextEncoder().encode(identity));
   const body=document.createElement('div');body.className='server-speech';
-  const root=card('Серверный голос',body,'Голос и подача выбираются на сервере. Проба ничего не отправляет в чат.');
+  const root=card(uiText("ui.ui.kit.window.server.speech.5c9ebd7b1c"),body,uiText("ui.ui.kit.window.server.speech.9dc46063b3"));
   root.dataset.serverSpeechCard='true';
   let disposed=false,mounted=false,epoch=0,controller=new AbortController(),status:Status|undefined;
   let voices:Voice[]=[],page=1,hasMore=false,readingCatalog=0,catalogBusy=false,modelInitialized=false,watching:{id:string;token:number}|undefined,selectionBusy=false,selectionFlight:object|undefined;
@@ -39,46 +40,46 @@ export function serverSpeechCard(): HTMLElement {
     }
   }catch{/* Storage is optional. */}
   const text=(tag:string,className='',value='')=>{const e=document.createElement(tag);e.className=className;e.textContent=value;return e;};
-  const hint=text('p','field-hint','Проверяю возможности сервера…'),note=text('p','receipt');note.setAttribute('role','status');
+  const hint=text('p','field-hint',uiText("ui.ui.kit.window.server.speech.3c8039d918")),note=text('p','receipt');note.setAttribute('role','status');
   const controls=text('div','actions'),content=text('div','server-speech-content');content.hidden=true;
   const makeButton=(label:string,action:()=>Promise<unknown>|void)=>{
     const b=document.createElement('button');b.type='button';b.className='btn btn-quiet';b.textContent=label;
     b.addEventListener('click',()=>{if(!usable())return;const token=epoch;
       void Promise.resolve().then(()=>current(token)?action():undefined).catch(error=>{if(current(token))fail(error);});});return b;
   };
-  const refresh=makeButton('Обновить',async()=>{await readStatus();await catalog();});
-  const power=makeButton('Приостановить озвучку',()=>select(status!.selection.provider,undefined,!status!.selection.enabled));
-  const xtts=makeButton('Использовать XTTS',()=>select('xtts'));
+  const refresh=makeButton(uiText("ui.ui.kit.window.server.speech.603e460bf5"),async()=>{await readStatus();await catalog();});
+  const power=makeButton(uiText("ui.ui.kit.window.server.speech.184ec7da48"),()=>select(status!.selection.provider,undefined,!status!.selection.enabled));
+  const xtts=makeButton(uiText("ui.ui.kit.window.server.speech.339d6d36cb"),()=>select('xtts'));
   controls.append(refresh,power,xtts);power.disabled=xtts.disabled=true;
   const model=document.createElement('select');model.className='field-input';model.dataset.speechModel='true';
-  model.append(new Option('Drama 3 · выразительная подача','drama-3'),new Option('S2.1 Pro','s2.1-pro'));
+  model.append(new Option(uiText("ui.ui.kit.window.server.speech.0bdad2d72e"),'drama-3'),new Option('S2.1 Pro','s2.1-pro'));
   const words=document.createElement('textarea');words.className='field-input';words.rows=2;words.maxLength=400;words.dataset.speechText='true';
-  words.value='Я здесь. Кажется, теперь получилось.';
+  words.value=uiText("ui.ui.kit.window.server.speech.fdc5609336");
   const direction=document.createElement('textarea');direction.className='field-input';direction.rows=3;direction.dataset.speechDelivery='true';
-  direction.placeholder='Тепло, с лёгкой улыбкой. Последнюю фразу — тише.';
-  for(const [title,input] of [['Модель',model],['Текст речи',words],['Как произнести',direction]] as const){
+  direction.placeholder=uiText("ui.ui.kit.window.server.speech.8c279b6c82");
+  for(const [title,input] of [[uiText("ui.ui.kit.window.server.speech.f3bdf7cce3"),model],[uiText("ui.ui.kit.window.server.speech.a6bc6a0e36"),words],[uiText("ui.ui.kit.window.server.speech.13db63af3c"),direction]] as const){
     const label=text('label','field-label',title);label.append(input);content.append(label);
   }
-  content.append(text('p','field-hint','Подачу можно описать своими словами. Drama 3 принимает [указания] для следующих фраз и метки вроде <whisper>слово</whisper>. Это описание отдельной пробы, а не постоянный характер агента.'));
-  content.append(text('p','field-hint','Прослушивание расходует API-баланс Fish. Выбор голоса и проба не отправляют сообщения.'));
+  content.append(text('p','field-hint',uiText("ui.ui.kit.window.server.speech.bf95babce1")));
+  content.append(text('p','field-hint',uiText("ui.ui.kit.window.server.speech.91a536d073")));
   const player=document.createElement('audio');player.controls=true;player.preload='none';player.hidden=true;
-  player.setAttribute('aria-label','Проба серверного голоса');
-  const check=makeButton('Проверить пробу',()=>watch(job!.id));check.dataset.speechCheck='true';
-  const replay=makeButton('Повторить тот же запрос',()=>{
+  player.setAttribute('aria-label',uiText("ui.ui.kit.window.server.speech.2811c6d052"));
+  const check=makeButton(uiText("ui.ui.kit.window.server.speech.4b4366416d"),()=>watch(job!.id));check.dataset.speechCheck='true';
+  const replay=makeButton(uiText("ui.ui.kit.window.server.speech.4ca61164e3"),()=>{
     if(job?.state==='unknown'&&intent?.request_id===job.id)return sendIntent(intent);
-  });replay.dataset.speechReplay='true';replay.title='Использует прежние текст, подачу, голос и модель.';
-  const cancel=makeButton('Остановить пробу',async()=>{
+  });replay.dataset.speechReplay='true';replay.title=uiText("ui.ui.kit.window.server.speech.83d60bf4cb");
+  const cancel=makeButton(uiText("ui.ui.kit.window.server.speech.5c39340dec"),async()=>{
     if(!job)return;
     const id=job.id,token=epoch;
     await request(`/api/speech/fish/jobs/${id}/cancel`,{});
     if(!current(token)||job?.id!==id)return;
     job=undefined;intent=undefined;remember();watching=undefined;stopAudio();drawJob();
-    note.textContent='Проба остановлена в окне. Остановка генерации у Fish не подтверждена.';
+    note.textContent=uiText("ui.ui.kit.window.server.speech.014a36ad1b");
   });cancel.dataset.speechCancel='true';
   const jobActions=text('div','actions');jobActions.append(check,replay,cancel);
   const list=text('div','server-speech-voices'),pages=text('div','actions'),pageLabel=text('span','field-hint');
-  const previous=makeButton('Назад',()=>catalog(Math.max(1,page-1)));
-  const next=makeButton('Дальше',()=>catalog(page+1));pages.append(previous,pageLabel,next);
+  const previous=makeButton(uiText("ui.ui.kit.window.server.speech.1a9fb1f3cf"),()=>catalog(Math.max(1,page-1)));
+  const next=makeButton(uiText("ui.ui.kit.window.server.speech.ea58bb0bc6"),()=>catalog(page+1));pages.append(previous,pageLabel,next);
   content.append(player,jobActions,list,pages);body.append(hint,controls,note,content);
 
   function usable(){return !disposed&&identity===scope()&&root.isConnected&&S.view==='settings';}
@@ -89,12 +90,12 @@ export function serverSpeechCard(): HTMLElement {
   function fail(error:unknown){
     if(!usable()||controller.signal.aborted)return;
     const code=error instanceof SpeechError?error.code:'';
-    const messages:Record<string,string>={unauthorized:'Нет доступа к настройкам серверного голоса.',
-      config_changed:'Настройки изменились на сервере. Обновите состояние перед выбором.',
-      fish_key_unavailable:'API-ключ Fish ещё не настроен на сервере.',fish_no_api_credit:'На API-балансе Fish нет средств.',
-      fish_rate_limited:'Fish ограничил частоту запросов.',invalid_text:'Проверьте текст и описание подачи.',
-      audio_invalid:'Сервер вернул непроверенное аудио. Оно не будет воспроизведено.'};
-    note.textContent=messages[code]||'Действие не подтверждено. Обновите состояние; платная проба автоматически не повторяется.';
+    const messages:Record<string,string>={unauthorized:uiText("ui.ui.kit.window.server.speech.adc9b62672"),
+      config_changed:uiText("ui.ui.kit.window.server.speech.de6558d1a4"),
+      fish_key_unavailable:uiText("ui.ui.kit.window.server.speech.4929518709"),fish_no_api_credit:uiText("ui.ui.kit.window.server.speech.ed767becea"),
+      fish_rate_limited:uiText("ui.ui.kit.window.server.speech.cb9ad5d3f4"),invalid_text:uiText("ui.ui.kit.window.server.speech.4ad9c6b041"),
+      audio_invalid:uiText("ui.ui.kit.window.server.speech.1fbedeaf51")};
+    note.textContent=messages[code]||uiText("ui.ui.kit.window.server.speech.afd6ef6428");
     note.className='receipt err';drawJob();
   }
   async function request<T>(path:string,payload?:unknown):Promise<T>{
@@ -125,16 +126,16 @@ export function serverSpeechCard(): HTMLElement {
         if(selected.provider==='fish'&&['drama-3','s2.1-pro'].includes(selected.model||''))model.value=selected.model!;
         modelInitialized=true;
       }
-      const connection=value.fish.authenticated===true?'Fish API подключён':value.fish.configured?'Доступ к Fish API не подтверждён':'Fish API ещё не настроен на сервере';
-      hint.textContent=`Активный движок: ${selected.provider==='fish'?'Fish Audio'+(selected.model?' · '+selected.model:''):'XTTS'} · ${selected.enabled?'озвучка включена':'озвучка приостановлена'}. ${connection}${value.fish.api_credit_raw!==undefined?' · API-баланс: '+value.fish.api_credit_raw:''}.`;
-      power.textContent=selected.enabled?'Приостановить озвучку':'Включить озвучку';power.disabled=selectionBusy;
+      const connection=value.fish.authenticated===true?uiText("ui.ui.kit.window.server.speech.e814c936e5"):value.fish.configured?uiText("ui.ui.kit.window.server.speech.aab1a40694"):uiText("ui.ui.kit.window.server.speech.2fbc3a5cdb");
+      hint.textContent=uiText("ui.ui.kit.window.server.speech.5492f8afe6", {p0: String(selected.provider==='fish'?'Fish Audio'+(selected.model?' · '+selected.model:''):'XTTS'), p1: String(selected.enabled?uiText("ui.ui.kit.window.server.speech.05d8671ba9"):uiText("ui.ui.kit.window.server.speech.871a3ca607")), p2: String(connection), p3: String(value.fish.api_credit_raw!==undefined?uiText("ui.ui.kit.window.server.speech.02181f61a0")+value.fish.api_credit_raw:'')});
+      power.textContent=selected.enabled?uiText("ui.ui.kit.window.server.speech.184ec7da48"):uiText("ui.ui.kit.window.server.speech.fdec013be3");power.disabled=selectionBusy;
       xtts.hidden=selected.provider==='xtts';xtts.disabled=selectionBusy;
-      if(!value.fish.configured)list.replaceChildren(text('p','field-hint','Fish настраивается в серверном профиле. Ключ поставщика не передаётся этому окну.'));
+      if(!value.fish.configured)list.replaceChildren(text('p','field-hint',uiText("ui.ui.kit.window.server.speech.b1c4f68caa")));
       drawVoices();drawJob();
     }catch(error){
       if(!current(token))return;
       if(error instanceof SpeechError&&(error.status===404||error.status===405)){root.hidden=true;return;}
-      hint.textContent='Состояние серверной озвучки недоступно.';fail(error);
+      hint.textContent=uiText("ui.ui.kit.window.server.speech.24d6b2be73");fail(error);
     }
   }
   async function catalog(requestedPage=page){
@@ -156,13 +157,13 @@ export function serverSpeechCard(): HTMLElement {
     list.replaceChildren();
     for(const voice of voices){
       const row=text('div','server-speech-voice'),name=text('strong','',voice.name),actions=text('div','actions');
-      if(status.selection.provider==='fish'&&status.selection.reference_id===voice.id)name.append(text('span','field-hint',' · выбран'));
-      const sample=makeButton('Послушать',()=>preview(voice));sample.dataset.speechPreview=voice.id;sample.disabled=pending();
-      const choose=makeButton('Выбрать и включить',()=>select('fish',voice));choose.dataset.speechSelect=voice.id;choose.disabled=selectionBusy;
+      if(status.selection.provider==='fish'&&status.selection.reference_id===voice.id)name.append(text('span','field-hint',uiText("ui.ui.kit.window.server.speech.99b3db37a6")));
+      const sample=makeButton(uiText("ui.ui.kit.window.server.speech.c9f921d211"),()=>preview(voice));sample.dataset.speechPreview=voice.id;sample.disabled=pending();
+      const choose=makeButton(uiText("ui.ui.kit.window.server.speech.446c810115"),()=>select('fish',voice));choose.dataset.speechSelect=voice.id;choose.disabled=selectionBusy;
       actions.append(sample,choose);row.append(name,actions);list.append(row);
     }
-    if(!voices.length)list.append(text('p','field-hint','В этой части каталога голосов нет.'));
-    pageLabel.textContent=`Страница ${page}`;previous.disabled=catalogBusy||page===1;next.disabled=catalogBusy||!hasMore;
+    if(!voices.length)list.append(text('p','field-hint',uiText("ui.ui.kit.window.server.speech.8f7e5d67dd")));
+    pageLabel.textContent=uiText("ui.ui.kit.window.server.speech.e2eb3825a4", {p0: String(page)});previous.disabled=catalogBusy||page===1;next.disabled=catalogBusy||!hasMore;
   }
   async function select(provider:'fish'|'xtts',voice?:Voice,enabled=true){
     if(!status||selectionBusy)return;const flight={},token=epoch;selectionFlight=flight;
@@ -170,7 +171,7 @@ export function serverSpeechCard(): HTMLElement {
     try{
       await request('/api/speech/selection',{request_id:requestId(),
         expected_revision:status.selection.revision,provider,enabled,...(voice?{voice_id:voice.id,model:model.value}:{})});
-      if(current(token))note.textContent='Выбор голоса сохранён на сервере.';
+      if(current(token))note.textContent=uiText("ui.ui.kit.window.server.speech.b740c50d66");
     }catch(error){if(current(token))fail(error);}finally{
       if(selectionFlight===flight){selectionFlight=undefined;selectionBusy=false;if(current(token))await readStatus();}
     }
@@ -180,7 +181,7 @@ export function serverSpeechCard(): HTMLElement {
     stopAudio();const id=requestId();
     intent=Object.freeze({request_id:id,voice_id:voice.id,model:model.value,text:words.value,delivery:direction.value});
     job={id,state:'queued'};remember();drawJob();
-    note.className='receipt';note.textContent=`Готовлю пробу: ${voice.name}…`;
+    note.className='receipt';note.textContent=uiText("ui.ui.kit.window.server.speech.522979f036", {p0: String(voice.name)});
     await sendIntent(intent);
   }
   async function sendIntent(body:PreviewIntent){
@@ -204,8 +205,8 @@ export function serverSpeechCard(): HTMLElement {
         if(value.id!==id||typeof value.state!=='string')throw new SpeechError('invalid_response');
         job=value;drawJob();
         if(value.state==='ready'){await loadAudio(id,token);return;}
-        if(['unknown','cancel_requested'].includes(value.state)){note.textContent='Исход пробы не подтверждён. Fish мог принять запрос; автоматического повтора не будет.';return;}
-        if(['failed','cancelled'].includes(value.state)){note.textContent=value.state==='cancelled'?'Проба отменена.':'Проба завершилась с ошибкой. Действующий голос не изменён.';return;}
+        if(['unknown','cancel_requested'].includes(value.state)){note.textContent=uiText("ui.ui.kit.window.server.speech.29e5cde9fc");return;}
+        if(['failed','cancelled'].includes(value.state)){note.textContent=value.state==='cancelled'?uiText("ui.ui.kit.window.server.speech.537fc7870e"):uiText("ui.ui.kit.window.server.speech.c43d34f54e");return;}
         await new Promise(resolve=>setTimeout(resolve,650));
       }
     }catch(error){if(current(token)&&job?.id===id){job.state='unknown';fail(error);}}
@@ -222,8 +223,8 @@ export function serverSpeechCard(): HTMLElement {
     if(bytes.length!==value.bytes||hash!==value.sha256)throw new SpeechError('audio_invalid');
     if(!current(token)||job?.id!==id)return;
     stopAudio();audioURL=URL.createObjectURL(new Blob([bytes],{type:value.mime}));player.src=audioURL;player.hidden=false;
-    note.textContent='Проба готова. Действующий голос не изменён.';
-    void player.play().catch(()=>{if(current(token)&&job?.id===id)note.textContent='Проба готова. Нажмите ▶ для прослушивания.';});
+    note.textContent=uiText("ui.ui.kit.window.server.speech.f830ffc5d6");
+    void player.play().catch(()=>{if(current(token)&&job?.id===id)note.textContent=uiText("ui.ui.kit.window.server.speech.4f97e65b65");});
   }
   function suspend(){epoch++;controller.abort();controller=new AbortController();watching=undefined;activation=undefined;selectionBusy=false;selectionFlight=undefined;stopAudio();}
   function dispose(){if(disposed)return;disposed=true;suspend();observer.disconnect();removeEventListener('frame-section',section);}

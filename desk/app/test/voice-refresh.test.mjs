@@ -1,7 +1,8 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 import {strict as assert} from 'node:assert';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
-const source=readFileSync(new URL('../src/voicecard.ts',import.meta.url),'utf8');
+const source=resolvedUiLiterals(readFileSync(new URL('../src/voicecard.ts',import.meta.url),'utf8'));
 assert.ok(source.includes('Прогревать Whisper при запуске'));
 assert.ok(source.includes('все доступные потоки CPU'));
 assert.ok(source.includes('30 минут после последнего использования'));
