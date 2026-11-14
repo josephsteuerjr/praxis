@@ -1,4 +1,4 @@
-import { t as uiText, locale } from "../lang/lang";
+import { t as uiText, locale, UiError } from "../lang/lang";
 // Текст и форматы — одна копия на окно, установщик, телефон и мини-апп.
 // Ни строчки DOM: всё здесь можно прогнать в node (app/test/*).
 
@@ -236,6 +236,7 @@ const OFFLINE_MARKS = ["failed to fetch", "networkerror", "load failed", "свя
 
 export function humanError(e: unknown): HumanError {
   const raw = (e instanceof Error ? e.message : String(e ?? "")).trim();
+  if (e instanceof UiError && raw) return { text: raw, detail: "" };
   const low = raw.toLowerCase();
   if (!raw) return { text: uiText("ui.ui.kit.text.b705d031e4"), detail: "" };
   // «доступно только в приложении Hélène» и подобное уже написано по-русски.

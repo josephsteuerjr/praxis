@@ -1,4 +1,4 @@
-import { t as uiText } from "../../lang/lang";
+import { t as uiText, UiError } from "../../lang/lang";
 import { shell } from './api';
 import { button, card, el, field, toggle } from '../dom';
 import { humanError } from './lib';
@@ -38,7 +38,7 @@ export function serverBridgeCard(onUse:(bridge:ServerBridge)=>void|string|Promis
     try{
       const result=await command<{ok:boolean;checks:Array<{message:string}>}>('check',{id:bridge.id});
       out.textContent=result.checks.map(check=>check.message).join(' ');
-      if(!result.ok)throw new Error(uiText("ui.ui.kit.window.server.settings.b7a276c178"));
+      if(!result.ok)throw new UiError(uiText("ui.ui.kit.window.server.settings.b7a276c178"));
       const use=button(uiText("ui.ui.kit.window.server.settings.2243b059b6"),'primary',async()=>{
         use.disabled=true;
         try{const message=await onUse(bridge);out.textContent=message||uiText("ui.ui.kit.window.server.settings.2a012899e4");}

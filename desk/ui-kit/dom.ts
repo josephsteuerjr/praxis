@@ -1,4 +1,4 @@
-import { t as uiText } from "../lang/lang";
+import { t as uiText, UiError } from "../lang/lang";
 // Форм-кит — одна копия DOM-обёрток на окно, установщик, телефон и мини-апп.
 // Раньше `toggle` жил в четырёх файлах, `button` — в пяти (ревью 06.09, §6).
 // Классы те же, что стояли в каждой копии (`field`, `switch`, `btn`, `choice`,
@@ -15,7 +15,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ""
 
 export function q<E extends Element = HTMLElement>(sel: string, root: ParentNode = document): E {
   const node = root.querySelector<E>(sel);
-  if (!node) throw new Error(uiText("ui.ui.kit.dom.a1859d81e6", {p0: String(sel)}));
+  if (!node) throw new UiError(uiText("ui.ui.kit.dom.a1859d81e6", {p0: String(sel)}));
   return node;
 }
 

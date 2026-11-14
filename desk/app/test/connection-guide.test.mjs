@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import './fixtures/ru-localization.mjs';
 
 const source=readFileSync(new URL('../../ui-kit/window/connection-guide.ts',import.meta.url),'utf8');
 const availabilitySource=readFileSync(new URL('../../ui-kit/window/feature-availability.ts',import.meta.url),'utf8');
@@ -73,7 +74,7 @@ current.config.mode='local';calls.length=0;
 if (!SERVER_TRANSFER_AVAILABLE) {
   const host=node('new-server');
   drawNewServer(host);
-  assert.equal(host.children.at(-1).text,SERVER_TRANSFER_NOTICE);
+  assert.equal(host.children.at(-1).text,SERVER_TRANSFER_NOTICE());
   assert.equal(host.children.at(-1).attributes.role,'status');
   assert.equal(host.children.some(item=>item.tag==='button'),false,'unavailable migration must expose no active transfer action');
   assert.deepEqual(calls,[],'unavailable migration must not stop the agent or invoke a server');

@@ -1,4 +1,4 @@
-import { t as uiText } from "../../../lang/lang";
+import { t as uiText, UiError } from "../../../lang/lang";
 // Каркас экрана «Настройки», общий обоим приложениям.
 //
 // ⚠⚠ ПРАВИЛО ЭТОГО ЭКРАНА: БЛОКИ КОНФИГА СЛИВАЮТСЯ, А НЕ ПЕРЕСОБИРАЮТСЯ.
@@ -393,7 +393,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
 
   const chooseBridge=(bridge:ServerBridge)=>{
-    if(draft.mode==='remote')throw new Error(uiText("ui.ui.kit.window.views.settings.frame.18eb1ae156"));
+    if(draft.mode==='remote')throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.18eb1ae156"));
     useBridge(draft,bridge);built.useServerBridge?.(bridge);
     phoneSettings.dispatchEvent(new CustomEvent('bridge-selected',{detail:bridge}));
     phoneSettings.dispatchEvent(new Event('input',{bubbles:true}));
@@ -428,7 +428,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   let autoState: boolean | null = null;
   const readAutostart = async () => {
     const value = await shell<boolean>("autostart_get");
-    if (typeof value !== "boolean") throw new Error(uiText("ui.ui.kit.window.views.settings.frame.9e2d9b6b18"));
+    if (typeof value !== "boolean") throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.9e2d9b6b18"));
     autoState = value;
     autoToggle.setAttribute("aria-checked", String(value));
     return value;
@@ -1346,7 +1346,7 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const exportRow = el("div", "actions");
   exportRow.append(exportBtn, exportOut);
   const steps = el("ol", "field-hint");
-  const unavailable = el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');box.append(unavailable);
+  const unavailable = el('p','receipt',SERVER_TRANSFER_NOTICE());unavailable.setAttribute('role','status');box.append(unavailable);
   steps.append(el("li", "", uiText("ui.ui.kit.window.views.settings.frame.4624978ffe")),
     el("li", "", uiText("ui.ui.kit.window.views.settings.frame.2d33c98813")));
   box.append(button(uiText("ui.ui.kit.window.views.settings.frame.981be49c36"),"primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
@@ -1481,7 +1481,7 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
       profiles.disabled=true;profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.e2d027a902");
       try{
         const checked=await shell<{ok:boolean}>('server_bridge',{action:'check',request:JSON.stringify({id:selected.id})});
-        if(!checked.ok)throw new Error(uiText("ui.ui.kit.window.views.settings.frame.19aae8d623"));
+        if(!checked.ok)throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.19aae8d623"));
         if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected);cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
         profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.1f37c24b41");
         profiles.dispatchEvent(new Event('input',{bubbles:true}));

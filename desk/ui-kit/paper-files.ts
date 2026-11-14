@@ -1,4 +1,4 @@
-import { t as uiText } from "../lang/lang";
+import { t as uiText, UiError } from "../lang/lang";
 import { fileError, fileSize, paperButton, paperDialog } from "./paper-dialog";
 
 export interface FileEntry { name: string; path: string; folder: boolean; size: number; mtime?: number }
@@ -151,7 +151,7 @@ export function fileDialog(access: FileAccess, options: { save?: string; count?:
         for (const entry of selected.values()) {
           const f = await access.read(entry.path); if (ended) return;
           bytes += f.size;
-          if (f.size > FILE_BYTES || bytes > (options.bytes ?? FILE_TOTAL)) throw new Error(uiText("ui.ui.kit.paper.files.fef5893b18"));
+          if (f.size > FILE_BYTES || bytes > (options.bytes ?? FILE_TOTAL)) throw new UiError(uiText("ui.ui.kit.paper.files.fef5893b18"));
           files.push(f);
         }
         finish(files);

@@ -1,4 +1,4 @@
-import { t as uiText } from "../../../lang/lang";
+import { t as uiText, UiError } from "../../../lang/lang";
 import { button, card, choice, el, field, toggle } from "../../dom";
 import { api, post } from "../api";
 import { humanError } from "../lib";
@@ -160,7 +160,7 @@ export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshne
         api<Status>("/api/self-review"), api<ConfigReply>("/api/agent-config"),
       ]);
       if (!node.isConnected) return;
-      if (fresh.schema !== "helene.self-review.status.v1" || !Array.isArray(fresh.reviews) || !Array.isArray(fresh.commands)) throw new Error(uiText("ui.ui.kit.window.views.self.review.card.0d5b85e251"));
+      if (fresh.schema !== "helene.self-review.status.v1" || !Array.isArray(fresh.reviews) || !Array.isArray(fresh.commands)) throw new UiError(uiText("ui.ui.kit.window.views.self.review.card.0d5b85e251"));
       status = fresh;
       uncertain = false;
       if (reset || !config) {
@@ -198,7 +198,7 @@ export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshne
     try {
       const answer = await post<Command & { ok: boolean }>("/api/self-review", body);
       if (!node.isConnected) return;
-      if (!answer.ok || !answer.command_id || answer.state !== "queued") throw new Error(uiText("ui.ui.kit.window.views.self.review.card.3846f9ad18"));
+      if (!answer.ok || !answer.command_id || answer.state !== "queued") throw new UiError(uiText("ui.ui.kit.window.views.self.review.card.3846f9ad18"));
       uncertain = true;
       say(uiText("ui.ui.kit.window.views.self.review.card.ae0866b534", {p0: String(answer.command_id)}));
     } catch (error) {

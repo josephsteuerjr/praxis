@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import './fixtures/ru-localization.mjs';
 class Element {
   constructor(tag){Object.assign(this,{tag,children:[],hidden:false,textContent:'',attrs:{},events:new Map()});}
   append(...children){this.children.push(...children);}
@@ -39,7 +40,7 @@ const controlSource=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/wind
 const controls=new Function(controlSource+';return updateOperationControls;')();
 assert.deepEqual(controls('attention'),{active:true,cancellable:true,cancelLabel:'Закрыть неудавшуюся попытку'});
 assert.equal(controls('cancelled').active,false);assert.equal(controls('superseded').active,false);assert.equal(controls('running').active,true);
-const availability=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/feature-availability.ts',import.meta.url),'utf8')).replace(/export /g,'');
+const availability=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/feature-availability.ts',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 const flags=new Function(availability+';return {SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE};')();
 // The product transfer is enabled again. Its real UI actions/Stop/SSH and
 // no-effect-before-confirmation are exercised by connection-guide.test.mjs.

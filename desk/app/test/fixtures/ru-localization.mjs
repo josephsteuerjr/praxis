@@ -24,7 +24,7 @@ const language=await import(languageURL);
 language.setLocale('ru');
 // Older tests deliberately execute extracted function bodies without imports.
 // Supply their newly explicit language dependency from the production module.
-Object.assign(globalThis,{uiText:language.t,locale:language.locale,localePreference:language.localePreference,saveLocale:language.saveLocale});
+Object.assign(globalThis,{uiText:language.t,locale:language.locale,localePreference:language.localePreference,saveLocale:language.saveLocale,UiError:language.UiError});
 
 /** Existing source-structure assertions may still identify a static label.
  * Resolve only literal, parameter-free calls through the actual catalog;

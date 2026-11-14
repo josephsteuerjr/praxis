@@ -1,3 +1,4 @@
+import { t as uiText, locale, UiError } from "../../lang/lang";
 import { api, cfg, electron, inTauri, post, shell } from "./api";
 import { button, el, field, toggle } from "../dom";
 import { humanError } from "./lib";
@@ -8,7 +9,7 @@ import { sshAccessForm } from './server-access-form';
 import { serverBridgeCard } from './server-settings';
 import { useBridge } from './server-bridge-config';
 
-let qrRenderer: (value:string)=>Promise<string> = async()=>{throw new Error("Не удалось подготовить QR. Обнови приложение.");};
+let qrRenderer: (value:string)=>Promise<string> = async()=>{throw new UiError(uiText("ui.ui.kit.window.connection.guide.758847f282"));};
 let transferBusy=false;
 export function setGuideQrRenderer(render:(value:string)=>Promise<string>) { qrRenderer=render; }
 
@@ -24,7 +25,7 @@ async function load():Promise<Session> {
 }
 async function save(patch:Partial<Config>, session:Session) {
   const fresh=await load();
-  if(fresh.remote!==session.remote||fresh.stamp!==session.stamp)throw new Error("Настройки уже изменились. Открой этот шаг заново: новые значения не будут затёрты.");
+  if(fresh.remote!==session.remote||fresh.stamp!==session.stamp)throw new UiError(uiText("ui.ui.kit.window.connection.guide.e7da5293d6"));
   const next:Config={...fresh.config};
   for (const name of Object.keys(patch)) {
     const before=next[name]; const value=patch[name];
@@ -33,7 +34,7 @@ async function save(patch:Partial<Config>, session:Session) {
   const reply= fresh.remote
     ? await post<{ok:boolean;error?:string}>("/api/agent-config",{config:Object.fromEntries(Object.keys(patch).map(key=>[key,next[key]])),mtime_ns:fresh.stamp})
     : await shell<{ok?:boolean;error?:string;code?:string}>("config_save",{config:JSON.stringify(next),mtimeNs:fresh.stamp});
-  if (reply?.ok===false) throw new Error(reply.error||"Настройки изменились. Перечитай их и повтори.");
+  if (reply?.ok===false) throw new Error(reply.error||uiText("ui.ui.kit.window.connection.guide.581ae58c1b"));
   Object.assign(session,await load());
 }
 function receipt(box:HTMLElement,text:string,error=false) {
@@ -44,25 +45,25 @@ function steps(items:string[]) {
 }
 async function restart(box:HTMLElement) {
   const reply=await post<{ok:boolean;note?:string}>("/api/supervisor/restart",{target:"runner"});
-  if (!reply.ok) throw new Error(reply.note||"Не удалось перезапустить агента.");
-  receipt(box,"Настройки сохранены. Агент перезапускается; дождись статуса «На связи».");
+  if (!reply.ok) throw new Error(reply.note||uiText("ui.ui.kit.window.connection.guide.e48750641a"));
+  receipt(box,uiText("ui.ui.kit.window.connection.guide.db96efb862"));
 }
 
 export function mountConnectionGuide(host:HTMLElement) {
   const goals=[
-    ["phone","Mini App Telegram","Меню твоего бота открывает агента по текущему адресу. Вручную переносить ссылку не нужно."],
-    ["telegram","Telegram без VPN","Прокси помогает агенту подключиться к Telegram. Это отдельная настройка связи."],
-    ["bridge","Серверный мост","Настрой прокси и постоянный HTTPS. Агент остаётся на этом компьютере."],
-    ["server","Агент на сервере","Перенеси агента, чтобы он работал и при выключенном компьютере."],
+    ["phone","Mini App Telegram",uiText("ui.ui.kit.window.connection.guide.36f59f35ea")],
+    ["telegram",uiText("ui.ui.kit.window.connection.guide.10757dda55"),uiText("ui.ui.kit.window.connection.guide.f3c5a47259")],
+    ["bridge",uiText("ui.ui.kit.window.connection.guide.719d7aa17f"),uiText("ui.ui.kit.window.connection.guide.6d73cadacc")],
+    ["server",uiText("ui.ui.kit.window.connection.guide.9176ce0a09"),uiText("ui.ui.kit.window.connection.guide.8f8a16a25e")],
   ];
-  const tabs=el("div","choice images-options connection-goals"); tabs.setAttribute("role","group"); tabs.setAttribute("aria-label","Что подключить");
+  const tabs=el("div","choice images-options connection-goals"); tabs.setAttribute("role","group"); tabs.setAttribute("aria-label",uiText("ui.ui.kit.window.connection.guide.bfd8671730"));
   const content=el("div","guide-content"); host.append(tabs,content);
   let serial=0;
   const pick=async(kind:string)=>{
     if(transferBusy)return;
     const current=++serial;
     tabs.querySelectorAll("button").forEach(node=>node.setAttribute("aria-pressed",String(node.dataset.goal===kind)));
-    content.replaceChildren(el("p","field-hint","Проверяю текущие настройки…"));
+    content.replaceChildren(el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.35951f816b")));
     try {
       const native=(kind==="server"||kind==="bridge")&&inTauri?await shell<Loaded>("config_load"):null;
       const session:Session=native?{config:native.config,stamp:String(native.mtime_ns||""),remote:native.config.mode==="remote"}:await load();
@@ -75,7 +76,7 @@ export function mountConnectionGuide(host:HTMLElement) {
     } catch(error) {
       if(current!==serial||!host.isConnected)return;
       const out=el("p","receipt err",humanError(error).text);
-      content.replaceChildren(out,button("Повторить","quiet",()=>void pick(kind)));
+      content.replaceChildren(out,button(uiText("ui.ui.kit.window.connection.guide.5189135a61"),"quiet",()=>void pick(kind)));
     }
   };
   for(const [kind,title,text] of goals) {
@@ -85,18 +86,18 @@ export function mountConnectionGuide(host:HTMLElement) {
   void pick("phone");
 }
 function drawBridge(host:HTMLElement) {
-  if(!inTauri){host.append(el('p','field-hint','Настрой серверный мост из программы Hélène.'));return;}
-  const note=el('p','receipt');const restartButton=button('Перезапустить движок','quiet',async()=>{
+  if(!inTauri){host.append(el('p','field-hint',uiText("ui.ui.kit.window.connection.guide.99fec0f312")));return;}
+  const note=el('p','receipt');const restartButton=button(uiText("ui.ui.kit.window.connection.guide.bfa262aa90"),'quiet',async()=>{
     try{await restart(note);restartButton.hidden=true;}catch(error){receipt(note,humanError(error).text,true);}
   });restartButton.hidden=true;
   host.append(serverBridgeCard(async bridge=>{
     const session=await load();
-    if(session.remote)throw new Error('Выбери местного агента: этот мост подключает программу на твоём компьютере.');
+    if(session.remote)throw new UiError(uiText("ui.ui.kit.window.connection.guide.e809df1a6d"));
     const next=structuredClone(session.config);useBridge(next,bridge);
     const patch:Partial<Config>={};if(bridge.external)patch.phone=next.phone;
     if(bridge.ports.local_proxy_port)patch.network=next.network;
     await save(patch,session);restartButton.hidden=!bridge.ports.local_proxy_port;
-    return restartButton.hidden?'Подключение сохранено. Hélène подготавливает вход с телефона.':'Подключение сохранено. Перезапусти движок кнопкой ниже, когда текущая работа закончится.';
+    return restartButton.hidden?uiText("ui.ui.kit.window.connection.guide.f9f2cbda7b"):uiText("ui.ui.kit.window.connection.guide.01b83734e0");
   }),note,restartButton);
 }
 /** Daily server operations stay available after onboarding has finished. */
@@ -106,13 +107,13 @@ export async function mountServerManagement(host:HTMLElement) {
   host.replaceChildren();drawServer(host,{config:source.config,stamp:String(source.mtime_ns||''),remote:source.config.mode==='remote'});
 }
 function drawPhone(host:HTMLElement,session:Session,reload:()=>void) {
-  host.append(steps(["Подключи своего бота и укажи id владельца в карточке Telegram. Для каждого локального агента используй отдельного бота.",session.remote?"Mini App подключится к тому же агенту на сервере.":"Включи Mini App: Hélène подготовит подключение и обновит меню бота.","Открой меню бота или отправь /app. Бот выдаст свежую кнопку. Кнопки в старых сообщениях сохраняют прежний адрес.",session.remote?"Сервер должен оставаться включённым.":"Компьютер должен оставаться включённым и подключённым к интернету."]));
+  host.append(steps([uiText("ui.ui.kit.window.connection.guide.a76e2d2542"),session.remote?uiText("ui.ui.kit.window.connection.guide.aadd69aecf"):uiText("ui.ui.kit.window.connection.guide.29cb92db6d"),uiText("ui.ui.kit.window.connection.guide.ddb6d8a462"),session.remote?uiText("ui.ui.kit.window.connection.guide.87410c9336"):uiText("ui.ui.kit.window.connection.guide.02bde81bd7")]));
   const config=structuredClone(session.config);
   const card=phoneCard(config,!!config.phone?.enabled,config.phone?.mode||"",session.remote?cfg.base:"",qrRenderer,{showToggle:false});
   const out=el("p","receipt");
   if(!session.remote) {
-    const apply=button(config.phone?.enabled?"Переподготовить подключение":"Подключить телефон","primary",async()=>{
-      apply.disabled=true;receipt(out,"Подготавливаю подключение…");
+    const apply=button(config.phone?.enabled?uiText("ui.ui.kit.window.connection.guide.b7625e8bb7"):uiText("ui.ui.kit.window.connection.guide.11383c8513"),"primary",async()=>{
+      apply.disabled=true;receipt(out,uiText("ui.ui.kit.window.connection.guide.77d0a4d5fa"));
       try{
         const patch:Partial<Config>={phone:{...config.phone,enabled:true,mode:config.phone?.mode||'automatic'}};
         if(config.network?.bridge_profile)patch.network=config.network;
@@ -121,7 +122,7 @@ function drawPhone(host:HTMLElement,session:Session,reload:()=>void) {
       catch(error){receipt(out,humanError(error).text,true);apply.disabled=false;}
     });
     host.append(apply,out);
-    if(config.phone?.enabled)host.append(button("Выключить подключение телефона","quiet",async()=>{
+    if(config.phone?.enabled)host.append(button(uiText("ui.ui.kit.window.connection.guide.b4c4159f13"),"quiet",async()=>{
       try{await save({phone:{...config.phone,enabled:false}},session);reload();}
       catch(error){receipt(out,humanError(error).text,true);}
     }));
@@ -132,27 +133,27 @@ function drawTelegram(host:HTMLElement,session:Session) {
   const tg={...session.config.telegram};const proxy={...tg.proxy};
   const out=el("div","guide-checks");const note=el("p","receipt");
   const owner=el("div","form-grid two");
-  const token=field("Токен своего бота",String(tg.bot_token||""),value=>tg.bot_token=value,{type:"password",hint:"Открой @BotFather в Telegram, создай своего бота и скопируй выданный токен сюда."});
-  const id=field("Твой Telegram ID",String(tg.owner_id||""),value=>tg.owner_id=value,{hint:"Открой @userinfobot в Telegram и нажми «Начать»: скопируй число Id. Оно нужно, чтобы миниапп пускал только тебя."});
+  const token=field(uiText("ui.ui.kit.window.connection.guide.a3ae25a9f8"),String(tg.bot_token||""),value=>tg.bot_token=value,{type:"password",hint:uiText("ui.ui.kit.window.connection.guide.b9a267d98c")});
+  const id=field(uiText("ui.ui.kit.window.connection.guide.8991005049"),String(tg.owner_id||""),value=>tg.owner_id=value,{hint:uiText("ui.ui.kit.window.connection.guide.fb8ed39fbe")});
   owner.append(token,id);
   const proxyFields=el("div","form-grid two");proxyFields.hidden=!proxy.enabled;
-  proxyFields.append(field("Адрес подключения",String(proxy.url||""),value=>proxy.url=value,{placeholder:"https://…/helene/telegram",hint:"Адрес уже подготовленного подключения Hélène. Обычный SOCKS/MTProxy сюда не подходит."}),field("Ключ подключения",String(proxy.key||""),value=>proxy.key=value,{type:"password",hint:"Ключ выдаётся вместе с адресом; бот-токен сюда вставлять не нужно."}));
-  const useProxy=toggle("Подключаться к Telegram через прокси",proxy.enabled===true,value=>{proxy.enabled=value;proxyFields.hidden=!value;});
-  host.append(steps(["Подключи своего бота: вставь токен и свой Telegram ID. Если они уже указаны, заново вводить их не нужно.","Если Telegram работает через VPN или напрямую, прокси можно не включать. Для работы без VPN укажи адрес и ключ подготовленного подключения.","Нажми «Проверить связь». Фото и стикеры проверяются отдельно: старый шлюз может пропускать сообщения и не передавать файлы."]),owner,useProxy,proxyFields);
+  proxyFields.append(field(uiText("ui.ui.kit.window.connection.guide.771987b200"),String(proxy.url||""),value=>proxy.url=value,{placeholder:"https://…/helene/telegram",hint:uiText("ui.ui.kit.window.connection.guide.73b53f6779")}),field(uiText("ui.ui.kit.window.connection.guide.b1f8b13c9c"),String(proxy.key||""),value=>proxy.key=value,{type:"password",hint:uiText("ui.ui.kit.window.connection.guide.34b68d4e84")}));
+  const useProxy=toggle(uiText("ui.ui.kit.window.connection.guide.2d4d806483"),proxy.enabled===true,value=>{proxy.enabled=value;proxyFields.hidden=!value;});
+  host.append(steps([uiText("ui.ui.kit.window.connection.guide.0a6e7f9ee2"),uiText("ui.ui.kit.window.connection.guide.09d85bb4da"),uiText("ui.ui.kit.window.connection.guide.a8c2c62c31")]),owner,useProxy,proxyFields);
   const controls=el("div","actions");
-  const check=button("Проверить связь","quiet",async()=>{
-    check.disabled=true;receipt(note,"Проверяю связь…");
+  const check=button(uiText("ui.ui.kit.window.connection.guide.87cb1172f2"),"quiet",async()=>{
+    check.disabled=true;receipt(note,uiText("ui.ui.kit.window.connection.guide.0e1f613d36"));
     try{
       const result=await post<{ok:boolean;bot_url?:string;checks:Array<{name:string;ok:boolean;message:string}>}>("/api/telegram/check",{telegram:{...tg,proxy}});
       out.replaceChildren(...result.checks.map(item=>el("p",item.ok?"receipt ok":"receipt err",item.name+": "+item.message)));
-      if(result.bot_url){const link=el("a","btn btn-quiet","Открыть своего бота");link.href=result.bot_url;link.target="_blank";link.rel="noopener noreferrer";out.append(link);}
-      receipt(note,result.ok?"Связь готова. Теперь сохрани настройки.":"Выше показано, что осталось настроить.",!result.ok);
+      if(result.bot_url){const link=el("a","btn btn-quiet",uiText("ui.ui.kit.window.connection.guide.74d51d1a52"));link.href=result.bot_url;link.target="_blank";link.rel="noopener noreferrer";out.append(link);}
+      receipt(note,result.ok?uiText("ui.ui.kit.window.connection.guide.f60ca02211"):uiText("ui.ui.kit.window.connection.guide.b89279061f"),!result.ok);
     }catch(error){receipt(note,humanError(error).text,true);}finally{check.disabled=false;}
   });
-  const apply=button("Сохранить и подключить","primary",async()=>{
+  const apply=button(uiText("ui.ui.kit.window.connection.guide.d9e0128dfa"),"primary",async()=>{
     apply.disabled=true;
     try{
-      receipt(note,"Проверяю данные перед сохранением…");
+      receipt(note,uiText("ui.ui.kit.window.connection.guide.e73d2da877"));
       const result=await post<{checks:Array<{name:string;ok:boolean;message:string}>}>("/api/telegram/check",{telegram:{...tg,proxy}});
       const blockers=result.checks.filter(row=>!row.ok&&row.name!=="Фото и стикеры");
       if(blockers.length)throw new Error(blockers.map(row=>row.message).join(" "));
@@ -160,28 +161,28 @@ function drawTelegram(host:HTMLElement,session:Session) {
     }catch(error){receipt(note,humanError(error).text,true);}finally{apply.disabled=false;}
   });
   controls.append(check,apply);host.append(controls,note,out);
-  if(tg.mode==="account")host.prepend(el("p","field-hint","Сейчас агент подключён как аккаунт Telegram. Не заменяй его ботом, если хочешь оставить этот режим. Адрес и ключ прокси ниже подходят и ему."));
+  if(tg.mode==="account")host.prepend(el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.27a84a3fba")));
   if(tg.bot_token||proxy.enabled)void check.click();
 }
 function drawServer(host:HTMLElement,session:Session) {
-  host.append(steps(["Подготовь перенос: архив сохранит память, навыки, настройки и входы агента.","Укажи сервер. Приложение поможет перенести агента; исходная память останется на этом компьютере.","После проверки подключения окно будет работать с агентом на сервере. Местная копия останется остановленной, чтобы два агента не отвечали одним ботом."]));
-  if(!inTauri){host.append(el("p","field-hint","Для переноса с компьютера открой этот шаг в установленном приложении Hélène."));return;}
+  host.append(steps([uiText("ui.ui.kit.window.connection.guide.ff32f2b5ec"),uiText("ui.ui.kit.window.connection.guide.1eb70f6b13"),uiText("ui.ui.kit.window.connection.guide.41c60a1fbe")]));
+  if(!inTauri){host.append(el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.b9d401de99")));return;}
   const buttons=el("div","actions");const body=el("div","server-move-guide");
-  if(!session.remote)buttons.append(button("Новый сервер","primary",()=>{if(!transferBusy)drawNewServer(body);}));
-  buttons.append(button("Сервер уже работает","quiet",()=>{if(!transferBusy)drawExistingServer(body);}));
-  buttons.append(button("Новый агент на сервере","quiet",()=>{if(!transferBusy)drawFreshServer(body);}));
-  buttons.append(button("Обновить сервер","quiet",()=>{if(!transferBusy)drawServerUpdate(body);}));
-  const back=button("Вернуть агента с сервера","quiet",()=>{if(!transferBusy)drawReturn(body);});
+  if(!session.remote)buttons.append(button(uiText("ui.ui.kit.window.connection.guide.080639ea8a"),"primary",()=>{if(!transferBusy)drawNewServer(body);}));
+  buttons.append(button(uiText("ui.ui.kit.window.connection.guide.b99010e383"),"quiet",()=>{if(!transferBusy)drawExistingServer(body);}));
+  buttons.append(button(uiText("ui.ui.kit.window.connection.guide.8a4f7d9520"),"quiet",()=>{if(!transferBusy)drawFreshServer(body);}));
+  buttons.append(button(uiText("ui.ui.kit.window.connection.guide.d985d9be6c"),"quiet",()=>{if(!transferBusy)drawServerUpdate(body);}));
+  const back=button(uiText("ui.ui.kit.window.connection.guide.91672be89e"),"quiet",()=>{if(!transferBusy)drawReturn(body);});
   back.hidden=!session.remote;buttons.append(back);
   void shell<{pending?:boolean;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"})
     .then(result=>{if(result.pending&&!result.return?.returned)back.hidden=false;}).catch(()=>{});
-  if(session.remote)buttons.append(button("Открыть местную копию","quiet",async()=>{
+  if(session.remote)buttons.append(button(uiText("ui.ui.kit.window.connection.guide.b5f7920af5"),"quiet",async()=>{
     const out=el("p","receipt");body.replaceChildren(out);
     try{
-      receipt(out,"Открываю сохранённую местную копию. После переноса она остановлена; сервер продолжит работать.");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.b80d2a7fa9"));
       const fresh=await shell<Loaded>("config_load");
       const reply=await shell<{ok?:boolean;error?:string}>("config_save",{config:JSON.stringify({...fresh.config,mode:"local",server_locator:undefined}),mtimeNs:String(fresh.mtime_ns||"")});
-      if(reply?.ok===false)throw new Error(reply.error||"Настройки не записались");
+      if(reply?.ok===false)throw new Error(reply.error||uiText("ui.ui.kit.window.connection.guide.cdba39d13e"));
       await shell("restart_self");
     }catch(error){receipt(out,humanError(error).text,true);}
   }));
@@ -190,28 +191,28 @@ function drawServer(host:HTMLElement,session:Session) {
 
 async function attachServer(base:string,key:string,source:Loaded,locator?:string) {
   const fresh=await shell<Loaded>("config_load");
-  if(fresh.path!==source.path)throw new Error("В окне выбран другой агент. Перенос сохранён; вернись к исходному агенту для подключения.");
+  if(fresh.path!==source.path)throw new UiError(uiText("ui.ui.kit.window.connection.guide.bcb140a346"));
   const config={...fresh.config,mode:"remote",base,key,server_locator:locator};
-  const issue=collectConnection(config,config);if(issue)throw new Error(issue);
+  const issue=collectConnection(config,config);if(issue)throw new UiError(issue);
   const reply=await shell<{ok?:boolean;error?:string}>("config_save",{config:JSON.stringify(config),mtimeNs:String(fresh.mtime_ns||"")});
-  if(reply?.ok===false)throw new Error(reply.error||"Подключение не сохранилось");
+  if(reply?.ok===false)throw new Error(reply.error||uiText("ui.ui.kit.window.connection.guide.d41100c8a8"));
   await shell("restart_self");
 }
 function drawExistingServer(host:HTMLElement) {
   let base="",key="";const out=el("p","receipt");
-  host.replaceChildren(el("h4","","Подключить уже работающего агента"),field("Адрес Hélène на сервере",base,value=>base=value,{placeholder:"https://…"}),field("Ключ окна",key,value=>key=value,{type:"password",hint:"Ключ выдаёт установка Hélène на сервере. Это не пароль SSH и не токен бота."}));
-  const connect=button("Проверить и подключить","primary",async()=>{
+  host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.e8091ec1f1")),field(uiText("ui.ui.kit.window.connection.guide.d55b3da929"),base,value=>base=value,{placeholder:"https://…"}),field(uiText("ui.ui.kit.window.connection.guide.4a5a0cbeaa"),key,value=>key=value,{type:"password",hint:uiText("ui.ui.kit.window.connection.guide.22fec37b6e")}));
+  const connect=button(uiText("ui.ui.kit.window.connection.guide.403dbcb170"),"primary",async()=>{
     connect.disabled=true;
     try{
-      const candidate:Record<string,unknown>={mode:"remote",base,key};const issue=collectConnection(candidate,candidate);if(issue)throw new Error(issue);
-      const endpoint=new URL(String(candidate.base));if(endpoint.protocol!=="https:")throw new Error("Для подключения через интернет нужен защищённый HTTPS-адрес.");
-      receipt(out,"Проверяю связь с агентом…");
+      const candidate:Record<string,unknown>={mode:"remote",base,key};const issue=collectConnection(candidate,candidate);if(issue)throw new UiError(issue);
+      const endpoint=new URL(String(candidate.base));if(endpoint.protocol!=="https:")throw new UiError(uiText("ui.ui.kit.window.connection.guide.c2160ecddd"));
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.00c6564844"));
       const response=await fetch(String(candidate.base)+"/api/state",{headers:{Authorization:"Bearer "+String(candidate.key)},redirect:"error",signal:AbortSignal.timeout(20000)});
-      if(!response.ok)throw new Error(response.status===403?"Сервер не принял ключ окна.":"Сервер пока не ответил. Проверь адрес и повтори.");
-      const state=await response.json();if(!state.agent)throw new Error("По этому адресу не обнаружен агент Hélène.");
+      if(!response.ok)throw new UiError(response.status===403?uiText("ui.ui.kit.window.connection.guide.11868678cb"):uiText("ui.ui.kit.window.connection.guide.10f7f8535a"));
+      const state=await response.json();if(!state.agent)throw new UiError(uiText("ui.ui.kit.window.connection.guide.61d09672ad"));
       const source=await shell<Loaded>("config_load");
       if(source.config.mode!=="remote")await stopForTransfer(out);
-      receipt(out,"Связь подтверждена. Переключаю окно к агенту на сервере…");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.1f4d57383b"));
       await attachServer(String(candidate.base),String(candidate.key),source);
     }catch(error){receipt(out,humanError(error).text,true);connect.disabled=false;}
   });host.append(connect,out);
@@ -222,19 +223,19 @@ function drawExistingServer(host:HTMLElement) {
   }).catch(error=>receipt(out,humanError(error).text,true));
 }
 async function stopForTransfer(out:HTMLElement) {
-  receipt(out,"Останавливаю Hélène на этом компьютере, чтобы местная копия не работала одновременно с серверной…");
+  receipt(out,uiText("ui.ui.kit.window.connection.guide.9c74a7d2d2"));
   await shell("owner_control",{action:"panic"});
   for(let attempt=0;attempt<30;attempt++) {
     const state=await shell<{stopped:boolean;runner_alive:boolean|null;pid:number}>("owner_state");
     if(state.stopped&&(state.runner_alive===false||!state.pid))return;
     await new Promise(resolve=>setTimeout(resolve,1000));
   }
-  throw new Error("Остановка ещё не подтвердилась. Перенос не начат — дождись остановки и повтори.");
+  throw new UiError(uiText("ui.ui.kit.window.connection.guide.b92e388c2d"));
 }
 function drawNewServer(host:HTMLElement) {
   if (!SERVER_TRANSFER_AVAILABLE) {
-    const unavailable=el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');
-    host.replaceChildren(el('h4','','Перенос на сервер'),unavailable);
+    const unavailable=el('p','receipt',SERVER_TRANSFER_NOTICE());unavailable.setAttribute('role','status');
+    host.replaceChildren(el('h4','',uiText("ui.ui.kit.window.connection.guide.2dda0e2c34")),unavailable);
     return;
   }
   const data:Record<string,unknown>={login:"root",port:22,install_docker:false,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
@@ -245,70 +246,70 @@ function drawNewServer(host:HTMLElement) {
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
   const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
   const deployment=data.deployment as Record<string,unknown>;
-  const docker=toggle("Подготовить Docker, если его ещё нет",false,value=>data.install_docker=value);
-  const check=button("Проверить сервер","quiet",()=>void probe());
-  const start=button("Перенести и подключить","primary",async()=>{
+  const docker=toggle(uiText("ui.ui.kit.window.connection.guide.dc8e4fd0e8"),false,value=>data.install_docker=value);
+  const check=button(uiText("ui.ui.kit.window.connection.guide.c8cafbdc9a"),"quiet",()=>void probe());
+  const start=button(uiText("ui.ui.kit.window.connection.guide.93684c61f8"),"primary",async()=>{
     if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;start.disabled=true;check.disabled=true;
     host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=true);
     try{
       const source=await shell<Loaded>("config_load");
       const tg=source.config.telegram||{};
-      if(source.config.mode==="remote")throw new Error("Это окно уже подключено к серверу. Для нового переноса открой местного агента.");
-      if(!String(tg.bot_token||"").trim()||!/^\d+$/.test(String(tg.owner_id||""))||Number(tg.owner_id)<=0)throw new Error("Сначала подключи своего бота и Telegram ID в соседнем шаге Telegram: через его кнопку окно найдёт сервер после перезапуска.");
+      if(source.config.mode==="remote")throw new UiError(uiText("ui.ui.kit.window.connection.guide.00e15b0a1e"));
+      if(!String(tg.bot_token||"").trim()||!/^\d+$/.test(String(tg.owner_id||""))||Number(tg.owner_id)<=0)throw new UiError(uiText("ui.ui.kit.window.connection.guide.3f0190e0c1"));
       const connection=await shell<{checks?:Array<{ok:boolean;name:string;message:string}>;message?:string}>("server_transfer",{action:"telegram-check",request:"{}"});
-      if(!connection.checks)throw new Error(connection.message||"Не удалось проверить Telegram. Повтори подключение.");
+      if(!connection.checks)throw new Error(connection.message||uiText("ui.ui.kit.window.connection.guide.e984d94257"));
       const blockers=connection.checks.filter(row=>!row.ok&&row.name!=="Фото и стикеры");
       if(blockers.length)throw new Error(blockers.map(row=>row.message).join(" "));
       await stopForTransfer(out);
-      receipt(out,"Собираю архив и переношу агента. Подготовка сервера и голоса может занять несколько минут; дождись результата.");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.c5f31e64e1"));
       const result=await shell<{ok:boolean;message?:string;base?:string;key?:string;server_locator?:string}>("server_transfer",{action:"run",request:JSON.stringify({...data,projects:decisions,expected_config:source.path})});
-      if(!result.ok||!result.base||!result.key)throw new Error(result.message||"Перенос ещё не подтверждён. Местные данные сохранены.");
-      receipt(out,"Перенос и канал проверены. Stop сохранён; открываю серверную установку…");
+      if(!result.ok||!result.base||!result.key)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.af8d5f634f"));
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.555c6c2b6b"));
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
       await attachServer(result.base,result.key,source,result.server_locator);
-    }catch(error){receipt(out,humanError(error).text+" Местная память сохранена. Если сервер уже запущен, не включай второго агента одновременно.",true);}
+    }catch(error){receipt(out,humanError(error).text+uiText("ui.ui.kit.window.connection.guide.b7af821ced"),true);}
     finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);check.disabled=false;start.disabled=!ready;}
   });start.disabled=true;
-  const recover=button("Остановить серверную копию для возврата","quiet",async()=>{
+  const recover=button(uiText("ui.ui.kit.window.connection.guide.699d287d44"),"quiet",async()=>{
     if(!ready||busy||transferBusy)return;
     busy=true;transferBusy=true;recover.disabled=true;
     try {
       const source=await shell<Loaded>("config_load");
       const result=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"recover-local",request:JSON.stringify({...data,expected_config:source.path})});
-      if(!result.ok)throw new Error(result.message||"Остановка не подтверждена");
-      receipt(out,result.message||"Серверная копия остановлена. Местный Stop сохранён.");
+      if(!result.ok)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.6a53f9ebf1"));
+      receipt(out,result.message||uiText("ui.ui.kit.window.connection.guide.20269420a2"));
     } catch(error){receipt(out,humanError(error).text,true);}
     finally{busy=false;transferBusy=false;recover.disabled=false;}
   });recover.hidden=true;
 
   async function probe() {
-    if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
+    if(busy)return;busy=true;check.disabled=true;receipt(out,uiText("ui.ui.kit.window.connection.guide.7f6b19b694"));
     try{
       const result=await shell<{ok:boolean;message:string;trust_needed?:boolean;fingerprint?:string;existing?:boolean;resumable?:boolean}>("server_transfer",{action:"probe",request:JSON.stringify(data)});
       ready=result.ok&&!result.trust_needed&&(!result.existing||!!result.resumable);
       recover.hidden=!result.resumable;
-      start.textContent=result.resumable?"Продолжить перенос":"Перенести и подключить";
+      start.textContent=result.resumable?uiText("ui.ui.kit.window.connection.guide.38959f9e7c"):uiText("ui.ui.kit.window.connection.guide.93684c61f8");
       if(result.fingerprint)data.fingerprint=result.fingerprint;
       if(result.trust_needed) {
-        trust.hidden=false;trust.replaceChildren(el("p","field-hint",result.message),el("p","mono server-fingerprint",result.fingerprint||""),button("Это мой сервер — проверить вход","quiet",()=>{data.confirmed_host=true;void probe();}));
+        trust.hidden=false;trust.replaceChildren(el("p","field-hint",result.message),el("p","mono server-fingerprint",result.fingerprint||""),button(uiText("ui.ui.kit.window.connection.guide.0db5785a92"),"quiet",()=>{data.confirmed_host=true;void probe();}));
       }else trust.hidden=true;
-      receipt(out,result.resumable?"Найден твой предыдущий перенос. Продолжу с сохранённого этапа; повторный импорт памяти не нужен.":result.existing?"На сервере уже есть Hélène. Выбери «Сервер уже работает», чтобы подключить окно.":result.message,!ready&&!result.trust_needed);
+      receipt(out,result.resumable?uiText("ui.ui.kit.window.connection.guide.9e22ef50e7"):result.existing?uiText("ui.ui.kit.window.connection.guide.04a8ce9456"):result.message,!ready&&!result.trust_needed);
       start.disabled=!ready;
     }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
   const preparation=el("div","server-preparation");preparation.append(docker,check);
   const actions=el("div","server-actions");actions.append(start,recover);
-  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 или ARM64 и проверит подключение."),grid,advanced,review,preparation,trust,actions,out);
+  host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.b4bf5ba114")),el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.2ac1b05bad")),grid,advanced,review,preparation,trust,actions,out);
   void shell<ReturnScope>("server_transfer",{action:"transfer-scope",request:"{}"}).then(result=>{
     if(!host.isConnected||!result.ok||!result.scope)return;
     decisions=result.scope.projects.map(item=>({path:item.path,bring:false}));
-    review.replaceChildren(el("h5","","Поедет на сервер"),...scopeReview(result,decisions,
-      "Внешние папки агента на этом компьютере. Отмеченные поедут с ним в workspace/projects; остальные останутся здесь, и это будет записано в паспорте переноса.",
-      "Что останется на этом компьютере и почему"));
+    review.replaceChildren(el("h5","",uiText("ui.ui.kit.window.connection.guide.e42deb294c")),...scopeReview(result,decisions,
+      uiText("ui.ui.kit.window.connection.guide.a9de124bad"),
+      uiText("ui.ui.kit.window.connection.guide.9652d2c82f")));
   }).catch(error=>receipt(out,humanError(error).text,true));
   void shell<{pending:boolean;message:string;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
     if(result.pending&&host.isConnected){
-      receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
+      receipt(out,result.message+(result.host?uiText("ui.ui.kit.window.connection.guide.2f2ccf14c0")+result.host+".":""));
       if(!data.host){
         data.host=result.host;data.login=result.login||"root";data.port=result.ssh_port||22;
         grid.dispatchEvent(new Event('ssh-fields-updated'));
@@ -328,21 +329,21 @@ type ReturnScope={ok:boolean;message?:string;version?:string;local_version?:stri
   scope?:{roots:ReturnRoot[];projects:Array<{path:string;via:string[]}>;unavailable:Array<{path:string;via?:string;reason:string}>};
   host_exclusions?:Array<{path:string;reason:string}>};
 type ReturnStatus={returned?:boolean;phase?:string|null;progress?:{done:number;total:number}|null;projects?:Array<{path:string;bring:boolean}>};
-const RETURN_PHASES:Record<string,string>={started:"Готовлю возврат",fenced:"Серверная копия остановлена; снимаю свежий архив",
-  snapshot:"Скачиваю архив агента",downloaded:"Архив скачан и проверен; раскладываю в новую папку",
-  staged:"Копия подготовлена; проверяю версию и переношу правки кода",activating:"Переключаю агента на вернувшиеся данные"};
-const ROOT_TITLES:Record<string,string>={data:"Память, навыки и рабочая папка",code:"Код агента",application:"Оболочка агента"};
-const UNAVAILABLE:Record<string,string>={bound_project_requires_mapping:"проект привязан к другому устройству",
-  project_unavailable:"папки нет на сервере",relative_project_path:"путь записан относительно",project_not_directory:"это не папка"};
-function megabytes(bytes:number){return (bytes/1048576).toFixed(bytes<10485760?1:0)+" МБ";}
+const RETURN_PHASES:Record<string,string>={get started() { return uiText("ui.ui.kit.window.connection.guide.713c87da71"); },get fenced() { return uiText("ui.ui.kit.window.connection.guide.298ea4cf21"); },
+  get snapshot() { return uiText("ui.ui.kit.window.connection.guide.39eb6fff9a"); },get downloaded() { return uiText("ui.ui.kit.window.connection.guide.e18d08d5a9"); },
+  get staged() { return uiText("ui.ui.kit.window.connection.guide.0846aecb00"); },get activating() { return uiText("ui.ui.kit.window.connection.guide.429b1bf7ee"); }};
+const ROOT_TITLES:Record<string,string>={get data() { return uiText("ui.ui.kit.window.connection.guide.260a0572f8"); },get code() { return uiText("ui.ui.kit.window.connection.guide.c96eb04dc3"); },get application() { return uiText("ui.ui.kit.window.connection.guide.32f59781d2"); }};
+const UNAVAILABLE:Record<string,string>={get bound_project_requires_mapping() { return uiText("ui.ui.kit.window.connection.guide.d81cde9147"); },
+  get project_unavailable() { return uiText("ui.ui.kit.window.connection.guide.d532e549fb"); },get relative_project_path() { return uiText("ui.ui.kit.window.connection.guide.abece36db4"); },get project_not_directory() { return uiText("ui.ui.kit.window.connection.guide.01faea97a0"); }};
+function megabytes(bytes:number){const digits=bytes<10485760?1:0;return (bytes/1048576).toLocaleString(locale(),{minimumFractionDigits:digits,maximumFractionDigits:digits})+uiText("ui.ui.kit.window.connection.guide.883817f199");}
 // One review for both directions: what travels, external projects to bring or leave,
 // and what stays behind with its reason. Nothing is decided silently.
 function scopeReview(result:ReturnScope,decisions:Array<{path:string;bring:boolean}>,projectsHint:string,staysTitle:string):HTMLElement[] {
   const scope=result.scope!;
   const roots=el("ul","field-hint");
   for(const root of scope.roots){
-    const extra=[root.git.length?"Git: "+root.git.length:"",root.links.length?"ссылок: "+root.links.length:"",root.empty_directories?"пустых папок: "+root.empty_directories:""].filter(Boolean).join(", ");
-    roots.append(el("li","",(ROOT_TITLES[root.kind]||root.kind)+" — файлов "+root.files+", "+megabytes(root.bytes)+(extra?" ("+extra+")":"")));
+    const extra=[root.git.length?"Git: "+root.git.length:"",root.links.length?uiText("ui.ui.kit.window.connection.guide.e4d2313846")+root.links.length:"",root.empty_directories?uiText("ui.ui.kit.window.connection.guide.d08dbcfdba")+root.empty_directories:""].filter(Boolean).join(", ");
+    roots.append(el("li","",(ROOT_TITLES[root.kind]||root.kind)+uiText("ui.ui.kit.window.connection.guide.c6aae3b348")+root.files+", "+megabytes(root.bytes)+(extra?" ("+extra+")":"")));
   }
   const projects=el("div","return-projects");
   if(scope.projects.length){
@@ -351,7 +352,7 @@ function scopeReview(result:ReturnScope,decisions:Array<{path:string;bring:boole
   }
   const stays=el("details","fold");stays.append(el("summary","",staysTitle));
   const list=el("ul","field-hint");(result.host_exclusions||[]).forEach(row=>list.append(el("li","",row.path+" — "+row.reason)));
-  scope.unavailable.forEach(item=>list.append(el("li","",(item.path||item.via||"проект")+" — "+(UNAVAILABLE[item.reason]||item.reason))));
+  scope.unavailable.forEach(item=>list.append(el("li","",(item.path||item.via||uiText("ui.ui.kit.window.connection.guide.dfb992e6d0"))+" — "+(UNAVAILABLE[item.reason]||item.reason))));
   stays.append(list);
   return [roots,projects,stays];
 }
@@ -362,68 +363,68 @@ function drawReturn(host:HTMLElement) {
   const changed=()=>{if(continuing)return;reviewed=false;start.disabled=true;review.replaceChildren();};
   const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
   const deployment=data.deployment as Record<string,unknown>;
-  const check=button("Проверить, что вернётся","quiet",()=>void inspect());
-  const start=button("Вернуть агента","primary",()=>void bring());start.disabled=true;
-  const restartApp=button("Перезапустить программу","primary",async()=>{
+  const check=button(uiText("ui.ui.kit.window.connection.guide.36900b0f94"),"quiet",()=>void inspect());
+  const start=button(uiText("ui.ui.kit.window.connection.guide.dfffca24a0"),"primary",()=>void bring());start.disabled=true;
+  const restartApp=button(uiText("ui.ui.kit.window.connection.guide.a489a6740a"),"primary",async()=>{
     restartApp.disabled=true;
     try{await shell("restart_self",{full:true});}catch(error){receipt(out,humanError(error).text,true);restartApp.disabled=false;}
   });restartApp.hidden=true;
-  const cancel=button("Отменить незавершённый возврат","quiet",async()=>{
+  const cancel=button(uiText("ui.ui.kit.window.connection.guide.e910269f8a"),"quiet",async()=>{
     if(busy)return;busy=true;cancel.disabled=true;
     try{
       const source=await shell<Loaded>("config_load");
       const reply=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"return-cancel",request:JSON.stringify({expected_config:source.path})});
-      if(!reply.ok)throw new Error(reply.message||"Отмена не подтверждена");
-      continuing=false;cancel.hidden=true;start.textContent="Вернуть агента";reviewed=false;start.disabled=true;
-      receipt(out,reply.message||"Возврат отменён.");
+      if(!reply.ok)throw new Error(reply.message||uiText("ui.ui.kit.window.connection.guide.371c99ad6e"));
+      continuing=false;cancel.hidden=true;start.textContent=uiText("ui.ui.kit.window.connection.guide.dfffca24a0");reviewed=false;start.disabled=true;
+      receipt(out,reply.message||uiText("ui.ui.kit.window.connection.guide.6d03b45dc4"));
     }catch(error){receipt(out,humanError(error).text,true);}finally{busy=false;cancel.disabled=false;}
   });cancel.hidden=true;
   function lock(on:boolean){host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>{if(node!==restartApp)node.disabled=on;});}
   async function inspect() {
     if(busy||transferBusy)return;busy=true;check.disabled=true;
-    receipt(out,"Читаю состав агента на сервере. Сервер пока продолжает работать, ничего не меняется.");
+    receipt(out,uiText("ui.ui.kit.window.connection.guide.c3604f658c"));
     try{
       const source=await shell<Loaded>("config_load");
       const result=await shell<ReturnScope>("server_transfer",{action:"return-scope",request:JSON.stringify({...data,expected_config:source.path})});
-      if(!result.ok||!result.scope)throw new Error(result.message||"Состав агента не прочитан.");
+      if(!result.ok||!result.scope)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.83972d185e"));
       decisions=result.scope.projects.map(item=>({path:item.path,bring:true}));
-      const version=el("p","field-hint","Версия на сервере "+(result.version||"неизвестна")+", здесь "+(result.local_version||"неизвестна")+"."
-        +(result.compatible===false?" Сервер новее: возврат скачается и подождёт, пока программа на этом компьютере обновится.":""));
-      review.replaceChildren(el("h5","","Вернётся"),...scopeReview(result,decisions,
-        "Внешние проекты агента на сервере. Отмеченные приедут вместе с ним; остальные останутся на сервере, и это будет записано в отчёте.",
-        "Что останется на сервере и почему"),version);
+      const version=el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.5542171c47")+(result.version||uiText("ui.ui.kit.window.connection.guide.8d699d8c65"))+uiText("ui.ui.kit.window.connection.guide.4b000be118")+(result.local_version||uiText("ui.ui.kit.window.connection.guide.8d699d8c65"))+"."
+        +(result.compatible===false?uiText("ui.ui.kit.window.connection.guide.ed8962d012"):""));
+      review.replaceChildren(el("h5","",uiText("ui.ui.kit.window.connection.guide.be7ddb0d9a")),...scopeReview(result,decisions,
+        uiText("ui.ui.kit.window.connection.guide.4b1ab907b9"),
+        uiText("ui.ui.kit.window.connection.guide.7ddaa4ce64")),version);
       reviewed=true;start.disabled=false;out.textContent="";
     }catch(error){reviewed=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
   async function bring() {
     if((!reviewed&&!continuing)||busy||transferBusy)return;busy=true;transferBusy=true;lock(true);
-    receipt(out,"Останавливаю серверную копию и снимаю свежий архив. Большой агент скачивается дольше; окно можно не трогать.");
+    receipt(out,uiText("ui.ui.kit.window.connection.guide.9574dbde3d"));
     const poll=setInterval(()=>void shell<{return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
       const state=result.return;if(!state?.phase)return;
       const step=RETURN_PHASES[state.phase]||state.phase;
-      live.textContent=state.progress&&state.phase==="snapshot"?step+": "+megabytes(state.progress.done)+" из "+megabytes(state.progress.total):step+".";
+      live.textContent=state.progress&&state.phase==="snapshot"?step+": "+megabytes(state.progress.done)+uiText("ui.ui.kit.window.connection.guide.e029cc4b39")+megabytes(state.progress.total):step+".";
     }).catch(()=>{}),1500);
     try{
       const source=await shell<Loaded>("config_load");
       const result=await shell<{ok:boolean;message?:string;code?:{summary?:string;folder?:string};previous_data?:string}>("server_transfer",
         {action:"return",request:JSON.stringify({...data,projects:decisions,expected_config:source.path})});
-      if(!result.ok)throw new Error(result.message||"Возврат ещё не завершён.");
+      if(!result.ok)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.d6584be0b8"));
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
-      const code=result.code?.summary?" Код: "+result.code.summary+(result.code.folder?" (материалы — "+result.code.folder+")":"")+".":"";
-      receipt(out,(result.message||"Агент вернулся.")+code+(result.previous_data?" Прежняя копия: "+result.previous_data+".":""));
+      const code=result.code?.summary?uiText("ui.ui.kit.window.connection.guide.dec37b12c9")+result.code.summary+(result.code.folder?uiText("ui.ui.kit.window.connection.guide.1ec1ee99f1")+result.code.folder+")":"")+".":"";
+      receipt(out,(result.message||uiText("ui.ui.kit.window.connection.guide.0d400bffdb"))+code+(result.previous_data?uiText("ui.ui.kit.window.connection.guide.5753bd6c6b")+result.previous_data+".":""));
       live.textContent="";cancel.hidden=true;start.hidden=true;check.hidden=true;
       // From the MiniApp the computer's own programme window performs the restart.
-      if(electron?.presentation==="miniapp")restartApp.textContent="Перезапустить программу на компьютере";
+      if(electron?.presentation==="miniapp")restartApp.textContent=uiText("ui.ui.kit.window.connection.guide.6c73988e0b");
       restartApp.hidden=false;
     }catch(error){
       const text=humanError(error).text;
-      receipt(out,text+" Прежняя местная копия и данные на сервере сохранены."+(/повтори/i.test(text)?"":" Повтори — возврат продолжится с сохранённого этапа."),true);
-      cancel.hidden=false;start.textContent="Продолжить возврат";continuing=true;
+      receipt(out,text+uiText("ui.ui.kit.window.connection.guide.de7fd9bf1c")+(/повтори/i.test(text)?"":uiText("ui.ui.kit.window.connection.guide.22004ef181")),true);
+      cancel.hidden=false;start.textContent=uiText("ui.ui.kit.window.connection.guide.9f7c63856d");continuing=true;
     }finally{clearInterval(poll);busy=false;transferBusy=false;lock(false);start.disabled=!reviewed&&!continuing;}
   }
   const actions=el("div","server-actions");actions.append(check,start,cancel,restartApp);
-  host.replaceChildren(el("h4","","Вернуть агента на этот компьютер"),
-    el("p","field-hint","Вернётся текущий агент с сервера: память, навыки, настройки, его код и проекты, Git с историей. Сначала посмотри состав — сервер в это время работает. Затем серверная копия остановится, архив скачается и разложится в новую папку рядом с прежней. Прежняя местная копия и данные на сервере не удаляются. Агент останется остановленным: возобнови его сам, когда проверишь."),
+  host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.543a04f3bc")),
+    el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.2af1c56579")),
     grid,advanced,review,actions,live,out);
   void shell<{pending:boolean;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
     if(!host.isConnected)return;
@@ -433,10 +434,10 @@ function drawReturn(host:HTMLElement) {
       if(result.deployment)Object.assign(deployment,result.deployment);
       const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
     }
-    if(result.return?.returned){receipt(out,"Агент уже вернулся с этого сервера. Прежняя копия и архив сохранены.");start.hidden=true;check.hidden=true;return;}
+    if(result.return?.returned){receipt(out,uiText("ui.ui.kit.window.connection.guide.c128e7fa7d"));start.hidden=true;check.hidden=true;return;}
     if(result.return?.phase){
-      continuing=true;decisions=result.return.projects||[];start.textContent="Продолжить возврат";start.disabled=false;cancel.hidden=false;
-      receipt(out,"Найден незавершённый возврат: "+(RETURN_PHASES[result.return.phase]||result.return.phase).toLowerCase()+". Укажи вход на сервер и продолжи — уже сделанное не повторится.");
+      continuing=true;decisions=result.return.projects||[];start.textContent=uiText("ui.ui.kit.window.connection.guide.9f7c63856d");start.disabled=false;cancel.hidden=false;
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.fb943adbd0")+(RETURN_PHASES[result.return.phase]||result.return.phase).toLowerCase()+uiText("ui.ui.kit.window.connection.guide.71c7079dd3"));
     }
   }).catch(error=>receipt(out,humanError(error).text,true));
 }
@@ -448,10 +449,10 @@ type ServerProbe={ok:boolean;message:string;trust_needed?:boolean;fingerprint?:s
 function sshForm(data:Record<string,unknown>,changed:()=>void,_out:HTMLElement) {
   const deployment=data.deployment as Record<string,unknown>;
   const grid=sshAccessForm(data,changed);
-  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Параметры установки и SSH-ключ"),inner);
-  inner.append(field("Папка установки",String(deployment.directory),value=>{deployment.directory=value;changed();}),
-    field("Проект Compose",String(deployment.project),value=>{deployment.project=value;deployment.container=value;changed();}),
-    field("Порт канала на сервере",String(deployment.port),value=>{deployment.port=Number(value);changed();}));
+  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","",uiText("ui.ui.kit.window.connection.guide.de7d41e838")),inner);
+  inner.append(field(uiText("ui.ui.kit.window.connection.guide.709f7210c7"),String(deployment.directory),value=>{deployment.directory=value;changed();}),
+    field(uiText("ui.ui.kit.window.connection.guide.40e794dcaf"),String(deployment.project),value=>{deployment.project=value;deployment.container=value;changed();}),
+    field(uiText("ui.ui.kit.window.connection.guide.f7ad2fc014"),String(deployment.port),value=>{deployment.port=Number(value);changed();}));
   return {grid,advanced};
 }
 function forgetSecrets(host:HTMLElement,data:Record<string,unknown>) {
@@ -463,7 +464,7 @@ function trustBlock(trust:HTMLElement,data:Record<string,unknown>,result:ServerP
   if(!result.trust_needed){trust.hidden=true;return;}
   trust.hidden=false;
   trust.replaceChildren(el("p","field-hint",result.message),el("p","mono server-fingerprint",result.fingerprint||""),
-    button("Это мой сервер — проверить вход","quiet",()=>{data.confirmed_host=true;again();}));
+    button(uiText("ui.ui.kit.window.connection.guide.0db5785a92"),"quiet",()=>{data.confirmed_host=true;again();}));
 }
 
 function drawFreshServer(host:HTMLElement) {
@@ -475,33 +476,33 @@ function drawFreshServer(host:HTMLElement) {
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
   const {grid,advanced}=sshForm(data,changed,out);
   const agent=el("div","form-grid two");
-  agent.append(field("Имя агента","",value=>{data.agent_name=value;}),
-    field("Токен бота агента","",value=>{telegram.bot_token=value.trim();},{type:"password",hint:"Новый бот от @BotFather. Через его кнопку окно находит сервер после перезапуска."}),
-    field("Твой Telegram ID","",value=>{telegram.owner_id=value.trim();},{hint:"Число из @userinfobot. Бот слушается только тебя."}));
-  const docker=toggle("Подготовить Docker, если его ещё нет",false,value=>data.install_docker=value);
-  const check=button("Проверить сервер","quiet",()=>void probe());
-  const start=button("Установить агента на сервер","primary",async()=>{
+  agent.append(field(uiText("ui.ui.kit.window.connection.guide.ba527ef131"),"",value=>{data.agent_name=value;}),
+    field(uiText("ui.ui.kit.window.connection.guide.fcb6883f75"),"",value=>{telegram.bot_token=value.trim();},{type:"password",hint:uiText("ui.ui.kit.window.connection.guide.89b0733d9f")}),
+    field(uiText("ui.ui.kit.window.connection.guide.8991005049"),"",value=>{telegram.owner_id=value.trim();},{hint:uiText("ui.ui.kit.window.connection.guide.c46d720845")}));
+  const docker=toggle(uiText("ui.ui.kit.window.connection.guide.dc8e4fd0e8"),false,value=>data.install_docker=value);
+  const check=button(uiText("ui.ui.kit.window.connection.guide.c8cafbdc9a"),"quiet",()=>void probe());
+  const start=button(uiText("ui.ui.kit.window.connection.guide.1047f94551"),"primary",async()=>{
     if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;
     host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=true);
     try{
-      receipt(out,"Ставлю Hélène на сервер: сборка образа и подготовка займут несколько минут. Местный агент не останавливается.");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.8d148c8d41"));
       const result=await shell<{ok:boolean;message?:string;agent_id?:string;trust_needed?:boolean}>("server_install",{action:"install",request:JSON.stringify(data)});
       forgetSecrets(host,data);
-      if(result.trust_needed)throw new Error(result.message||"Подтверди ключ сервера и повтори.");
-      if(!result.ok||!result.agent_id)throw new Error(result.message||"Установка ещё не подтверждена.");
-      receipt(out,"Агент на сервере установлен и подключён. Открываю его…");
+      if(result.trust_needed)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.997dd3e5bb"));
+      if(!result.ok||!result.agent_id)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.9b78bf1045"));
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.de74275889"));
       await shell("switch_agent",{id:result.agent_id});
     }catch(error){
       receipt(out,humanError(error).text,true);
       void offerConnect();
     }finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);start.disabled=!ready;}
   });start.disabled=true;
-  const connect=button("Подключить установленного агента","quiet",async()=>{
+  const connect=button(uiText("ui.ui.kit.window.connection.guide.40f8edc347"),"quiet",async()=>{
     if(busy||transferBusy)return;busy=true;transferBusy=true;connect.disabled=true;
     try{
-      receipt(out,"Ищу адрес агента через его бота…");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.d4c1ffdf1c"));
       const result=await shell<{ok:boolean;agent_id?:string;message?:string}>("server_install",{action:"connect",request:"{}"});
-      if(!result.ok||!result.agent_id)throw new Error(result.message||"Адрес ещё не найден.");
+      if(!result.ok||!result.agent_id)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.e07eb96d82"));
       await shell("switch_agent",{id:result.agent_id});
     }catch(error){receipt(out,humanError(error).text,true);}finally{busy=false;transferBusy=false;connect.disabled=false;}
   });connect.hidden=true;
@@ -510,20 +511,20 @@ function drawFreshServer(host:HTMLElement) {
     catch{connect.hidden=true;}
   }
   async function probe() {
-    if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
+    if(busy)return;busy=true;check.disabled=true;receipt(out,uiText("ui.ui.kit.window.connection.guide.7f6b19b694"));
     try{
       const result=await shell<ServerProbe>("server_install",{action:"probe",request:JSON.stringify(data)});
       trustBlock(trust,data,result,()=>void probe());
       ready=result.ok&&!result.trust_needed&&!result.existing;
-      const where=result.arch==="aarch64"?" Сервер ARM64.":result.arch==="x86_64"?" Сервер x64.":"";
-      receipt(out,result.existing?"На сервере уже стоит Hélène. Подключи её кнопкой «Сервер уже работает» или обнови кнопкой «Обновить сервер».":result.trust_needed?result.message:ready?"Сервер готов к установке."+where:result.message+where,!ready&&!result.trust_needed);
+      const where=result.arch==="aarch64"?uiText("ui.ui.kit.window.connection.guide.5d0f7a7dd7"):result.arch==="x86_64"?uiText("ui.ui.kit.window.connection.guide.e7531c00c0"):"";
+      receipt(out,result.existing?uiText("ui.ui.kit.window.connection.guide.7f567a1f96"):result.trust_needed?result.message:ready?uiText("ui.ui.kit.window.connection.guide.4faeea96b2")+where:result.message+where,!ready&&!result.trust_needed);
       start.disabled=!ready;
     }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
   const preparation=el("div","server-preparation");preparation.append(docker,check);
   const actions=el("div","server-actions");actions.append(start,connect);
-  host.replaceChildren(el("h4","","Новый агент на сервере"),
-    el("p","field-hint","Приложение само поставит Hélène на твой сервер Ubuntu/Debian (x64 или ARM64) и откроет нового агента отдельной строкой. Агент на этом компьютере продолжает работать и не переносится."),
+  host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.8a4f7d9520")),
+    el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.c4db34d701")),
     grid,agent,advanced,preparation,trust,actions,out);
   void offerConnect();
 }
@@ -534,31 +535,31 @@ function drawServerUpdate(host:HTMLElement) {
   const out=el("p","receipt");const trust=el("div");trust.hidden=true;
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
   const {grid,advanced}=sshForm(data,changed,out);
-  const check=button("Проверить сервер","quiet",()=>void probe());
-  const start=button("Обновить сервер","primary",async()=>{
+  const check=button(uiText("ui.ui.kit.window.connection.guide.c8cafbdc9a"),"quiet",()=>void probe());
+  const start=button(uiText("ui.ui.kit.window.connection.guide.d985d9be6c"),"primary",async()=>{
     if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;
     host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=true);
     try{
-      receipt(out,"Передаю серверу эту версию. Его исполнитель сделает копию, обновит и проверит агента; если что-то пойдёт не так — вернёт прежнюю версию. Это займёт несколько минут.");
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.48516eb849"));
       const result=await shell<{ok:boolean;message?:string;trust_needed?:boolean}>("server_install",{action:"update",request:JSON.stringify(data)});
       forgetSecrets(host,data);
-      if(result.trust_needed)throw new Error(result.message||"Подтверди ключ сервера и повтори.");
-      receipt(out,result.message||"Готово.",!result.ok);
+      if(result.trust_needed)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.997dd3e5bb"));
+      receipt(out,result.message||uiText("ui.ui.kit.window.connection.guide.12c7111228"),!result.ok);
     }catch(error){receipt(out,humanError(error).text,true);}
     finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);start.disabled=!ready;}
   });start.disabled=true;
   async function probe() {
-    if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
+    if(busy)return;busy=true;check.disabled=true;receipt(out,uiText("ui.ui.kit.window.connection.guide.7f6b19b694"));
     try{
       const result=await shell<ServerProbe>("server_install",{action:"probe",request:JSON.stringify(data)});
       trustBlock(trust,data,result,()=>void probe());
       ready=!result.trust_needed&&!!result.existing;
-      receipt(out,result.trust_needed?result.message:result.existing?"Hélène на сервере найдена. Можно обновить её до версии этого приложения.":"В этой папке Hélène не найдена. Проверь папку установки в параметрах.",!ready&&!result.trust_needed);
+      receipt(out,result.trust_needed?result.message:result.existing?uiText("ui.ui.kit.window.connection.guide.734d98110f"):uiText("ui.ui.kit.window.connection.guide.112ff747b0"),!ready&&!result.trust_needed);
       start.disabled=!ready;
     }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
   const actions=el("div","server-actions");actions.append(check,start);
-  host.replaceChildren(el("h4","","Обновить сервер из приложения"),
-    el("p","field-hint","Нужно, когда на сервере ещё нет исполнителя обновлений или он не отвечает. Приложение по SSH передаст свою версию; дальше обновления — кнопкой «Обновить» в окне."),
+  host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.7f150827aa")),
+    el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.59c6382c5b")),
     grid,advanced,trust,actions,out);
 }

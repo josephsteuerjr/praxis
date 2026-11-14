@@ -1,4 +1,4 @@
-import { t as uiText } from "../lang/lang";
+import { t as uiText, UiError } from "../lang/lang";
 import { esc } from "./text";
 import { audioHTML, mountPaperAudio } from './paper-audio';
 import { fileError, fileSize, paperButton, paperDialog } from "./paper-dialog";
@@ -47,7 +47,7 @@ export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
     const key = client.key(media); let entry = cache.get(key);
     if (!entry) {
       const promise = client.bytes(media).then(blob => {
-        if (!blob.size) throw new Error(uiText("ui.ui.kit.paper.media.3362268c24"));
+        if (!blob.size) throw new UiError(uiText("ui.ui.kit.paper.media.3362268c24"));
         return { blob, url: URL.createObjectURL(blob) };
       });
       entry = { promise, refs: 0 }; cache.set(key, entry);
@@ -81,20 +81,20 @@ export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
         image.src=value.url; image.muted=node.dataset.paperKind==='animation'; image.loop=node.dataset.paperKind==='animation';
         await new Promise<void>((resolve,reject)=>{
           const done=(error?: Error)=>{clearTimeout(timer);image.removeEventListener('loadeddata',ready);image.removeEventListener('error',failed);error?reject(error):resolve();};
-          const ready=()=>done(),failed=()=>done(new Error(uiText("ui.ui.kit.paper.media.8fcd33495a")));
-          const timer=setTimeout(()=>done(new Error(uiText("ui.ui.kit.paper.media.40f63e5b7a"))),15000);
+          const ready=()=>done(),failed=()=>done(new UiError(uiText("ui.ui.kit.paper.media.8fcd33495a")));
+          const timer=setTimeout(()=>done(new UiError(uiText("ui.ui.kit.paper.media.40f63e5b7a"))),15000);
           image.addEventListener('loadeddata',ready,{once:true});image.addEventListener('error',failed,{once:true});image.load();
         });
         if (image.loop) await image.play().catch(() => {});
         const button=node.querySelector('[data-paper-play]'); if(button) button.textContent=image.paused?uiText("ui.ui.kit.paper.media.bdd37eb217"):uiText("ui.ui.kit.paper.media.65530fd463");
       } else {
-        if (!animationPlayer) throw new Error(uiText("ui.ui.kit.paper.media.da7b5751c9"));
+        if (!animationPlayer) throw new UiError(uiText("ui.ui.kit.paper.media.da7b5751c9"));
         const data=JSON.parse(await value.blob.text());
         const safe=(value: unknown): boolean => {
           if (!value || typeof value!=='object') return true;
           return Object.entries(value).every(([key,val]) => !((key==='x'||key==='fPath')&&typeof val==='string') && safe(val));
         };
-        if (!safe(data) || data.assets?.some((a:{u?:string;p?:string})=>a.u||a.p)) throw new Error(uiText("ui.ui.kit.paper.media.eededf047d"));
+        if (!safe(data) || data.assets?.some((a:{u?:string;p?:string})=>a.u||a.p)) throw new UiError(uiText("ui.ui.kit.paper.media.eededf047d"));
         const player=await animationPlayer();
         if (!node.isConnected || state.seq!==seq) return;
         state.animation?.destroy(); image.replaceChildren();

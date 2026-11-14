@@ -27,6 +27,9 @@ import zh from "./zh.json";
 
 export type Lang = "ru" | "en" | "fr" | "zh";
 
+/** Product-authored guidance, safe to display without guessing its language. */
+export class UiError extends Error {}
+
 type Catalog = Record<string, string>;
 
 const CATALOGS: Record<Lang, Catalog> = {

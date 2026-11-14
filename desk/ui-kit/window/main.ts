@@ -1,4 +1,4 @@
-import { t as uiText } from "../../lang/lang";
+import { t as uiText, UiError } from "../../lang/lang";
 // Окно как таковое: полка слева (разделы и чаты), переписка в центре, ход агента
 // справа; состояние агента одной фразой в шапке; настройки экраном, а не файлом.
 // Большой надписи с именем продукта нет — только подпись внизу полки (слово
@@ -255,7 +255,7 @@ export function start(opts: WindowOptions): void {
           await shell("engine_restart");
           accepted = true;
         }
-        if (!accepted) throw new Error(uiText("ui.ui.kit.window.main.42e379a9fe"));
+        if (!accepted) throw new UiError(uiText("ui.ui.kit.window.main.42e379a9fe"));
       } else {
         await shell("owner_control", { action: action === "stop" ? "panic" : "resume" });
       }

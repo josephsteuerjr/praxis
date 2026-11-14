@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { collectConnection } from '../../ui-kit/window/server-connection.ts';
+import './fixtures/ru-localization.mjs';
+const { collectConnection } = await import('../../ui-kit/window/server-connection.ts');
 
 test('unfinished remote settings refuse saving rather than quietly starting another local agent', () => {
   for (const draft of [{mode:'remote'}, {mode:'remote',base:'https://example.com'}, {mode:'remote',base:'nonsense',key:'key'}]) {

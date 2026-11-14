@@ -1,4 +1,4 @@
-import { t as uiText } from "../lang/lang";
+import { t as uiText, UiError } from "../lang/lang";
 import { FILE_BYTES } from "./paper-files";
 import { fileError, paperButton, paperDialog } from "./paper-dialog";
 import type { PaperMedia } from "./paper-media";
@@ -6,10 +6,10 @@ import type { PaperMedia } from "./paper-media";
 export async function artifactBytes(url: string): Promise<Blob> {
   const r = await fetch(url, { signal: AbortSignal.timeout(60000) });
   if (!r.ok) throw new Error(r.status === 404 ? uiText("ui.ui.kit.paper.transfer.b492849f9d") : r.status === 403 ? uiText("ui.ui.kit.paper.transfer.c78374de0b") : uiText("ui.ui.kit.paper.transfer.1377c636b6") + r.status + ")");
-  if (Number(r.headers.get("content-length")) > FILE_BYTES) throw new Error(uiText("ui.ui.kit.paper.transfer.9aaebecf86"));
-  const reader = r.body?.getReader(); if (!reader) throw new Error(uiText("ui.ui.kit.paper.transfer.d43b644987"));
+  if (Number(r.headers.get("content-length")) > FILE_BYTES) throw new UiError(uiText("ui.ui.kit.paper.transfer.9aaebecf86"));
+  const reader = r.body?.getReader(); if (!reader) throw new UiError(uiText("ui.ui.kit.paper.transfer.d43b644987"));
   const chunks: BlobPart[] = []; let size = 0;
-  try { while (true) { const { value, done } = await reader.read(); if (done) break; size += value.byteLength; if (size > FILE_BYTES) { await reader.cancel(); throw new Error(uiText("ui.ui.kit.paper.transfer.9aaebecf86")); } chunks.push(value); } }
+  try { while (true) { const { value, done } = await reader.read(); if (done) break; size += value.byteLength; if (size > FILE_BYTES) { await reader.cancel(); throw new UiError(uiText("ui.ui.kit.paper.transfer.9aaebecf86")); } chunks.push(value); } }
   finally { reader.releaseLock(); }
   return new Blob(chunks, { type: r.headers.get("content-type") || "application/octet-stream" });
 }

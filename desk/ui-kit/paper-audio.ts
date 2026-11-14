@@ -1,4 +1,4 @@
-import { t as uiText, locale } from "../lang/lang";
+import { t as uiText, locale, UiError } from "../lang/lang";
 import { esc } from './text';
 import type { PaperMedia, MediaClient } from './paper-media';
 
@@ -124,7 +124,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if (t.loading) return t.loading;
     t.error = undefined;
     t.loading = (async () => {
-      const blob = await client.bytes(t.media); if (!blob.size) throw new Error(uiText("ui.ui.kit.paper.audio.3362268c24"));
+      const blob = await client.bytes(t.media); if (!blob.size) throw new UiError(uiText("ui.ui.kit.paper.audio.3362268c24"));
       if (disposed || tracks.get(client.key(t.media))!==t) return;
       t.blob = blob;
       // Source first: neither a waveform import nor audio decoding gates play.
