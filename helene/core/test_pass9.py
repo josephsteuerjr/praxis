@@ -154,9 +154,7 @@ class TestMissedFrame(BufBase):
                                    missed_hours=3.2)
         frame = agent._presence_frame(ctx)
         self.assertIn("[missed]", frame)
-        self.assertIn("3 h ago", frame)
-        self.assertIn("while you were offline", frame)
-        self.assertIn("don't pretend you were here", frame)
+        self.assertIn(agent.frame_language.text('owned.agent.9c52c0087b70', v0='3'), frame)
 
     def test_frame_without_missed_is_clean(self):
         ctx = agent.ChannelContext(chat_id="777", is_dm=True)
@@ -164,7 +162,8 @@ class TestMissedFrame(BufBase):
 
     def test_sub_hour_wording(self):
         ctx = agent.ChannelContext(chat_id="777", is_dm=True, missed_hours=0.4)
-        self.assertIn("less than an h ago", agent._presence_frame(ctx))
+        self.assertIn(agent.frame_language.text('owned.agent.9c52c0087b70',
+                      v0=agent.frame_language.text('prompt.less_than_one')), agent._presence_frame(ctx))
 
     def test_voice_sees_missed_line(self):
         self._client("отвечаю")

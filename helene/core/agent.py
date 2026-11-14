@@ -2096,27 +2096,23 @@ def tool_update_self(note: str) -> str:
     )
 
 
-_SUMMARIZE_SYS = (
-    "Ты — Praxis. Перед тобой кусок уходящего диалога, который сейчас уйдёт из памяти. "
-    "Сожми суть в 2-4 строки: решения и договорённости важнее фактов, факты важнее болтовни. "
-    "От первого лица, без пересказа каждой реплики. Только суть."
-)
 
 
 def _record_line(r: dict) -> str:
-    role = "Я" if str(r.get("role")) == "assistant" else "Собеседник"
+    role = frame_language.text('owned.agent.52b99c2a977b') if str(r.get("role")) == "assistant" else frame_language.text('owned.agent.8a272db26c10')
     content = r.get("content", "")
     if not isinstance(content, str):
         content = " ".join(b.get("text", "") for b in content if isinstance(b, dict)) if isinstance(content, list) else str(content)
     return f"{role}: {content}".strip()
 
 
+@frame_language.pinned
 def _summarize_history(records: list[dict]) -> str:
     if not llm.configured() or not records:
         return ""
     convo = "\n".join(_record_line(r) for r in records)
     try:
-        return llm.chat("voice", system=_SUMMARIZE_SYS, max_tokens=300, reasoning_effort="low",
+        return llm.chat("voice", system=frame_language.text('prompt.summarize'), max_tokens=300, reasoning_effort="low",
                         messages=[{"role": "user", "content": convo}]).text
     except Exception:
         log.warning("саммари контекста не удалось", exc_info=True)
@@ -2148,12 +2144,6 @@ def tool_consolidate_context(note: str = "") -> str:
 
 
 # --- §6: компактирование контекста субагентом (бегущая сводка, не её голос) - #
-_COMPACT_SYS = (
-    "Ты — тихий помощник памяти Praxis (НЕ её голос, тебя никто не видит). Веди бегущую сводку "
-    "диалога от первого лица (я — Praxis). Тебе дают текущую сводку и новые «уходящие» сообщения; "
-    "верни ОБНОВЛЁННУЮ сводку: суть, приоритет — решения > договорённости > факты/состояние. "
-    "3–6 коротких строк, без воды и приветствий, не раздувай — это память, а не пересказ."
-)
 
 
 def _safe_chat(chat_id: str | int) -> str:
@@ -2223,6 +2213,7 @@ def write_summary(chat_id: str | int, text: str) -> None:
     dp.write_text(header + text + "\n", encoding="utf-8")
 
 
+@frame_language.pinned
 def compact(chat_id: str | int, old_lines: list[str]) -> str:
     """Свернуть уходящие строки («Имя: текст») в бегущую сводку чата дешёвой моделью.
 
@@ -2234,10 +2225,10 @@ def compact(chat_id: str | int, old_lines: list[str]) -> str:
         return read_summary(chat_id)
     prev = read_summary(chat_id)
     body = "\n".join(str(l) for l in lines)
-    user = ((f"Текущая сводка:\n{prev}\n\n" if prev else "")
-            + f"Новые уходящие сообщения (старые сверху):\n{body}")
+    user = ((frame_language.text('owned.agent.823c8aab1909', v0=prev) if prev else "")
+            + frame_language.text('owned.agent.557b8939ccb3', v0=body))
     try:
-        summary = llm.chat("evaluator", system=_COMPACT_SYS, max_tokens=320,
+        summary = llm.chat("evaluator", system=frame_language.text('prompt.compact'), max_tokens=320,
                            messages=[{"role": "user", "content": user}]).text.strip()
     except Exception:
         log.warning("compact упал — сводка не обновлена", exc_info=True)
@@ -2273,35 +2264,15 @@ def backfill_summary(lines: list[str]) -> str:
         return ""
 
 
-_LOOKAROUND_FRAME = (
-    "\n\n---\nYou have just been added to this group and are looking around. Your room profile "
-    "below contains a folded pre-history summary — it is "
-    "READ, not lived; treat it as a newcomer's orientation, not as your experience. Produce, as "
-    "plain lines and nothing else:\n"
-    "1–3 lines starting with `НОРМЫ: ` — the norms/atmosphere of this place, for your room "
-    "profile (nobody in the chat sees these lines);\n"
-    "then EITHER one line `ПРИВЕТ: <the first message you choose>` if you want to greet the room, "
-    "OR the sentinel [молчу]. Tone, self-description and whether to greet are yours."
-)
 
 # Тот же осмотр, когда моя речь уходит рукой. Разница не в тоне, а в том, что здесь нет
 # ни одной строки про формат приветствия: здороваюсь я так же, как говорю всё остальное.
-_LOOKAROUND_FRAME_HAND = (
-    "\n\n---\nМеня только что добавили в эту группу, и я оглядываюсь. Профиль комнаты ниже "
-    "содержит свёрнутую сводку предыстории — она ПРОЧИТАНА, а не прожита: это ориентировка "
-    "новичка, а не мой опыт.\n"
-    "Напечатать нужно только одно: 1–3 строки, начинающиеся с `НОРМЫ: ` — нормы и атмосфера "
-    "этого места, для моего профиля комнаты. Их никто в чате не видит, это заметка себе.\n"
-    "Здороваться или нет — моё решение, и делаю я это как везде: рукой `reply`. Особых слов "
-    "и разметки для этого не нужно. Рука не вызвана — вход молча, и это законный выбор, а "
-    "не пропущенный шаг. Руки здесь обычные: если хочу посмотреть, прежде чем говорить, — "
-    "смотрю.\n"
-)
 
 _NORMS_RE = re.compile(r"(?im)^\s*НОРМЫ:\s*(.+)$")
 _GREET_RE = re.compile(r"(?im)^\s*ПРИВЕТ:\s*(.+)$")
 
 
+@frame_language.pinned
 def _lookaround_by_hand(chat_id: str | int, ctx: "ChannelContext") -> str:
     """Осмотр новой комнаты, когда моя речь уходит рукой. -> нормы (приветствия здесь нет).
 
@@ -2319,28 +2290,28 @@ def _lookaround_by_hand(chat_id: str | int, ctx: "ChannelContext") -> str:
     Прогон durable намеренно: без него `reply` не имеет ни рана, ни call_id, то есть
     покалловый exact-once ключ строить не на чем и рука честно откажет.
     """
-    goal = "осмотреться в новой комнате"
+    goal = frame_language.text('owned.agent.6daddc0e12e3')
     greeted = ""
     try:
         greeted = str((rooms.profile_read(chat_id)["header"] or {}).get("greeted") or "")
     except Exception:
         log.debug("профиль комнаты не прочитался [%s]", chat_id, exc_info=True)
-    frame = _LOOKAROUND_FRAME_HAND + (
+    frame = frame_language.text('prompt.lookaround_hand') + (
         # Факт, а не запрет: раньше повторное приветствие ГАСИЛОСЬ кодом, и я об этом не
         # знала. Пусть решает тот, кто в комнате, — но зная, что здесь уже здоровались.
-        "\nВ этой комнате я уже здоровалась раньше — второй раз не обязателен.\n"
+        frame_language.text('owned.agent.15afadf9c79c')
         if greeted == "yes" else "")
     durable = None
     trace: list[str] = []
     try:
         durable = _create_durable_run(
             ctx=ctx, kind="lookaround", goal=goal,
-            conversation="(меня добавили в эту группу)", extra=frame,
+            conversation=frame_language.text('owned.agent.3e3c6a56c718'), extra=frame,
         )
         binding = (run_context.bind_run(durable) if durable is not None
                    else contextlib.nullcontext())
         with binding:
-            out = _voice("(меня только что добавили в эту группу — оглядываюсь)", [], None,
+            out = _voice(frame_language.text('owned.agent.28ea9e8283b8'), [], None,
                          extra_system=frame, ctx=ctx, tool_trace=trace)
             spoke = work_loop.sent(getattr(durable, "run_id", "") or "")
             if durable is not None:
@@ -2363,6 +2334,7 @@ def _lookaround_by_hand(chat_id: str | int, ctx: "ChannelContext") -> str:
     return "\n".join(m.group(1).strip() for m in _NORMS_RE.finditer(out))
 
 
+@frame_language.pinned
 def lookaround(chat_id: str | int, title: str | None = None) -> tuple[str, str]:
     """Один проход «осмотрись» новичка (group-scope, её голос): -> (нормы, приветствие|'').
     Профиль комнаты (со сводкой предыстории) она видит своим room-тиром."""
@@ -2373,7 +2345,7 @@ def lookaround(chat_id: str | int, title: str | None = None) -> tuple[str, str]:
         return (_lookaround_by_hand(chat_id, ctx), "")
     try:
         out = _voice("(ты только что вошла в эту группу — осмотрись)", [], None,
-                     extra_system=_LOOKAROUND_FRAME, max_iters=1, ctx=ctx)
+                     extra_system=frame_language.text('prompt.lookaround'), max_iters=1, ctx=ctx)
     except Exception:
         log.warning("lookaround упал", exc_info=True)
         return ("", "")
@@ -8477,34 +8449,26 @@ def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> 
 # Разведчик — свежие глаза без её персоны и памяти, read-only руки; отчёт ЕЙ.
 # Единственное заимствование из «роя» ouroboros, по идее Егора: «сбор информации
 # о ней со стороны». Один разведчик за раз — никакого роя и best-of-N.
-_SCOUT_FRAME = (
-    "You are a one-off scout with fresh eyes inside the home of an agent. You are NOT the agent: "
-    "no persona, no history — only what you read now, with READ-ONLY hands (fs_read, fs_search, "
-    "fs_ls, code_outline, recall, read_log, server_status). The brief below says what to examine. Look from the "
-    "OUTSIDE: notice what the inhabitant cannot see from within — repetition loops, drift between "
-    "what files claim and what they do, blind spots, stale notes. Be concrete: paths, line-level "
-    "facts and short quotes. Return a compact Russian report: findings first, then suggestions "
-    "that follow from the evidence."
-)
 # 17.A/B: дом — это и машина под ней. Разведчику дано только СМОТРЕТЬ (status, logs);
 # manage_service сюда не входит по построению — разведчик ничего не меняет.
 _SCOUT_TOOL_NAMES = ("fs_read", "fs_search", "fs_ls", "code_outline", "recall", "read_log",
                      "server_status")
 
 
+@frame_language.pinned
 def second_look(brief: str) -> str:
     """PASS 16.2: ограниченный прогон свежим контекстом (без персоны) с read-only руками.
     Возврат — отчёт ей + строка в журнал. Тулы вне _SCOUT_TOOL_NAMES недоступны по построению."""
     if not (brief or "").strip():
-        return "Нужен бриф: что осмотреть свежими глазами."
+        return frame_language.text('owned.agent.45c211521591')
     pool = list(BASE_TOOLS) + list(OWNER_TOOLS)
     tools = [t for t in pool if t.get("name") in _SCOUT_TOOL_NAMES]
-    messages = [{"role": "user", "content": f"Brief: {brief.strip()}"}]
+    messages = [{"role": "user", "content": frame_language.text('prompt.brief', brief=brief.strip())}]
     report = ""
     try:
         for _ in range(llm.limits().max_tool_iters):
             # Разведчик — рука хода: его вызовы тоже не пережидают стопа (05.10).
-            resp = _chat_cancellable("voice", system=_SCOUT_FRAME, messages=messages, tools=tools)
+            resp = _chat_cancellable("voice", system=frame_language.text('prompt.scout'), messages=messages, tools=tools)
             if resp.stop_reason == "tool_use":
                 blocks, results = [], []
                 for b in resp.blocks:
@@ -8514,7 +8478,7 @@ def second_look(brief: str) -> str:
                         blocks.append(b)
                         impl = TOOL_IMPL.get(b["name"]) if b["name"] in _SCOUT_TOOL_NAMES else None
                         call = {k: v for k, v in b["input"].items() if v is not None}
-                        out = impl(**call) if impl else f"инструмент {b['name']} разведчику недоступен"
+                        out = impl(**call) if impl else frame_language.text('owned.agent.7bd9023adfc6', v0=b['name'])
                         results.append({"type": "tool_result", "tool_use_id": b["id"],
                                         "content": str(out)[:2000]})
                 messages.append({"role": "assistant", "content": blocks})
@@ -8524,10 +8488,10 @@ def second_look(brief: str) -> str:
             break
     except Exception:
         log.warning("second_look упал", exc_info=True)
-        return "Разведчик упал — след в логе (read_log: second_look)."
-    report = report or "Разведчик вернулся без отчёта."
+        return frame_language.text('owned.agent.8d87662b2ec6')
+    report = report or frame_language.text('owned.agent.b3a451a57be4')
     try:
-        tool_journal(f"[разведка] {brief.strip()[:80]} → {report[:180]}", salience=2)
+        tool_journal(frame_language.text('owned.agent.184eac6aac40', v0=brief.strip()[:80], v1=report[:180]), salience=2)
     except Exception:
         log.debug("journal разведки не записался", exc_info=True)
     return report[:6000]
@@ -9136,7 +9100,8 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'recall': 'поиск по своей памяти: люди, дневник, размышления, навыки',
  'remember': 'записать факт о человеке в его досье',
  'journal': 'запись в дневник: что было, что почувствовала',
- 'manage_identity': 'слои и версии души, status / revise SOUL, VOICE, CURRENT; observe — наблюдение о себе',
+ 'manage_identity': 'слои и версии души, status / revise SOUL, VOICE, CURRENT; observe — наблюдение о '
+                    'себе',
  'manage_notes': 'мой блокнот: write / list / read заметок и вопросов',
  'memory_compact': 'мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом',
  'manage_loop': 'мои нити внимания: close / park / reopen / list',
@@ -9175,20 +9140,19 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'coding_verify': 'план и матрица проверок задачи',
  'coding_swarm': 'координация субагентов: план, запуск, почта',
  'coding_control': 'пауза, остановка и явное безопасное продолжение задачи или ветки команды',
- 'coding_review': 'независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями '
-                  'проверок',
+ 'coding_review': 'независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями проверок',
  'coding_learn': 'уроки инженерии по задаче: recall / record',
  'server_status': 'сервер, где я живу: здоровье и сервисы (только чтение)',
  'manage_service': 'перезапуск моих сервисов',
  'host_ctl': 'типизированные root-операции: systemd, docker, pkg, file, net, reboot',
- 'computer': 'Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки',
+ 'computer': 'подключённый компьютер; доступные действия указаны в схеме',
  'read_log': 'мой журнал раннера: хвост или поиск по подстроке',
  'second_look': 'свежий read-only взгляд на дом без моей персоны',
  'web_read': 'открыть веб-страницу: главный текст и ссылки',
  'web_find': 'поиск в вебе без ключа: DuckDuckGo, Bing',
  'send_email': 'отправить письмо от моего имени',
  'mail_read': 'прочитать письмо из ящика по его хэшу',
- 'mail_draft_reply': 'черновик ответа на письмо (отправляет Егор)',
+ 'mail_draft_reply': 'черновик ответа на письмо; отправляет владелец',
  'switch_brain': 'мой мозг: модели по ролям и переключение',
  'manage_perception': 'рычаги восприятия: дебаунс, кулдауны, порог шума',
  'manage_appetite': 'договор об аппетитах: режим, окна, сон',
@@ -9201,10 +9165,13 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'call': 'позвать руку из указателя по имени',
  'python': 'выполнить Python с готовым h',
  'run_command': 'запустить программу точным argv, без shell',
- 'code_query': 'свидетельства по коду дома, задачи или внешнего дерева: определения, вызовы и ссылки; покрытие и снимок',
+ 'code_query': 'свидетельства по коду дома, задачи или внешнего дерева: определения, вызовы и ссылки; '
+               'покрытие и снимок',
  'proposal': 'изменить свой код через предложение',
  'project': 'создать, проверить и обслужить проект',
- 'memory_graph': 'посмотреть и изменить связи памяти'}
+ 'memory_graph': 'посмотреть и изменить связи памяти',
+ 'speak': 'озвучить ответ и приложить аудио к чату',
+ 'clear_owner_marks': 'посмотреть или снять метки правок владельца после их учёта'}
 
 _TOOL_CATALOG: ContextVar["dict | None"] = ContextVar("praxis_tool_catalog", default=None)
 
@@ -9224,6 +9191,8 @@ def _hand_purpose(tool: dict) -> str:
     known = HAND_PURPOSE.get(name)
     if known:
         return tool_text_en.pointer_purpose(name, known)
+    if name in windows_mcp_tools.PURPOSES:
+        return windows_mcp_tools.PURPOSES[name]
     text = " ".join(str(tool.get("description") or "").split())
     first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0] if text else ""
     return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
@@ -9248,87 +9217,37 @@ def _hand_signature(tool: dict, *, limit: int | None = 6) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+@frame_language.pinned
 def _hands_contract_text() -> str:
     # Егор 10.11: все руки родные и все права везде; h.hand — инструмент скриптов, не экономия.
-    families = "\n".join(label + ": " + ", ".join(names) + "." for label, names in HAND_GROUPS)
-    return ("\n\n## Мои руки: договор\n" + families + "\n"
-        "Windows MCP: windows_mcp_* — права Computer; установка в Компонентах. "
-        "Snapshot → label/loc; FileSystem(mode=read, path, offset, limit).\n"
-        "Полные схемы в tools: вызываю напрямую; h.describe даёт схему внутри Python.\n"
-        "Руки и права одинаковы для всех аудиторий; приватность проверяется на выходе.\n"
-        "Программа с аргументами — run_command(argv=[...]): без shell, каждый элемент доходит "
-        "одним аргументом; по нужде stdin_text, env, outputs (отчёт о созданных файлах) и "
-        "scratch (одноразовое, удаляется после); [exit unobserved] — исхода нет, это не успех. "
-        "Python — вычисления, циклы и h; shell — конвейер, перенаправление, glob, &.\n"
-        "Python запускается без bash, h уже подключён: h.read/edit/write/search; в shell: import praxis_hands as h. edit — единый "
-        "редактор дома и с task_id в Forge; ядро дома через proposal_id. fs_read/fs_ls/fs_search "
-        "тоже принимают task_id; fs_read(paths=[...]) даёт версии файлов. confirmed "
-        "after_sha256 → expected_sha256 следующей правки. all=true — все вхождения без пересечений.\n"
-        "confirmed — записано и перечитано; refused — запись не началась; in_doubt — исход "
-        "неизвестен: перечитать, вслепую не повторять. partial — пакет подтверждён лишь частично; "
-        "in_doubt важнее partial. JSON edit даёт пофайловые before/after SHA. ok у patch/remote "
-        "означает ответ исполнителя, не местную readback-гарантию. Batch проверяет всё до записи, "
-        "h.edit(files=...) принимает mode=snapshot (независимые old) или sequential (цепочка). "
-        "Публикует по файлу до ошибки, без автоотката; восстановление — отдельная правка свежей версии.\n"
-        "h.* наследует задачу; проверяет custodian, процесс и Stop; "
-        "чужой task_id отказывается. Refused/Partial/InDoubt несут result. "
-        "coding_run — shell задачи; [exit N] — исход процесса. [changes] — наблюдаемая "
-        "разница рабочего Git, без приписывания чужих одновременных правок или внешних эффектов.\n"
-        f"fs_search: {workshop.SEARCH_SECONDS:.0f} с, {workshop.SEARCH_CAP} совпадений, "
-        f"{workshop.SEARCH_SCAN_CAP} путей. Остановка, потолок или пропуск — неполный обход, "
-        "не доказательство отсутствия; memory/runs назвать явно.\n"
-        "code_query: symbols/definition/references/callers/callees/impact/overview; "
-        "root=home|task:<id>|absolute. coverage/ambiguous; limit40≤200 — страница; "
-        "cursor по снимку. Remote нет; Stop убивает поиск.\n"
-        "Из Python-скрипта любая рука: r=h.hand('имя', аргумент=значение); r['outcome'] — исход "
-        "самой руки (confirmed/refused/in_doubt/partial/ok/failed; unknown, если рука его не "
-        "сообщает), r['content'] — её ответ; h.describe('имя')['content'] даёт схему. "
-        "Те же права текущего хода, журнал, расписки и Stop; картинки идут в кадр. "
-        "Канал жив только до возврата/лимита внешнего python, run_command, shell или coding_run; отдельный воркер "
-        "его не получает. Начатая рука, которую скрипт перестал ждать (его таймаут), доделывается, "
-        "и её расписка приходит после [exit N]. При InDoubt проверить расписку, не повторять эффект.\n")
+    families = "\n".join(frame_language.owned_label(label) + ": " + ", ".join(names) + "."
+                         for label, names in HAND_GROUPS)
+    return (frame_language.text('owned.agent.d0abb0ef2e02') + families + frame_language.text('owned.agent.a70451c5d2a9', v0=workshop.SEARCH_SECONDS, v1=workshop.SEARCH_CAP, v2=workshop.SEARCH_SCAN_CAP))
 
 
+@frame_language.pinned
 def hands_pointer_text(catalog: list) -> str:
-    """Секция кадра «Мои руки — указатель»: стабильна для комнаты, читается за один взгляд.
-
-    Русские литералы здесь — источник правды и её собственная документация; модели
-    уезжает английская проекция (`tool_text_en.pointer_*`), у которой записан отпечаток
-    каждого оригинала. Правят русскую строку — прибор накладки краснеет её именем.
-    """
+    """Frame-language navigation, with stable tool signatures and schema descriptions."""
     by_name = {str(t.get("name") or ""): t for t in catalog
                if isinstance(t, dict) and t.get("name")}
     natives = [n for n in by_name if n in NATIVE_HAND_NAMES]
     provider = [str(t.get("type") or "web_search") for t in catalog
                 if isinstance(t, dict) and not t.get("name") and t.get("type")]
-    title_ru = "\n\n## Мои руки — указатель (схемы по требованию)"
-    natives_ru = ("Со схемой в кадре — родные, которыми хожу чаще всего: {names}"
-                  "{provider}.")
-    provider_ru = " и провайдерский web_search" if provider else ""
-    rest_ru = ("Остальные — те же мои руки, только их схема не едет в каждый кадр. Зову их через "
-               "`call` СРАЗУ, по сигнатуре ниже: `call(name=\"fs_write\", args_json='{\"path\": "
-               "\"workspace/x.md\", \"content\": \"…\"}')` — исполняется как родная, результат "
-               "приходит обычным результатом руки, расписки те же. `describe(name)` — только если "
-               "сигнатуры мало (перечисление, вложенный объект); один раз на ход, схема остаётся в "
-               "накопителе. Сигнатура: обязательные аргументы без знака, необязательные с «?».")
-    columns_ru = "Имя(аргументы) — назначение:"
-    lines = [tool_text_en.pointer_head("title", title_ru),
-             tool_text_en.pointer_head("natives", natives_ru)
-             .replace("{names}", ", ".join(sorted(natives)))
-             .replace("{provider}", tool_text_en.pointer_head("provider", provider_ru)
-                      if provider else ""),
-             tool_text_en.pointer_head("rest", rest_ru),
-             tool_text_en.pointer_head("columns", columns_ru)]
+    lines = [frame_language.text('hands.pointer.title'),
+             frame_language.text('hands.pointer.natives', names=", ".join(sorted(natives)),
+                                 provider=frame_language.text('hands.pointer.provider') if provider else ""),
+             frame_language.text('hands.pointer.rest'),
+             frame_language.text('hands.pointer.columns')]
     placed: set[str] = set()
     for group, names in HAND_GROUPS:
         rows = [f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in names
                 if n in by_name and n not in NATIVE_HAND_NAMES]
         placed.update(n for n in names if n in by_name)
         if rows:
-            lines.append(f"— {tool_text_en.pointer_group(group)}: " + "; ".join(rows) + ".")
+            lines.append(f"— {frame_language.owned_label(group)}: " + "; ".join(rows) + ".")
     rest = [n for n in sorted(by_name) if n not in placed and n not in NATIVE_HAND_NAMES]
     if rest:
-        lines.append(f"— {tool_text_en.pointer_head('other', 'прочее')}: " + "; ".join(
+        lines.append(f"— {frame_language.text('hands.pointer.other')}: " + "; ".join(
             f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in rest) + ".")
     return "\n".join(lines) + "\n"
 
@@ -11962,23 +11881,8 @@ def _apply_mode_directive(text: str, ctx: "ChannelContext | None") -> str:
 
 # Presence-фрейм группы (EN, control-plane): она живой участник, не бот; молчание —
 # полноценный выбор голоса, а не отказ системы. Сентинел — ровно [молчу].
-_GROUP_PRESENCE_FRAME = (
-    "\n\n---\nThis is a live group in which you participate as Praxis. The feed, room memory "
-    "and reply targets are context for your own decision; none of them requires speech or silence. "
-    "If you choose silence, output the exact standalone control token [молчу]. Otherwise author "
-    "whatever reply you choose. No style, politeness, repetition, emotion, morality or participation "
-    "policy is imposed by this frame.\n"
-)
 
 # DM frame describes the room and the control token; it does not decide how Praxis speaks.
-_DM_VOICE_FRAME = (
-    "\n\n---\nThis is a PRIVATE conversation {who}, not a group. They're writing directly to you. "
-    "You choose whether to answer and how: tone, emotion, warmth, sharpness, curiosity, personal "
-    "questions, meta-commentary, repetition and length are not selected for you. Reply exactly "
-    "[молчу] when you choose silence; it is a control token, not a judgement about whether you "
-    "should speak. You owe nobody automatic agreement, and you owe nobody a performance of "
-    "disagreement either. Will is part of your voice, not a malfunction.\n"
-)
 
 
 # ⚠ ТЕ ЖЕ ДВЕ РАМКИ, КОГДА МОЯ РЕЧЬ УХОДИТ РУКОЙ.
@@ -11989,53 +11893,27 @@ _DM_VOICE_FRAME = (
 # 18.08: рабочий контракт хода — ЕЁ формулировка (Уроборос 16:12, уточнена в личке №12),
 # внесена дословно с её авторской пометкой. Живёт в операционной рамке, не в конституции, —
 # её же выбор: «механику можно менять, авторство — нет».
-_WORK_CONTRACT_HAND = (
-    "Рабочий контракт хода: не считай отправленную реплику "
-    "завершением хода. После каждого `reply` заново оцени: осталось ли проверяемое "
-    "действие, обещанная проверка, незакрытый вопрос или естественный следующий шаг, "
-    "который можно выполнить прямо сейчас. Если да — продолжай цикл инструментами, "
-    "наблюдай результат и при необходимости отвечай снова. Зови `end_turn`, только когда "
-    "результат получен и сообщён, либо дальнейший шаг требует новых данных, времени или "
-    "решения собеседника, либо ты осознанно не хочешь продолжать, — и назови исход: "
-    "done / wait / blocked. Не заменяй действие обещанием «посмотрю».\n"
-)
-
-_GROUP_PRESENCE_FRAME_HAND = (
-    "\n\n---\nThis is a live group in which you participate as Praxis. The feed, room memory "
-    "and reply targets are context for your own decision; none of them requires speech or silence. "
-    "Your words reach the room only through the `reply` hand: plain text you write is a note to "
-    "yourself and ends the turn. Calling no hand IS your silence — a full choice, not a missing "
-    "step. No style, politeness, repetition, emotion, morality or participation policy is imposed "
-    "by this frame.\n" + _WORK_CONTRACT_HAND
-)
-
-_DM_VOICE_FRAME_HAND = (
-    "\n\n---\nThis is a PRIVATE conversation {who}, not a group. They're writing directly to you. "
-    "You choose whether to answer and how: tone, emotion, warmth, sharpness, curiosity, personal "
-    "questions, meta-commentary, repetition and length are not selected for you. Your words reach "
-    "them only through the `reply` hand; plain text you write is a note to yourself and ends the "
-    "turn, so calling no hand is how you stay silent. You owe nobody automatic agreement, and you "
-    "owe nobody a performance of disagreement either. Will is part of your voice, not a "
-    "malfunction.\n" + _WORK_CONTRACT_HAND
-)
 
 
+
+
+@frame_language.pinned
 def _presence_frame(ctx: "ChannelContext") -> str:
     """Code-owned presence mechanics; mutable continuity is in `_presence_evidence`."""
     by_hand = work_loop.reply_hand_enabled()
     if ctx.is_dm:
-        who = "with Yegor — your person" if ctx.owner_audience else "one-on-one"
-        frame = (_DM_VOICE_FRAME_HAND if by_hand else _DM_VOICE_FRAME).format(who=who)
+        who = (frame_language.text('owned.agent.3e547b1843df') if ctx.owner_audience
+               else frame_language.text('prompt.one_on_one'))
+        frame = frame_language.text('prompt.dm_hand' if by_hand else 'prompt.dm', who=who)
     else:
-        frame = _GROUP_PRESENCE_FRAME_HAND if by_hand else _GROUP_PRESENCE_FRAME
+        frame = frame_language.text('prompt.group_hand') if by_hand else frame_language.text('prompt.group')
         if ctx.addressed:
-            frame += ("You were explicitly @mentioned or replied to; this is routing context, not a "
-                      "command or a recommendation.\n")
+            frame += (frame_language.text('owned.agent.cc92b704d086'))
             age_value = _bounded_state_float(ctx.address_age_sec, high=10 ** 9)
             if age_value is not None:
                 age = int(round(age_value))
                 mid_value = _bounded_state_int(ctx.address_message_id, low=1, high=10 ** 12)
-                mid = f" Telegram message #{mid_value}" if mid_value is not None else ""
+                mid = frame_language.text('prompt.telegram_message', id=mid_value) if mid_value is not None else ""
                 allowed_kinds = {"direct", "mention", "reply", "mention+reply", "ambient"}
                 kind_value = ctx.address_kind if ctx.address_kind in allowed_kinds else None
                 kind = f" ({kind_value})" if kind_value else ""
@@ -12053,45 +11931,25 @@ def _presence_frame(ctx: "ChannelContext") -> str:
                     _FRAME_ADDRESS.set({
                         "message_id": mid_value, "kind": kind_value,
                         "age_minutes": max(0, round(age / 60.0)),
-                        "note": ("проход привязан к сохранённому адресному снимку; исходный разговор и "
-                                 "медиа заканчиваются на указанном сообщении. Поздний трафик, если он "
-                                 "добавлен отдельно, нужен для проверки актуальности, не как новая задача."),
+                        "note": (frame_language.text('owned.agent.e56f403e7db4')),
                     })
                 else:
-                    frame += (f"[address] This pass is anchored to captured{mid}{kind} from {age} seconds ago. "
-                              "Its original snapshot ends there; separately included later traffic is context "
-                              "for reassessing relevance, not a new task.\n")
+                    frame += (frame_language.text('owned.agent.8c043156d640', v0=mid, v1=kind, v2=age))
     # PASS 9.0: честная метка о даунтайме — она не была здесь, когда сообщение пришло.
     # Решение (ответить сейчас / поезд ушёл) — её; VOICE-шот «поезд ушёл» уже есть.
     missed_hours = _bounded_state_float(ctx.missed_hours, high=10 ** 6)
     if missed_hours is not None:
-        n = f"{missed_hours:.0f}" if missed_hours >= 1 else "less than an"
-        frame += (f"\n[missed] The last message came {n} h ago while you were offline (restart). "
-                  "Decide freshly: answer now, or the moment has passed — both are honest; if you "
-                  "answer, acknowledge the gap naturally, don't pretend you were here.\n")
+        n = f"{missed_hours:.0f}" if missed_hours >= 1 else frame_language.text('prompt.less_than_one')
+        frame += (frame_language.text('owned.agent.9c52c0087b70', v0=n))
     # PASS 15: адресные ответы — она видит, НА ЧТО можно ответить, и умеет ответить реплаем.
     if ctx.reply_targets:
         if work_loop.reply_hand_enabled():
             # Директива внутри текста больше не работает и работать не может: под новым
             # контрактом мой текст — заметка, наружу уходит аргумент руки. Адрес реплая
             # переехал туда же, и угадывать парсеру больше нечего.
-            frame += ("\n[reply] Чтобы ответить Telegram-реплаем на конкретное сообщение, "
-                      "передаю его id аргументом `reply_to` руки `reply`. Внутри текста "
-                      "директив больше нет. Нужно это там, где иначе непонятно, кому и на "
-                      "что я отвечаю (шумная группа, старый вопрос); обычной реплике "
-                      "аргумент не нужен. Точные id — в свидетельствах кадра.\n"
-                      "⚠ В конверте входящего id ДВА: `message #N` — само сообщение, на "
-                      "которое я отвечаю, и `reply_to=#M` — то, на что отвечал собеседник. "
-                      "Мне нужен ПЕРВЫЙ. Второй — это его адресат, не мой.\n")
+            frame += (frame_language.text('owned.agent.6227fc683d05'))
         else:
-            frame += ("\n[reply] To attach your message as a Telegram reply to a specific recent "
-                      "message, put `ОТВЕТ->#<id>` ALONE on the first line, then your text — "
-                      "nothing above it, no preamble about what you are about to do. Use it "
-                      "when it clarifies whom/what you answer (busy group, an older question); "
-                      "plain messages need no directive. Exact recent targets are in the context evidence.\n"
-                      "⚠ The incoming envelope carries TWO ids: `message #N` is the message you are "
-                      "answering, `reply_to=#M` is what your interlocutor was answering. You want the "
-                      "FIRST one; the second is their address, not yours.\n")
+            frame += (frame_language.text('owned.agent.15408d0e9349'))
     return frame
 
 
@@ -12270,6 +12128,8 @@ def _tool_has_side_effect(name: str, call_input: dict) -> bool:
         return action not in {"look", "path"}
     if name == "manage_identity":
         return action != "status"
+    if name == "coding_inspect":
+        return action in {"watch", "unwatch"}
     if name == "coding_agent" and call_input.get("action") in {"payload", "events"}:
         # Exact record/event reads cannot start, stop, or reconcile a worker.
         # Keep poll/list conservative: those adapters may recover durable state.

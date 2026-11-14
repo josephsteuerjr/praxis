@@ -1360,7 +1360,8 @@ class FrameDidNotMove(unittest.TestCase):
         # 10.11: approved family catalogue, measured in this same fixed environment.
         # 10.11 (Егор, «сними»): outbound-сегмент говорит «держит только кред-пол» и рельсов
         # 53 — заказанное изменение кадра, перемерено тем же кодом.
-        self.assertEqual(self._digest(line), "26945551529ac7a8",
+        # 14.11 edition: localized capabilities and current tool catalog; same fixed environment.
+        self.assertEqual(self._digest(line), "519abed9fbbf9e01",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
@@ -1417,13 +1418,14 @@ class FrameDidNotMove(unittest.TestCase):
             self.assertEqual(sum(t["name"] == "clear_owner_marks" for t in agent.BASE_TOOLS), 1)
             self.assertIs(agent.TOOL_IMPL["clear_owner_marks"], agent.tool_clear_owner_marks)
             probes = (
-                ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
-                ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
+                ("prompt.dm/en", agent.frame_language.catalog('en')['prompt.dm'], "4f2a1533c7112571"),
+                ("prompt.group/en", agent.frame_language.catalog('en')['prompt.group'], "bfa680319b8eb74e"),
                 # 10.11: approved families; public descriptions name sovereign hands too.
                 # Same fixed environment and frozen voice/editor normalization as before.
                 # 10.11 (Егор, «сними»): строка группы больше не обещает outbound-советника.
-                ("describe('group')", capabilities.describe("group"), "21a2a33e6ac639a5"),
-                ("describe('known')", capabilities.describe("known"), "a44d67fe54afeabd"),
+                # 14.11 edition: approved translated capabilities/current catalog.
+                ("describe('group')", capabilities.describe("group"), "afe43ea00171f586"),
+                ("describe('known')", capabilities.describe("known"), "6f8ec18cb5d899e3"),
             )
         for name, value, expected in probes:
             with self.subTest(probe=name):

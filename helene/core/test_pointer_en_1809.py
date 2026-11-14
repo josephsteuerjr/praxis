@@ -38,7 +38,7 @@ def ctx():
 
 
 def pointer(env) -> str:
-    with mock.patch.dict(os.environ, env):
+    with mock.patch.dict(os.environ, env), agent.frame_language.use('en'):
         return agent.hands_pointer_text(agent.catalog_tools_for(ctx()))
 
 
@@ -89,12 +89,13 @@ class ThePointerSpeaksEnglish(unittest.TestCase):
         # назначения в указателе не печатаются вовсе.
         text = pointer(ON)
         self.assertIn("an honest snapshot", text)          # my_capabilities
-        self.assertIn("my proposals and their fate", text)  # list_proposals
+        self.assertIn(tool_text_en.POINTER_PURPOSE['proposal'], text)
 
     def test_the_english_lever_gives_her_own_words_back(self):
         text = pointer(OFF_EN)
-        self.assertIn("Мои руки — указатель", text,
-                      "PRAXIS_TOOLS_EN=off обязан возвращать её собственный текст")
+        self.assertIn("My tools — pointer", text, "frame language is independent of schema language")
+        self.assertIn(agent.HAND_PURPOSE['my_capabilities'], text,
+                      "PRAXIS_TOOLS_EN=off restores original tool descriptions")
 
     def test_describe_and_call_are_english_too(self):
         """Две руки указателя едут в КАЖДОМ кадре: по-русски они рвут набор пополам."""

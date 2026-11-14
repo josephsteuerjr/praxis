@@ -133,7 +133,7 @@ class TestPointerText(PointerBase):
         ctx = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
         catalog = agent.catalog_tools_for(ctx)
         text = agent.hands_pointer_text(catalog)
-        self.assertIn("## My tools — pointer", text)
+        self.assertIn(agent.frame_language.text('hands.pointer.title'), text)
         for tool in catalog:
             name = tool.get("name")
             if not name:
@@ -160,7 +160,8 @@ class TestPointerText(PointerBase):
         self.assertEqual(agent._hand_signature(many), "x(a0, a1?, a2?, a3?, a4?, a5?, …)")
         text = agent.hands_pointer_text([tool, {"name": "reply", "input_schema": {}}])
         self.assertIn("fs_write(path, content, overwrite?, force?) — ", text)
-        self.assertIn("RIGHT AWAY", text, "указатель говорит звать call без describe")
+        self.assertIn(agent.frame_language.text('hands.pointer.rest'), text,
+                      "указатель сохраняет инструкцию прямого call без лишнего describe")
         self.assertNotIn("reply(", text, "родная в списке не повторяется")
 
     def test_native_set_is_a_lever_with_a_fixed_core(self):
@@ -176,8 +177,9 @@ class TestPointerText(PointerBase):
 
     def test_every_catalog_hand_has_a_curated_purpose(self):
         ctx = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
+        curated = set(agent.HAND_PURPOSE) | set(agent.windows_mcp_tools.PURPOSES)
         missing = [t["name"] for t in agent.catalog_tools_for(ctx)
-                   if t.get("name") and t["name"] not in agent.HAND_PURPOSE]
+                   if t.get("name") and t["name"] not in curated]
         self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Егора 12.09)")
 
     def test_roster_knows_the_section(self):
@@ -295,7 +297,7 @@ class TestLoopEndToEnd(PointerBase):
                     client.read_digest = match.group(1)
                 tool, args = (
                     ("fs_read", {"path": "workspace/example.txt"}),
-                    ("fs_edit", {"path": "workspace/example.txt", "old": "alpha",
+                    ("edit", {"action": "replace", "path": "workspace/example.txt", "old": "alpha",
                                  "new": "beta", "expected_sha256": client.read_digest}),
                     ("fs_read", {"path": "workspace/example.txt"}),
                 )[client.step]
@@ -312,7 +314,6 @@ class TestLoopEndToEnd(PointerBase):
         client = _Client()
         llm.use_test_client(client)
         with mock.patch.object(workshop, "BASE", self.tmp), \
-             mock.patch.object(workshop.hands, "guard", return_value=None), \
              mock.patch.object(agent.stewardship, "check", return_value=None), \
              mock.patch.object(agent, "_pre_shell_dirt", return_value=set()), \
              mock.patch.object(agent, "_autocommit_self_edit"), \
@@ -327,7 +328,7 @@ class TestLoopEndToEnd(PointerBase):
         self.assertEqual(client.read_digest, before)
         owner = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True,
                                                  known=True, scope="owner")
-        schema = {t["name"]: t for t in agent.catalog_tools_for(owner)}["fs_edit"]
+        schema = {t["name"]: t for t in agent.catalog_tools_for(owner)}["edit"]
         self.assertIn("expected_sha256", schema["input_schema"]["properties"])
         self.assertIn("call", _names(client.calls[0]["tools"]))
         results = [block for call in client.calls[1:] for message in call["messages"]
@@ -391,7 +392,7 @@ class TestLoopEndToEnd(PointerBase):
         self.assertNotIn("fake_tool", offered, "fake_tool едет указателем, не схемой")
         system = client.calls[0].get("system")
         system = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
-        self.assertIn("My tools — pointer", system)
+        self.assertIn(agent.frame_language.text('hands.pointer.title').strip(), system)
         self.assertIn("fake_tool(required_field, optional_field?) — ", system)
         second = client.calls[1]["messages"]
         results = [b for m in second if isinstance(m.get("content"), list)

@@ -279,19 +279,20 @@ class TestTalkativeness(Base):
         # PASS 8.1: привратник снесён — вместо PERCEIVE_INSTRUCTION живёт presence-фрейм голоса
         self.assertFalse(hasattr(agent, "PERCEIVE_INSTRUCTION"))
         self.assertFalse(hasattr(agent, "perceive"))
-        self.assertIn("[молчу]", agent._GROUP_PRESENCE_FRAME)
-        self.assertIn("live group", agent._GROUP_PRESENCE_FRAME)
+        frame = agent.frame_language.text('prompt.group')
+        self.assertIn("[молчу]", frame)
+        self.assertIn("живая группа", frame)
 
     def test_private_tail_has_grounding_without_style_coercion(self):
         _, private = agent.build_system_parts(speaker="Егор", chat_id="777")
         _, public = agent.build_system_parts(
             speaker="Егор", ctx=agent.ChannelContext(chat_id="-777", is_dm=False),
         )
-        self.assertIn("Operational continuity", private)
+        self.assertIn(agent.frame_language.text('owned.agent.818295802af1'), private)
         self.assertNotIn("no bureaucratese", private)
         self.assertNotIn("Never narrate inner feelings", private)
         self.assertNotIn("Don't meta-comment", private)
-        self.assertIn("whether to speak are yours", private)
+        self.assertIn("решение говорить принадлежат тебе", private)
         self.assertNotIn("no bureaucratese", public)
         self.assertNotIn("без эссе и списков", public)
 
@@ -306,9 +307,9 @@ class TestTalkativeness(Base):
                 chat_id="2", is_dm=True, known=False,
             ),
         )
-        self.assertIn("owner-assigned FAMILY role", family)
+        self.assertIn(agent.frame_language.text('owned.agent.e9fc05d4e3cb'), family)
         self.assertNotIn("Full warmth", family)
-        self.assertIn("has no delegated owner authority", unknown)
+        self.assertIn(agent.frame_language.text('owned.agent.64c81f5c3a98'), unknown)
         self.assertNotIn("Be warm", unknown)
 
 

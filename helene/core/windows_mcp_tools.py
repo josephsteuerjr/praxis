@@ -8,6 +8,31 @@ import tempfile
 
 TOOLS = json.loads(Path(__file__).with_name('windows_mcp_schemas.json').read_text(encoding='utf-8'))
 SCHEMAS = {tool['name']: tool['input_schema'] for tool in TOOLS}
+# Reviewed English summaries of the pinned tools, shared by the compact pointer.
+PURPOSES = {'windows_mcp_' + name: purpose for name, purpose in {
+    'ControlStatus': 'inspect desktop-control ownership or release it',
+    'App': 'launch, switch, move or resize a Windows application',
+    'DisplayInventory': 'list displays and their coordinate spaces',
+    'PowerShell': 'execute PowerShell with a bounded timeout',
+    'FileSystem': 'read, write, copy, move, delete, list, search or inspect local files',
+    'Snapshot': 'inspect the desktop accessibility tree and interactive targets',
+    'Screenshot': 'capture a fast desktop screenshot',
+    'Click': 'click an observed desktop target or coordinate',
+    'Type': 'type into an observed control or the focused application',
+    'Scroll': 'scroll at an observed target or coordinate',
+    'Move': 'move the pointer or drag between coordinates',
+    'Shortcut': 'send a keyboard shortcut to the active application',
+    'Wait': 'wait for a bounded duration',
+    'WaitFor': 'wait for a desktop condition',
+    'Scrape': 'read a web page or the active browser DOM without model sampling',
+    'MultiSelect': 'select several items in a desktop control',
+    'MultiEdit': 'edit several desktop controls',
+    'Clipboard': 'read or set clipboard text',
+    'Process': 'list or terminate Windows processes',
+    'Notification': 'show a Windows notification',
+    'Registry': 'read, list, set or delete Windows registry values',
+}.items()}
+assert set(PURPOSES) == set(SCHEMAS)
 _call = None
 _allowed = None
 
