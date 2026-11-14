@@ -32,7 +32,8 @@ agent.py зовёт `capture()` и игнорирует возврат, llm.py �
 Зоны и их закон (§1–2 контракта): ничто, что меняется чаще, не стоит выше того, что
 меняется реже, ни одной строкой.
 
-    K — конституция: SOUL.md + VOICE.md байтами файлов. Заголовок тени НЕ несёт номер
+    K — конституция: SOUL.md + VOICE.md байтами файлов (+ постоянные части навыков
+        soul/skills/<slug>/resident.md, если они есть). Заголовок тени НЕ несёт номер
         эпохи: он менялся бы каждой границей НАД конституцией — мимо закона порядка.
     E — эпоха v3, семь блоков в порядке частоты изменения, шапка ПОСЛЕДНЕЙ:
         кто я · руки указателем · указатель памяти · адресная книга · недавнее ·
@@ -77,6 +78,7 @@ from pathlib import Path
 import desires as desires_ledger
 import frame_trace
 import memory_provenance
+import resident_skills
 import run_context
 import self_model
 import tool_offerings
@@ -536,6 +538,11 @@ def _zone_k() -> str:
     parts = [soul]
     if voice:
         parts.append("\n\n---\n" + voice)
+    # 14.11: постоянные части навыков живут в персоне сразу после VOICE — значит, и в
+    # конституции тени. Нет ни одной — байты K прежние.
+    resident, _rows = resident_skills.render(BASE / "soul" / "skills")
+    if resident:
+        parts.append("\n\n---\n" + resident)
     return "".join(parts)
 
 
@@ -2055,7 +2062,8 @@ def _coverage(live_sections, carried=frozenset(), recap_in_a: bool = False) -> d
             continue
         name = str(row.get("name") or "")
         label = str(row.get("label") or "")
-        if name in {"persona.soul", "persona.voice", "persona.self_current",
+        if name in {"persona.soul", "persona.voice", "persona.resident_skills",
+                    "persona.self_current",
                     "situation.channel", "situation.open", "situation.close"}:
             covered += 1
         elif name in _SITUATION_CANDIDATE_HOMES or (

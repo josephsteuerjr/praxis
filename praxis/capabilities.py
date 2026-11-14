@@ -27,6 +27,7 @@ import forge
 import llm
 import mailer
 import rails
+import resident_skills
 import selfdev
 import work_loop
 
@@ -377,7 +378,9 @@ def _fingerprint() -> str:
     # panelapp.html здесь потому, что список разделов пульта теперь читается из него:
     # новая плитка у Егора обязана доехать до неё без рестарта, иначе снимок опять начнёт
     # отставать — только уже молча, через кэш.
-    deps = [SKILLS_INDEX, llm.CONFIG_PATH, selfdev.POLICY_FILE, PANEL_HUB]
+    # Каталог навыков — тоже зависимость: новый или удалённый файл навыка не трогает mtime
+    # INDEX, и без этой строки снимок мог показывать прежний список до правки индекса.
+    deps = [SKILLS_INDEX, SKILLS_INDEX.parent, llm.CONFIG_PATH, selfdev.POLICY_FILE, PANEL_HUB]
     try:  # PASS 21: её живые рычаги восприятия — смена сбрасывает кэш возможностей
         import perception
         deps.append(perception.STATE_PATH)
@@ -388,6 +391,8 @@ def _fingerprint() -> str:
             parts.append(str(p.stat().st_mtime_ns))
         except OSError:
             parts.append("0")
+    parts.append("res=" + resident_skills.fingerprint(SKILLS_INDEX.parent))
+    parts.append("resmax=" + str(resident_skills.max_chars()))
     parts.append("ws=" + ("1" if web_search else "0"))
     parts.append("wsb=" + (llm.web_search_backend() or "none"))
     # Risk classification affects the snapshot; it never narrows merge authority.
@@ -463,6 +468,23 @@ def _skills_list() -> list[dict]:
     for slug in sorted(named - set(on_disk)):
         out.append({"name": slug, "line": "⚠ назван в индексе, но файла нет",
                     "orphan": True})
+    # 14.11: постоянная часть навыка (soul/skills/<slug>/resident.md) стоит в кадре каждого
+    # хода, папка навыка — материалы по потребности. Ключи появляются только там, где это
+    # правда, как и `orphan`: у обычного навыка строка прежняя.
+    _, resident_rows = resident_skills.render(SKILLS_INDEX.parent)
+    by_name = {row["name"]: row for row in out}
+    for res in resident_rows:
+        row = by_name.get(res["slug"])
+        if row is None:
+            row = {"name": res["slug"], "line": "⚠ постоянная часть есть, файла навыка нет",
+                   "orphan": True}
+            out.append(row)
+            by_name[res["slug"]] = row
+        row["resident"] = {"path": res["path"], "chars": res.get("chars", 0),
+                           "in_frame": bool(res.get("in_frame")),
+                           **({"refused": res["refused"]} if res.get("refused") else {})}
+        if res.get("materials"):
+            row["materials"] = [f"soul/skills/{res['slug']}/{name}" for name in res["materials"]]
     return out
 
 
@@ -583,6 +605,28 @@ def snapshot() -> dict:
     return snap
 
 
+def _resident_line(skills: list[dict]) -> str:
+    """Строка о постоянных навыках: что стоит в кадре каждого хода и где материалы.
+
+    Механизм называется и тогда, когда постоянных навыков нет: иначе о нём не узнать."""
+    rows = [x for x in skills if isinstance(x.get("resident"), dict)]
+    how = ("постоянная часть навыка — soul/skills/<slug>/resident.md, стоит в персоне каждого "
+           "хода сразу после VOICE, во всех чатах; потолок суммы "
+           f"{resident_skills.max_chars() or 'не задан'} знаков")
+    if not rows:
+        return f"постоянные навыки: нет ({how})"
+    shown = []
+    for x in rows:
+        res = x["resident"]
+        state = ("в кадре" if res.get("in_frame")
+                 else f"НЕ в кадре: {res.get('refused') or 'не поместилась в потолок'}")
+        bit = f"{x['name']} ({state}, {res.get('chars', 0)} зн.) — {x.get('line') or NO_PURPOSE}"
+        if x.get("materials"):
+            bit += "; материалы по потребности: " + ", ".join(x["materials"])
+        shown.append(bit)
+    return "постоянные навыки: " + " | ".join(shown) + f" ({how})"
+
+
 def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
     """Текст для my_capabilities: аудитория и руки — РАЗНЫЕ измерения (контракт A1).
 
@@ -611,6 +655,7 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
         brain = ", ".join(_brain_bit(r, b) for r, b in s["brain"].items())
         lim = s["limits"]
         skills = ", ".join(x["name"] for x in s["skills"]) or "—"
+        resident = _resident_line(s["skills"])
         try:  # 9.1: расход — живой, мимо кэша снапшота (меняется каждым вызовом)
             spent = llm.usage_line()
         except Exception:
@@ -674,6 +719,7 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
             f"- outbound (снимок кодом): {s['reflexes']['evaluator']}; "
             f"{s['reflexes']['authorship']}; {s['reflexes']['rewrite']}\n"
             f"- скиллы в блокноте: {skills}\n"
+            f"- {resident}\n"
             "- самоавторство (PASS 20): SOUL/VOICE/self ревизую сама через manage_identity — "
             "версия+причина+откат, Егор видит постфактум; журнал событий нагрузки и ночная ревизия "
             "характера по прожитому; меняющие действия — из owner-скоупа (моя дисциплина)\n"

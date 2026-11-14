@@ -31,10 +31,22 @@ beyond that frozen desktop code.
 ## Current cloud Praxis mirror
 
 `praxis/` mirrors the selected public source of the running cloud Praxis on
-2026-11-14: docs HEAD `a3f18a7e439fb22ebc012b272e44ab30970b8100`, runtime
-`771695e8d184416e3ef98815d5780ca4f9f7f22a`, and final test-isolated source
-`7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e`, with no deployed-uncommitted
-product files. Since the previous mirror (`24d09a6`), this adds titles bound to
+2026-11-14: HEAD `fe7d2036713ee8428b36d4ec3d4f7366b7d41514`, with no deployed-uncommitted
+product files. Since the previous core mirror (`12f38a8`, live `a3f18a7e`), this
+adds resident skills. A skill folder may hold `resident.md`; its text stands in
+the persona of every turn right after VOICE, while the skill file and the rest of
+the folder stay on demand. Order is deterministic, symbolic links are refused,
+and a total cap (`PRAXIS_RESIDENT_SKILLS_MAX`, 6,000 characters) names what did
+not fit instead of cutting it. The section belongs to the closed frame roster and
+the shadow constitution; the owner capability description names resident skills
+and their materials. The first resident skill, a support for lively Russian prose
+with an on-demand workshop, exercises and sources, lives in Praxis's private
+soul directory and is not mirrored. The source passed two identical 435-module gates, each with 7,323
+tests, 16 skips and no errors; the first fresh model inputs after deployment
+carried the resident section exactly once.
+
+Earlier the same day (docs HEAD `a3f18a7e`, runtime `771695e8`, final
+test-isolated source `7a4dfea8`), the mirror after `24d09a6` added titles bound to
 the actual triggering messages, separate operator-probe history, numeric model
 generation progress, and the `code_query` hand shared with Forge. Semantic search
 runs through owned child processes; its Python AST evidence, hash-bound pages
@@ -51,7 +63,9 @@ passed. No paid provider probes were made; physical phone acceptance is separate
 
 The semantic-search interface draws on Ouroboros v7.10.0 (MIT)
 `tools/query_code.py` and `code_navigation.py`; implementation reuses Praxis
-Forge and owned search, with no source copied.
+Forge and owned search, with no source copied. The split between an always-present
+support and on-demand materials follows the Ouroboros "living prose" kit
+(2026-11-14); the resident-skill mechanism is new Praxis code.
 `CORE-SOURCE.json` records all selected source digests, mirror digests and
 executable modes, together with the canonical mirror digest.
 

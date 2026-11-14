@@ -99,7 +99,7 @@ TEXT_CARRIED = ("contract.", "state.", "frame.extra_system", "evidence.tier")
 # опознаётся своим ярлыком (label), а не именем, и тиры, которые не собрались вовсе,
 # записи сегодня не получают — это названная граница этапа 1, а не умолчание.
 SYSTEM_ROSTER = (
-    "persona.soul", "persona.voice", "persona.self_current",
+    "persona.soul", "persona.voice", "persona.resident_skills", "persona.self_current",
     "contract.base", "contract.hands_pointer", "contract.hands_contract", "state.owner_place", "contract.owner_tools",
     "contract.appetite", "state.state_block",
     "contract.family_audience", "contract.unknown_authority",
