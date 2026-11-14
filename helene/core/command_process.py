@@ -136,6 +136,7 @@ class CommandProcess:
         self._custody = None
         self._temporary_custody = None
         self._nonce = None
+        parent_lifeline = bool(kwargs.pop('parent_lifeline', False))
         self._admission_fd = None
         gate_read = None
         self._linux_custody = False
@@ -145,7 +146,7 @@ class CommandProcess:
             if not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'WEXITED', 'P_PID')):
                 raise OSError('Safe command custody requires waitid/WNOWAIT')
             kwargs['start_new_session'] = True
-            if self._deferred:
+            if self._deferred or (parent_lifeline and sys.platform.startswith('linux')):
                 if kwargs.get('preexec_fn') is not None:
                     raise ValueError('Deferred POSIX commands cannot use preexec_fn')
                 if sys.platform.startswith('linux') and (kwargs.get('pass_fds') or not kwargs.get('close_fds', True)):
@@ -164,7 +165,8 @@ class CommandProcess:
                 executable = os.fsdecode(executable) if executable is not None else None
                 request = {'command': args[0] if isinstance(command, (str, bytes, os.PathLike)) else args,
                            'shell': shell, 'executable': executable, 'nonce': self._nonce,
-                           'deferred': True, 'parent_pid': os.getpid()}
+                           'deferred': self._deferred, 'parent_pid': os.getpid(),
+                           'parent_lifeline': parent_lifeline}
                 (self._custody/'request.json').write_text(json.dumps(request), encoding='utf-8')
                 os.chmod(self._custody/'request.json', 0o600)
                 self._linux_custody = sys.platform.startswith('linux')
@@ -273,6 +275,39 @@ class CommandProcess:
             if code is not None:return code
             if time.monotonic() >= end:raise subprocess.TimeoutExpired(self.args, timeout)
             time.sleep(.03)
+
+    def wait_foreground(self, timeout=None):
+        """Preserve shell '&' semantics while retaining custody of descendants."""
+        if not self._custody:
+            return self.wait(timeout)
+        directory = self._custody
+        end = time.monotonic() + timeout if timeout is not None else float('inf')
+        while True:
+            with self._lock:
+                code = self.poll()
+                if code is not None:
+                    return code
+                try:
+                    value = json.loads((directory / 'foreground.json').read_text())
+                except (OSError, ValueError):
+                    value = {}
+                if value.get('nonce') == self._nonce and type(value.get('exit_code')) is int:
+                    return value['exit_code']
+            if time.monotonic() >= end:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(.02)
+
+    def request_stop(self):
+        """Signal owned resources immediately; settlement is collected later."""
+        with self._lock:
+            if self.poll() is not None:return
+            if self._job:self._job.stop()
+            elif self._custody:
+                if self._leader_exited():return
+                os.kill(self.pid, signal.SIGTERM)
+            else:
+                self._leader_exited()
+                if self._live() is not None:os.killpg(self.pid, signal.SIGTERM)
 
     def stop_tree(self):
         with self._lock:

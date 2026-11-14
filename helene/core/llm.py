@@ -150,6 +150,19 @@ class EmptyResponseError(BrokenChannelError):
     """
 
 
+class RunawayGenerationError(BrokenChannelError):
+    """Explicit relay ceiling; no model result or tool invocation was admitted."""
+    code = 'runaway_generation'
+
+    def __init__(self, message='runaway_generation', metrics=None):
+        import model_progress
+        self.metrics = model_progress.project(metrics)
+        if message == 'runaway_generation' and self.metrics:
+            counts = {k:self.metrics[k] for k in ('max_call_argument_bytes', 'longest_whitespace_run', 'attempt_ms', 'limits') if k in self.metrics}
+            message += ': ' + json.dumps(counts, sort_keys=True)
+        super().__init__(message)
+
+
 class TornStreamError(BrokenChannelError):
     """Стрим НАЧАЛСЯ и оборвался ошибкой: что-то уже приехало, а finish_reason='error'.
 
@@ -2477,6 +2490,9 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
         for chunk in stream:
             if _service_tier_present(chunk):
                 actual_tier = _observed_service_tier(chunk)
+            import model_progress
+            progress = model_progress.packet_of(chunk)
+            if progress:model_progress.emit(progress)
             observations.merge(provider_observation.packet_of(chunk))
             # 25.09: терминал реле — ДО choices и content. Диагностика лимита подписки
             # приходила текстом в content и читалась как ответ модели (см.
@@ -2484,6 +2500,12 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
             # а коды апстрима (torn/upstream_error) идут прежним путём finish_reason=error.
             term = _relay_terminal_of(chunk)
             if term is not None:
+                if term.get('code') == 'runaway_generation':
+                    close = getattr(stream, 'close', None)
+                    if close is not None:
+                        try:close()
+                        except Exception:pass
+                    raise RunawayGenerationError(metrics=progress)
                 typed = _terminal_error(term)
                 if typed is not None:
                     raise typed
@@ -2742,6 +2764,14 @@ def _resolve_fallback_model(primary_framework: str, primary_model: str,
 
 
 def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMResponse:
+    import run_context
+    context = run_context.current_run()
+    if context is not None and not os.environ.get('PRAXIS_TEST') and framework not in _TEST_CLIENTS:
+        import model_step
+        if not _resolved:
+            model = _resolve_model(framework, model)
+        return model_step.call(framework, model, kw, _config(),
+                               single_attempt=_SINGLE_PROVIDER_ATTEMPT.get())
     spec = (_config().get("frameworks") or {}).get(framework) or {}
     _validate_endpoint_effort(framework, kw.get("thinking"), kw.get("reasoning_effort"), model)
     tier = normalize_service_tier(kw.pop("service_tier", None))

@@ -136,19 +136,23 @@ INSPECT_TOOL = {
     "name": "inspect",
     "description": (
         "See the exact task place. Besides read/search/diff, model/symbols/references/diagnostics/"
-        "impact/checks expose normalized semantic and test facts; mailbox shows worker signals. "
+        "impact/checks expose normalized semantic and test facts; definition/callers/callees use "
+        "the shared code_query evidence engine, coverage and snapshot cursor; mailbox shows worker signals. "
         "Large read replies are exact UTF-8 JSON pages (<=8000 chars): continue with "
         "start=next_start, start_char=next_char, expected_sha256=sha256; a changed file refuses "
         "the old hash. Small reads retain the legacy numbered-line display."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
-                    "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+                    "references", "definition", "callers", "callees", "diagnostics", "impact", "checks", "lessons", "mailbox",
                     "read", "list", "search", "diff", "history"], "description": "What to inspect in this task."},
         "path": {"type": "string", "description": "File or directory relative to the task root."}, "query": {"type": "string", "description": "Text or symbol to find."},
         "glob": {"type": "string", "description": "File mask narrowing the search."}, "start": {"type": "integer", "description": "First line, one-based."}, "end": {"type": "integer", "description": "Last line, inclusive."},
         "start_char": {"type": "integer", "description": "Unicode character offset within start line, for paged reads."},
         "expected_sha256": {"type": "string", "description": "Full 64-hex source hash from a read page; pins continuation to those bytes."},
+        "module": {"type": "string", "description": "Target defining module for semantic evidence."},
+        "limit": {"type": "integer", "description": "Semantic rows per page: default40, maximum200."},
+        "cursor": {"type": "string", "description": "Semantic snapshot:offset; changed files refuse continuation."},
     }, ["action"]),
 }
 
@@ -196,15 +200,41 @@ RUN_TOOL = {
                            "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}}, ["command"]),
 }
 
+RUN_COMMAND_TOOL = {
+    "name": "run_command",
+    "description": (
+        "Run one program in the task with exact argv and no shell: argv[0] is the program (PATH "
+        "name or a path relative to cwd), each other item is one argument byte for byte. Quotes, "
+        "spaces, ;, $(), *, backslashes and newlines are plain data. Use it for ordinary program "
+        "calls; use run when you want shell grammar (pipes, redirects, globs, &&). It never falls "
+        "back to shell. Same admission, custody, Stop and full log as run; stdout and stderr are "
+        "combined. A missing program or cwd is refused before launch. The reply ends with a "
+        "[run_command {...}] facts line and [exit N]; [exit unobserved] after a timeout is not "
+        "success. Host and Windows tasks refuse it before sending anything."
+    ),
+    "input_schema": _obj({"argv": {"type": "array", "items": {"type": "string"}, "description": "Program then its arguments, one array item per argument."},
+                           "cwd": {"type": "string", "description": "Working directory inside the task root; omitted uses the root."},
+                           "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."},
+                           "stdin_text": {"type": "string", "description": "Optional exact standard input text; omitted means closed stdin."},
+                           "env": {"type": "array", "items": {"type": "object", "properties": {
+                               "name": {"type": "string", "description": "Variable name."},
+                               "value": {"type": "string", "description": "Exact value."}}, "required": ["name", "value"]},
+                               "description": "Optional extra environment for this one program: [{name, value}]. The facts line and task receipts name variables only; like any tool argument, the values stay in this run's call record. PRAXIS_* is runtime-owned and refused. Nothing is read from settings."},
+                           "outputs": {"type": "array", "items": {"type": "string"}, "description": "Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size."},
+                           "scratch": {"type": "array", "items": {"type": "string"}, "description": "Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven."}}, ["argv"]),
+}
+
 PROCESS_TOOL = {
     "name": "process",
     "description": (
         "Start/poll/stop/list a long-running command without blocking this agent. start returns an "
-        "id immediately and keeps the complete log. timeout=0 is unbounded."
+        "id immediately and keeps the complete log. timeout=0 is unbounded. start takes either "
+        "command (a shell string) or argv (one exact program and arguments, no shell), never both."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["start", "poll", "stop", "list"], "description": "start launches a durable command; poll reads it; stop requests cancellation; list shows commands."},
-        "process_id": {"type": "string", "description": "Process to poll or stop."}, "command": {"type": "string", "description": "Command to start."},
+        "process_id": {"type": "string", "description": "Process to poll or stop."}, "command": {"type": "string", "description": "Shell command string to start."},
+        "argv": {"type": "array", "items": {"type": "string"}, "description": "Exact program then arguments to start without a shell; instead of command."},
         "cwd": {"type": "string", "description": "Working directory inside the task root."}, "name": {"type": "string", "description": "Human-readable command name."},
         "timeout": {"type": "integer", "description": "Seconds; 0 means unbounded."}, "tail": {"type": "integer", "description": "Trailing log lines to return."},
     }, ["action"]),
@@ -267,7 +297,7 @@ Operating contract:
 - Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
 - Change files with `edit` (replace, batch, write, patch) after inspect(action=read). When a script suits the job, write Python and use import praxis_hands as h (h.read, h.edit): the same version check and write lock. Bare file writes, including str.replace followed by open().write, bypass both.
-- A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Detached process/verification jobs are task-scoped; stopping your agent subtree does NOT stop them. Stop those jobs explicitly.
+- A worker may use `run_command` for exact program arguments, `run` for shell commands and build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Detached process/verification jobs are task-scoped; stopping your agent subtree does NOT stop them. Stop those jobs explicitly.
 - Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
 - Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
@@ -289,7 +319,7 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
         return f"{role}: tool {name} refused (read-oriented role)."
     if role != "worker" and name == "inspect" and clean.get("action") not in {
         "status", "orientation", "overview", "review", "model", "symbols",
-        "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+        "references", "definition", "callers", "callees", "diagnostics", "impact", "checks", "lessons", "mailbox",
         "read", "list", "search", "diff", "history",
     }:
         return f"{role}: inspect action refused (read-oriented role)."
@@ -299,6 +329,8 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
         return editor.edit(task_id=task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "run":
         return forge.run(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
+    if name == "run_command":
+        return forge.run_command(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "process":
         return forge.process(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "verify":
@@ -510,7 +542,7 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
         else:
             tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
             if role == "worker":
-                tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
+                tools += [EDIT_TOOL, RUN_TOOL, RUN_COMMAND_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
         adapter_id = (type(adapter).__module__ + "." + type(adapter).__qualname__) if adapter is not None else ""
         state = journal.start(request, {
             "next_boundary": "model_ready", "iteration": 0,

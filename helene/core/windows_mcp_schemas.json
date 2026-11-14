@@ -1,0 +1,1137 @@
+[
+  {
+    "name": "windows_mcp_ControlStatus",
+    "description": "Windows MCP (optional Windows component). Get desktop control owner, enabled state, gate policy, configured idle timeout and remaining user idle wait in seconds. AI control has no time limit: it lasts until the user takes over or release=true hands the desktop back, so release when the desktop work is done or before waiting on the user. Settings are read-only and changes require a server restart.",
+    "input_schema": {
+      "properties": {
+        "release": {
+          "default": false,
+          "type": "boolean",
+          "description": "Release this client's current desktop control session."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_App",
+    "description": "Windows MCP (optional Windows component). Open/start/launch applications and manage windows. Keywords: open, start, launch, program, application, window, foreground, focus, resize. Four modes: 'launch' (opens an application by Start Menu name), 'launch_executable' (strictly launches one executable path with separated argv and optional cwd), 'resize' (adjusts a named or active window), and 'switch' (brings a specific window into focus). Prefer background execution when supported. If launching an application is known to take focus or disrupt the user, obtain permission first, reusing existing authorization. Relaxed policy does not gate launch modes; this guidance is not server-enforced approval.",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "default": "launch",
+          "enum": [
+            "launch",
+            "launch_executable",
+            "resize",
+            "switch"
+          ],
+          "type": "string",
+          "description": "Operation to perform; choose one of the listed modes."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Application/process name or registry value name, according to the tool."
+        },
+        "window_loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window top-left position [x, y] in screen pixels."
+        },
+        "window_size": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window size [width, height] in pixels."
+        },
+        "executable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Executable path to launch; args is a list of exact arguments."
+        },
+        "args": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact application argument array; each item is one argument."
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute working directory for the launched application."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_DisplayInventory",
+    "description": "Windows MCP (optional Windows component). Read active display layout and DPI metadata. Reports display index, device name, monitor/work-area bounds, resolution, orientation, primary flag, effective DPI, and scale.",
+    "input_schema": {
+      "properties": {},
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_PowerShell",
+    "description": "Windows MCP (optional Windows component). Shell/command execution. Keywords: shell, run, execute, cmd, terminal, command line, script. A comprehensive system tool for executing any PowerShell commands. Use it to navigate the file system, manage files and processes, and execute system-level operations. Capable of accessing web content (e.g., via Invoke-WebRequest), interacting with network resources, and performing complex administrative tasks. This tool provides full access to the underlying operating system capabilities, making it the primary interface for system automation, scripting, and deep system interaction. Under relaxed control policy this tool is not desktop-gated. Prefer background execution; coordinate with the user before commands known to interfere with their desktop, reusing existing authorization. Output longer than max_output characters is cut to its head and tail with a marker reporting how much was omitted; a command ended by the timeout reports Status Code: timed out (distinct from a failure exit code) and includes whatever it printed before ending. A timeout ends the command and the console programs it was running; programs it started to run on their own (GUI programs, Start-Process without -NoNewWindow) keep running.",
+    "input_schema": {
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "PowerShell script text, executed as the current Windows user."
+        },
+        "timeout": {
+          "default": 30,
+          "type": "integer",
+          "description": "Maximum wait in seconds; does not authorize automatic replay on failure."
+        },
+        "max_output": {
+          "default": 20000,
+          "type": "integer",
+          "description": "Maximum returned output characters."
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_FileSystem",
+    "description": "Windows MCP (optional Windows component). Manages file system operations with eight modes: 'read' (read text file contents with optional line offset/limit), 'write' (create or overwrite a file, set append=True to append), 'copy' (copy file or directory to destination), 'move' (move or rename file/directory), 'delete' (delete file or directory, set recursive=True for non-empty dirs), 'list' (list directory contents with optional pattern filter, set show_hidden=True to include hidden entries), 'search' (find files matching a glob pattern), 'info' (get file/directory metadata like size, dates, type). Relative paths are resolved from the user's Desktop folder. Use absolute paths to access other locations.",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "enum": [
+            "read",
+            "write",
+            "copy",
+            "move",
+            "delete",
+            "list",
+            "search",
+            "info"
+          ],
+          "type": "string",
+          "description": "Operation to perform; choose one of the listed modes."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute Windows path. FileSystem relative paths resolve against the Desktop."
+        },
+        "destination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute destination for copy/move."
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Complete text to write, or text to append when append=true."
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Glob pattern for list/search, e.g. *.py."
+        },
+        "recursive": {
+          "default": false,
+          "type": "boolean",
+          "description": "Include subdirectories; required for deleting a nonempty directory."
+        },
+        "append": {
+          "default": false,
+          "type": "boolean",
+          "description": "Append content instead of replacing the file."
+        },
+        "overwrite": {
+          "default": false,
+          "type": "boolean",
+          "description": "Allow replacing an existing destination file."
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "First line to read, 1-based; omit to start at line 1."
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum number of lines or rows; omit for the server default."
+        },
+        "encoding": {
+          "default": "utf-8",
+          "type": "string",
+          "description": "Text encoding; utf-8 by default."
+        },
+        "show_hidden": {
+          "default": false,
+          "type": "boolean",
+          "description": "Include hidden files in directory listings."
+        }
+      },
+      "required": [
+        "mode",
+        "path"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Snapshot",
+    "description": "Windows MCP (optional Windows component). Take a screenshot and inspect the screen. Keywords: screenshot, screen capture, see screen, observe, look, inspect, UI elements, what's on screen. Captures complete desktop state including: system language, focused/opened windows, interactive elements (buttons, text fields, links, menus with coordinates), and scrollable areas. Set use_vision=True to include screenshot with cursor highlight. Set use_annotation=False to get a clean screenshot without bounding box overlays on UI elements (default: True, draws colored rectangles around detected elements). Set use_ui_tree=False for a faster screenshot-only snapshot when you do not need interactive or scrollable element extraction. Set width_reference_line/height_reference_line to overlay a grid for better spatial reasoning (make sure vision is enabled to use it). Set use_dom=True for browser content to get web page elements instead of browser UI. Set display=[0] or display=[0,1] using zero-based active Windows display indices; omit it to keep the default full-desktop behavior. Set region=[left, top, right, bottom] in virtual-desktop pixel coordinates to capture and inspect only that rectangle instead of the whole screen/display — useful when you already know which area matters and want to save tokens; region takes precedence over display when both are given, and an invalid or out-of-bounds region raises an error rather than silently capturing something else. Set save_path to an absolute file path (or an existing directory for a timestamped name) to also write the returned screenshot as a PNG file; this turns on use_vision and the saved path is reported in the response. Existing files are never overwritten. Always call this first to understand the current desktop state before taking actions.",
+    "input_schema": {
+      "properties": {
+        "use_vision": {
+          "default": false,
+          "type": "boolean",
+          "description": "Include screenshot pixels in the result."
+        },
+        "use_dom": {
+          "default": false,
+          "type": "boolean",
+          "description": "Read browser page DOM instead of browser chrome."
+        },
+        "use_annotation": {
+          "default": true,
+          "type": "boolean",
+          "description": "Draw UI element labels/bounds on the screenshot."
+        },
+        "use_ui_tree": {
+          "default": true,
+          "type": "boolean",
+          "description": "Include interactive/scrollable UI elements; false makes a faster image-only snapshot."
+        },
+        "width_reference_line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional horizontal reference grid spacing."
+        },
+        "height_reference_line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional vertical reference grid spacing."
+        },
+        "display": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-based active display indices from DisplayInventory, e.g. [0, 1]."
+        },
+        "region": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rectangle [left, top, right, bottom] in virtual-desktop pixels."
+        },
+        "save_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional absolute PNG path or existing directory; saves a screenshot and requires file-write permission."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Screenshot",
+    "description": "Windows MCP (optional Windows component). Captures a fast screenshot-first desktop snapshot with cursor position, desktop/window summaries, and an image. This path skips UI tree extraction for speed. Use Snapshot when you need interactive element ids, scrollable regions, or browser DOM extraction. Set display=[0] or display=[0,1] using zero-based active Windows display indices to capture only those monitors. Set region=[left, top, right, bottom] in virtual-desktop pixel coordinates to capture only that rectangle instead of the whole screen/display — useful when you already know which area matters and want to save tokens; region takes precedence over display when both are given, and an invalid or out-of-bounds region raises an error rather than silently capturing something else. Set save_path to an absolute file path (or an existing directory for a timestamped name) to also write the returned image as a PNG file (same pixels as the returned image); the saved path is reported in the response and existing files are never overwritten. Note: the returned image may be downscaled for efficiency; when it is, multiply image coordinates by the ratio of original size to displayed size to get the actual screen coordinates for mouse actions (Click, Move, etc.).",
+    "input_schema": {
+      "properties": {
+        "use_annotation": {
+          "default": false,
+          "type": "boolean",
+          "description": "Draw UI element labels/bounds on the screenshot."
+        },
+        "width_reference_line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional horizontal reference grid spacing."
+        },
+        "height_reference_line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional vertical reference grid spacing."
+        },
+        "display": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-based active display indices from DisplayInventory, e.g. [0, 1]."
+        },
+        "region": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rectangle [left, top, right, bottom] in virtual-desktop pixels."
+        },
+        "save_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional absolute PNG path or existing directory; saves a screenshot and requires file-write permission."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Click",
+    "description": "Windows MCP (optional Windows component). Performs mouse clicks at specified coordinates [x, y] or passing a UI element's label/id. Supports button types: 'left' for selection/activation, 'right' for context menus, 'middle'. Supports clicks: 0=hover only (no click), 1=single click (select/focus), 2=double click (open/activate). Provide either loc or label.",
+    "input_schema": {
+      "properties": {
+        "loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Screen coordinates [x, y] in virtual-desktop pixels; use loc OR label from a fresh Snapshot."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Numeric UI element label from the latest Snapshot; stale labels must be refreshed."
+        },
+        "button": {
+          "default": "left",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "type": "string",
+          "description": "Mouse button to click."
+        },
+        "clicks": {
+          "default": 1,
+          "type": "integer",
+          "description": "0 hovers without clicking; 1 clicks once; 2 double-clicks.",
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Type",
+    "description": "Windows MCP (optional Windows component). Types text at specified coordinates [x, y] or passing a UI element's label/id. Set clear=True to clear existing text first (Home, Shift+End, Backspace; never Ctrl+A, which many apps treat as 'mark every record'), False to append. The answer says how the field was cleared and what it reads back when the field exposes its text, and warns when focus moved away while typing (e.g. a message box took the keystrokes). Set press_enter=True to submit after typing. Set caret_position to 'start' or 'end' to type at the beginning or end of the field (Home/End; Ctrl+Home/Ctrl+End when the clicked field is a document or a native multi-line edit box, so the whole text rather than the clicked line), or 'idle' (default) to type where the click put the caret. Provide either loc or label. clear and press_enter accept only true or false. An empty text types nothing, so combine it with clear=True to just empty a field.",
+    "input_schema": {
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to type, find, or place on the clipboard, according to the tool."
+        },
+        "loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Screen coordinates [x, y] in virtual-desktop pixels; use loc OR label from a fresh Snapshot."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Numeric UI element label from the latest Snapshot; stale labels must be refreshed."
+        },
+        "clear": {
+          "default": false,
+          "type": "boolean",
+          "description": "Replace existing text before typing."
+        },
+        "caret_position": {
+          "default": "idle",
+          "enum": [
+            "start",
+            "idle",
+            "end"
+          ],
+          "type": "string",
+          "description": "Caret placement after typing; choose the listed position."
+        },
+        "press_enter": {
+          "default": false,
+          "type": "boolean",
+          "description": "Press Enter after typing."
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Scroll",
+    "description": "Windows MCP (optional Windows component). Scrolls at coordinates [x, y], a UI element's label/id, or current mouse position if loc=None. Type: vertical (default) or horizontal. Direction: up/down for vertical, left/right for horizontal. wheel_times controls amount (1 wheel ≈ 3-5 lines). Use for navigating long content, lists, and web pages.",
+    "input_schema": {
+      "properties": {
+        "loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Screen coordinates [x, y] in virtual-desktop pixels; use loc OR label from a fresh Snapshot."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Numeric UI element label from the latest Snapshot; stale labels must be refreshed."
+        },
+        "type": {
+          "default": "vertical",
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "type": "string",
+          "description": "Operation-specific type; choose one of the listed values."
+        },
+        "direction": {
+          "default": "down",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string",
+          "description": "Scroll direction."
+        },
+        "wheel_times": {
+          "default": 1,
+          "type": "integer",
+          "description": "Number of scroll wheel steps."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Move",
+    "description": "Windows MCP (optional Windows component). Moves mouse cursor to coordinates [x, y] or passing a UI element's label/id. Set drag=True to perform a drag-and-drop operation from the current mouse position to the target coordinates, or provide from_loc=[x, y] to make the drag explicit-start and atomic in one tool call. Optional duration controls bounded intermediate movement. Default (drag=False) is a simple cursor move (hover). Drag uses synthesized mouse input, which XAML shell surfaces such as Start menu tiles and pinned taskbar buttons ignore: there the drag does nothing even though the call succeeds, so use their context-menu commands (for example Move to front) instead and check the result with a Screenshot. Provide either loc or label.",
+    "input_schema": {
+      "properties": {
+        "loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Screen coordinates [x, y] in virtual-desktop pixels; use loc OR label from a fresh Snapshot."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Numeric UI element label from the latest Snapshot; stale labels must be refreshed."
+        },
+        "drag": {
+          "default": false,
+          "type": "boolean",
+          "description": "Drag from from_loc to loc while holding the left mouse button."
+        },
+        "from_loc": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Drag origin [x, y]; loc is the destination."
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Duration in seconds."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Shortcut",
+    "description": "Windows MCP (optional Windows component). Executes keyboard shortcuts using key combinations separated by +. Examples: \"ctrl+c\" (copy), \"ctrl+v\" (paste), \"alt+tab\" (switch apps), \"win+r\" (Run dialog), \"win\" (Start menu), \"ctrl+shift+esc\" (Task Manager). Use for quick actions and system commands.",
+    "input_schema": {
+      "properties": {
+        "shortcut": {
+          "type": "string",
+          "description": "Key chord such as Ctrl+C, Ctrl+Shift+S or Alt+Tab."
+        }
+      },
+      "required": [
+        "shortcut"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Wait",
+    "description": "Windows MCP (optional Windows component). Pauses execution for specified duration in seconds. Use when waiting for: applications to launch/load, UI animations to complete, page content to render, dialogs to appear, or between rapid actions. Helps ensure UI is ready before next interaction.",
+    "input_schema": {
+      "properties": {
+        "duration": {
+          "type": "integer",
+          "description": "Duration in seconds."
+        }
+      },
+      "required": [
+        "duration"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_WaitFor",
+    "description": "Windows MCP (optional Windows component). Waits until a UI condition is satisfied, polling the Windows accessibility tree inside the tool to avoid repeated Snapshot calls. Conditions: text_exists, active_window, element_exists, element_enabled, focused_element. Provide text and/or window_name depending on the condition. Set use_dom=True for browser DOM text.",
+    "input_schema": {
+      "properties": {
+        "condition": {
+          "type": "string",
+          "description": "Condition to wait for; choose a listed state."
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Text to type, find, or place on the clipboard, according to the tool."
+        },
+        "window_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window title used by the wait condition."
+        },
+        "timeout": {
+          "default": 10.0,
+          "type": "number",
+          "description": "Maximum wait in seconds; does not authorize automatic replay on failure."
+        },
+        "interval": {
+          "default": 0.25,
+          "type": "number",
+          "description": "Polling interval in seconds."
+        },
+        "use_dom": {
+          "default": false,
+          "type": "boolean",
+          "description": "Read browser page DOM instead of browser chrome."
+        }
+      },
+      "required": [
+        "condition"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Scrape",
+    "description": "Windows MCP (optional Windows component). Read a web page as raw content; use_dom=true reads the active browser tab DOM. Hélène does not delegate a second model request; use_sampling must be false.",
+    "input_schema": {
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Absolute http(s) URL of the page to read."
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional extraction focus; raw page content is returned without model sampling."
+        },
+        "use_dom": {
+          "default": false,
+          "type": "boolean",
+          "description": "Read browser page DOM instead of browser chrome."
+        },
+        "use_sampling": {
+          "default": false,
+          "type": "boolean",
+          "description": "False in Hélène: return page content directly without a second model call.",
+          "enum": [
+            false
+          ]
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_MultiSelect",
+    "description": "Windows MCP (optional Windows component). Selects multiple items such as files, folders, or checkboxes if press_ctrl=True, or performs multiple clicks if False. Pass locs (list of coordinates) or labels (list of UI element labels/ids).",
+    "input_schema": {
+      "properties": {
+        "locs": {
+          "anyOf": [
+            {
+              "items": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "List of screen positions [[x, y], ...]."
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "UI element labels from the latest Snapshot."
+        },
+        "press_ctrl": {
+          "default": true,
+          "type": "boolean",
+          "description": "Hold Ctrl while selecting multiple items."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_MultiEdit",
+    "description": "Windows MCP (optional Windows component). Enters text into multiple input fields at specified coordinates locs=[[x,y,text], ...] or using labels=[[label,text], ...]. Provide either locs or labels.",
+    "input_schema": {
+      "properties": {
+        "locs": {
+          "anyOf": [
+            {
+              "items": {
+                "items": {},
+                "type": "array"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "List of screen positions [[x, y], ...]."
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "items": {
+                "items": {},
+                "type": "array"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "UI element labels from the latest Snapshot."
+        }
+      },
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Clipboard",
+    "description": "Windows MCP (optional Windows component). Copy/paste clipboard operations. Keywords: copy, paste, cut, clipboard, text transfer. Use mode=\"get\" to read current clipboard content, mode=\"set\" to set clipboard text. This is the real Windows clipboard; set overwrites shared contents. Avoid using it merely to pass data between tools and coordinate known interference with the user.",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "enum": [
+            "get",
+            "set"
+          ],
+          "type": "string",
+          "description": "Operation to perform; choose one of the listed modes."
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Text to type, find, or place on the clipboard, according to the tool."
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Process",
+    "description": "Windows MCP (optional Windows component). List and kill running processes. Keywords: task manager, running tasks, kill, terminate, stop process, PID, CPU, memory usage. Use mode=\"list\" to list running processes with filtering and sorting options. Use mode=\"kill\" to terminate processes by PID or name. Prefer an exact PID. If the target is known to belong to the user or termination is known to disrupt their work, obtain permission first, reusing existing authorization. Unknown ownership alone does not require refusal. Ownership and approval are not enforced by this tool.",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "enum": [
+            "list",
+            "kill"
+          ],
+          "type": "string",
+          "description": "Operation to perform; choose one of the listed modes."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Application/process name or registry value name, according to the tool."
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact process ID; inspect Process(mode=list) first."
+        },
+        "sort_by": {
+          "default": "memory",
+          "enum": [
+            "memory",
+            "cpu",
+            "name"
+          ],
+          "type": "string",
+          "description": "Field used to order the returned processes."
+        },
+        "limit": {
+          "default": 20,
+          "type": "integer",
+          "description": "Maximum number of lines or rows; omit for the server default."
+        },
+        "force": {
+          "default": false,
+          "type": "boolean",
+          "description": "Force process termination; false uses normal termination."
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Notification",
+    "description": "Windows MCP (optional Windows component). Sends a Windows toast notification. Requires title, message, and app_id (a registered Windows AppUserModelID). Find available IDs with PowerShell: Get-StartApps | Select-Object Name, AppID. Avoid unnecessary notifications that interrupt the user; relaxed control policy does not gate this tool.",
+    "input_schema": {
+      "properties": {
+        "title": {
+          "description": "Notification title.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Notification body.",
+          "type": "string"
+        },
+        "app_id": {
+          "description": "Application name shown with the notification.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "message",
+        "app_id"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "windows_mcp_Registry",
+    "description": "Windows MCP (optional Windows component). Read and write the Windows Registry. Keywords: regedit, registry key, HKEY, HKCU, HKLM, Windows settings, registry value. Use mode=\"get\" to read a value (the answer names its type and shows it as stored, in the form set takes: ExpandString keeps its %VARIABLES%, Binary is .reg hex), mode=\"set\" to create/update a value, mode=\"delete\" to remove a value or key, mode=\"list\" to list values and sub-keys under a path. For type=\"Binary\", value lists bytes in decimal or 0x hex separated by commas or spaces (\"1, 2, 0xff\"), or in .reg notation (\"hex:01,02,ff\"); for type=\"MultiString\", put each string on its own line. Paths use PowerShell format (e.g. \"HKCU:\\Software\\MyApp\", \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\").",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "enum": [
+            "get",
+            "set",
+            "delete",
+            "list"
+          ],
+          "type": "string",
+          "description": "Operation to perform; choose one of the listed modes."
+        },
+        "path": {
+          "type": "string",
+          "description": "Registry path, e.g. HKCU:\\Software\\MyApp or HKLM:\\SOFTWARE."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Application/process name or registry value name, according to the tool."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Registry value text. MultiString uses one item per line; Binary accepts decimal/hex bytes."
+        },
+        "type": {
+          "default": "String",
+          "enum": [
+            "String",
+            "ExpandString",
+            "Binary",
+            "DWord",
+            "MultiString",
+            "QWord"
+          ],
+          "type": "string",
+          "description": "Operation-specific type; choose one of the listed values."
+        }
+      },
+      "required": [
+        "mode",
+        "path"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  }
+]

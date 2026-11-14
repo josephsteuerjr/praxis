@@ -124,6 +124,21 @@ class WindowsJob:
         if self.handle and not self.k.TerminateJobObject(self.handle, 1):
             raise ctypes.WinError(ctypes.get_last_error())
 
+    def empty(self):
+        if not self.handle:return True
+        from ctypes import wintypes as w
+        class Accounting(ctypes.Structure):
+            _fields_=[('user',ctypes.c_ulonglong),('kernel',ctypes.c_ulonglong),
+                      ('period_user',ctypes.c_ulonglong),('period_kernel',ctypes.c_ulonglong),
+                      ('faults',w.DWORD),('total',w.DWORD),('active',w.DWORD),('terminated',w.DWORD)]
+        fn=self.k.QueryInformationJobObject
+        fn.argtypes=[w.HANDLE,ctypes.c_int,ctypes.c_void_p,w.DWORD,ctypes.c_void_p]
+        fn.restype=w.BOOL
+        value=Accounting()
+        if not fn(self.handle,1,ctypes.byref(value),ctypes.sizeof(value),None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return value.active == 0
+
     def close(self):
         if self.handle:
             if not self.k.CloseHandle(self.handle):
@@ -214,6 +229,36 @@ def cancel_all():
     with _lock:
         scopes = {s for s, _, _ in _children.values()} | {s for s, _ in _external.values()}
         return [cancel(s) for s in scopes]
+
+
+class StepHandle:
+    """Native tool completion plus this edition's existing process custody.
+
+    A shared MCP/Computer request can remain in flight after cancellation; its
+    Future stays pending instead of claiming that an unkillable call has died.
+    """
+    pid = 0
+    kind = 'edition-tool'
+
+    def __init__(self, future, scope):
+        self.future, self.scope = future, str(scope)
+
+    def poll(self):
+        if not self.future.done():return None
+        with _lock:
+            for scope, proc, job in _children.values():
+                if scope == self.scope or scope.startswith(self.scope + '/'):
+                    if proc.poll() is None or (job and not job.empty()):return None
+            if any(scope == self.scope or scope.startswith(self.scope + '/') for scope,_ in _external.values()):
+                return None
+        return 0
+
+    def stop_tree(self):
+        result = cancel(self.scope)
+        if not self.future.running():self.future.cancel()
+        ended = not result['failures'] and self.poll() is not None
+        return ended, ('tool and its owned processes ended' if ended else
+                       'tool or owned process still pending; outcome unconfirmed')
 
 
 def reap_if_done(proc):

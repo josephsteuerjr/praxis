@@ -143,9 +143,67 @@ PYTHON_TOOL = schema("python",
     "inherits custody and Stop; remote tasks are refused before execution. At home timeout=0 "
     "uses the configured shell default (normally 30s), capped at 600s; in a task 0 means unlimited. "
     "The output ends with [exit N]; a timeout closes the ordinary process group. Background "
-    "descendants survive normal completion. Prefer h.edit to whole-file string replacement.", {
+    "descendants survive normal completion. Prefer h.edit to whole-file string replacement. "
+    "To run one program with exact arguments, call run_command instead of subprocess glue.", {
         "code": field("Python source, exact line numbers preserved; h is preloaded"),
         "cwd": field("Working directory; task paths are relative to the task root"),
         "timeout": field("Seconds; 0 uses home default or no task deadline", type="integer"),
         "task_id": field("Optional local Forge task; omitted means home"),
     }, ["code"])
+
+RUN_COMMAND_TOOL = schema("run_command",
+    "Run one program with exact arguments and no shell: argv[0] is the program (PATH name or "
+    "a path relative to cwd), every other item reaches it as one argument, byte for byte. "
+    "Quotes, spaces, ;, $(), *, ~, backslashes and newlines are plain data, never expanded. "
+    "Choose it for an ordinary program call (git show 'HEAD:a b.py', pytest -k x, ffmpeg ...); "
+    "python for computation, loops or h; shell only when you want shell grammar "
+    "(pipes, redirects, globs, &&, background &). It never falls back to shell. "
+    "Routes: home (the Linux container, cwd defaults to /app, same rights and autocommit as "
+    "shell) or, with task_id, a local Forge task (task root, admission, custody, Stop and its "
+    "full log). Host and Windows tasks are refused before anything is sent: their backends "
+    "take only shell strings; use coding_run there, or computer for the Windows laptop. "
+    "At home timeout=0 uses the configured default (normally 30s), capped at 600s; in a task "
+    "0 means no deadline. stdin_text is sent exactly as UTF-8 then EOF; omitted means closed "
+    "stdin. stdout and stderr arrive combined in one stream; the full output is kept. "
+    "The reply ends with a [run_command {...}] facts line (executor, cwd, argv, resolved "
+    "program, exit_code or signal, timed_out and tree_stop), [changes] and [exit N]. "
+    "[exit unobserved] means no exit status was seen (timeout): never read it as success. "
+    "refused: nothing was launched (bad argv, missing program or cwd). in_doubt: it may have "
+    "run; check before repeating. A non-zero exit does not mean nothing changed. "
+    "Optional env, outputs and scratch: see their fields; the facts line reports them.", {
+        "argv": field("Program then its arguments, one array item per argument",
+                      type="array", items={"type": "string"}),
+        "cwd": field("Working directory; home default /app, task paths are relative to the task root"),
+        "timeout": field("Seconds; 0 uses the home default or no task deadline", type="integer"),
+        "task_id": field("Optional local Forge task; omitted means home"),
+        "stdin_text": field("Optional exact standard input text; omitted means closed stdin"),
+        "env": field("Optional extra environment for this one program: [{name, value}]. The facts line and task receipts name variables only; like any tool argument, the values stay in this run's call record. PRAXIS_* is runtime-owned and refused. Nothing is read from settings.", type="array", items={"type": "object", "properties": {
+            "name": {"type": "string", "description": "Variable name"},
+            "value": {"type": "string", "description": "Exact value"}},
+            "required": ["name", "value"]}),
+        "outputs": field("Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size", type="array", items={"type": "string"}),
+        "scratch": field("Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven", type="array", items={"type": "string"}),
+    }, ["argv"])
+
+CODE_QUERY_TOOL = schema("code_query",
+    "Read-only code evidence in home, a local Forge task, or an absolute external tree; "
+    "never creates a task/project or a write right. Python AST definitions, calls, references "
+    "and import bindings; unknown receivers and shadowing stay ambiguous, never proven edges. "
+    "JS/TS use disclosed regex symbols and text mentions; no LSP/type or re-export resolution. "
+    "Returns snapshot, rows, total, next_cursor, coverage and methods. Empty incomplete scans "
+    "do not prove absence. line is 1-based, char Unicode code points, byte UTF-8 column; end "
+    "exclusive, CRLF excluded. Page limit is independent of the named Forge scan budget "
+    "(normally 12000 files/90 seconds). Cursor binds query and file hashes: changed files "
+    "refuse with paths; restart expires parent-held cursors. Structural cache is disposable "
+    "and stores no snippets/source/literals; external roots use process RAM only. "
+    "Heavy work uses the run-owned search process and stops with run reset. "
+    "Remote host/Windows tasks are explicitly unsupported. impact is heuristic; its "
+    "verification_plan(full=True) remains the full gate, overview is factual inventory.", {
+        "op": field("Evidence operation", enum=["symbols","definition","references","callers","callees","impact","overview"]),
+        "root": field("home (default), task:<id>, or an absolute local read-only tree"),
+        "path": field("Optional relative file/directory narrowing the scan; impact treats it as changed path"),
+        "name": field("Symbol name, dotted allowed; required for definition/references/callers/callees"),
+        "module": field("Defining module when known; distinguishes import bindings and same-name targets"),
+        "limit": field("Rows shown per page: default40, maximum200, independent of scan budget", type="integer"),
+        "cursor": field("Exact next_cursor snapshot:offset; keep root/path/op/name/module unchanged"),
+    }, ["op"])

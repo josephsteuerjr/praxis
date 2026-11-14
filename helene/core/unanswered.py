@@ -106,6 +106,9 @@ def entries(now: float | None = None) -> list[dict]:
         age = now - since
         if age < _min_age():
             continue
+        import step_control
+        if step_control.suppresses_replay(cid, base=BASE):
+            continue
         out.append({"chat_id": cid, "name": str(e.get("name") or ""),
                     "since": since, "hours": age / 3600.0})
     out.sort(key=lambda x: x["since"])

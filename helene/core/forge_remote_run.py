@@ -2,6 +2,8 @@
 import hashlib
 import json
 import ntpath
+import os
+import threading
 import time
 import uuid
 
@@ -23,15 +25,122 @@ def _call(forge, task, action, request, *, command='', cwd='.', timeout=0):
                                                'cwd': cwd, 'timeout': timeout},
                                    request_id=request['backend_request_id'])
             return remote.call('op.' + ('stop' if action == 'stop' else 'poll'),
-                               {'operation_id': ident, **({'tail': 30000} if action != 'stop' else {})})
+                               {'operation_id': ident, **({'tail': 30000} if action != 'stop' else {})},
+                               **({'request_id': request['reset_request_id']} if action == 'stop' and request.get('reset_request_id') else {}))
         if action == 'start':
             place = task['root'] if cwd in ('', '.') else ntpath.join(task['root'], cwd)
             return remote.process_start(command=command, shell='power_shell', cwd=place, timeout=timeout,
                                         request_id=request['backend_request_id'],
                                         operation_id=request['backend_operation_id'])
-        return (remote.call('process.cancel', {'operation_id': ident, 'tail': 30000})
+        return (remote.call('process.cancel', {'operation_id': ident, 'tail': 30000},
+                           **({'request_id': request['reset_request_id'], 'operation_id': request['reset_operation_id']}
+                              if request.get('reset_request_id') else {}))
                 if action == 'stop' else remote.process_status(ident, 30000))
 
+
+class RemoteCommand:
+    """Stop the exact admitted backend operation, then require its exit proof."""
+    pid = 0
+    kind = 'remote-process'
+
+    def __init__(self, forge, directory, task):
+        self.forge, self.directory, self.task = forge, directory, dict(task)
+        self.lock = threading.Lock()
+        self.stopping = False
+        self.settled = False
+
+    def _terminal(self, value):
+        if not isinstance(value, dict) or value.get('status') not in TERMINAL:
+            return False
+        request = self.forge._read_json(self.directory / 'request.json', {})
+        if value.get('prelaunch_refused') is True:
+            return True
+        row = value.get('remote_result') or {}
+        expected = request.get('remote_id') or request.get('backend_operation_id')
+        identity = row.get('id') if self.task['scope'] == 'host' else row.get('operation_id')
+        if not expected or identity != expected:
+            return False
+        return self.task['scope'] != 'host' or tree_settled(row, expected)
+
+    def poll(self):
+        if self.settled:
+            return 0
+        result = self.forge._read_json(self.directory / 'result.json', {})
+        request = self.forge._read_json(self.directory / 'request.json', {})
+        value = project_result(self.directory, request, result, self.task['scope']) if result else {}
+        if self._terminal(value):
+            self.settled = True
+            return 0
+        return None
+
+    def _cancel(self):
+        try:
+            # Probe first: do not cache a stop against an operation that has
+            # not yet been admitted. The identity was allocated before RPC.
+            value = refresh(self.forge, self.directory, self.task)
+            if value.get('status') in ACTIVE:
+                value = refresh(self.forge, self.directory, self.task, stop=True)
+            if self._terminal(value):
+                self.settled = True
+        finally:
+            with self.lock:
+                self.stopping = False
+
+    def stop_tree(self):
+        if self.poll() is not None:
+            return True, 'backend command exit verified'
+        with self.lock:
+            if not self.stopping:
+                self.stopping = True
+                threading.Thread(target=self._cancel, name='remote-run-reset', daemon=True).start()
+        return False, 'backend stop requested; waiting for exact operation exit proof'
+
+
+def tree_settled(row,operation_id=""):
+    if not isinstance(row,dict):return False
+    proof=row.get('tree_exit') or {}
+    if not isinstance(proof,dict):return False
+    receipt=proof.get('receipt') or {}
+    if not isinstance(receipt,dict):return False
+    try:receipt_sha=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    except (TypeError,ValueError,OverflowError):return False
+    return (proof.get('contract')=='command-tree-v1' and proof.get('settled') is True
+            and receipt.get('settled') is True and isinstance(receipt.get('nonce'),str) and bool(receipt.get('nonce'))
+            and type(receipt.get('exit_code')) is int
+            and (not operation_id or proof.get('operation_id')==operation_id)
+            and proof.get('receipt_sha256')==receipt_sha)
+
+def custody_status(request,result,scope=None):
+    if not isinstance(request,dict) or not isinstance(result,dict):return 'unknown'
+    status=result.get('status')
+    if status is not None and not isinstance(status,str):return 'unknown'
+    if scope and request.get('scope') and request['scope']!=scope:return 'unknown'
+    scope=scope or request.get('scope')
+    if scope is not None and not isinstance(scope,str):return 'unknown'
+    if request.get('remote') and scope not in {'host','windows'}:return 'unknown'
+    if scope=='host' and status in TERMINAL and result.get('prelaunch_refused') is not True:
+        if not tree_settled(result.get('remote_result') or {},request.get('remote_id') or request.get('backend_operation_id') or ''):return 'unknown'
+    return status
+
+def project_result(directory,request,result,scope=None):
+    """Read-only old bytes + exact-operation exit reconciliation, never replacement."""
+    if not isinstance(request,dict) or not isinstance(result,dict):return {'status':'unknown'}
+    if custody_status(request,result,scope) in TERMINAL:return result
+    if any((directory/name).is_symlink() for name in ('result.json','exit-reconciliation.json')):
+        return {**result,'status':'unknown'}
+    try:
+        original=(directory/'result.json').read_bytes()
+        raw=(directory/'exit-reconciliation.json').read_bytes();receipt=json.loads(raw)
+    except (OSError,ValueError):return {**result,'status':'unknown'}
+    if not isinstance(receipt,dict):return {**result,'status':'unknown'}
+    value=receipt.get('observation') or {}
+    operation=request.get('remote_id') or request.get('backend_operation_id')
+    if (receipt.get('original_result_sha256')!=hashlib.sha256(original).hexdigest()
+            or receipt.get('operation_id')!=operation or custody_status(request,value,scope) not in TERMINAL):
+        return {**result,'status':'unknown'}
+    return {**value,'original_result_status':result.get('status'),
+            'original_result_sha256':receipt['original_result_sha256'],
+            'exit_reconciliation':{'sha256':hashlib.sha256(raw).hexdigest(),'at':receipt.get('at')}}
 
 def refresh(forge, directory, task, *, stop=False):
     request = forge._read_json(directory / 'request.json', {}) or {}
@@ -85,7 +194,20 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
             request['backend_request_id'].encode()).hexdigest()[:16]
     else:
         request['backend_operation_id'] = 'op-' + uuid.uuid4().hex
+    import run_context
+    context = run_context.current_run()
+    controlled = context is not None and not os.environ.get('PRAXIS_TEST')
+    if controlled:
+        reset_id = hashlib.sha256((request['backend_request_id'] + ':reset').encode()).hexdigest()
+        request.update(reset_request_id=reset_id, reset_operation_id='op-' + reset_id)
     forge._atomic_json(directory / 'request.json', request)
+    if controlled:
+        import step_control
+        step_control.track(RemoteCommand(forge, directory, task), run_id=context.run_id, base=forge.BASE)
+        if step_control.requested(context.run_id, forge.BASE):
+            request.update(status='failed', prelaunch_refused=True, error='owner reset before backend admission')
+            forge._atomic_json(directory / 'result.json', request)
+            return request
     try:
         row = _call(forge, task, 'start', request, command=command, cwd=cwd, timeout=timeout)
         identity = row.get('id') if task['scope'] == 'host' else row.get('operation_id')

@@ -314,6 +314,10 @@ def _ask_search_process(request: dict, seconds: float) -> dict | None:
     script = str(Path(__file__).resolve().with_name("hands_search.py"))
     wait = seconds + _SEARCH_PARENT_PAD if seconds > 0 else None
     try:
+        import run_context
+        if run_context.current_run() is not None and not os.environ.get('PRAXIS_TEST'):
+            import search_execution
+            return search_execution.call([sys.executable, '-I', '-S', '-B', script], request, timeout=wait)
         proc = subprocess.run([sys.executable, "-I", "-S", "-B", script],
                               input=json.dumps(request), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=wait)
@@ -389,7 +393,7 @@ def _read_capped(stream, cap: int) -> str:
 
 def execute_argv(argv: list[str], cwd: str, timeout: int = 120, cap: int | None = 8000,
                  base: str | Path | None = None, *, confined: bool = True, stdin=None,
-                 label: str = "") -> dict:
+                 label: str = "", env: dict | None = None) -> dict:
     """One launch with file output; normal exit leaves background descendants alive.
 
     A timeout terminates the private process group. `confined=False` retains the
@@ -425,16 +429,19 @@ def execute_argv(argv: list[str], cwd: str, timeout: int = 120, cap: int | None 
     with tempfile.TemporaryFile() as output:
         try:
             import command_execution
-            proc = command_execution.launch(argv, cwd=place, stdin=stdin, stdout=output)
+            proc = command_execution.launch(argv, cwd=place, stdin=stdin, stdout=output, env=env)
         except OSError as exc:
             receipt("exec", False, label, f"не запустилось: {exc}", base=home)
             return {"ok": False, "msg": f"не запустилось: {exc}"}
         killed = False
+        stop = None
         try:
-            code = proc.wait(timeout if timeout and timeout > 0 else None)
+            wait = getattr(proc, 'wait_foreground', proc.wait)
+            code = wait(timeout if timeout and timeout > 0 else None)
         except subprocess.TimeoutExpired:
             killed, code = True, -1
-            proc.stop_tree()
+            confirmed, detail = proc.stop_tree()
+            stop = {'confirmed': bool(confirmed), 'detail': str(detail)}
         if cap is None:
             output.seek(0)
             text = command_execution.output_decoder(output.read())
@@ -445,7 +452,7 @@ def execute_argv(argv: list[str], cwd: str, timeout: int = 120, cap: int | None 
     ok = code == 0 and not killed
     receipt("exec", ok, label, f"code={code} killed={killed} "
                               f"dur_ms={int((time.monotonic() - started) * 1000)}", base=home)
-    return {"ok": ok, "code": code, "killed": killed, "out": text,
+    return {"ok": ok, "code": code, "killed": killed, "out": text, "stop": stop,
             "execution": {"argv": list(proc.args), "cwd": str(place), "pid": proc.pid}}
 
 
