@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 // Файлы: память агента как она есть — маркдауны по группам, чтение справа.
 import { ApiError, api, post } from "../api";
 import { bindFail, esc, failHTML, fmtAge, humanError, md, q, safeRender, toast } from "../lib";
@@ -144,15 +145,14 @@ function diffHTML(before: string, after: string): string {
   while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
   const gone = a.slice(head, a.length - tail);
   const came = b.slice(head, b.length - tail);
-  if (!gone.length && !came.length) return '<p class="field-hint">Текст совпадает с прошлой версией.</p>';
+  if (!gone.length && !came.length) return uiText("ui.ui.kit.window.views.files.086b1ae76f");
   const cap = 200;
   const block = (rows: string[], cls: string, sign: string) =>
     rows
       .slice(0, cap)
       .map((r) => `<div class="${cls}">${esc(sign + r)}</div>`)
-      .join("") + (rows.length > cap ? `<div class="muted">…и ещё ${rows.length - cap} строк</div>` : "");
-  return `<p class="field-hint">Изменившийся участок, строки с ${head + 1}-й.</p>
-    <div class="card md diff">${block(gone, "diff-gone", "− ")}${block(came, "diff-came", "+ ")}</div>`;
+      .join("") + (rows.length > cap ? uiText("ui.ui.kit.window.views.files.423aa8a664", {p0: String(rows.length - cap)}) : "");
+  return uiText("ui.ui.kit.window.views.files.73b8b74167", {p0: String(head + 1), p1: String(block(gone, "diff-gone", "− ")), p2: String(block(came, "diff-came", "+ "))});
 }
 
 export async function render(container: HTMLElement): Promise<void> {
@@ -172,7 +172,7 @@ export async function render(container: HTMLElement): Promise<void> {
     retry.type = "button";
     retry.className = "btn btn-quiet";
     retry.style.marginTop = "10px";
-    retry.textContent = "Повторить";
+    retry.textContent = uiText("ui.ui.kit.window.views.files.5189135a61");
     retry.addEventListener("click", () => void render(container));
     fail.append(document.createElement("br"), retry);
     container.append(fail);
@@ -180,7 +180,7 @@ export async function render(container: HTMLElement): Promise<void> {
   }
   lastGroups = groups;
   if (!groups.length) {
-    container.innerHTML = '<div class="empty"><b>Файлов пока нет</b>Память появится после первых ходов.</div>';
+    container.innerHTML = uiText("ui.ui.kit.window.views.files.e09774d280");
     return;
   }
   const cols = groups
@@ -189,24 +189,21 @@ export async function render(container: HTMLElement): Promise<void> {
       const total = typeof g.total === "number" ? g.total : shown;
       // Молчаливый срез был хуже пустоты: из тысячи заметок окно показывало
       // произвольные двести и печатало «200» как их полное число.
-      const count = total > shown ? `${shown} из ${total}` : String(shown);
+      const count = total > shown ? uiText("ui.ui.kit.window.views.files.872e50273d", {p0: String(shown), p1: String(total)}) : String(shown);
       return `<details class="fold" ${i === 0 || (S.mdSel || "").startsWith(g.root) ? "open" : ""}>
       <summary><b>${esc(g.group)}</b> <span class="muted">${esc(count)}</span></summary>
       <div class="fold-body" style="padding:0 6px 8px">${
-        total > shown ? `<p class="field-hint" style="margin:4px 2px 8px">Показаны ${shown} самых свежих из ${total}.</p>` : ""
+        total > shown ? uiText("ui.ui.kit.window.views.files.a6b3be9114", {p0: String(shown), p1: String(total)}) : ""
       }${g.files
         .map(
           (f) => `<div class="item" role="button" tabindex="0" aria-current="${f.path === S.mdSel}" data-path="${esc(f.path)}">
-          <span>${esc(f.name)}${f.readonly ? ' <span class="badge">только чтение</span>' : ""}</span><span class="n">${fmtAge(f.mtime)}</span></div>`,
+          <span>${esc(f.name)}${f.readonly ? uiText("ui.ui.kit.window.views.files.ae43390f9f") : ""}</span><span class="n">${fmtAge(f.mtime)}</span></div>`,
         )
         .join("")}</div>
     </details>`;
     })
     .join("");
-  container.innerHTML = `<div class="split wide">
-    <div class="list">${cols}</div>
-    <div class="reading" id="md-main"><div class="empty">Выбери файл слева</div></div>
-  </div>`;
+  container.innerHTML = uiText("ui.ui.kit.window.views.files.5e200a884a", {p0: String(cols)});
   for (const el of container.querySelectorAll<HTMLElement>(".item[data-path]")) {
     el.addEventListener("keydown", e => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
@@ -227,7 +224,7 @@ async function open(container: HTMLElement, path: string) {
     el.setAttribute("aria-current", String(el.dataset.path === path));
   }
   const main = q<HTMLElement>("#md-main", container);
-  main.innerHTML = '<div class="empty">читаю…</div>';
+  main.innerHTML = uiText("ui.ui.kit.window.views.files.fe732bbd85");
   // Чтение файла может отказать тоже — и правая половина не должна застревать
   // в вечном «читаю…» (тот же живой случай: отказ маскировался молчанием).
   let doc: Doc;
@@ -242,12 +239,12 @@ async function open(container: HTMLElement, path: string) {
     // Труба отдаёт сырое `FileNotFoundError: [WinError 2] … 'C:\…'`; владельцу
     // нужно слово, а не имя класса исключения. Сырое — в складку.
     const messages: Record<string, string> = {
-      not_found: "Этого файла больше нет — агент его убрал.",
-      denied: "Нет доступа к файлу.",
-      io: "Файл не открылся.",
-      outside: "Этот файл окно не показывает.",
-      not_markdown: "Окно показывает только маркдауны агента.",
-      too_big: "Файл слишком большой для этого окна.",
+      not_found: uiText("ui.ui.kit.window.views.files.f2e08b1696"),
+      denied: uiText("ui.ui.kit.window.views.files.76cd1de634"),
+      io: uiText("ui.ui.kit.window.views.files.a35e26db2d"),
+      outside: uiText("ui.ui.kit.window.views.files.5523e9d85d"),
+      not_markdown: uiText("ui.ui.kit.window.views.files.f6c5df2ca7"),
+      too_big: uiText("ui.ui.kit.window.views.files.20ba8e2529"),
     };
     main.innerHTML = failHTML(doc.error, { retry: false, message: messages[doc.code || ""] });
     bindFail(main);
@@ -263,29 +260,9 @@ async function open(container: HTMLElement, path: string) {
   // владелец платит потерянным текстом: отказ приходил только по «Сохранить».
   const readonly = !!doc.readonly || !!doc.tail;
   const prev = prevVersion(path);
-  main.innerHTML = `<div class="tools-row"><span class="muted mono">${esc(path)}</span>
-      ${readonly ? "" : '<button class="btn btn-quiet" id="md-edit" type="button">Править</button>'}</div>
-    ${doc.readonly ? '<p class="field-hint">Этот файл подписан агентом: ручная правка снаружи его обнуляет, поэтому окно его только показывает.</p>' : ""}
-    ${doc.tail_note ? `<p class="field-hint">${esc(doc.tail_note)}</p>` : ""}
-    ${
-      prev
-        ? `<div class="notice" id="md-revised">
-        <span class="dot"></span>
-        <span>Агент правит этот файл сам и без спроса. Последняя его правка: ${esc(fmtAge(prev.mtime))} назад.</span>
-        <button class="notice-action" id="md-diff" type="button">Что изменилось</button>
-      </div><div id="md-diff-out"></div>`
-        : ""
-    }
-    <div class="card md" id="md-view">${md(text)}</div>
-    <div id="md-editor" hidden>
-      <textarea class="md-editor" spellcheck="false"></textarea>
-      <div class="actions" style="margin-top:12px">
-        <button class="btn btn-primary" id="md-save" type="button">Сохранить</button>
-        <button class="btn btn-quiet" id="md-cancel" type="button">Отмена</button>
-        <span class="receipt" id="md-receipt"></span>
-      </div>
-      <div id="md-conflict" hidden></div>
-    </div>`;
+  main.innerHTML = uiText("ui.ui.kit.window.views.files.d3be1a6428", {p0: String(esc(path)), p1: String(readonly ? "" : uiText("ui.ui.kit.window.views.files.fabf8d13bb")), p2: String(doc.readonly ? uiText("ui.ui.kit.window.views.files.b4288abd7b") : ""), p3: String(doc.tail_note ? `<p class="field-hint">${esc(doc.tail_note)}</p>` : ""), p4: String(prev
+        ? uiText("ui.ui.kit.window.views.files.d1ffe24f93", {p0: String(esc(fmtAge(prev.mtime)))})
+        : ""), p5: String(md(text))});
   if (prev) bindDiff(main, prev.path, text);
   parkAfterRender(path);  // после рендера документа — см. парковку выше
   if (readonly) return;
@@ -310,22 +287,22 @@ async function open(container: HTMLElement, path: string) {
   /** `stamp` = undefined — писать поверх сознательно, без сверки отпечатка. */
   const write = async (stamp: string | undefined) => {
     receipt.className = "receipt";
-    receipt.textContent = "пишу…";
+    receipt.textContent = uiText("ui.ui.kit.window.views.files.61ccb49c68");
     try {
       await post("/api/md", { path, text: editor.value, mtime_ns: stamp });
-      toast("Сохранено: агент увидит это в следующем ходу");
+      toast(uiText("ui.ui.kit.window.views.files.56aca7466e"));
       await open(container, path);
     } catch (e) {
       if (e instanceof ApiError && e.code === "conflict") {
         // Развилка вместо молчания. Текст владельца остаётся в поле — что бы он
         // ни выбрал, набранное не пропадает.
         receipt.className = "receipt err";
-        receipt.textContent = "Файл изменился, пока он был открыт.";
+        receipt.textContent = uiText("ui.ui.kit.window.views.files.6bbbc8a595");
         await showConflict();
         return;
       }
       receipt.className = "receipt err";
-      receipt.textContent = "Не сохранилось: " + humanError(e).text;
+      receipt.textContent = uiText("ui.ui.kit.window.views.files.55932347ab") + humanError(e).text;
     }
   };
 
@@ -338,15 +315,7 @@ async function open(container: HTMLElement, path: string) {
       theirs = "";   // не прочиталось — развилку всё равно показываем
     }
     conflictBox.hidden = false;
-    conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px">
-      <span class="dot failed"></span>
-      <span>Агент изменил этот файл, пока он был открыт в окне. Если сохранить как есть, его правка пропадёт.</span>
-    </div>
-    ${theirs ? `<details class="fail-detail"><summary>Что в файле сейчас</summary><pre class="mono">${esc(theirs)}</pre></details>` : ""}
-    <div class="actions" style="margin-top:10px">
-      <button class="btn btn-primary" id="md-reread" type="button">Перечитать (мои правки потеряются)</button>
-      <button class="btn btn-quiet" id="md-force" type="button">Перезаписать своим текстом</button>
-    </div>`;
+    conflictBox.innerHTML = uiText("ui.ui.kit.window.views.files.e6af46ae13", {p0: String(theirs ? uiText("ui.ui.kit.window.views.files.828d9eb8cb", {p0: String(esc(theirs))}) : "")});
     q("#md-reread", conflictBox).addEventListener("click", () => {
       safeRender(main, () => open(container, path));
     });
@@ -366,11 +335,11 @@ function bindDiff(main: HTMLElement, prevPath: string, current: string) {
   if (!btn || !out) return;
   btn.addEventListener("click", () => {
     btn.disabled = true;
-    btn.textContent = "читаю…";
+    btn.textContent = uiText("ui.ui.kit.window.views.files.b7eefd36b7");
     safeRender(out, async () => {
       const doc = await api<Doc>("/api/md?path=" + encodeURIComponent(prevPath));
       btn.disabled = false;
-      btn.textContent = "Что изменилось";
+      btn.textContent = uiText("ui.ui.kit.window.views.files.bc016a1cbc");
       if (doc.error) {
         out.innerHTML = failHTML(doc.error, { retry: false });
         bindFail(out);
@@ -379,9 +348,9 @@ function bindDiff(main: HTMLElement, prevPath: string, current: string) {
       const before = doc.text || "";
       const meta = versionMeta(before);
       const why = meta.reason
-        ? `<p class="field-hint">Основание, записанное агентом${meta.by ? " (" + esc(meta.by) + ")" : ""}: ${esc(meta.reason)}</p>`
+        ? uiText("ui.ui.kit.window.views.files.0e7d9d9698", {p0: String(meta.by ? " (" + esc(meta.by) + ")" : ""), p1: String(esc(meta.reason))})
         : "";
-      out.innerHTML = `<p class="field-hint mono">${esc(prevPath)}${meta.version ? " · версия " + esc(meta.version) : ""}</p>${why}${diffHTML(before, current)}`;
+      out.innerHTML = `<p class="field-hint mono">${esc(prevPath)}${meta.version ? uiText("ui.ui.kit.window.views.files.aaca4567c9") + esc(meta.version) : ""}</p>${why}${diffHTML(before, current)}`;
     });
   });
 }

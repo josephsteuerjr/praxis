@@ -176,7 +176,7 @@ server.on('upgrade',(req,socket)=>{
       if(mask)for(let i=0;i<bytes.length;i++)bytes[i]^=mask[i%4];
       if(opcode===8){socket.end();return;}if(opcode!==1)continue;
       let d;try{d=JSON.parse(bytes.toString());}catch{socket.destroy();return;}
-      void route(d.path,d.method,d.body).then(body=>socket.write(frame({id:d.id,status:200,body})),e=>socket.write(frame({id:d.id,status:e.status||500,error:e.message})));
+      void route(d.path,d.method,d.body).then(body=>socket.write(frame({id:d.id,status:200,body})),e=>socket.write(frame({id:d.id,status:e.status||500,error:e.message,code:e.code})));
     }
   });
   socket.on('error',()=>{});socket.on('close',()=>sockets.delete(socket));

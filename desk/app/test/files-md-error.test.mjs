@@ -3,8 +3,9 @@
 // словами с повтором, а не молчаливой пустотой или вечным «читаю…».
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 
-const src = readFileSync(new URL("../../ui-kit/window/views/files.ts", import.meta.url), "utf8");
+const src = resolvedUiLiterals(readFileSync(new URL("../../ui-kit/window/views/files.ts", import.meta.url), "utf8"));
 
 // 1. Дерево (/api/md-tree) читается под ловцом: отказ → слова + «Повторить»,
 //    не пустота и не необработанный throw.
