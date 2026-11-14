@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../lang/lang";
 import "./paper-files.css";
 
 let serial = 0;
@@ -10,7 +11,7 @@ export function paperDialog(title: string, wide = false) {
   heading.textContent = title;
   dialog.setAttribute("aria-labelledby", heading.id);
   const header = document.createElement("header");
-  const close = paperButton("Закрыть", () => dialog.close());
+  const close = paperButton(uiText("ui.ui.kit.paper.dialog.a7a4033657"), () => dialog.close());
   close.className += " paper-close";
   header.append(heading, close);
   const body = document.createElement("div"); body.className = "paper-dialog-body";
@@ -34,12 +35,12 @@ export function paperButton(label: string, action: () => void, primary = false) 
 
 export function fileSize(bytes: number) {
   if (!Number.isFinite(bytes)) return "";
-  return bytes >= 1048576 ? (bytes / 1048576).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " МБ"
-    : bytes >= 1024 ? Math.ceil(bytes / 1024) + " КБ" : bytes + " Б";
+  return bytes >= 1048576 ? (bytes / 1048576).toLocaleString(locale(), { maximumFractionDigits: 1 }) + uiText("ui.ui.kit.paper.dialog.883817f199")
+    : bytes >= 1024 ? Math.ceil(bytes / 1024) + uiText("ui.ui.kit.paper.dialog.69a96a5345") : bytes + uiText("ui.ui.kit.paper.dialog.ec78fc60af");
 }
 
 export function fileError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
-  if (/failed to fetch|networkerror|load failed|aborterror|timeout|timed out/i.test(text)) return "Связь прервалась. Проверь подключение и повтори.";
-  return text.replace(/https?:\/\/[^\s]+/gi, "адрес файла").slice(0, 400);
+  if (/failed to fetch|networkerror|load failed|aborterror|timeout|timed out/i.test(text)) return uiText("ui.ui.kit.paper.dialog.2d60528908");
+  return text.replace(/https?:\/\/[^\s]+/gi, uiText("ui.ui.kit.paper.dialog.d39a66a2c1")).slice(0, 400);
 }

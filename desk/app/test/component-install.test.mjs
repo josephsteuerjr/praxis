@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
@@ -14,10 +15,11 @@ const shell=async command=>{
  status.progress={state:'running',stage:'unpacking',active:true,files:2,total_files:8};return {state:'running',active:true};
 };
 const output=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/components-card.ts',import.meta.url),'utf8')
+ .replace(/^import \{ t as uiText, locale \}.*\r?\n/m,'')
  .replace("import { shell } from './api';","const {shell}=require('./api');")
  .replace("import { button, card, el } from '../dom';","const {button,card,el}=require('../dom');")
  .replaceAll('export function ','function '),{mode:'transform'})+'\nexports.componentsCard=componentsCard;';
-const context={exports:{},setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout:()=>{},
+const context={exports:{},uiText,locale,setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout:()=>{},
  require:name=>name==='./api'?{shell}:{el:(...args)=>new Node(...args),card:(title,body)=>body,
  button:(label,cls,click)=>Object.assign(new Node('button',cls,label),{click})}};
 vm.runInNewContext(output,context);

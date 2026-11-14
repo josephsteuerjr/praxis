@@ -132,7 +132,8 @@ async function route(path,method='GET',body=null) {
   if(p==='/api/anatomy')return {};
   return [];
 }
-const injection=`<script>window.DESK_CONFIG_OVERRIDE={base:'',key:'',agent:'Hélène',product:'Hélène'};window.__HELENE__={shell:'electron',platform:'windows',invoke:async(cmd,args)=>{const r=await fetch('/__fixture/native',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd,args})});if(!r.ok)throw Error(await r.text());return r.json();},win:()=>{},look:()=>{}};</script>`;
+const fixtureShell=process.env.HELENE_UI_FIXTURE_SHELL==='python'?'python':'electron';
+const injection=`<script>window.DESK_CONFIG_OVERRIDE={base:'',key:'',agent:'Hélène',product:'Hélène'};window.__HELENE__={shell:'${fixtureShell}',platform:'windows',invoke:async(cmd,args)=>{const r=await fetch('/__fixture/native',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd,args})});if(!r.ok)throw Error(await r.text());return r.json();},win:()=>{},look:()=>{}};</script>`;
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.woff2':'font/woff2'};
 const server=http.createServer(async(req,res)=>{
   try {

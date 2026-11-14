@@ -1,4 +1,5 @@
-import { api, post, ApiError, artifactURL, cfg, channelURL, inTauri, shell } from "./api";
+import { t as uiText } from "../../lang/lang";
+import { api, post, ApiError, artifactURL, cfg, channelURL, inTauri, electron, shell } from "./api";
 import { fileDialog, FILE_BYTES, type FileAccess, type Folder } from "../paper-files";
 import { fileError, paperButton, paperDialog } from "../paper-dialog";
 import { mountPaperMedia, type PaperMedia } from "../paper-media";
@@ -8,7 +9,7 @@ type ReadFile = { name: string; mime: string; data: string; size: number };
 export function bytesToFile(value: ReadFile): File {
   const decoded = atob(value.data), bytes = new Uint8Array(decoded.length);
   for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
-  if (bytes.length !== value.size || bytes.length > FILE_BYTES) throw new Error("Файл изменился при чтении");
+  if (bytes.length !== value.size || bytes.length > FILE_BYTES) throw new Error(uiText("ui.ui.kit.window.paper.files.9adfa23df0"));
   return new File([bytes], value.name, { type: value.mime });
 }
 function toBase64(blob: Blob): Promise<string> {
@@ -32,13 +33,13 @@ function access(localAgent: boolean, media?: PaperMedia, blob?: Blob): FileAcces
       try { const value = await shell<Folder>("local_files_list", { path }); native = true; return value; }
       catch (e) { if (!/not found|unknown.*command|неизвестн.*команд/i.test(String(e))) throw e; native = false; }
     }
-    if (!localAgent || !localChannel()) throw new Error("Для файлов этого компьютера нужна обновлённая оболочка Hélène. Соединение с сервером сохранено.");
+    if (!localAgent || !localChannel()) throw new Error(uiText("ui.ui.kit.window.paper.files.441ae5b2fa"));
     return localHTTP<Folder>("/api/local-files?path=" + encodeURIComponent(path));
   };
   return { list,
     read: async path => bytesToFile(native ? await shell<ReadFile>("local_files_read", { path }) : await localHTTP<ReadFile>("/api/local-files", { action: "read", path })),
     save: async (folder, name, overwrite) => {
-      if (!media || !blob) throw new Error("Нет файла для сохранения");
+      if (!media || !blob) throw new Error(uiText("ui.ui.kit.window.paper.files.af66f1ba11"));
       return native ? shell("local_files_save", { folder, name, overwrite, data: await toBase64(blob) })
         : localHTTP("/api/local-files", { action: "save", rel: media.path, folder, name, overwrite, data: await toBase64(blob) });
     },
@@ -53,22 +54,22 @@ export async function pickPaperFiles(_localAgent: boolean, count: number, bytes:
     input.addEventListener('cancel',()=>{clean();resolve([]);},{once:true});
     input.addEventListener('change',()=>{
       const files=Array.from(input.files || []); clean();
-      if(files.length>count || files.some(f=>f.size>bytes) || files.reduce((n,f)=>n+f.size,0)>bytes) {reject(new Error('Слишком много файлов или превышен допустимый размер'));return;}
+      if(files.length>count || files.some(f=>f.size>bytes) || files.reduce((n,f)=>n+f.size,0)>bytes) {reject(new Error(uiText("ui.ui.kit.window.paper.files.055ae79764")));return;}
       resolve(files);
     },{once:true});
     try { input.click(); } catch(e) { clean();reject(e); }
   });
 }
 async function save(localAgent: boolean, media: PaperMedia, blob: Blob) {
-  if (!inTauri || 'showSaveFilePicker' in window) return browserSave(media,blob);
+  if (!inTauri || electron?.presentation === 'miniapp' || 'showSaveFilePicker' in window) return browserSave(media,blob);
   try {
     const result = await fileDialog(access(localAgent, media, blob), { save: saveName(media) });
     if (!result || Array.isArray(result)) return;
-    const ui = paperDialog("Файл сохранён");
+    const ui = paperDialog(uiText("ui.ui.kit.window.paper.files.43985e59a3"));
     const text = document.createElement("p"); text.className = "paper-file-receipt"; text.textContent = result.path;
-    ui.body.append(text); ui.footer.append(paperButton("Готово", () => ui.dialog.close(), true));
+    ui.body.append(text); ui.footer.append(paperButton(uiText("ui.ui.kit.window.paper.files.ef05d57959"), () => ui.dialog.close(), true));
   } catch (e) {
-    const ui = paperDialog("Не удалось сохранить"); const text = document.createElement("p"); text.textContent = fileError(e); ui.body.append(text);
+    const ui = paperDialog(uiText("ui.ui.kit.window.paper.files.6d1e3f7c5f")); const text = document.createElement("p"); text.textContent = fileError(e); ui.body.append(text);
   }
 }
 export function mountWindowMedia(root: HTMLElement, localAgent: boolean) {

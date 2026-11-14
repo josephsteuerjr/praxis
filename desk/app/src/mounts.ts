@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Монтирование экраном: список смонтированного, добавление, снятие и просьбы
 // агента с кнопками «дать» и «отказать».
 //
@@ -84,7 +85,7 @@ export function mountsCard(
   const answered = new Set<string>();
 
   const box = el("section", "card");
-  box.append(el("h3", "", "Монтирование"));
+  box.append(el("h3", "", uiText("ui.app.src.mounts.d6b58137df")));
   const state = el("p", "field-hint");
   const listBox = el("div", "mount-list");
   const askBox = el("div", "mount-list");
@@ -95,10 +96,10 @@ export function mountsCard(
     const key = mountKey(path);
     return (liveSandbox?.mounts || []).find((m) => mountKey(m.path) === key || mountKey(m.real) === key);
   };
-  const answerFor = (path: string): string => {
+  const answerFor = (path: string): "mounted" | "denied" | "" => {
     const key = mountKey(path);
-    if (rows.some((r) => mountKey(r.path) === key)) return "уже смонтирована";
-    if (denials.some((d) => mountKey(d.path) === key)) return "уже в отказах";
+    if (rows.some((r) => mountKey(r.path) === key)) return "mounted";
+    if (denials.some((d) => mountKey(d.path) === key)) return "denied";
     return "";
   };
 
@@ -106,16 +107,16 @@ export function mountsCard(
     fenceTitle = title || fenceTitle;
     state.className = "field-hint";
     state.textContent = on
-      ? `Ограда «${fenceTitle}» включена: агент видит только свою папку и то, что в списке ниже.`
-      : `Сейчас выбрана ограда «${fenceTitle}» — она агента в папке не запирает: файловые тулы и shell видят всё, ` +
-        `что доступно твоей учётке, монтировать нечего. Список ниже сохранится и заработает, когда включишь песочницу.`;
+      ? uiText("ui.app.src.mounts.98af5d99c3", {p0: String(fenceTitle)})
+      : uiText("ui.app.src.mounts.ef5f37c2ed", {p0: String(fenceTitle)}) +
+        uiText("ui.app.src.mounts.6acc9eda3e");
   };
 
   // --- список смонтированного
   const drawList = () => {
     listBox.replaceChildren();
     if (!rows.length) {
-      listBox.append(el("p", "field-hint", "Пока ничего не смонтировано: за пределы своей папки агент не выходит."));
+      listBox.append(el("p", "field-hint", uiText("ui.app.src.mounts.bbc86e42da")));
       return;
     }
     for (const row of rows) {
@@ -129,29 +130,29 @@ export function mountsCard(
         }),
       );
       head.append(
-        smallBtn("Убрать", "quiet", () => {
+        smallBtn(uiText("ui.app.src.mounts.07cb650874"), "quiet", () => {
           const i = rows.indexOf(row);
           if (i >= 0) rows.splice(i, 1);
           drawList();
           drawAsk();
-          say("Убрал из списка. Папка закроется, когда сохранишь.");
+          say(uiText("ui.app.src.mounts.56088bdb01"));
         }),
       );
       line.append(head);
-      if (row.why) line.append(el("p", "field-hint", `Зачем: ${row.why}`));
+      if (row.why) line.append(el("p", "field-hint", uiText("ui.app.src.mounts.53e1bcc419", {p0: String(row.why)})));
       // Приговор харнесса по этой папке — из снимка анатомии, а не наш.
       const live = liveOf(row.path);
-      if (live?.error) line.append(el("p", "receipt err", `Не открыта: ${live.error}`));
+      if (live?.error) line.append(el("p", "receipt err", uiText("ui.app.src.mounts.0393c1ff9b", {p0: String(live.error)})));
       else if (live?.link_error) {
         line.append(
-          el("p", "receipt err", `Папка открыта по полному пути, но стык в mnt/ не завёлся: ${live.link_error}`),
+          el("p", "receipt err", uiText("ui.app.src.mounts.6639a802df", {p0: String(live.link_error)})),
         );
-      } else if (live?.link) line.append(el("p", "field-hint", `Агенту видна как ${live.link}`));
+      } else if (live?.link) line.append(el("p", "field-hint", uiText("ui.app.src.mounts.ab5133569c", {p0: String(live.link)})));
       // Про «нет в снимке» говорим, только если снимок вообще есть: иначе это
       // не факт о папке, а наша слепота, и писать её строкой под каждой папкой —
       // шум. О самой слепоте сказано один раз, в блоке просьб.
       else if (!live && liveSandbox) {
-        line.append(el("p", "field-hint", "В снимке кода агента этой папки ещё нет — появится после сохранения и перезапуска."));
+        line.append(el("p", "field-hint", uiText("ui.app.src.mounts.552594604f")));
       }
       listBox.append(line);
     }
@@ -171,8 +172,8 @@ export function mountsCard(
     }
     const clean = path.trim().replace(/^"+|"+$/g, "").replace(/[\\/]+$/, "");
     const known = answerFor(clean);
-    if (known === "уже смонтирована") {
-      say("Эта папка уже в списке.", true);
+    if (known === "mounted") {
+      say(uiText("ui.app.src.mounts.55365d575d"), true);
       return false;
     }
     // Отказ на ту же папку снимаем молча: владелец передумал — это его право, а
@@ -190,13 +191,13 @@ export function mountsCard(
   const addRow = el("div", "mount-add");
   const input = el("input", "field-input mono");
   input.type = "text";
-  input.placeholder = S.platform === "linux" ? "/home/имя/Documents" : S.platform === "macos" ? "/Users/имя/Documents" : "C:\\Users\\Имя\\Документы";
+  input.placeholder = S.platform === "linux" ? uiText("ui.app.src.mounts.e3578e4bf4") : S.platform === "macos" ? uiText("ui.app.src.mounts.826a161eb0") : uiText("ui.app.src.mounts.2da8cc9935");
   input.autocomplete = "off";
   input.spellcheck = false;
   let addAccess: "read" | "write" = "read";
-  const addBtn = smallBtn("Добавить", "quiet", () => {
+  const addBtn = smallBtn(uiText("ui.app.src.mounts.71038c53bb"), "quiet", () => {
     if (add(input.value, addAccess, "")) {
-      say(`Добавил: ${input.value.trim()} (${ACCESS_WORDS[addAccess]}). Папка откроется, когда сохранишь.`);
+      say(uiText("ui.app.src.mounts.c3a0c6a88f", {p0: String(input.value.trim()), p1: String(ACCESS_WORDS[addAccess])}));
       input.value = "";
     }
   });
@@ -211,9 +212,9 @@ export function mountsCard(
   // --- просьбы агента
   const drawAsk = () => {
     askBox.replaceChildren();
-    askBox.append(el("h4", "", "Просьбы агента"));
+    askBox.append(el("h4", "", uiText("ui.app.src.mounts.dd489211fc")));
     if (!liveSandbox) {
-      const why = liveFail ? "Снимок устройства не прочитан — просьбы агента спросить не у кого." : "Снимок устройства пуст — просьб не видно.";
+      const why = liveFail ? uiText("ui.app.src.mounts.0ece825edc") : uiText("ui.app.src.mounts.1522748f4c");
       askBox.append(el("p", "receipt err", why));
       return;
     }
@@ -222,7 +223,7 @@ export function mountsCard(
       return key && !answered.has(key) && !answerFor(String(r.path || r.real || ""));
     });
     if (!asks.length) {
-      askBox.append(el("p", "field-hint", "Агент ничего не просил. Попросить папку он может сам — тулом mount_request; решаешь ты, здесь."));
+      askBox.append(el("p", "field-hint", uiText("ui.app.src.mounts.563528a6a5")));
       return;
     }
     for (const ask of asks) {
@@ -235,16 +236,16 @@ export function mountsCard(
       head.append(accessSelect(access, (v) => (give = v)));
       const reason = el("input", "field-input");
       reason.type = "text";
-      reason.placeholder = "почему нет (необязательно)";
+      reason.placeholder = uiText("ui.app.src.mounts.f95e53c536");
       reason.autocomplete = "off";
       head.append(
-        smallBtn("Дать", "primary", () => {
+        smallBtn(uiText("ui.app.src.mounts.2e4dde93c7"), "primary", () => {
           if (add(path, give, String(ask.why || ""))) {
             answered.add(mountKey(path));
-            say(`Дал: ${path} (${ACCESS_WORDS[give]}). Папка откроется, когда сохранишь.`);
+            say(uiText("ui.app.src.mounts.3d4e4d770f", {p0: String(path), p1: String(ACCESS_WORDS[give])}));
           }
         }),
-        smallBtn("Отказать", "quiet", () => {
+        smallBtn(uiText("ui.app.src.mounts.586dfefc2d"), "quiet", () => {
           const key = mountKey(path);
           for (let i = rows.length - 1; i >= 0; i--) if (mountKey(rows[i].path) === key) rows.splice(i, 1);
           denials.push({ path: path.trim().replace(/[\\/]+$/, ""), why: reason.value.trim() || undefined, at: stamp() });
@@ -252,14 +253,14 @@ export function mountsCard(
           drawList();
           drawDenied();
           drawAsk();
-          say("Отказал. Агент прочитает отказ и не будет спрашивать второй раз — после сохранения.");
+          say(uiText("ui.app.src.mounts.d84ecb4e47"));
         }),
       );
       line.append(head);
       const asked = Number(ask.asked || 1);
       const when = ask.at ? `, ${ask.at}` : "";
-      line.append(el("p", "field-hint", `Просит на ${ACCESS_WORDS[access]}${when}${asked > 1 ? `, спрашивал ${asked} раз` : ""}.`));
-      if (ask.why) line.append(el("p", "choice-text", `Зачем: ${ask.why}`));
+      line.append(el("p", "field-hint", uiText("ui.app.src.mounts.98720ed4e9", {p0: String(ACCESS_WORDS[access]), p1: String(when), p2: String(asked > 1 ? uiText("ui.app.src.mounts.a8dfbdc5f5", {p0: String(asked)}) : "")})));
+      if (ask.why) line.append(el("p", "choice-text", uiText("ui.app.src.mounts.53e1bcc419", {p0: String(ask.why)})));
       line.append(reason);
       askBox.append(line);
     }
@@ -269,25 +270,25 @@ export function mountsCard(
   const drawDenied = () => {
     denyBox.replaceChildren();
     if (!denials.length) return;
-    denyBox.append(el("h4", "", "Отказано"));
+    denyBox.append(el("h4", "", uiText("ui.app.src.mounts.c65141292b")));
     denyBox.append(
-      el("p", "field-hint", "Про эти папки агент уже получил «нет» и второй раз не спросит. Вернёшь — сможет попросить снова."),
+      el("p", "field-hint", uiText("ui.app.src.mounts.302e386a77")),
     );
     for (const row of denials) {
       const line = el("div", "mount-row");
       const head = el("div", "mount-head");
       head.append(el("span", "mount-path mono", row.path));
       head.append(
-        smallBtn("Вернуть", "quiet", () => {
+        smallBtn(uiText("ui.app.src.mounts.5ae0e885f6"), "quiet", () => {
           const i = denials.indexOf(row);
           if (i >= 0) denials.splice(i, 1);
           drawDenied();
           drawAsk();
-          say("Убрал из отказов. Агент сможет попросить эту папку снова — после сохранения.");
+          say(uiText("ui.app.src.mounts.79a7515dcf"));
         }),
       );
       line.append(head);
-      const tail = [row.at ? String(row.at) : "", row.why ? `почему: ${row.why}` : ""].filter(Boolean).join(" · ");
+      const tail = [row.at ? String(row.at) : "", row.why ? uiText("ui.app.src.mounts.a9a37ae9a7", {p0: String(row.why)}) : ""].filter(Boolean).join(" · ");
       if (tail) line.append(el("p", "field-hint", tail));
       denyBox.append(line);
     }
@@ -307,7 +308,7 @@ export function mountsCard(
     el(
       "p",
       "field-hint",
-      "Агент получит доступ ко всей папке. Изменения применяются после сохранения.",
+      uiText("ui.app.src.mounts.6acb438f32"),
     ),
   );
 
