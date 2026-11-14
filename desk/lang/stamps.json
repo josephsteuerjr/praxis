@@ -5540,9 +5540,9 @@
     "zh": "4217c8f7"
   },
   "ui.ui.kit.tool.lens.91f5387fc4": {
-    "en": "91f5387f",
-    "fr": "91f5387f",
-    "zh": "91f5387f"
+    "en": "d002106c",
+    "fr": "d002106c",
+    "zh": "d002106c"
   },
   "ui.ui.kit.tool.lens.5b503847e4": {
     "en": "5b503847",
@@ -6568,5 +6568,20 @@
     "en": "5cfcac6a",
     "fr": "5cfcac6a",
     "zh": "5cfcac6a"
+  },
+  "ui.lens.python_ast": {
+    "en": "7b3deb03",
+    "fr": "7b3deb03",
+    "zh": "7b3deb03"
+  },
+  "ui.lens.scan_time_budget": {
+    "en": "1d475334",
+    "fr": "1d475334",
+    "zh": "1d475334"
+  },
+  "ui.lens.scan_time": {
+    "en": "ec169438",
+    "fr": "ec169438",
+    "zh": "ec169438"
   }
 }

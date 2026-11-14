@@ -117,7 +117,7 @@ const EVIDENCE: Record<string, string> = {
   get name_match_other_scope() { return uiText("ui.ui.kit.tool.lens.9391771840"); }, get attribute_receiver_unknown() { return uiText("ui.ui.kit.tool.lens.98cf98bbe3"); },
   get text_mention() { return uiText("ui.ui.kit.tool.lens.fd4561ccf0"); }, get heuristic() { return uiText("ui.ui.kit.tool.lens.1ff11116a0"); }, get inventory() { return uiText("ui.ui.kit.tool.lens.1b38a27ec7"); },
 };
-const METHOD: Record<string, string> = { python_ast: "AST Python", get regex() { return uiText("ui.ui.kit.tool.lens.0143ae74a6"); }, get text() { return uiText("ui.ui.kit.tool.lens.ab15d5ab16"); }, get heuristic() { return uiText("ui.ui.kit.tool.lens.1ff11116a0"); } };
+const METHOD: Record<string, string> = { get python_ast() { return uiText("ui.lens.python_ast"); }, get regex() { return uiText("ui.ui.kit.tool.lens.0143ae74a6"); }, get text() { return uiText("ui.ui.kit.tool.lens.ab15d5ab16"); }, get heuristic() { return uiText("ui.ui.kit.tool.lens.1ff11116a0"); } };
 const n = (v: number | null | undefined) => v == null ? "?" : v.toLocaleString(locale());
 const code = (s: string) => `<code>${esc(s)}</code>`;
 
@@ -185,7 +185,10 @@ export function codeQueryHTML(l: CodeQueryLens, args: unknown): string {
   }
   const c = l.coverage || {};
   if (c.seen != null) {
-    const time = c.spent_s != null ? uiText("ui.ui.kit.tool.lens.f4927424ec", {p0: c.spent_s.toLocaleString(locale(), {minimumFractionDigits: 1, maximumFractionDigits: 1}), p1: String(c.time_budget_s ? uiText("ui.ui.kit.tool.lens.a0ac7ef435", {p0: c.time_budget_s.toLocaleString(locale(), {maximumFractionDigits: 0})}) : "")}) : "";
+    const spent = c.spent_s?.toLocaleString(locale(), {minimumFractionDigits: 1, maximumFractionDigits: 1});
+    const time = spent == null ? "" : c.time_budget_s
+      ? uiText("ui.lens.scan_time_budget", {spent, budget: c.time_budget_s.toLocaleString(locale(), {maximumFractionDigits: 0})})
+      : uiText("ui.lens.scan_time", {spent});
     facts.push([uiText("ui.ui.kit.tool.lens.1c8d132bd3"), esc(join(uiText("ui.ui.kit.tool.lens.643d284afe", {p0: String(n(c.seen))}), c.parsed != null ? uiText("ui.ui.kit.tool.lens.6b53cb66b4", {p0: String(n(c.parsed))}) : "",
       c.prefiltered ? uiText("ui.ui.kit.tool.lens.e693ade2b8", {p0: String(n(c.prefiltered))}) : "", time))]);
   }

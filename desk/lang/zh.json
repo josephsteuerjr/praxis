@@ -1107,7 +1107,7 @@
   "ui.ui.kit.tool.lens.2f2d168be9": "已更改",
   "ui.ui.kit.tool.lens.6393bed327": "未找到内容",
   "ui.ui.kit.tool.lens.4217c8f7a5": "显示 {p0} 项，共 {p1} 项",
-  "ui.ui.kit.tool.lens.91f5387fc4": "全部 {p0} 项",
+  "ui.ui.kit.tool.lens.91f5387fc4": "共 {p0} 项",
   "ui.ui.kit.tool.lens.5b503847e4": " · 有下一页",
   "ui.ui.kit.tool.lens.7a6481e3e1": "完整性",
   "ui.ui.kit.tool.lens.db98fc4fce": "完整扫描",
@@ -1312,5 +1312,8 @@
   "ui.ui.kit.steps.59a5a4320b": "<details class=\"run-actions\" data-detail=\"actions\" {p0}><summary>步骤{p1}</summary>{p2}</details>",
   "ui.ui.kit.steps.a215cbe837": "<div class=\"frame-strip\">\n    <div class=\"frame-strip-head\"><span>{p0}</span>{p1}</div>\n    <div class=\"frame-bar\"><i class=\"cached\" style=\"width:{p2}\"></i><i class=\"fresh\" style=\"width:{p3}\"></i><i class=\"out\" style=\"width:{p4}\"></i></div>\n    <div class=\"frame-legend\">\n      <span class=\"cached\"><i></i>缓存 {p5}（{p6}%）</span>\n      <span class=\"fresh\"><i></i>新输入 {p7}</span>\n      <span class=\"out\"><i></i>回复 {p8}</span>\n    </div>\n  </div>",
   "ui.steps.trace_request_short": "请求",
-  "ui.steps.trace_response_short": "响应"
+  "ui.steps.trace_response_short": "响应",
+  "ui.lens.python_ast": "Python AST",
+  "ui.lens.scan_time_budget": "{spent} 秒 / {budget} 秒",
+  "ui.lens.scan_time": "{spent} 秒"
 }

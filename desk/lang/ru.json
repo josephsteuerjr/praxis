@@ -1107,7 +1107,7 @@
   "ui.ui.kit.tool.lens.2f2d168be9": "Изменились",
   "ui.ui.kit.tool.lens.6393bed327": "ничего не найдено",
   "ui.ui.kit.tool.lens.4217c8f7a5": "показано {p0} из {p1}",
-  "ui.ui.kit.tool.lens.91f5387fc4": "все {p0}",
+  "ui.ui.kit.tool.lens.91f5387fc4": "всего {p0}",
   "ui.ui.kit.tool.lens.5b503847e4": " · есть следующая страница",
   "ui.ui.kit.tool.lens.7a6481e3e1": "Полнота",
   "ui.ui.kit.tool.lens.db98fc4fce": "полный обход",
@@ -1312,5 +1312,8 @@
   "ui.ui.kit.steps.59a5a4320b": "<details class=\"run-actions\" data-detail=\"actions\" {p0}><summary>Шаги{p1}</summary>{p2}</details>",
   "ui.ui.kit.steps.a215cbe837": "<div class=\"frame-strip\">\n    <div class=\"frame-strip-head\"><span>{p0}</span>{p1}</div>\n    <div class=\"frame-bar\"><i class=\"cached\" style=\"width:{p2}\"></i><i class=\"fresh\" style=\"width:{p3}\"></i><i class=\"out\" style=\"width:{p4}\"></i></div>\n    <div class=\"frame-legend\">\n      <span class=\"cached\"><i></i>из кэша {p5} ({p6}%)</span>\n      <span class=\"fresh\"><i></i>заново {p7}</span>\n      <span class=\"out\"><i></i>ответ {p8}</span>\n    </div>\n  </div>",
   "ui.steps.trace_request_short": "Запрос",
-  "ui.steps.trace_response_short": "Ответ"
+  "ui.steps.trace_response_short": "Ответ",
+  "ui.lens.python_ast": "AST Python",
+  "ui.lens.scan_time_budget": "{spent} с из {budget} с",
+  "ui.lens.scan_time": "{spent} с"
 }

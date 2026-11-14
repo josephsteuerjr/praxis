@@ -1107,7 +1107,7 @@
   "ui.ui.kit.tool.lens.2f2d168be9": "Modifiés",
   "ui.ui.kit.tool.lens.6393bed327": "aucun résultat",
   "ui.ui.kit.tool.lens.4217c8f7a5": "{p0} affichés sur {p1}",
-  "ui.ui.kit.tool.lens.91f5387fc4": "tous les {p0}",
+  "ui.ui.kit.tool.lens.91f5387fc4": "total : {p0}",
   "ui.ui.kit.tool.lens.5b503847e4": " · page suivante disponible",
   "ui.ui.kit.tool.lens.7a6481e3e1": "Exhaustivité",
   "ui.ui.kit.tool.lens.db98fc4fce": "parcours complet",
@@ -1312,5 +1312,8 @@
   "ui.ui.kit.steps.59a5a4320b": "<details class=\"run-actions\" data-detail=\"actions\" {p0}><summary>Étapes{p1}</summary>{p2}</details>",
   "ui.ui.kit.steps.a215cbe837": "<div class=\"frame-strip\">\n    <div class=\"frame-strip-head\"><span>{p0}</span>{p1}</div>\n    <div class=\"frame-bar\"><i class=\"cached\" style=\"width:{p2}\"></i><i class=\"fresh\" style=\"width:{p3}\"></i><i class=\"out\" style=\"width:{p4}\"></i></div>\n    <div class=\"frame-legend\">\n      <span class=\"cached\"><i></i>du cache {p5} ({p6} %)</span>\n      <span class=\"fresh\"><i></i>nouveaux {p7}</span>\n      <span class=\"out\"><i></i>réponse {p8}</span>\n    </div>\n  </div>",
   "ui.steps.trace_request_short": "Requête",
-  "ui.steps.trace_response_short": "Réponse"
+  "ui.steps.trace_response_short": "Réponse",
+  "ui.lens.python_ast": "AST Python",
+  "ui.lens.scan_time_budget": "{spent} s sur {budget} s",
+  "ui.lens.scan_time": "{spent} s"
 }
