@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { computerOverview } from '../../ui-kit/window/views/system-status.ts';
+import './fixtures/ru-localization.mjs';
+const { computerOverview } = await import('../../ui-kit/window/views/system-status.ts');
 const now=Date.now(),fresh=new Date(now).toISOString(),old=new Date(now-60000).toISOString();
 const cfg={enabled:true,scopes:['computer.apps']};
 const live={enabled:true,available:true,connected:true,checked_at:fresh,written_at:fresh};

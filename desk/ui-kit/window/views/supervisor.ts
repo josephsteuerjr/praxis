@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../../../lang/lang";
 // Управление харнессом и его журналы — та часть экрана «Система», которая не
 // рассказывает, а ДЕЙСТВУЕТ.
 //
@@ -63,59 +64,55 @@ export interface LogRow {
 }
 
 function size(bytes: number | undefined): string {
-  if (!bytes) return "пусто";
-  if (bytes < 1024) return bytes + " Б";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " КБ";
-  return (bytes / 1024 / 1024).toFixed(1) + " МБ";
+  if (!bytes) return uiText("ui.ui.kit.window.views.supervisor.67dc5403f9");
+  if (bytes < 1024) return bytes.toLocaleString(locale()) + uiText("ui.ui.kit.window.views.supervisor.ec78fc60af");
+  if (bytes < 1024 * 1024) return (bytes / 1024).toLocaleString(locale(), {maximumFractionDigits: 0}) + uiText("ui.ui.kit.window.views.supervisor.69a96a5345");
+  return (bytes / 1024 / 1024).toLocaleString(locale(), {minimumFractionDigits: 1, maximumFractionDigits: 1}) + uiText("ui.ui.kit.window.views.supervisor.883817f199");
 }
 
 function childRow(c: SupervisorChild): string {
   const state = c.halted
-    ? `<span class="receipt err">остановлен: ${esc(c.halted)}</span>`
+    ? uiText("ui.ui.kit.window.views.supervisor.5c2b020630", {p0: String(esc(c.halted))})
     : c.alive
-      ? `<span class="mono">жив, pid ${c.pid ?? "?"}</span>`
-      : '<span class="receipt err">не поднят</span>';
+      ? uiText("ui.ui.kit.window.views.supervisor.bdb78f6e9e", {p0: String(c.pid ?? "?")})
+      : uiText("ui.ui.kit.window.views.supervisor.6331a74875");
   return `<tr><td><b>${esc(c.name)}</b></td><td>${state}</td>
     <td class="muted">${c.since_utc ? esc(fmtTime(c.since_utc)) : ""}</td>
-    <td class="muted">${c.falls ? esc(String(c.falls)) + " падений за час" : ""}</td></tr>`;
+    <td class="muted">${c.falls ? esc(String(c.falls)) + uiText("ui.ui.kit.window.views.supervisor.f560af2035") : ""}</td></tr>`;
 }
 
 /** Панель управления: кто держит харнесс, что поднято, чем можно тряхнуть. */
 export function supervisorHTML(s: Supervisor | null): string {
-  if (!s) return '<p class="muted">Харнесс о себе ничего не сказал.</p>';
+  if (!s) return uiText("ui.ui.kit.window.views.supervisor.53e2479c43");
   if (!s.kind) {
     // Записки нет вовсе: харнесс поднят не надзором. На Windows это оболочка, и
     // у неё своя кнопка — врать про удалённый перезапуск здесь нечем.
     return `<p class="muted">${esc(s.control.why)}.</p>`;
   }
   const beat = s.alive
-    ? `бьётся ${s.beat_age ?? "?"} с назад`
+    ? uiText("ui.ui.kit.window.views.supervisor.fcc158b2e9", {p0: String(s.beat_age ?? "?")})
     : `<span class="receipt err">${esc(s.control.why)}</span>`;
-  const head = `<p class="muted">Надзор: <b>${esc(s.kind)}</b>${s.in_container ? " в контейнере" : ""} ·
-    поднят ${esc(fmtTime(s.started_utc))} · ${beat}</p>`;
+  const head = uiText("ui.ui.kit.window.views.supervisor.338d7d1b13", {p0: String(esc(s.kind)), p1: String(s.in_container ? uiText("ui.ui.kit.window.views.supervisor.3c0f26b783") : ""), p2: String(esc(fmtTime(s.started_utc))), p3: String(beat)});
   const table = s.children.length
     ? `<table class="grid">${s.children.map(childRow).join("")}</table>`
-    : '<p class="muted">Детей в записке нет.</p>';
+    : uiText("ui.ui.kit.window.views.supervisor.e6a4555a27");
   const buttons = s.control.available
-    ? `<div class="actions" style="margin-top:10px">${s.targets
+    ? uiText("ui.ui.kit.window.views.supervisor.9f4c038cb3", {p0: String(s.targets
         .map(
           (t) =>
-            `<button class="btn quiet" data-restart="${esc(t.id)}">Перезапустить ${esc(t.title)}</button>`,
+            uiText("ui.ui.kit.window.views.supervisor.1a4154cbd8", {p0: String(esc(t.id)), p1: String(esc(t.title))}),
         )
-        .join("")}<span class="receipt" id="sv-note"></span></div>
-       <p class="muted">«Перезапустить весь код агента» ${
-         s.in_container
-           ? "гасит надзор — контейнер поднимает его заново; окно на несколько секунд потеряет связь"
-           : "перезапускает детей на месте: надзор запущен не в контейнере, выходить ему некуда"
-       }.</p>`
-    : `<p class="muted">Перезапуск отсюда недоступен: ${esc(s.control.why)}.</p>`;
+        .join("")), p1: String(s.in_container
+           ? uiText("ui.ui.kit.window.views.supervisor.29e84f9ac8")
+           : uiText("ui.ui.kit.window.views.supervisor.aa60cf7be0"))})
+    : uiText("ui.ui.kit.window.views.supervisor.d6bb86116e", {p0: String(esc(s.control.why))});
   const receipt = s.receipt
-    ? `<p class="${s.receipt.done ? "receipt ok" : "receipt err"}">Последняя просьба (${esc(
+    ? uiText("ui.ui.kit.window.views.supervisor.40d01165ed", {p0: String(s.receipt.done ? "receipt ok" : "receipt err"), p1: String(esc(
         fmtTime(s.receipt.done_utc),
-      )}): ${esc(s.receipt.note)}</p>`
+      )), p2: String(esc(s.receipt.note))})
     : "";
   const pending = s.pending
-    ? `<p class="receipt">Просьба лежит и ещё не взята: ${esc(String(s.pending.target || ""))}</p>`
+    ? uiText("ui.ui.kit.window.views.supervisor.546a71bcc9", {p0: String(esc(String(s.pending.target || "")))})
     : "";
   // Обновление — отдельный раздел ниже (`update-card.ts`): канал с доступом к докеру
   // хоста был бы не обновлением, а отмычкой, поэтому обновляет сосед снаружи.
@@ -209,34 +206,22 @@ export interface BrainModels {
  */
 export function containersHTML(state: Containers | null): string {
   if (!state || !state.available) {
-    const why = state?.why || "служба управления контейнерами рядом с этим каналом не объявлена";
-    return `<h3 class="section-title">Контейнеры</h3><p class="muted">${esc(why)}.</p>`;
+    const why = state?.why || uiText("ui.ui.kit.window.views.supervisor.6f315a9924");
+    return uiText("ui.ui.kit.window.views.supervisor.51b08d8e97", {p0: String(esc(why))});
   }
   const rows = state.containers
     .map(
-      (c) => `<tr><td><b>${esc(c.name)}</b></td>
-        <td>${c.up ? `<span class="mono">${esc(c.status)}</span>` : `<span class="receipt err">${esc(c.status)}</span>`}</td>
-        <td class="muted">${esc(c.image)}</td>
-        <td class="actions">
-          <button class="btn quiet" data-restart-container="${esc(c.name)}">Перезапустить</button>
-          <button class="btn quiet" data-clog="${esc(c.name)}">Журнал</button>
-          <button class="btn quiet" data-clog="${esc(c.name)}" data-errors="1">Ошибки</button>
-        </td></tr>`,
+      (c) => uiText("ui.ui.kit.window.views.supervisor.4f73923df9", {p0: String(esc(c.name)), p1: String(c.up ? `<span class="mono">${esc(c.status)}</span>` : `<span class="receipt err">${esc(c.status)}</span>`), p2: String(esc(c.image)), p3: String(esc(c.name)), p4: String(esc(c.name)), p5: String(esc(c.name))}),
     )
     .join("");
-  return `<h3 class="section-title">Контейнеры</h3>
-    <p class="muted">Идёт мимо агента: перезапуск нужен ровно тогда, когда он не отвечает.
-      Список закрыт службой на сервере — чужие контейнеры ей не видны.</p>
-    <table class="grid">${rows}</table>
-    <p class="receipt" id="cnt-note"></p>
-    <pre class="mono" id="clog-view" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:8px" hidden></pre>`;
+  return uiText("ui.ui.kit.window.views.supervisor.5aaecbf8aa", {p0: String(rows)});
 }
 
 /** Мозг: какая модель у какой роли и чем её заменить, если эта замолчала. */
 export function brainHTML(state: Brain | null, models: BrainModels | null): string {
   if (!state || !state.ok) {
-    const why = state?.note || state?.why || "мозг отсюда не читается";
-    return `<h3 class="section-title">Мозг</h3><p class="muted">${esc(why)}.</p>`;
+    const why = state?.note || state?.why || uiText("ui.ui.kit.window.views.supervisor.5121320c17");
+    return uiText("ui.ui.kit.window.views.supervisor.dc9cd25e70", {p0: String(esc(why))});
   }
   const live: string[] = [];
   for (const spec of Object.values(models?.by_framework || {})) {
@@ -266,35 +251,19 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
       const select = (k: string, values: string[]) =>
         `<select class="field-input" data-f="${k}" data-was="${esc(f(k))}">${choice(values, f(k))}</select>`;
       const tier = `<select class="field-input" data-f="service_tier" data-was="${esc(f('service_tier'))}">${serviceTierChoices(f('service_tier')).map(([value,title])=>`<option value="${esc(value)}"${value===f('service_tier')?' selected':''}>${esc(title)}</option>`).join('')}</select>`;
-      return `<tr data-brain-form="${esc(role)}" data-codex="${state.service_tiers?.[role]?.codex===true || state.service_tiers?.[role]?.available===true}" data-fast-available="${state.service_tiers?.[role]?.available}"><td><b>${esc(role)}</b><div class="muted">${esc(f("framework"))} · ${esc(f("model"))}</div></td>
-      <td>
-        <label class="field"><span class="muted">Модель</span>${input("model")}</label>
-        <label class="field"><span class="muted">Фреймворк</span>${select("framework", frameworks)}</label>
-        <label class="field"><span class="muted">Запасная модель</span>${input("fallback_model", "пусто — без запасной")}</label>
-        <label class="field"><span class="muted">Фреймворк запасной</span>${select("fallback_framework", ["", ...frameworks])}</label>
-        <label class="field"><span class="muted">Усилие</span>${select("reasoning_effort", efforts)}</label>
-        <label class="field" data-service-tier-field${state.service_tiers?.[role]?.codex || state.service_tiers?.[role]?.available?'':' hidden'}><span class="muted">Скорость обработки</span>${tier}</label>
-        <p class="field-hint">${esc(serviceTierReceipt(state.service_tiers?.[role]?.actual))}</p>
-      </td>
-      <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Применить</button></td></tr>`;
+      return uiText("ui.ui.kit.window.views.supervisor.2fa3a01bd0", {p0: String(esc(role)), p1: String(state.service_tiers?.[role]?.codex===true || state.service_tiers?.[role]?.available===true), p2: String(state.service_tiers?.[role]?.available), p3: String(esc(role)), p4: String(esc(f("framework"))), p5: String(esc(f("model"))), p6: String(input("model")), p7: String(select("framework", frameworks)), p8: String(input("fallback_model", uiText("ui.ui.kit.window.views.supervisor.e2efc81fb0"))), p9: String(select("fallback_framework", ["", ...frameworks])), p10: String(select("reasoning_effort", efforts)), p11: String(state.service_tiers?.[role]?.codex || state.service_tiers?.[role]?.available?'':' hidden'), p12: String(tier), p13: String(esc(serviceTierReceipt(state.service_tiers?.[role]?.actual))), p14: String(esc(role))});
     })
     .join("");
   const liveNote = live.length
-    ? `Список моделей — живой ответ мозга (${live.length}), а не наш перечень.`
-    : "Живой список моделей получить не удалось, поэтому в выборе только то, что уже стоит.";
-  return `<h3 class="section-title">Мозг</h3>
-    <p class="muted">${esc(liveNote)} Смена пишется в его конфиг и применяется, когда агент перечитает мозг —
-      перезапусти его выше, если нужно сейчас. Ключи провайдеров сюда не отдаются вовсе.</p>
-    <p class="muted">${esc(FAST_MODE_HINT)} Основная роль voice выполняет также шаги управления компьютером.</p>
-    ${datalist}<table class="grid">${rows}</table>
-    <p class="receipt" id="brain-note"></p>`;
+    ? uiText("ui.ui.kit.window.views.supervisor.6c3d475e48", {p0: String(live.length)})
+    : uiText("ui.ui.kit.window.views.supervisor.04dfe118a9");
+  return uiText("ui.ui.kit.window.views.supervisor.4c32adb469", {p0: String(esc(liveNote)), p1: String(esc(FAST_MODE_HINT)), p2: String(datalist), p3: String(rows)});
 }
 
 
 /** Прерывание живого хода (12.09): просьба в memory/.control, раннер снимает ход на тике. */
 export function interruptHTML(): string {
-  return `<h3 class="section-title">Пауза агента</h3><div class="actions" data-autonomy-box></div>
-    <p class="muted">На паузе Telegram продолжает сохраняться, а новые ответы и фоновые ходы остановлены. После продолжения накопившиеся упоминания не запускают отдельные ответы. Текущий ход останавливается на безопасной границе; совершённые действия остаются.</p>`;
+  return uiText("ui.ui.kit.window.views.supervisor.828d859e9e");
 }
 
 /** Журналы: что есть, насколько свежо, и место под хвост выбранного. */
@@ -304,14 +273,11 @@ export function logsHTML(rows: LogRow[] | null): string {
     .map(
       (r) =>
         `<button class="btn quiet" data-log="${esc(r.id)}"${r.exists ? "" : " disabled"}>${esc(r.title)} <span class="muted">${
-          r.exists ? esc(size(r.size)) : "нет"
+          r.exists ? esc(size(r.size)) : uiText("ui.ui.kit.window.views.supervisor.dc9337ff5b")
         }</span></button>`,
     )
     .join("");
-  return `<h3 class="section-title">Журналы</h3>
-    <p class="muted">Хвост журнала — то же, что <code>docker logs</code>, только без ssh. Показывается последние 300 строк.</p>
-    <div class="actions">${buttons}<button class="btn quiet" data-log-again hidden>Обновить</button></div>
-    <pre class="mono" id="log-view" style="max-height:340px;overflow:auto;white-space:pre-wrap;margin-top:10px" hidden></pre>`;
+  return uiText("ui.ui.kit.window.views.supervisor.34a1189b70", {p0: String(buttons)});
 }
 
 /** Перерисовать панель свежим ответом канала. Обработчики при этом не трогаются. */
@@ -331,7 +297,7 @@ async function draw(box: HTMLElement): Promise<void> {
   // Контейнеры и мозг рисуются, только когда служба рядом объявлена: у окна
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
-  box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
+  box.innerHTML = uiText("ui.ui.kit.window.views.supervisor.fd1bf02058", {p0: String(interruptHTML()), p1: String(supervisorHTML(state)), p2: String(extra), p3: String(logsHTML(logs))});
   bindBrainModelControls(box, models?.by_framework || {});
   mountAutonomy(box.querySelector<HTMLElement>("[data-autonomy-box]")!, {
     read: () => api<AutonomyState>("/api/autonomy"), write: action => post("/api/autonomy", { action }),
@@ -390,14 +356,14 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     shown = id;
     view.hidden = false;
     if (again) again.hidden = false;
-    view.textContent = "читаю…";
+    view.textContent = uiText("ui.ui.kit.window.views.supervisor.b7eefd36b7");
     try {
       const got = await api<{ ok: boolean; title: string; text: string; note?: string; exists: boolean }>(
         `/api/log/${encodeURIComponent(id)}?lines=300`,
       );
-      view.textContent = got.exists ? got.text || "(пусто)" : got.note || "журнала нет";
+      view.textContent = got.exists ? got.text || uiText("ui.ui.kit.window.views.supervisor.0b5781e580") : got.note || uiText("ui.ui.kit.window.views.supervisor.0aedb51881");
     } catch (e) {
-      view.textContent = "не прочиталось: " + String(e);
+      view.textContent = uiText("ui.ui.kit.window.views.supervisor.bfd271b125") + String(e);
     }
   };
 
@@ -405,16 +371,16 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     const view = box.querySelector<HTMLPreElement>("#clog-view");
     if (!view) return;
     view.hidden = false;
-    view.textContent = "читаю…";
+    view.textContent = uiText("ui.ui.kit.window.views.supervisor.b7eefd36b7");
     try {
       const got = await api<{ ok: boolean; text?: string; note?: string; lines?: number }>(
         `/api/container-log/${encodeURIComponent(name)}?lines=200${onlyErrors ? "&errors=1" : ""}`,
       );
       view.textContent = got.ok
-        ? got.text || (onlyErrors ? "ошибок в хвосте журнала нет" : "(пусто)")
-        : got.note || "журнал не прочитался";
+        ? got.text || (onlyErrors ? uiText("ui.ui.kit.window.views.supervisor.3bcdfe94c2") : uiText("ui.ui.kit.window.views.supervisor.0b5781e580"))
+        : got.note || uiText("ui.ui.kit.window.views.supervisor.d283094609");
     } catch (e) {
-      view.textContent = "не прочиталось: " + String(e);
+      view.textContent = uiText("ui.ui.kit.window.views.supervisor.bfd271b125") + String(e);
     }
   };
 
@@ -432,7 +398,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         }
       };
       upd.disabled = true;
-      say("receipt", version ? "начинаю…" : "передаю…");
+      say("receipt", version ? uiText("ui.ui.kit.window.views.supervisor.09810ea4c7") : uiText("ui.ui.kit.window.views.supervisor.2f6d13ac8b"));
       try {
         const answer = version
           ? await post<{ ok: boolean; note: string }>("/api/update/plan", {
@@ -459,7 +425,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
           upd.disabled = false;
         }
       } catch (e) {
-        say("receipt err", "не дошло: " + String(e));
+        say("receipt err", uiText("ui.ui.kit.window.views.supervisor.afbe540226") + String(e));
         upd.disabled = false;
       }
       return;
@@ -478,7 +444,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         const inote = box.querySelector<HTMLElement>("#interrupt-note");
         if (inote) {
           inote.className = "receipt";
-          inote.textContent = "прошу остановить ход…";
+          inote.textContent = uiText("ui.ui.kit.window.views.supervisor.402838e4c8");
         }
         try {
           const answer = await post<{ ok: boolean; note: string }>("/api/interrupt", {
@@ -490,7 +456,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         } catch (e) {
           if (inote) {
             inote.className = "receipt err";
-            inote.textContent = "не дошло: " + String(e);
+            inote.textContent = uiText("ui.ui.kit.window.views.supervisor.afbe540226") + String(e);
           }
         }
         return;
@@ -499,7 +465,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
       if (restartName) {
         if (note) {
           note.className = "receipt";
-          note.textContent = `перезапускаю ${restartName}…`;
+          note.textContent = uiText("ui.ui.kit.window.views.supervisor.7b2658d842", {p0: String(restartName)});
         }
         try {
           const answer = await post<{ ok: boolean; note: string }>("/api/containers/restart", { name: restartName });
@@ -514,7 +480,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         } catch (e) {
           if (note) {
             note.className = "receipt err";
-            note.textContent = "не дошло: " + String(e);
+            note.textContent = uiText("ui.ui.kit.window.views.supervisor.afbe540226") + String(e);
           }
         }
         return;
@@ -533,13 +499,13 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         if (!Object.keys(fields).length) {
           if (note) {
             note.className = "receipt";
-            note.textContent = "ничего не изменено";
+            note.textContent = uiText("ui.ui.kit.window.views.supervisor.f6dba6a0b4");
           }
           return;
         }
         if (note) {
           note.className = "receipt";
-          note.textContent = `меняю роль ${role}: ${Object.keys(fields).join(", ")}…`;
+          note.textContent = uiText("ui.ui.kit.window.views.supervisor.57366a8072", {p0: String(role), p1: String(Object.keys(fields).join(", "))});
         }
         try {
           const answer = await post<{ ok: boolean; note?: string; now?: Record<string, string> }>(
@@ -547,8 +513,8 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
           if (note) {
             note.className = answer.ok ? "receipt ok" : "receipt err";
             note.textContent = answer.ok
-              ? `роль ${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
-              : answer.note || "не вышло";
+              ? uiText("ui.ui.kit.window.views.supervisor.b104a75f54", {p0: String(role), p1: String(Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")), p2: String(answer.note || "")})
+              : answer.note || uiText("ui.ui.kit.window.views.supervisor.8735f485c3");
           }
           if (answer.ok) {
             await new Promise((done) => setTimeout(done, 1500));
@@ -557,7 +523,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         } catch (e) {
           if (note) {
             note.className = "receipt err";
-            note.textContent = "не дошло: " + String(e);
+            note.textContent = uiText("ui.ui.kit.window.views.supervisor.afbe540226") + String(e);
           }
         }
         return;
@@ -581,7 +547,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     buttons.forEach((b) => (b.disabled = true));
     if (note) {
       note.className = "receipt";
-      note.textContent = "прошу…";
+      note.textContent = uiText("ui.ui.kit.window.views.supervisor.9ba666207b");
     }
     try {
       const answer = await post<{ ok: boolean; note: string }>("/api/supervisor/restart", { target: restart });
@@ -599,7 +565,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     } catch (e) {
       if (note) {
         note.className = "receipt err";
-        note.textContent = "не дошло: " + String(e);
+        note.textContent = uiText("ui.ui.kit.window.views.supervisor.afbe540226") + String(e);
       }
     }
     buttons.forEach((b) => (b.disabled = false));

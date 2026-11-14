@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
+import './fixtures/ru-localization.mjs';
 const dir=mkdtempSync(join(tmpdir(),'helene-diagnostics-review-'));
 try {
   const read=file=>readFileSync(new URL('../../ui-kit/'+file,import.meta.url),'utf8');

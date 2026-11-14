@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
+import './fixtures/ru-localization.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "anatomy.ts"), "utf8");
@@ -82,7 +83,8 @@ assert.ok(materialsHTML(null).includes("Леджер ретенции пуст")
 // --------------------------------------------------------------------------
 // 4. Проводка экрана: место наверху, разворот и удаление — явными обработчиками.
 // --------------------------------------------------------------------------
-assert.ok(source.includes("${meta}${materials}${modeBox}${fenceBox}"),
+assert.ok(uiText('ui.ui.kit.window.views.anatomy.9193355332', {p0: '', p1: 'META', p2: 'MATERIALS', p3: 'MODE', p4: 'FENCE', p5: '', p6: '', p7: '', p8: '', p9: '', p10: '', p11: ''}).includes('METAMATERIALSMODEFENCE') &&
+  /p1: String\(meta\), p2: String\(materials\), p3: String\(modeBox\), p4: String\(fenceBox\)/.test(source),
   "материалы снова уехали в низ экрана — слово владельца 05.10: «находится в жопе»");
 assert.ok(source.includes("e.preventDefault();\n      strip.open = !strip.open;"),
   "нативный toggle вернулся — у владельца он не открывался (05.10)");
