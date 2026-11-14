@@ -266,7 +266,7 @@ function mountCol(): Col {
   }
   box.innerHTML = uiText("ui.ui.kit.window.panel.77c204938f");
   const inner = box.querySelector<HTMLElement>(".turns-inner")!;
-  inner.prepend(forgeRoot);
+  inner.append(forgeRoot);
   inner.prepend(workRoot);
   forgeView!.start();
   const c: Col = {
