@@ -417,5 +417,12 @@
   "hands.pointer.provider": " et web_search du fournisseur",
   "hands.pointer.rest": "Les autres sont les mêmes outils, mais leurs schémas ne voyagent pas dans chaque contexte. Appelle-les DIRECTEMENT via `call` avec les signatures ci-dessous : `call(name=\"fs_write\", args_json='{{\"path\": \"workspace/x.md\", \"content\": \"…\"}}')`. Exécution, résultat et reçus sont identiques à un appel direct. `describe(name)` n’est utile que si la signature ne suffit pas (énumération, objet imbriqué), une fois par tour ; le schéma reste dans l’accumulateur. Arguments requis sans marque, facultatifs avec « ? ».",
   "hands.pointer.columns": "Nom(arguments) — fonction :",
-  "hands.pointer.other": "autres"
+  "hands.pointer.other": "autres",
+  "skills.written_heading": "## Mes compétences personnelles",
+  "skills.index_title": "# Compétences",
+  "skills.write_origin": " Lien conservé avec la note `{note_id}`.",
+  "skills.write_result": "Compétence «{name}» enregistrée (soul/skills/{slug}.md).{origin}",
+  "skills.index_unreadable": "soul/skills/INDEX.md ne peut pas être lu sans perte d’octets ({error_type}) ; les objets des compétences ne sont pas confirmés, vérifier la source avant de s’y fier",
+  "skills.index_changed": "soul/skills/INDEX.md a changé pendant la lecture ; carte non confirmée",
+  "skills.index_unavailable": "soul/skills/INDEX.md est devenu inaccessible pendant la lecture ; carte non confirmée"
 }

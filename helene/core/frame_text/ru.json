@@ -417,5 +417,12 @@
   "hands.pointer.provider": " и провайдерский web_search",
   "hands.pointer.rest": "Остальные — те же мои инструменты, но их схемы не едут в каждый кадр. Вызываю их через `call` СРАЗУ, по сигнатуре ниже: `call(name=\"fs_write\", args_json='{{\"path\": \"workspace/x.md\", \"content\": \"…\"}}')`. Выполнение, результат и расписки те же, что при прямом вызове. `describe(name)` нужен, только если сигнатуры мало (перечисление, вложенный объект); один раз на ход, схема остаётся в накопителе. В сигнатуре обязательные аргументы без знака, необязательные с «?».",
   "hands.pointer.columns": "Имя(аргументы) — назначение:",
-  "hands.pointer.other": "прочее"
+  "hands.pointer.other": "прочее",
+  "skills.written_heading": "## Написаны мной",
+  "skills.index_title": "# Навыки",
+  "skills.write_origin": " Связь с заметкой `{note_id}` записана.",
+  "skills.write_result": "Записан навык «{name}» (soul/skills/{slug}.md).{origin}",
+  "skills.index_unreadable": "soul/skills/INDEX.md не читается без потери байтов ({error_type}); назначения не подтверждены, проверь источник прежде чем ими руководствоваться",
+  "skills.index_changed": "soul/skills/INDEX.md изменился во время чтения; карта не подтверждена",
+  "skills.index_unavailable": "soul/skills/INDEX.md стал недоступен во время чтения; карта не подтверждена"
 }

@@ -2731,6 +2731,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
     return (body if body else "(пустой вывод)") + command_execution.tail(code, process_status, changes)
 
 
+@frame_language.pinned
 def tool_write_skill(name: str, content: str, from_note: str = "") -> str:
     """Записать новый навык в soul/skills/<slug>.md, отметить в индексе, переиндексировать.
 
@@ -2757,11 +2758,11 @@ def tool_write_skill(name: str, content: str, from_note: str = "") -> str:
     if str(from_note or "").strip():
         try:
             lessons.accept(str(from_note).strip(), slug)
-            origin = f" Связь с заметкой `{str(from_note).strip()}` записана."
+            origin = frame_language.text('skills.write_origin', note_id=str(from_note).strip())
         except Exception:
             log.debug("связь навык↔заметка не записалась", exc_info=True)
     log.info("write_skill %s", slug)
-    return f"Записан навык «{name}» (soul/skills/{slug}.md).{origin}"
+    return frame_language.text('skills.write_result', name=name, slug=slug, origin=origin)
 
 
 def _ensure_skill_index_line(slug: str, name: str) -> None:
@@ -2771,12 +2772,16 @@ def _ensure_skill_index_line(slug: str, name: str) -> None:
     line = f"- [{name}]({slug}.md)"
     if line in text or f"]({slug}.md)" in text:
         return
-    # 28.09: заголовок раздела — тот, что стоит в INDEX.md поставки Hélène («Написаны мной»).
-    marker = "## Написаны мной"
-    if marker not in text and "## Записаны Praxis" in text:
-        marker = "## Записаны Praxis"      # дома, заведённые до 1.2.5: их раздел уже есть
-    if marker not in text:
-        text = (text.rstrip() + f"\n\n{marker}\n") if text.strip() else f"# Навыки\n\n{marker}\n"
+    selected = frame_language.text('skills.written_heading')
+    # Keep a known heading already authored in this home, even after a later
+    # frame-language change. Only new product-owned headings use the new locale.
+    markers = [selected, *(frame_language.catalog(lang)['skills.written_heading']
+                           for lang in frame_language.LANGUAGES), '## Записаны Praxis']
+    headings = set(text.splitlines())
+    marker = next((value for value in markers if value in headings), selected)
+    if marker not in headings:
+        title = frame_language.text('skills.index_title')
+        text = (text.rstrip() + f"\n\n{marker}\n") if text.strip() else f"{title}\n\n{marker}\n"
     text = text.rstrip() + f"\n{line}\n"
     idx.write_text(text, encoding="utf-8")
 

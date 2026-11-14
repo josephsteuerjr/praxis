@@ -26,6 +26,13 @@
       "fr": "c82771edc812720c64e6a2619966b5001c5fe1ea11255cf658a2f0176d1b9ced",
       "zh": "3f249bd807a3cee55f05070bdf9ef9a070954ea336b298ac489ff06c61d749ab"
     },
+    "soul/skills/INDEX.md": {
+      "ru": "41a40704d33c5f9f3ceea4cde7ca7bfc493f947eb65a64b0444d8a8d656f1ffc",
+      "en": "eddb905b4762a46fc1de7a2780d3bc5e0b03f9ad60512acc9569a4eba7812f26",
+      "fr": "1de41b142203711ba8e5433ad1831e46ac8723e01ef70d2230ab9cf76e792aec",
+      "zh": "6ce838390b1fb37498cf96e303df089e5aa5ad269aa60e6a5d63e1a76cf9be20",
+      "identifiers": true
+    },
     "soul/skills/code-map.md": {
       "ru": "07e7deb8960626fabab166a5cbaffca856aaa7e2524a6002958dd01a7894a422",
       "en": "dfd061b4bb28d3d45c75c5acda9d081db831ea4c9d6993a9ff90f9bbd889346f",

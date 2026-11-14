@@ -417,5 +417,12 @@
   "hands.pointer.provider": " and the provider’s web_search",
   "hands.pointer.rest": "The rest are the same tools, but their schemas do not ride in every frame. Call them through `call` RIGHT AWAY using the signatures below: `call(name=\"fs_write\", args_json='{{\"path\": \"workspace/x.md\", \"content\": \"…\"}}')`. Execution, results and receipts are the same as direct calls. Use `describe(name)` only when the signature is insufficient (an enum or nested object), once per turn; the schema stays in the accumulator. Required arguments have no marker; optional ones have “?”.",
   "hands.pointer.columns": "Name(arguments) — purpose:",
-  "hands.pointer.other": "other"
+  "hands.pointer.other": "other",
+  "skills.written_heading": "## My own skills",
+  "skills.index_title": "# Skills",
+  "skills.write_origin": " Linked to note `{note_id}`.",
+  "skills.write_result": "Saved skill “{name}” (soul/skills/{slug}.md).{origin}",
+  "skills.index_unreadable": "soul/skills/INDEX.md cannot be read without byte loss ({error_type}); skill purposes are unconfirmed, check the source before relying on them",
+  "skills.index_changed": "soul/skills/INDEX.md changed during reading; the map is unconfirmed",
+  "skills.index_unavailable": "soul/skills/INDEX.md became unavailable during reading; the map is unconfirmed"
 }

@@ -417,5 +417,12 @@
   "hands.pointer.provider": "，以及提供方的 web_search",
   "hands.pointer.rest": "其余仍是相同工具，只是模式不会进入每次上下文。按下方签名立即通过 `call` 调用：`call(name=\"fs_write\", args_json='{{\"path\": \"workspace/x.md\", \"content\": \"…\"}}')`。执行、结果和回执与直接调用相同。只有签名信息不足（如枚举或嵌套对象）时才使用 `describe(name)`，每回合一次，模式会保留在累积内容中。必填参数不带标记，可选参数带“?”。",
   "hands.pointer.columns": "名称(参数)——用途：",
-  "hands.pointer.other": "其他"
+  "hands.pointer.other": "其他",
+  "skills.written_heading": "## 我编写的技能",
+  "skills.index_title": "# 技能",
+  "skills.write_origin": " 已关联笔记 `{note_id}`。",
+  "skills.write_result": "已保存技能“{name}”（soul/skills/{slug}.md）。{origin}",
+  "skills.index_unreadable": "无法无损读取 soul/skills/INDEX.md（{error_type}）；技能用途未确认，请核实来源后再采用",
+  "skills.index_changed": "soul/skills/INDEX.md 在读取时发生变化，地图未确认",
+  "skills.index_unavailable": "soul/skills/INDEX.md 在读取时变得不可访问，地图未确认"
 }
