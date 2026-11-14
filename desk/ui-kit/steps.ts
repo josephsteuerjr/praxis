@@ -1,8 +1,11 @@
+import { t as uiText, locale } from "../lang/lang";
 // Шаги одного прогона агента — одна разметка для окна (панель хода, урок на
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
 import { esc, fmtK, md } from "./text";
 import { copyText } from "./dom";
 import { lensHTML, lensState, toolTarget, type ToolLens } from "./tool-lens";
+
+const decimal = (value: number) => value.toLocaleString(locale(), {minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false});
 
 /**
  * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
@@ -79,40 +82,40 @@ export interface StepsOptions {
 }
 
 export const ACTIONS: Record<string, string> = {
-  shell: "Команда", run_command: "Программа", read_file: "Чтение файла", write_file: "Запись файла",
-  edit_file: "Правка файла", search: "Поиск", web_search: "Поиск в интернете",
-  fs_read: "Чтение файла", fs_ls: "Список файлов", fs_search: "Поиск по файлам", edit: "Правка файла",
-  python: "Python", code_query: "Поиск по коду", task_control: "Ход задачи", coding_session: "Задача разработки",
-  coding_run: "Команда в задаче", coding_inspect: "Осмотр задачи", memory_compact: "Свёртка памяти",
-  manage_notes: "Заметки", telegram_account: "Аккаунт Telegram", "telegram.send_media": "Отправка медиа",
-  my_agenda: "Повестка", manage_loop: "Открытые петли", recent_turns: "Последние ходы", stay_silent: "Промолчать",
-  react: "Реакция", git: "Git",
-  fetch_url: "Чтение страницы", read_url: "Чтение страницы",
-  reply: "Ответ", end_turn: "Завершение работы", remind_self: "Напоминание",
-  recall: "Поиск в памяти", remember: "Запись в память", read_memory: "Чтение памяти",
-  coding_task: "Задача разработки", coding_agent: "Помощник по коду",
-  coding_process: "Процесс", coding_read: "Чтение кода", coding_search: "Поиск в коде",
-  coding_patch: "Правка кода", coding_verify: "Проверка", coding_finish: "Завершение задачи",
-  write_skill: "Запись навыка", consolidate_context: "Свёртка контекста",
-  computer: "Компьютер", read_run_result: "Дочитать результат", journal: "Дневник",
-  wake: "Будильник", set_wake: "Будильник", sleep: "Сон", voice: "Голос", speak: "Голос",
-  browser: "Браузер", screenshot: "Снимок экрана", send_file: "Отправка файла",
-  "telegram.deliver": "Доставка сообщения",
-  windows_mcp_Snapshot: "Обзор экрана", windows_mcp_Screenshot: "Снимок экрана",
-  windows_mcp_Click: "Нажатие", windows_mcp_Type: "Ввод текста", windows_mcp_Scroll: "Прокрутка",
-  windows_mcp_Move: "Перемещение указателя", windows_mcp_Shortcut: "Сочетание клавиш",
-  windows_mcp_App: "Приложение Windows", windows_mcp_PowerShell: "PowerShell",
-  windows_mcp_FileSystem: "Файлы Windows", windows_mcp_Registry: "Реестр Windows",
-  windows_mcp_Process: "Процессы Windows", windows_mcp_Clipboard: "Буфер обмена",
-  windows_mcp_ControlStatus: "Состояние управления", windows_mcp_DisplayInventory: "Дисплеи",
-  windows_mcp_MultiSelect: "Выбор элементов", windows_mcp_MultiEdit: "Ввод в поля",
-  windows_mcp_Notification: "Уведомление", windows_mcp_Scrape: "Чтение страницы",
-  windows_mcp_Wait: "Ожидание", windows_mcp_WaitFor: "Ожидание элемента",
+  get shell() { return uiText("ui.ui.kit.steps.8b372c12c2"); }, get run_command() { return uiText("ui.ui.kit.steps.075f39ec5a"); }, get read_file() { return uiText("ui.ui.kit.steps.45fb6f573f"); }, get write_file() { return uiText("ui.ui.kit.steps.a4430b3a82"); },
+  get edit_file() { return uiText("ui.ui.kit.steps.a4c851c825"); }, get search() { return uiText("ui.ui.kit.steps.180f58ab97"); }, get web_search() { return uiText("ui.ui.kit.steps.bc19a3f034"); },
+  get fs_read() { return uiText("ui.ui.kit.steps.45fb6f573f"); }, get fs_ls() { return uiText("ui.ui.kit.steps.844f16c325"); }, get fs_search() { return uiText("ui.ui.kit.steps.40cd5d05c9"); }, get edit() { return uiText("ui.ui.kit.steps.a4c851c825"); },
+  python: "Python", get code_query() { return uiText("ui.ui.kit.steps.1931982baf"); }, get task_control() { return uiText("ui.ui.kit.steps.b2f2be9925"); }, get coding_session() { return uiText("ui.ui.kit.steps.4be5fcdceb"); },
+  get coding_run() { return uiText("ui.ui.kit.steps.d9eecb6b86"); }, get coding_inspect() { return uiText("ui.ui.kit.steps.80e25e5ed1"); }, get memory_compact() { return uiText("ui.ui.kit.steps.095dd3fe2c"); },
+  get manage_notes() { return uiText("ui.ui.kit.steps.04a18b51cd"); }, get telegram_account() { return uiText("ui.ui.kit.steps.3230cfc033"); }, get "telegram.send_media"() { return uiText("ui.ui.kit.steps.924172163c"); },
+  get my_agenda() { return uiText("ui.ui.kit.steps.170b1c8b9e"); }, get manage_loop() { return uiText("ui.ui.kit.steps.3a81a8fa85"); }, get recent_turns() { return uiText("ui.ui.kit.steps.d296125a18"); }, get stay_silent() { return uiText("ui.ui.kit.steps.4ef700539d"); },
+  get react() { return uiText("ui.ui.kit.steps.c2622cc274"); }, git: "Git",
+  get fetch_url() { return uiText("ui.ui.kit.steps.0ecb66478d"); }, get read_url() { return uiText("ui.ui.kit.steps.0ecb66478d"); },
+  get reply() { return uiText("ui.ui.kit.steps.5cfcac6ad0"); }, get end_turn() { return uiText("ui.ui.kit.steps.324988af1d"); }, get remind_self() { return uiText("ui.ui.kit.steps.eea894b26c"); },
+  get recall() { return uiText("ui.ui.kit.steps.bb91ccbb2f"); }, get remember() { return uiText("ui.ui.kit.steps.53bacfee4c"); }, get read_memory() { return uiText("ui.ui.kit.steps.ccee864b5a"); },
+  get coding_task() { return uiText("ui.ui.kit.steps.4be5fcdceb"); }, get coding_agent() { return uiText("ui.ui.kit.steps.0cc6eef0cf"); },
+  get coding_process() { return uiText("ui.ui.kit.steps.781e34e36d"); }, get coding_read() { return uiText("ui.ui.kit.steps.f0a663f477"); }, get coding_search() { return uiText("ui.ui.kit.steps.4cc341cef9"); },
+  get coding_patch() { return uiText("ui.ui.kit.steps.76f978e79f"); }, get coding_verify() { return uiText("ui.ui.kit.steps.e56a412d12"); }, get coding_finish() { return uiText("ui.ui.kit.steps.5152fe706a"); },
+  get write_skill() { return uiText("ui.ui.kit.steps.6d8788384a"); }, get consolidate_context() { return uiText("ui.ui.kit.steps.c993c62d33"); },
+  get computer() { return uiText("ui.ui.kit.steps.9329c3a242"); }, get read_run_result() { return uiText("ui.ui.kit.steps.e1965c23d8"); }, get journal() { return uiText("ui.ui.kit.steps.77bde73edb"); },
+  get wake() { return uiText("ui.ui.kit.steps.00ef5eb94e"); }, get set_wake() { return uiText("ui.ui.kit.steps.00ef5eb94e"); }, get sleep() { return uiText("ui.ui.kit.steps.1c947e774a"); }, get voice() { return uiText("ui.ui.kit.steps.24a0d703af"); }, get speak() { return uiText("ui.ui.kit.steps.24a0d703af"); },
+  get browser() { return uiText("ui.ui.kit.steps.4a3b61fd81"); }, get screenshot() { return uiText("ui.ui.kit.steps.e878257234"); }, get send_file() { return uiText("ui.ui.kit.steps.d5b72f56e5"); },
+  get "telegram.deliver"() { return uiText("ui.ui.kit.steps.9f545f8f36"); },
+  get windows_mcp_Snapshot() { return uiText("ui.ui.kit.steps.d9063c292e"); }, get windows_mcp_Screenshot() { return uiText("ui.ui.kit.steps.e878257234"); },
+  get windows_mcp_Click() { return uiText("ui.ui.kit.steps.f6cf996cea"); }, get windows_mcp_Type() { return uiText("ui.ui.kit.steps.d69397589d"); }, get windows_mcp_Scroll() { return uiText("ui.ui.kit.steps.64dbfe55dc"); },
+  get windows_mcp_Move() { return uiText("ui.ui.kit.steps.757b2e98e3"); }, get windows_mcp_Shortcut() { return uiText("ui.ui.kit.steps.383ac4908f"); },
+  get windows_mcp_App() { return uiText("ui.ui.kit.steps.448fabc413"); }, windows_mcp_PowerShell: "PowerShell",
+  get windows_mcp_FileSystem() { return uiText("ui.ui.kit.steps.b3cd7719dc"); }, get windows_mcp_Registry() { return uiText("ui.ui.kit.steps.836f4c1824"); },
+  get windows_mcp_Process() { return uiText("ui.ui.kit.steps.5650f4123d"); }, get windows_mcp_Clipboard() { return uiText("ui.ui.kit.steps.eb31594ab4"); },
+  get windows_mcp_ControlStatus() { return uiText("ui.ui.kit.steps.25dc9559bc"); }, get windows_mcp_DisplayInventory() { return uiText("ui.ui.kit.steps.720042dadd"); },
+  get windows_mcp_MultiSelect() { return uiText("ui.ui.kit.steps.6cf14b2064"); }, get windows_mcp_MultiEdit() { return uiText("ui.ui.kit.steps.a2c9033788"); },
+  get windows_mcp_Notification() { return uiText("ui.ui.kit.steps.1a3cc6cdef"); }, get windows_mcp_Scrape() { return uiText("ui.ui.kit.steps.0ecb66478d"); },
+  get windows_mcp_Wait() { return uiText("ui.ui.kit.steps.074415c7fe"); }, get windows_mcp_WaitFor() { return uiText("ui.ui.kit.steps.e6b55327fa"); },
 };
 const TERMINAL: Record<string, string> = {
-  done: "Работа завершена", completed: "Работа завершена", failed: "Работа остановилась с ошибкой",
-  cancelled: "Работа отменена", canceled: "Работа отменена", paused: "Работа приостановлена",
-  in_doubt: "Нужно проверить результат", blocked: "Есть препятствие",
+  get done() { return uiText("ui.ui.kit.steps.edc4e7a138"); }, get completed() { return uiText("ui.ui.kit.steps.edc4e7a138"); }, get failed() { return uiText("ui.ui.kit.steps.042fb5f9ab"); },
+  get cancelled() { return uiText("ui.ui.kit.steps.d33d9337ec"); }, get canceled() { return uiText("ui.ui.kit.steps.d33d9337ec"); }, get paused() { return uiText("ui.ui.kit.steps.6cf0b8fc13"); },
+  get in_doubt() { return uiText("ui.ui.kit.steps.e16eb78176"); }, get blocked() { return uiText("ui.ui.kit.steps.5db21586e6"); },
 };
 /** Причина завершения человеческими словами. `done` бывает разным: оборвалась потолком —
  *  не то же, что «решила промолчать». Ход без руки reply НЕ помечается «без ответа»:
@@ -121,8 +124,8 @@ const TERMINAL: Record<string, string> = {
 export function terminalLabel(status: string, reason: string): { label: string; failed: boolean } {
   const r = (reason || "").toLowerCase();
   if (status === "done" || status === "completed") {
-    if (r.includes("max_tokens")) return { label: "Ответ оборван потолком, работа не доведена", failed: true };
-    if (r === "silent decision") return { label: "Завершено: решила промолчать", failed: false };
+    if (r.includes("max_tokens")) return { label: uiText("ui.ui.kit.steps.1d3433e766"), failed: true };
+    if (r === "silent decision") return { label: uiText("ui.ui.kit.steps.493e303d62"), failed: false };
   }
   return { label: TERMINAL[status] || status, failed: status === "failed" };
 }
@@ -177,7 +180,7 @@ export function toolParameters(args: unknown): Array<[string, unknown]> {
 
 function traceBlock(key: string, label: string, content: string, kind: string, opts: Parameters<typeof textBox>[2] = {}): string {
   return `<section class="tool-trace-block tool-trace-${kind}"><div class="tool-trace-heading"><span>${esc(label)}</span>` +
-    `<button type="button" class="tool-copy" data-copy-block aria-label="Копировать: ${esc(label)}">${opts.truncated ? 'Копировать фрагмент' : 'Копировать'}</button></div>` +
+    uiText("ui.ui.kit.steps.c23eb9b8cd", {p0: String(esc(label)), p1: String(opts.truncated ? uiText("ui.ui.kit.steps.547e84dadd") : uiText("ui.ui.kit.steps.1ecddf40bf"))}) +
     textBox(key, content, opts) + `</section>`;
 }
 
@@ -187,30 +190,33 @@ export function toolSummary(t: ToolDetail, live = false) {
   const received = t.result != null || t.status === 'received' || !!t.finished_at;
   const active = !received && t.status !== 'failed' && live;
   const outcome = t.status === 'failed' ? 'failed' : known.includes(t.outcome || '') ? t.outcome! : 'unknown';
-  const labels: Record<string,string> = {ok:'успех',confirmed:'подтверждено',failed:'ошибка',refused:'отказ',in_doubt:'нужна проверка',partial:'частично',unknown:'исход неизвестен'};
+  const labels: Record<string,string> = {ok:uiText("ui.ui.kit.steps.7b3fee132f"),confirmed:uiText("ui.ui.kit.steps.3807e9938d"),failed:uiText("ui.ui.kit.steps.44d4090ae9"),refused:uiText("ui.ui.kit.steps.6d4b1454a0"),in_doubt:uiText("ui.ui.kit.steps.a518ad0ddc"),partial:uiText("ui.ui.kit.steps.27e1bd212b"),unknown:uiText("ui.ui.kit.steps.e1ffc81378")};
   const icons: Record<string,string> = {ok:'✓',confirmed:'✓',failed:'✗',refused:'⊘',in_doubt:'?',partial:'◐',unknown:'·'};
   const receipt = [t.execution, ...(t.operations || [])].filter(r => r?.exit_code != null).at(-1);
   const lens = active ? null : lensState(t.lens);
-  const state = active ? 'выполняется' : lens ? lens.state : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
+  const state = active ? uiText("ui.ui.kit.steps.bd280ebe5b") : lens ? lens.state : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
   const elapsed = Date.parse(t.finished_at || '') - Date.parse(t.at || '');
   const seconds = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed/1000 : null;
-  const duration = seconds == null ? '' : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} с` : `${Math.floor(seconds/60)} мин ${Math.round(seconds%60)} с`;
-  return {outcome,active,state,icon:active ? '◌' : icons[outcome],label:active ? 'выполняется' : labels[outcome],duration,
+  const duration = seconds == null ? '' : seconds < 60 ? uiText("ui.ui.kit.steps.baf1ec7874", {p0: String(seconds < 10 ? decimal(seconds) : Math.round(seconds))}) : uiText("ui.ui.kit.steps.aef6c8dfde", {p0: String(Math.floor(seconds/60)), p1: String(Math.round(seconds%60))});
+  return {outcome,active,state,icon:active ? '◌' : icons[outcome],label:active ? uiText("ui.ui.kit.steps.bd280ebe5b") : labels[outcome],duration,
     target:t.target || toolTarget(t.tool || '', t.args) || subject(t.args),
     failed:['failed','refused'].includes(outcome) || !!lens?.failed,attention:['partial','in_doubt'].includes(outcome) || !!lens?.attention};
 }
 
 const selectedTraceTabs = new Map<string,string>();
-export const traceTabNames = [['args','Аргументы'],['definition','Функция'],['execution','Исполнение'],['request','JSON-запрос'],['response','JSON-ответ']] as const;
+export function traceTabNames() {
+  return [['args',uiText("ui.ui.kit.steps.751a142ab0")],['definition',uiText("ui.ui.kit.steps.8595381191")],['execution',uiText("ui.ui.kit.steps.b517109e50")],['request',uiText("ui.ui.kit.steps.e9e7fe7628")],['response',uiText("ui.ui.kit.steps.f1cfb8171f")]] as const;
+}
 export function traceTabsHTML(key:string, panels: Record<string,string>): string {
   // «Сводка» есть только у рук с линзой и тогда открывается первой.
-  const tabs: ReadonlyArray<readonly [string,string]> = panels.summary ? [['summary','Сводка'],...traceTabNames] : traceTabNames;
+  const names = traceTabNames();
+  const tabs: ReadonlyArray<readonly [string,string]> = panels.summary ? [['summary',uiText("ui.ui.kit.steps.2acdbda48e")],...names] : names;
   const remembered = selectedTraceTabs.get(key);
   const selected = remembered && tabs.some(([tab])=>tab===remembered) ? remembered : panels.summary ? 'summary' : 'args';
   const id = 'trace-' + encodeURIComponent(key);
-  return `<div class="tool-trace" data-trace-key="${esc(key)}"><div class="tool-tabs" role="tablist" aria-label="Детали вызова">` +
-    tabs.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
-    tabs.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
+  return uiText("ui.ui.kit.steps.705883f694", {p0: String(esc(key))}) +
+    tabs.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${tab==='request'||tab==='response'?`<span class="tab-long">${label}</span><span class="tab-short">${uiText('ui.steps.trace_'+tab+'_short')}</span>`:label}</button>`).join('') + '</div>' +
+    tabs.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || uiText("ui.ui.kit.steps.470488b699")}</section>`).join('') + '</div>';
 }
 function selectTraceTab(button:HTMLElement):void {
   const trace=button.closest<HTMLElement>('[data-trace-key]');if(!trace)return;
@@ -254,8 +260,8 @@ export function shellQuote(arg: string): string {
 }
 
 const RECEIPT_STATE: Record<string, string> = {
-  entered: 'обработчик вызван', returned: 'процесс завершился', timed_out: 'истекло время ожидания',
-  launch_failed: 'запуск не состоялся', running: 'выполняется', failed: 'ошибка', cancelled: 'отменено', started: 'запущен',
+  get entered() { return uiText("ui.ui.kit.steps.6fce85e3b3"); }, get returned() { return uiText("ui.ui.kit.steps.3f7948a54d"); }, get timed_out() { return uiText("ui.ui.kit.steps.55829b7cce"); },
+  get launch_failed() { return uiText("ui.ui.kit.steps.fa6213514d"); }, get running() { return uiText("ui.ui.kit.steps.bd280ebe5b"); }, get failed() { return uiText("ui.ui.kit.steps.44d4090ae9"); }, get cancelled() { return uiText("ui.ui.kit.steps.8a09723017"); }, get started() { return uiText("ui.ui.kit.steps.d847c0f696"); },
 };
 
 /** One receipt as the command it records: Python call, process line or bare harness note. */
@@ -265,12 +271,12 @@ export function executionText(r: ExecutionReceipt, args: unknown): { title: stri
   if (r.argv?.length || r.requested_argv?.length) {
     const argv = r.argv?.length ? r.argv : r.requested_argv!;
     const line = argv.map(shellQuote).join(' ');
-    return { title: r.argv?.length ? 'Процесс' : 'Попытка запуска (процесс не стартовал)',
+    return { title: r.argv?.length ? uiText("ui.ui.kit.steps.781e34e36d") : uiText("ui.ui.kit.steps.a2889947cc"),
       code: (r.cwd ? `$ cd ${shellQuote(r.cwd)}\n` : '') + '$ ' + line, meta };
   }
-  if (r.command) return { title: 'Команда', code: (r.cwd ? `$ cd ${shellQuote(r.cwd)}\n` : '') + '$ ' + r.command, meta };
-  if (r.handler && (r.kind || 'python') === 'python') return { title: 'Вызов Python', code: pythonCall(r.handler, args), meta };
-  return { title: 'Исполнение харнесса', code: pretty(r), meta };
+  if (r.command) return { title: uiText("ui.ui.kit.steps.8b372c12c2"), code: (r.cwd ? `$ cd ${shellQuote(r.cwd)}\n` : '') + '$ ' + r.command, meta };
+  if (r.handler && (r.kind || 'python') === 'python') return { title: uiText("ui.ui.kit.steps.c9e15d025f"), code: pythonCall(r.handler, args), meta };
+  return { title: uiText("ui.ui.kit.steps.d0d47b7549"), code: pretty(r), meta };
 }
 
 /** metadata.operations rows: ["read", path], ["process", exe, argv], ["connect", addr]… */
@@ -290,28 +296,28 @@ export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string
   const missing=(text:string)=>`<p class="tool-trace-unrecorded">${esc(text)}</p>`;
   const panels:Record<string,string>={};
   const summary=lensHTML(t.lens,t.args);
-  if(summary)panels.summary=summary+(t.outcome_source==='result'?'<p class="tool-trace-unrecorded">Исход в журнале не записан; значок взят из собственного отчёта инструмента (error/complete).</p>':'');
-  panels.args=t.args!=null ? traceBlock(key+':args','Аргументы',pretty(t.args),'request') : missing('Аргументы не записаны.');
-  panels.definition=t.definition ? traceBlock(key+':definition','Схема инструмента',pretty(t.definition),'definition') : missing('Схема инструмента в этом журнале не записана.');
-  panels.request=t.model_request ? traceBlock(key+':request','Сохранённый JSON-запрос модели',pretty(t.model_request),'request') : missing('Исходный JSON-запрос модели не записан. Аргументы доступны отдельно.');
+  if(summary)panels.summary=summary+(t.outcome_source==='result'?uiText("ui.ui.kit.steps.9a428edea4"):'');
+  panels.args=t.args!=null ? traceBlock(key+':args',uiText("ui.ui.kit.steps.751a142ab0"),pretty(t.args),'request') : missing(uiText("ui.ui.kit.steps.6625210452"));
+  panels.definition=t.definition ? traceBlock(key+':definition',uiText("ui.ui.kit.steps.fb11f80f1c"),pretty(t.definition),'definition') : missing(uiText("ui.ui.kit.steps.8e4dd13b95"));
+  panels.request=t.model_request ? traceBlock(key+':request',uiText("ui.ui.kit.steps.196ae6fa4e"),pretty(t.model_request),'request') : missing(uiText("ui.ui.kit.steps.7a2d979148"));
   const executions=[t.execution,...(t.operations||[])].filter((r):r is ExecutionReceipt=>!!r);
   panels.execution=executions.length ? executions.map((r,i)=>{
     const shown=executionText(r,t.args);
     return traceBlock(key+':execution:'+i,shown.title+(shown.meta?' · '+shown.meta:''),shown.code,'execution');
-  }).join('') : missing('Фактическое исполнение в этом журнале не записано.');
-  if(t.nested?.length)panels.execution+=traceBlock(key+':nested','Что рука сделала внутри',nestedText(t.nested),'execution');
-  else if(executions.length && !executions.some(r=>r.argv||r.command||r.requested_argv))panels.execution+=missing('Внутренних процессов, файлов и соединений журнал за этим вызовом не записал.');
-  if(t.nested_cut)panels.execution+=missing('Список вложенных действий сокращён.');
-  if(executions.length)panels.execution+=details(key+':receipt',[['Квитанции исполнения',pretty(executions)]],'Квитанции · JSON');
-  const result=t.result?.truncated ? [t.result.head,'… пропущена часть результата …',t.result.tail].filter(Boolean).join('\n') : String(t.result?.head ?? t.result?.tail ?? '');
-  panels.response=t.result ? traceBlock(key+':result','Ответ инструмента',resultText(result),'response',{truncated:t.result.truncated,ref:t.result.result_id,run:runId,size:t.result.size,raw:true}) : missing('Ответ инструмента ещё не записан.');
-  if(t.model_observation!=null)panels.response+=!t.result?.truncated&&t.model_observation===result ? missing('Модель получила этот же ответ; отдельной приписки нет.') : traceBlock(key+':model-response','Ответ для модели с припиской харнесса',t.model_observation,'model-response');
-  if(t.model_response_image_count)panels.response+=missing(`К ответу приложено изображений: ${t.model_response_image_count}`);
-  if(t.error)panels.response+=traceBlock(key+':error','Ошибка',t.error,'error');
+  }).join('') : missing(uiText("ui.ui.kit.steps.720e7fde0a"));
+  if(t.nested?.length)panels.execution+=traceBlock(key+':nested',uiText("ui.ui.kit.steps.29070a58a5"),nestedText(t.nested),'execution');
+  else if(executions.length && !executions.some(r=>r.argv||r.command||r.requested_argv))panels.execution+=missing(uiText("ui.ui.kit.steps.d581ee9cdf"));
+  if(t.nested_cut)panels.execution+=missing(uiText("ui.ui.kit.steps.1b3df7b455"));
+  if(executions.length)panels.execution+=details(key+':receipt',[[uiText("ui.ui.kit.steps.47466c9c39"),pretty(executions)]],uiText("ui.ui.kit.steps.bc17e81016"));
+  const result=t.result?.truncated ? [t.result.head,uiText("ui.ui.kit.steps.e57971f1bd"),t.result.tail].filter(Boolean).join('\n') : String(t.result?.head ?? t.result?.tail ?? '');
+  panels.response=t.result ? traceBlock(key+':result',uiText("ui.ui.kit.steps.7391ee5e19"),resultText(result),'response',{truncated:t.result.truncated,ref:t.result.result_id,run:runId,size:t.result.size,raw:true}) : missing(uiText("ui.ui.kit.steps.498d011d77"));
+  if(t.model_observation!=null)panels.response+=!t.result?.truncated&&t.model_observation===result ? missing(uiText("ui.ui.kit.steps.7113c9969f")) : traceBlock(key+':model-response',uiText("ui.ui.kit.steps.cf5b7d94b4"),t.model_observation,'model-response');
+  if(t.model_response_image_count)panels.response+=missing(uiText("ui.ui.kit.steps.49e3fc8f1e", {p0: String(t.model_response_image_count)}));
+  if(t.error)panels.response+=traceBlock(key+':error',uiText("ui.ui.kit.steps.bf22dfeeba"),t.error,'error');
   return traceTabsHTML(runId+'/'+key,panels);
 }
 
-function details(key: string, parts: Array<[string, string]>, label = "Подробности"): string {
+function details(key: string, parts: Array<[string, string]>, label = uiText("ui.ui.kit.steps.0fefbd67d8")): string {
   const body = parts.filter(([, value]) => value).map(([name, value]) =>
     `<div class="action-detail-label">${esc(name)}</div><pre>${esc(value)}</pre>`).join("");
   return body ? `<details class="action-details" data-detail="${esc(key)}"><summary>${esc(label)}</summary>${body}</details>` : "";
@@ -323,9 +329,9 @@ function humanOrigin(text: string, label: string): { text: string; label: string
   let t = text.replace(/^(?:Hélène|Praxis|Праксис):\s*/u, "");
   let kind = "";
   const alarm = t.match(/^Сработал твой будильник[.:]\s*(?:Намечено было вот что:\s*|намечено\s+)?/iu);
-  if (alarm) { t = t.slice(alarm[0].length); label = "Будильник"; kind = "alarm"; }
+  if (alarm) { t = t.slice(alarm[0].length); label = uiText("ui.ui.kit.steps.00ef5eb94e"); kind = "alarm"; }
   const promise = t.match(/^\[обещание\]\s*напоминание себе:\s*/iu);
-  if (promise) { t = t.slice(promise[0].length); label = "Напоминание себе"; kind = "promise"; }
+  if (promise) { t = t.slice(promise[0].length); label = uiText("ui.ui.kit.steps.a9d789f09a"); kind = "promise"; }
   return { text: t.trim() || text, label, kind };
 }
 
@@ -336,11 +342,11 @@ function originLinks(d: RunDetail | undefined, kind: string, goal: string): stri
   const room = raw === LEGACY_WINDOW_KEY ? "window" : raw;
   const at = d.manifest?.created_at || "";
   const links: string[] = [];
-  if (room) links.push(`<a href="#" data-open-room="${esc(room)}" data-at="${esc(at)}">Открыть в чате →</a>`);
+  if (room) links.push(uiText("ui.ui.kit.steps.c657bfc303", {p0: String(esc(room)), p1: String(esc(at))}));
   if (room && (kind === "alarm" || kind === "promise")) {
     const g = clip(goal.replace(/\s+/g, " ").trim(), 200);
-    links.push(`<a href="#" data-compose="${esc(room)}" data-text="${esc(`Повтори это напоминание через 10 минут: «${g}»`)}">Повторить через 10 минут</a>`);
-    links.push(`<a href="#" data-compose="${esc(room)}" data-text="${esc(`Сними напоминание: «${g}»`)}">Снять</a>`);
+    links.push(uiText("ui.ui.kit.steps.7aaa8fc847", {p0: String(esc(room)), p1: String(esc(uiText("ui.ui.kit.steps.b7cf9f1af8", {p0: String(g)})))}));
+    links.push(uiText("ui.ui.kit.steps.6ebe9225d6", {p0: String(esc(room)), p1: String(esc(uiText("ui.ui.kit.steps.a9c5ba482f", {p0: String(g)})))}));
   }
   return links.length ? `<div class="run-links">${links.join(" · ")}</div>` : "";
 }
@@ -351,7 +357,7 @@ function readable(text: string, label: string, key: string, d?: RunDetail): stri
   if (key === "origin") ({ text, label, kind } = humanOrigin(text, label));
   const body = `<div class="run-reading md">${md(text)}</div>`;
   const links = key === "origin" ? originLinks(d, kind, text) : "";
-  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}${links}</section>`;
+  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? uiText("ui.ui.kit.steps.3db6274b13", {p0: String(key), p1: String(md(clip(text, 240))), p2: String(body)}) : body}${links}</section>`;
 }
 
 // ---------------------------------------------------------------- длинные тексты
@@ -380,8 +386,8 @@ export function textBox(key: string, text: string, opts: { truncated?: boolean; 
   const truncated = !!opts.truncated && full === undefined;
   const folded = needsClip(body) || truncated;
   const more = truncated
-    ? `Показать целиком${opts.size ? ` · ${fmtK(opts.size)} байт` : ""}`
-    : `Показать целиком · ${lineCount(body)} строк`;
+    ? uiText("ui.ui.kit.steps.0e01cda91f", {p0: String(opts.size ? uiText("ui.ui.kit.steps.34f5770325", {p0: String(fmtK(opts.size))}) : "")})
+    : uiText("ui.ui.kit.steps.2247a80575", {p0: String(lineCount(body))});
   const fullAttr = truncated && opts.ref && opts.run ? ` data-full="${esc(opts.run)}/${esc(opts.ref)}/${opts.raw ? "raw" : "model"}"` : "";
   return `<div class="run-text" data-text="${esc(key)}">` +
     `<pre class="run-text-body ${folded ? "clipped" : ""}">${esc(body)}</pre>` +
@@ -420,9 +426,9 @@ function bindMore(): void {
       e.preventDefault();
       const text = copy.closest('.tool-trace-block')?.querySelector('.run-text-body')?.textContent;
       if (text != null) {
-        copyText(text).then((ok) => { copy.textContent = ok ? 'Скопировано' : 'Не скопировалось'; },
-          () => { copy.textContent = 'Не скопировалось'; });
-      } else copy.textContent = 'Копирование недоступно';
+        copyText(text).then((ok) => { copy.textContent = ok ? uiText("ui.ui.kit.steps.d2d08c715e") : uiText("ui.ui.kit.steps.b96e4f8504"); },
+          () => { copy.textContent = uiText("ui.ui.kit.steps.b96e4f8504"); });
+      } else copy.textContent = uiText("ui.ui.kit.steps.324df365aa");
       return;
     }
     // Ссылки с карточки: хозяин ленты (окно, телефон) решает, как открыть чат и композер.
@@ -448,26 +454,26 @@ function bindMore(): void {
     if (full && !fetched.has(full) && fetchResult) {
       const [run, rid, mode] = full.split("/");
       btn.disabled = true;
-      btn.textContent = "читаю…";
+      btn.textContent = uiText("ui.ui.kit.steps.b7eefd36b7");
       fetchResult(run, rid).then((payload) => {
         const text = textOf(payload, mode === "raw");
         if (text) {
           fetched.set(full, text);
           pre.textContent = text;
           const copy = box.closest('.tool-trace-block')?.querySelector<HTMLButtonElement>('[data-copy-block]');
-          if (copy) copy.textContent = 'Копировать';
+          if (copy) copy.textContent = uiText("ui.ui.kit.steps.1ecddf40bf");
         }
         pre.classList.remove("clipped");
         btn.disabled = false;
-        btn.textContent = text ? "Свернуть" : "Файл результата не прочитался";
+        btn.textContent = text ? uiText("ui.ui.kit.steps.36c25d9ffc") : uiText("ui.ui.kit.steps.ccdc285fe7");
       }, () => {
         btn.disabled = false;
-        btn.textContent = "Не прочиталось, попробовать ещё";
+        btn.textContent = uiText("ui.ui.kit.steps.1e9ec28943");
       });
       return;
     }
     const closed = pre.classList.toggle("clipped");
-    btn.textContent = closed ? `Показать целиком · ${lineCount(pre.textContent || "")} строк` : "Свернуть";
+    btn.textContent = closed ? uiText("ui.ui.kit.steps.2247a80575", {p0: String(lineCount(pre.textContent || ""))}) : uiText("ui.ui.kit.steps.36c25d9ffc");
   });
 }
 bindMore();
@@ -479,8 +485,8 @@ export function modelProgressLabel(it: NonNullable<RunDetail["iterations"]>[numb
   const p = it.progress;
   if (p?.outcome !== "streaming" || !Number.isFinite(p.argument_bytes) || !Number.isFinite(p.attempt_ms)) return "";
   const age = it.progress_at ? now - Date.parse(it.progress_at) : Infinity;
-  const label = age >= 0 && age < 15000 ? "Модель пишет аргументы" : "Последний прогресс аргументов";
-  return `${label}: ${((p.argument_bytes || 0) / 1024).toFixed(1)} КБ · ${((p.attempt_ms || 0) / 60000).toFixed(1)} мин`;
+  const label = age >= 0 && age < 15000 ? uiText("ui.ui.kit.steps.ae4b3e99e1") : uiText("ui.ui.kit.steps.7a8490e569");
+  return uiText("ui.ui.kit.steps.389a300c57", {p0: String(label), p1: decimal((p.argument_bytes || 0) / 1024), p2: decimal((p.attempt_ms || 0) / 60000)});
 }
 
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
@@ -500,17 +506,17 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     const complete = it.status === "completed" || (it.status !== "failed" && it.ms != null);
     const thinking = !complete && it.status !== "failed" && !it.tools?.length && live;
     const cut = complete && it.stop === "max_tokens";
-    const status = it.status === "failed" ? "ошибка модели" : cut ? (it.text_chars ? "ответ оборван потолком, фраза не закончена" : "ответ оборван потолком, ни слова не дошло") : thinking ? "думает" : "";
-    const seconds = it.ms != null ? `${(it.ms / 1000).toFixed(1)} с` : "";
-    const tokens = u.in != null ? `${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ${fmtK(u.out || 0)}` : "";
+    const status = it.status === "failed" ? uiText("ui.ui.kit.steps.286475bfb9") : cut ? (it.text_chars ? uiText("ui.ui.kit.steps.52dcc83822") : uiText("ui.ui.kit.steps.2682d29e0f")) : thinking ? uiText("ui.ui.kit.steps.8176f94e66") : "";
+    const seconds = it.ms != null ? uiText("ui.ui.kit.steps.baf1ec7874", {p0: decimal(it.ms / 1000)}) : "";
+    const tokens = u.in != null ? `${fmtK(total)}${cached ? uiText("ui.ui.kit.steps.bd22fee03c", {p0: String(share)}) : ""} → ${fmtK(u.out || 0)}` : "";
     const meta = [seconds, tokens].filter(Boolean).join(" · ");
     const parts: string[] = [];
-    parts.push(`<div class="step-head"><span class="step-n">Шаг ${n}</span>${meta ? `<span class="step-meta">${esc(meta)}</span>` : ""}${status ? `<span class="action-status">${esc(status)}</span>` : ""}</div>`);
+    parts.push(uiText("ui.ui.kit.steps.21931b9dc9", {p0: String(n), p1: String(meta ? `<span class="step-meta">${esc(meta)}</span>` : ""), p2: String(status ? `<span class="action-status">${esc(status)}</span>` : "")}));
     const progress = thinking ? modelProgressLabel(it) : "";
     if (progress) parts.push(`<div class="step-meta" data-model-progress>${esc(progress)}</div>`);
-    parts.push(details("model:" + key, [["Модель", it.model || ""], ["Время", seconds],
-      ["Токены", u.in != null ? `вход ${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ответ ${fmtK(u.out || 0)}` : ""],
-      ["Остановка", cut ? "max_tokens: потолок ответа исчерпан размышлением или длинным ответом" : ""], ["Ошибка", it.error || ""]], "Подробности шага"));
+    parts.push(details("model:" + key, [[uiText("ui.ui.kit.steps.f3bdf7cce3"), it.model || ""], [uiText("ui.ui.kit.steps.6711f073ab"), seconds],
+      [uiText("ui.ui.kit.steps.98b7dc4147"), u.in != null ? uiText("ui.ui.kit.steps.74ec630d1f", {p0: String(fmtK(total)), p1: String(cached ? uiText("ui.ui.kit.steps.bd22fee03c", {p0: String(share)}) : ""), p2: String(fmtK(u.out || 0))}) : ""],
+      [uiText("ui.ui.kit.steps.065a18f569"), cut ? uiText("ui.ui.kit.steps.dcdb345a29") : ""], [uiText("ui.ui.kit.steps.bf22dfeeba"), it.error || ""]], uiText("ui.ui.kit.steps.3c17ab48d8")));
     parts.push(lesson(n === 1 ? "think_first" : "think"));
     for (const t of it.tools || []) {
       hands += 1;
@@ -520,8 +526,8 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       // Шаг доставки ядра с нулём знаков — не её действие и не «получила ноль»: на границе
       // прогона доставлять было нечего (слово ушло рукой reply или границей окна).
       const emptyDelivery = t.tool === "telegram.deliver" && (t.args as { text_chars?: number } | null)?.text_chars === 0 && !(t.args as { media_count?: number } | null)?.media_count;
-      const tstatus = failed ? "ошибка" : emptyDelivery ? "нечего доставлять" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
-      const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
+      const tstatus = failed ? uiText("ui.ui.kit.steps.44d4090ae9") : emptyDelivery ? uiText("ui.ui.kit.steps.d30323a8b4") : received ? uiText("ui.ui.kit.steps.6c455b8924") : active ? uiText("ui.ui.kit.steps.bd280ebe5b") : uiText("ui.ui.kit.steps.c394012b6f");
+      const title = emptyDelivery ? uiText("ui.ui.kit.steps.9b8f19a36a") : ACTIONS[t.tool || ""] || t.tool || uiText("ui.ui.kit.steps.6b53aafe28");
       const lessonKey = t.tool === "reply" ? "reply" : t.tool === "end_turn" ? "end_turn" : "hand";
       const tkey = "tool:" + (t.call_id || String(t.seq ?? key + ":" + hands));
       parts.push(
@@ -533,9 +539,9 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       );
     }
     if (it.text) {
-      parts.push(`<div class="hand word"><div class="action-head"><b class="action-title">Слово</b></div>${textBox("text:" + key, it.text, { truncated: !!it.text_truncated, ref: it.text_ref, run: runId })}</div>`);
+      parts.push(uiText("ui.ui.kit.steps.c7ed4117dc", {p0: String(textBox("text:" + key, it.text, { truncated: !!it.text_truncated, ref: it.text_ref, run: runId }))}));
     } else if (it.text_ref) {
-      parts.push(`<div class="hand word"><div class="action-head"><b class="action-title">Слово</b><span class="action-status">длинный ответ сохранён файлом</span></div>${textBox("text:" + key, "", { truncated: true, ref: it.text_ref, run: runId })}</div>`);
+      parts.push(uiText("ui.ui.kit.steps.ebfe71b9ca", {p0: String(textBox("text:" + key, "", { truncated: true, ref: it.text_ref, run: runId }))}));
     }
     steps.push(`<div class="ev-step step ${thinking ? "action-active" : ""} ${cut || it.status === "failed" ? "action-failed" : ""}">${parts.join("")}</div>`);
   });
@@ -544,21 +550,21 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   if (term.status) {
     const t = terminalLabel(term.status, term.reason || "");
     tail.push(
-      `<div class="ev-step ${t.failed ? "action-failed" : ""}"><b class="action-title">${esc(t.label)}</b>${details("terminal", [["Причина", term.reason || ""]])}${lesson("terminal")}</div>`,
+      `<div class="ev-step ${t.failed ? "action-failed" : ""}"><b class="action-title">${esc(t.label)}</b>${details("terminal", [[uiText("ui.ui.kit.steps.442e7ad547"), term.reason || ""]])}${lesson("terminal")}</div>`,
     );
   }
-  const origin = readable(d.origin?.text || "", "Повод запуска", "origin", d) || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
-  const outcome = readable(d.outcome?.text || d.outcome?.note || "", "Итог", "outcome");
-  let actions = steps.join("") || `<div class="muted">${live ? "Работа началась. Первые шаги ещё не записаны." : "Шаги не записаны."}</div>`;
+  const origin = readable(d.origin?.text || "", uiText("ui.ui.kit.steps.454699fd11"), "origin", d) || (d.origin?.source === "unknown" ? uiText("ui.ui.kit.steps.5b70d80713") : "");
+  const outcome = readable(d.outcome?.text || d.outcome?.note || "", uiText("ui.ui.kit.steps.4706e4a4a3"), "outcome");
+  let actions = steps.join("") || `<div class="muted">${live ? uiText("ui.ui.kit.steps.60af385604") : uiText("ui.ui.kit.steps.28e6d08b30")}</div>`;
   if (opts.limit && steps.length > opts.limit) {
     // Счёт один и тот же везде: шаги = итерации модели, не сумма рук и не строки ленты.
     const hidden = steps.length - opts.limit;
-    actions = `<details class="action-earlier" data-detail="earlier"><summary>Показать ранние шаги · ${hidden} из ${steps.length}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("");
+    actions = uiText("ui.ui.kit.steps.6949a0a079", {p0: String(hidden), p1: String(steps.length), p2: String(steps.slice(0, -opts.limit).join(""))}) + steps.slice(-opts.limit).join("");
   }
   actions += tail.join("");
   if (opts.overview) {
-    const count = steps.length ? ` · ${steps.length}${hands ? `, рук ${hands}` : ""}` : "";
-    return origin + outcome + `<details class="run-actions" data-detail="actions" ${live ? "open" : ""}><summary>Шаги${count}</summary>${actions}</details>`;
+    const count = steps.length ? ` · ${steps.length}${hands ? uiText("ui.ui.kit.steps.8e103f4247", {p0: String(hands)}) : ""}` : "";
+    return origin + outcome + uiText("ui.ui.kit.steps.59a5a4320b", {p0: String(live ? "open" : ""), p1: String(count), p2: String(actions)});
   }
   return origin + actions + outcome;
 }
@@ -581,7 +587,7 @@ export function renderSteps(box: HTMLElement, d: RunDetail, opts: StepsOptions =
     if (!unclipped.has(el.dataset.text)) continue;
     el.querySelector(".run-text-body")?.classList.remove("clipped");
     const btn = el.querySelector<HTMLButtonElement>(".run-text-more");
-    if (btn && !btn.dataset.full) btn.textContent = "Свернуть";
+    if (btn && !btn.dataset.full) btn.textContent = uiText("ui.ui.kit.steps.36c25d9ffc");
   }
 }
 
@@ -605,13 +611,5 @@ export function frameStripHTML(d: RunDetail | undefined, title: string, link = "
   const share = total ? Math.round((100 * u.cached) / total) : 0;
   const all = total + u.out || 1;
   const w = (n: number) => `${Math.max(0, (100 * n) / all).toFixed(2)}%`;
-  return `<div class="frame-strip">
-    <div class="frame-strip-head"><span>${esc(title)}</span>${link}</div>
-    <div class="frame-bar"><i class="cached" style="width:${w(u.cached)}"></i><i class="fresh" style="width:${w(u.in)}"></i><i class="out" style="width:${w(u.out)}"></i></div>
-    <div class="frame-legend">
-      <span class="cached"><i></i>из кэша ${fmtK(u.cached)} (${share}%)</span>
-      <span class="fresh"><i></i>заново ${fmtK(u.in)}</span>
-      <span class="out"><i></i>ответ ${fmtK(u.out)}</span>
-    </div>
-  </div>`;
+  return uiText("ui.ui.kit.steps.a215cbe837", {p0: String(esc(title)), p1: String(link), p2: String(w(u.cached)), p3: String(w(u.in)), p4: String(w(u.out)), p5: String(fmtK(u.cached)), p6: String(share), p7: String(fmtK(u.in)), p8: String(fmtK(u.out))});
 }
