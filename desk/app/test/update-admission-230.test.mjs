@@ -1,8 +1,9 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Real production admission helper; no shell service, network or app mutation.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
-const source=readFileSync(new URL('../../ui-kit/window/update-admission.ts',import.meta.url),'utf8');
+const source=resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/update-admission.ts',import.meta.url),'utf8'));
 const code=stripTypeScriptTypes(source).replace(/export /g,'');
 const {requestAgentUpdate}=new Function(code+';return {requestAgentUpdate}')();
 const calls=[];
@@ -18,7 +19,7 @@ for(const value of [null,{state:'admitted'},{state:'installer_opened',job:{id:'o
   let n=0;await assert.rejects(()=>requestAgentUpdate(async()=>{n++;return value},'x','','clean'),/не подтверждено/);assert.equal(n,1);
 }
 let n=0;await assert.rejects(()=>requestAgentUpdate(async()=>{n++;throw Error('lost reply')},'x','','preserve'),/lost reply/);assert.equal(n,1,'unknown admission never retries or falls back to old install');
-const frame=readFileSync(new URL('../../ui-kit/window/views/settings-frame.ts',import.meta.url),'utf8');
+const frame=resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/views/settings-frame.ts',import.meta.url),'utf8'));
 assert.match(frame,/requestAgentUpdate\(shell, updUrl, updSha, sourceMode\)/);
 assert.doesNotMatch(frame,/forceToggle|forceExtensions|let forceExt/);
 assert.ok(frame.indexOf('requestAgentUpdate(shell')<frame.indexOf('>("update_download"'),'Python durable admission is before legacy window-owned download');
@@ -30,7 +31,7 @@ const pollerBegin=frame.indexOf('  // Reconnecting the old UI reads the same ope
 const pollerEnd=frame.indexOf('\n  const updateWork=',pollerBegin);
 assert.ok(pollerBegin>=0 && pollerEnd>pollerBegin,'existing Settings poller and its actual observation state are available');
 const poller=stripTypeScriptTypes(frame.slice(pollerBegin,pollerEnd));
-const controls=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8')).replace(/export /g,'');
+const controls=stripTypeScriptTypes(resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8'))).replace(/export /g,'');
 const makeObserver=new Function('shell',`
  ${controls}
  const pythonUpdate=true,activityScope=()=> 'private-selected',settingsScope='private-selected';

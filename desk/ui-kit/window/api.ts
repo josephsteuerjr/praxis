@@ -13,6 +13,8 @@ export interface Cfg {
   needs_subscription_login?: boolean;
   local_agent?: boolean;
   discover_server?: boolean;
+  lang?: 'ru' | 'en' | 'fr' | 'zh' | '';
+  locales?: string[];
 }
 
 declare global {

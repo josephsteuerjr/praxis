@@ -1,3 +1,4 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Карточка «Агенты» 1.4.0: конституция при заведении, дефолт, гашение, удаление.
 //
 // Что здесь стережётся (по заданию волны B1):
@@ -405,7 +406,7 @@ const soulParts = (soulBox) => soulBox.children; // [label, pick, textarea, warn
 //    Состав экрана — по образцу settings-remote: чтением исходника.
 // --------------------------------------------------------------------------
 {
-  const src = readFileSync(new URL("../src/settings-agent.ts", import.meta.url), "utf8");
+  const src = resolvedUiLiterals(readFileSync(new URL("../src/settings-agent.ts", import.meta.url), "utf8"));
   assert.ok(src.includes('"/soul/SOUL.md"'), "путь конституции не строится в «Данных агента»");
   assert.ok(src.includes('button("Показать файл"'), "нет кнопки «Показать файл»");
   assert.ok(src.includes('{ path: soulPath }'), "«Показать файл» не ведёт на soul/SOUL.md");

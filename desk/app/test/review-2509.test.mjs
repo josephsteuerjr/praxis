@@ -1,3 +1,4 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Стенды по ревью 25.09 (A4/A7/A12): окно и оболочка держат слово исходником.
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -9,7 +10,7 @@ const src = join(here, "..", "src");
 const desk = join(here, "..", "..");
 const win = join(desk, "ui-kit", "window");
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-const read = (...p) => code(readFileSync(join(...p), "utf8"));
+const read = (...p) => code(resolvedUiLiterals(readFileSync(join(...p), "utf8")));
 
 // Legacy argument naming remains camelCase. Owner28Oct removed the obsolete
 // incompatible-extension update action entirely, rather than keeping a bypass.

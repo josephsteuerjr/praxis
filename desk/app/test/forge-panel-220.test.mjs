@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Executes the real production Forge panel, with deterministic DOM/transport.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';

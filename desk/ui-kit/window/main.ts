@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Окно как таковое: полка слева (разделы и чаты), переписка в центре, ход агента
 // справа; состояние агента одной фразой в шапке; настройки экраном, а не файлом.
 // Большой надписи с именем продукта нет — только подпись внизу полки (слово
@@ -47,6 +48,8 @@ import { releaseNotice, type ReleaseSummary } from './release-notice';
 import { cleanupNotice, type CleanupStatus } from './cleanup-notice';
 import './styles/release-notice.css';
 import './styles/interface-refresh.css';
+import { initializeLocale, locale } from '../../lang/lang';
+import { localizeMarkup } from '../../lang/markup';
 
 /** Чем издание отличается от голого окна. */
 export interface WindowOptions {
@@ -80,6 +83,8 @@ export interface WindowOptions {
 }
 
 export function start(opts: WindowOptions): void {
+  initializeLocale(cfg.lang);
+  localizeMarkup();
   setProductName(opts.productName);
   setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
   // Ordinary launches open Now. A newly created subscription agent continues
@@ -150,7 +155,7 @@ export function start(opts: WindowOptions): void {
 
   const engineControls = document.createElement("div");
   engineControls.className = "engine-controls";
-  engineControls.innerHTML = '<button type="button" data-engine-power hidden></button><button type="button" data-engine-restart>Перезапустить</button>';
+  engineControls.innerHTML = uiText("ui.ui.kit.window.main.afb0cc90ae");
   document.querySelector(".head-side")?.append(engineControls);
   const autonomyControls = document.createElement("div");
   autonomyControls.className = "engine-controls";
@@ -179,14 +184,14 @@ export function start(opts: WindowOptions): void {
     // Installation-wide stop remains usable if this profile is disabled:
     // another profile or a privileged job may still run.
     {
-      powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Аварийный стоп";
-      powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить всех агентов Hélène, их процессы и привилегированные поручения до явного возобновления";
+      powerButton.textContent = ownerState?.stopped ? uiText("ui.ui.kit.window.main.07c7b8b814") : uiText("ui.ui.kit.window.main.0d4f3f205a");
+      powerButton.title = ownerState?.stopped ? uiText("ui.ui.kit.window.main.bb294fee13") : uiText("ui.ui.kit.window.main.0641d4f8e0");
       powerButton.classList.toggle("emergency-stop", !ownerState?.stopped);
     }
     powerButton.disabled = !!engineOperation;
     restartButton.hidden = foreignHarness();
     restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
-    restartButton.title = ownerState?.stopped ? "Сначала возобнови движок" : "Перезапустить движок, сохранив окно";
+    restartButton.title = ownerState?.stopped ? uiText("ui.ui.kit.window.main.8575c5d179") : uiText("ui.ui.kit.window.main.5fef4b795f");
     syncComposer();
   }
 
@@ -212,14 +217,14 @@ export function start(opts: WindowOptions): void {
       engineOperation = null;
       unconfirmedOperation = null;
       engineFailure = "";
-      toast(op.action === "stop" ? "Движок остановлен" : op.action === "resume" ? "Движок на связи" : "Движок перезапущен");
+      toast(op.action === "stop" ? uiText("ui.ui.kit.window.main.9782bf486b") : op.action === "resume" ? uiText("ui.ui.kit.window.main.0042a140e5") : uiText("ui.ui.kit.window.main.3781602f31"));
     } else if (engineOperation && op?.accepted && Date.now() - op.started > 60_000) {
       unconfirmedOperation = op;
       engineOperation = null;
       // Слово обязано объяснить, ЧТО именно тянется (06.10): движок выходит на
       // границе хода, и «ещё не подтверждён» без причины читался как зависание.
-      engineFailure = op.action === "stop" ? "Остановка ещё не подтверждена" : op.action === "resume"
-        ? "Запуск ещё не подтверждён" : "Перезапуск ждёт: движение ещё не вышло на границу хода";
+      engineFailure = op.action === "stop" ? uiText("ui.ui.kit.window.main.6fed4e8dc0") : op.action === "resume"
+        ? uiText("ui.ui.kit.window.main.9fae3d4ae8") : uiText("ui.ui.kit.window.main.b044ebb16a");
       toast(engineFailure);
     }
     paintEngineControls();
@@ -227,7 +232,7 @@ export function start(opts: WindowOptions): void {
 
   async function controlEngine(action: EngineOperation["action"]) {
     if (engineOperation) return;
-    if (ownerState?.stopped && action === "restart") { toast("Сначала возобнови движок"); return; }
+    if (ownerState?.stopped && action === "restart") { toast(uiText("ui.ui.kit.window.main.8575c5d179")); return; }
     const op: EngineOperation = { action, agent_id: ownerState?.agent_id, started: Date.now(),
       previousPid: S.agentState?.runner?.pid || ownerState?.pid || 0, accepted: false };
     engineOperation = op;
@@ -242,7 +247,7 @@ export function start(opts: WindowOptions): void {
         try {
           const answer = await post<{ ok?: boolean; note?: string }>("/api/supervisor/restart", { target: "all" });
           accepted = answer?.ok === true;
-          if (!accepted) throw new ApiError(answer?.note || "Движок не принял просьбу о перезапуске", 409);
+          if (!accepted) throw new ApiError(answer?.note || uiText("ui.ui.kit.window.main.42e379a9fe"), 409);
         } catch (error) {
           if (!inTauri || opts.localAgent === false) throw error;
           if (error instanceof ApiError && error.status && error.status < 500
@@ -250,7 +255,7 @@ export function start(opts: WindowOptions): void {
           await shell("engine_restart");
           accepted = true;
         }
-        if (!accepted) throw new Error("Движок не принял просьбу о перезапуске");
+        if (!accepted) throw new Error(uiText("ui.ui.kit.window.main.42e379a9fe"));
       } else {
         await shell("owner_control", { action: action === "stop" ? "panic" : "resume" });
       }
@@ -311,14 +316,14 @@ export function start(opts: WindowOptions): void {
     for (const f of files) {
       const mime = baseMime(f.type);
       const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : ATTACH_MIME.has(mime) ? "image" : "file";
-      if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 64 МБ`); continue; }
-      if (attachments.reduce((sum, item) => sum + item.size, 0) + f.size > ATTACH_TOTAL) { toast("Вложения вместе больше 128 МБ"); continue; }
-      if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} вложений за раз`); break; }
+      if (f.size > ATTACH_BYTES) { toast(uiText("ui.ui.kit.window.main.2d2c11fb7c", {p0: String(f.name || uiText("ui.ui.kit.window.main.48d8c3e9ee"))})); continue; }
+      if (attachments.reduce((sum, item) => sum + item.size, 0) + f.size > ATTACH_TOTAL) { toast(uiText("ui.ui.kit.window.main.7224c25402")); continue; }
+      if (attachments.length >= ATTACH_MAX) { toast(uiText("ui.ui.kit.window.main.b6979ce602", {p0: String(ATTACH_MAX)})); break; }
       try {
         const data = await fileToBase64(f);
         attachments.push({ name: f.name || (kind === "audio" ? "voice" : "file"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
       } catch (e) {
-        toast("Не прочиталось: " + humanError(e).text);
+        toast(uiText("ui.ui.kit.window.main.f750546f2d") + humanError(e).text);
       }
     }
     paintFiles();
@@ -345,8 +350,8 @@ export function start(opts: WindowOptions): void {
     composerFiles.hidden = attachments.length === 0;
     composerFiles.innerHTML = attachments
       .map((a, i) => a.kind === "audio"
-        ? `<div class="voice-attachment" data-voice-attachment="${i}"><button type="button" class="voice-round" data-voice-play aria-label="Прослушать">▶</button><div><canvas width="384" height="36" aria-label="Звуковая волна"></canvas><span data-voice-time>${a.seconds ? fmtDur(a.seconds) : 'Голосовое сообщение'}</span></div><button type="button" class="voice-round" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></div>`
-        : `<span class="chip">${a.kind === "image" ? `<img src="${a.url}" alt="">` : `<span class="chip-ico" aria-hidden="true">📄</span>`}<span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
+        ? uiText("ui.ui.kit.window.main.ac7da1328e", {p0: String(i), p1: String(a.seconds ? fmtDur(a.seconds) : uiText("ui.ui.kit.window.main.6e70042869")), p2: String(i)})
+        : uiText("ui.ui.kit.window.main.f234ea5db4", {p0: String(a.kind === "image" ? `<img src="${a.url}" alt="">` : `<span class="chip-ico" aria-hidden="true">📄</span>`), p1: String(esc(a.name)), p2: String(fmtK(a.size)), p3: String(i)}))
       .join("");
     composerFiles.querySelectorAll<HTMLElement>('[data-voice-attachment]').forEach(node=>{voiceAttachmentCleanup.push(mountVoiceAttachment(node,attachments[Number(node.dataset.voiceAttachment)].url));});
     composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
@@ -354,8 +359,8 @@ export function start(opts: WindowOptions): void {
     });
   }
 
-  attachBtn.setAttribute("aria-label", "Приложить файлы");
-  attachBtn.title = "Приложить файлы · можно вставить из буфера или перетащить";
+  attachBtn.setAttribute("aria-label", uiText("ui.ui.kit.window.main.8bec1fdea7"));
+  attachBtn.title = uiText("ui.ui.kit.window.main.c61cd3cd89");
   let pickingFiles = false;
   attachBtn.addEventListener("click", async () => {
     if (pickingFiles) return;
@@ -364,7 +369,7 @@ export function start(opts: WindowOptions): void {
       const selected = await pickPaperFiles(opts.localAgent !== false, ATTACH_MAX - attachments.length,
         ATTACH_TOTAL - attachments.reduce((s,a) => s + a.size, 0));
       await addFiles(selected);
-    } catch (e) { toast("Не удалось приложить файлы: " + humanError(e).text); }
+    } catch (e) { toast(uiText("ui.ui.kit.window.main.d7196d35ca") + humanError(e).text); }
     finally { pickingFiles = false; }
   });
   attachInput.addEventListener("change", () => {
@@ -378,14 +383,14 @@ export function start(opts: WindowOptions): void {
     target: () => ownerState?.stopped || engineOperation || S.rooms.find(r=>r.key===S.room)?.stub ? null
       : {agent:S.agent,room:S.room,name:S.roomName || S.agent,route:channelURL('/api/say')},
     send: async (blob,target) => {
-      if(S.agent!==target.agent || ownerState?.stopped || engineOperation) throw Error('Агент сменился или остановлен. Запись сохранена.');
+      if(S.agent!==target.agent || ownerState?.stopped || engineOperation) throw Error(uiText("ui.ui.kit.window.main.839575fb26"));
       const mime=baseMime(blob.type), ext=mime==='audio/mp4'?'m4a':mime==='audio/ogg'?'ogg':'webm';
       const file=new File([blob],`voice-${Date.now()}.${ext}`,{type:mime});
       const payload:Record<string,unknown>={text:'',attachments:[{name:file.name,mime,data:await fileToBase64(file)}]};
       if(target.room!==WINDOW_ROOM)payload.chat=target.room;
-      if(target.route!==channelURL('/api/say'))throw Error('Получатель сменился. Запись сохранена для прежнего чата.');
+      if(target.route!==channelURL('/api/say'))throw Error(uiText("ui.ui.kit.window.main.ba7c95841f"));
       const response=await fetch(target.route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      if(!response.ok)throw Error('Не удалось отправить голосовое ('+response.status+'). Запись сохранена.');
+      if(!response.ok)throw Error(uiText("ui.ui.kit.window.main.c1ff9772fb")+response.status+uiText("ui.ui.kit.window.main.8c494f551b"));
       talk.afterSend();
     },
   }) : null;
@@ -472,14 +477,14 @@ export function start(opts: WindowOptions): void {
   };
 
   const SECTIONS: Array<{ id: View; label: string; kicker: string; key: string }> = [
-    { id: "now", label: "Сейчас", kicker: "Что агент делает", key: "1" },
-    { id: "talk", label: "Чат", kicker: "", key: "2" },
-    { id: "plans", label: "Задачи", kicker: "Агенда и доска", key: "3" },
-    { id: "wakes", label: "Пробуждения", kicker: "Пробуждения по расписанию", key: "4" },
-    { id: "frame", label: "Контекст", kicker: "Из чего собран кадр (тень)", key: "5" },
-    { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "6" },
-    { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
-    { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "8" },
+    { id: "now", label: uiText("ui.ui.kit.window.main.460b59b99f"), kicker: uiText("ui.ui.kit.window.main.abdba51964"), key: "1" },
+    { id: "talk", label: uiText("ui.ui.kit.window.main.917bb52293"), kicker: "", key: "2" },
+    { id: "plans", label: uiText("ui.ui.kit.window.main.03cc1c2d5a"), kicker: uiText("ui.ui.kit.window.main.f7f4f61413"), key: "3" },
+    { id: "wakes", label: uiText("ui.ui.kit.window.main.9643f15ecb"), kicker: uiText("ui.ui.kit.window.main.a23d443fdd"), key: "4" },
+    { id: "frame", label: uiText("ui.ui.kit.window.main.ec399d9949"), kicker: uiText("ui.ui.kit.window.main.41fc4fab01"), key: "5" },
+    { id: "files", label: uiText("ui.ui.kit.window.main.9088ca9c0d"), kicker: uiText("ui.ui.kit.window.main.d656da2a59"), key: "6" },
+    { id: "journal", label: uiText("ui.ui.kit.window.main.97c459a6bb"), kicker: uiText("ui.ui.kit.window.main.f653a5b597"), key: "7" },
+    { id: "anatomy", label: uiText("ui.ui.kit.window.main.6da215b1bd"), kicker: uiText("ui.ui.kit.window.main.119b1e1d7d"), key: "8" },
   ];
   // ⚠ Подвал полки — ОТДЕЛЬНЫЙ массив, а не хвост SECTIONS: по SECTIONS строятся кнопки
   // полки и раскладка Ctrl+1…8, и «Настройки» появились бы в полке дважды. Но и одинокой
@@ -488,8 +493,8 @@ export function start(opts: WindowOptions): void {
   // «Настройками». Без подзаголовка строка кикера схлопывается
   // (`.head-kicker:empty { display: none }`), и заголовок подпрыгивает на каждый Ctrl+`,`.
   const FOOT: Array<{ id: View; label: string; kicker: string; key: string }> = [
-    { id: "learn", label: "Онбординг", kicker: "С чего начать и как идёт ход", key: "9" },
-    { id: "settings", label: "Настройки", kicker: "Как настроена программа", key: "," },
+    { id: "learn", label: uiText("ui.ui.kit.window.main.d76df572cb"), kicker: uiText("ui.ui.kit.window.main.1959124974"), key: "9" },
+    { id: "settings", label: uiText("ui.ui.kit.window.main.985b5e0f2c"), kicker: uiText("ui.ui.kit.window.main.a4a859dc61"), key: "," },
   ];
 
   // Подписи клавиш — по КЛАВИАТУРЕ, на которой открыто окно (⌘ на Mac): это
@@ -601,7 +606,7 @@ export function start(opts: WindowOptions): void {
   panelBtn.addEventListener("click", () => togglePanel("panel"));
   addEventListener("frame-live-action", (event) => {
     const button = document.querySelector("[data-live-runs]");
-    if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
+    if (button) button.textContent = uiText("ui.ui.kit.window.main.cb7ef50958", {p0: String((event as CustomEvent<string>).detail)});
   });
   addEventListener("frame-live-runs", async () => {
     if(S.view!=='talk')await show('talk');
@@ -753,7 +758,7 @@ export function start(opts: WindowOptions): void {
     // в подробностях — сообщением, по которому владельцу нечего понять. Лучше показать
     // «Сейчас» и назвать промах вслух.
     if (!views[id]) {
-      toast(`Раздела «${id}» нет — открываю «Сейчас».`);
+      toast(uiText("ui.ui.kit.window.main.8399c356b4", {p0: String(id)}));
       id = "now";
     }
     const gen = ++showSeq;
@@ -881,7 +886,7 @@ export function start(opts: WindowOptions): void {
       const more = document.createElement("button");
       more.type = "button";
       more.className = "icon-btn room-more";
-      more.setAttribute("aria-label", "Действия с чатом");
+      more.setAttribute("aria-label", uiText("ui.ui.kit.window.main.536378f272"));
       more.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>';
       more.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -920,7 +925,7 @@ export function start(opts: WindowOptions): void {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "room";
-      retry.textContent = "Повторить загрузку чатов и тем";
+      retry.textContent = uiText("ui.ui.kit.window.main.fd9d2354e5");
       retry.addEventListener("click", () => void loadRooms());
       nodes.push(error, retry);
     }
@@ -981,7 +986,7 @@ export function start(opts: WindowOptions): void {
 
   async function newRoom() {
     try {
-      const room = await createRoom("Новый чат");
+      const room = await createRoom(uiText("ui.ui.kit.window.main.c44ad59fc3"));
       S.rooms.splice(S.rooms.findIndex((r) => r.kind === "telegram") < 0 ? S.rooms.length : S.rooms.findIndex((r) => r.kind === "telegram"), 0, room);
       // Новая комната сразу первой среди чатов окна, после основной.
       const i = S.rooms.indexOf(room);
@@ -989,11 +994,11 @@ export function start(opts: WindowOptions): void {
       S.rooms.splice(1, 0, room);
       selectRoom(room);
       if (room.stub) {
-        toast("Этот код агента ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
+        toast(uiText("ui.ui.kit.window.main.83822ae462"));
       }
       startRename(room);
     } catch (e) {
-      toast("Чат не создался: " + humanError(e).text);
+      toast(uiText("ui.ui.kit.window.main.1796b31ce1") + humanError(e).text);
     }
   }
   roomAdd.addEventListener("click", () => void newRoom());
@@ -1065,8 +1070,8 @@ export function start(opts: WindowOptions): void {
       });
       menu.append(b);
     };
-    item("Переименовать", "", () => startRename(room));
-    item("Убрать чат", "danger", () => void removeRoom(room));
+    item(uiText("ui.ui.kit.window.main.194306e208"), "", () => startRename(room));
+    item(uiText("ui.ui.kit.window.main.5b1564c730"), "danger", () => void removeRoom(room));
     menu.hidden = false;
     const x = Math.min(at.left, innerWidth - menu.offsetWidth - 8);
     const y = Math.min(at.bottom + 4, innerHeight - menu.offsetHeight - 8);
@@ -1106,7 +1111,7 @@ export function start(opts: WindowOptions): void {
         void show("talk");
       }
       renderRooms();
-      toast(room.stub ? "Чат убран." : "Чат убран: переписка отложена в архив агента, не удалена.");
+      toast(room.stub ? uiText("ui.ui.kit.window.main.98df934a13") : uiText("ui.ui.kit.window.main.4a9ae59241"));
     } catch (e) {
       toast(humanError(e).text);
     }
@@ -1133,14 +1138,14 @@ export function start(opts: WindowOptions): void {
    */
   function foreignState(s: AgentState): { level: string; phrase: string } {
     const running = S.runs.find((r) => r.status === "running" && runIsRecent(r));
-    if (running) return { level: "live", phrase: "Ведёт ход" + (running.chat_title ? ` · ${running.chat_title}` : "") };
+    if (running) return { level: "live", phrase: uiText("ui.ui.kit.window.main.533b75df32") + (running.chat_title ? ` · ${running.chat_title}` : "") };
     const at = s.brain?.last_call_at;
-    if (!at) return { level: "warn", phrase: "Вызовов модели ещё не было" };
+    if (!at) return { level: "warn", phrase: uiText("ui.ui.kit.window.main.b0bb72c7e7") };
     const ageMin = (Date.now() / 1000 - at) / 60;
     const age = fmtAge(at);
-    const when = age === "только что" ? age : `${age} назад`;
-    if (ageMin < 15) return { level: "ok", phrase: `На связи · модель отвечала ${when}` };
-    return { level: "warn", phrase: `Модель молчит ${age}` };
+    const when = age === uiText("ui.ui.kit.window.main.556f1e91d5") ? age : uiText("ui.ui.kit.window.main.5993487c07", {p0: String(age)});
+    if (ageMin < 15) return { level: "ok", phrase: uiText("ui.ui.kit.window.main.c1f3a6d603", {p0: String(when)}) };
+    return { level: "warn", phrase: uiText("ui.ui.kit.window.main.66661d74a2", {p0: String(age)}) };
   }
 
   function renderState(s: AgentState | null, connected: boolean) {
@@ -1163,7 +1168,7 @@ export function start(opts: WindowOptions): void {
     }
     if (!connected) {
       statePill.dataset.level = "off";
-      stateText.textContent = "Нет связи с кодом агента";
+      stateText.textContent = uiText("ui.ui.kit.window.main.ed91894ac4");
       stateAction.hidden = true;
       return;
     }
@@ -1172,14 +1177,14 @@ export function start(opts: WindowOptions): void {
       const f = foreignState(s);
       statePill.dataset.level = f.level;
       stateText.textContent = f.phrase;
-      statePill.title = "Дерево ведёт чужой код агента: снимка Hélène нет, состояние — по вызовам модели и запускам.";
+      statePill.title = uiText("ui.ui.kit.window.main.50aad3b112");
       stateAction.hidden = true;
       alarmBox.hidden = true;
       return;
     }
     statePill.dataset.level = s.level;
     stateText.textContent = s.level === "live" && s.activity
-      ? s.activity.phase==='model' ? 'Думает' : s.activity.phase==='tool' ? 'Выполняет действие' : 'Работает'
+      ? s.activity.phase==='model' ? uiText("ui.ui.kit.window.main.e497673800") : s.activity.phase==='tool' ? uiText("ui.ui.kit.window.main.33639ee7ba") : uiText("ui.ui.kit.window.main.0232a30541")
       : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
@@ -1267,7 +1272,7 @@ export function start(opts: WindowOptions): void {
       return;
     }
     pulseBox.classList.toggle("stale", !connected);
-    pulseBox.innerHTML = connected ? pulseHTML : `<span class="muted">данные от ${esc(pulseStamp)}</span> · ${pulseHTML}`;
+    pulseBox.innerHTML = connected ? pulseHTML : uiText("ui.ui.kit.window.main.d7cfd663e1", {p0: String(esc(pulseStamp)), p1: String(pulseHTML)});
   }
 
   async function refreshPulse() {
@@ -1284,15 +1289,15 @@ export function start(opts: WindowOptions): void {
       // The header identifies the model; detailed usage remains in the tooltip,
       // context disclosure and System. Keep the conversation visually primary.
       pulseHTML =
-        `<span class="muted">Последний ответ</span> <b>${esc(l.model || "")}</b>${l.err && l.ok !== true ? ' · <span class="err-msg">ошибка</span>' : ""}`;
-      pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
-        `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
-      pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+        uiText("ui.ui.kit.window.main.7048ed82c7", {p0: String(esc(l.model || "")), p1: String(l.err && l.ok !== true ? uiText("ui.ui.kit.window.main.0adb6d8dc1") : "")});
+      pulseLast = uiText("ui.ui.kit.window.main.5793d3e71d", {p0: String(fmtTs(l.ts)), p1: String(share)}) +
+        uiText("ui.ui.kit.window.main.473a8defb3", {p0: String(fmtK(total)), p1: String(fmtK(l.out || 0))});
+      pulseStamp = new Date().toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
       pulseBox.title = pulseLast;
       if (p.calls_day != null) {
-        pulseBox.title = pulseLast + ` За сутки: вызовов ${p.calls_day}` +
-          (p.cache_day != null ? `, доля кэша ${p.cache_day}%` : "") +
-          (p.cache_now != null ? `; сейчас ${p.cache_now}%` : "");
+        pulseBox.title = pulseLast + uiText("ui.ui.kit.window.main.500e95b10d", {p0: String(p.calls_day)}) +
+          (p.cache_day != null ? uiText("ui.ui.kit.window.main.69dce3c3dd", {p0: String(p.cache_day)}) : "") +
+          (p.cache_now != null ? uiText("ui.ui.kit.window.main.571b495c72", {p0: String(p.cache_now)}) : "");
       }
       paintPulse(S.connected);
     } catch {
@@ -1336,8 +1341,8 @@ export function start(opts: WindowOptions): void {
   let composerRoom = "";
   function syncComposer() {
     const room = S.rooms.find((r) => r.key === S.room);
-    composerTarget.textContent = isWindowRoom(S.room) ? "" : `Ответ агента — в «${S.roomName}»`;
-    say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Поручить агенту в «${S.roomName}»…`;
+    composerTarget.textContent = isWindowRoom(S.room) ? "" : uiText("ui.ui.kit.window.main.5a6cd515aa", {p0: String(S.roomName)});
+    say.placeholder = room?.stub ? uiText("ui.ui.kit.window.main.577c3d895b") : isWindowRoom(S.room) ? uiText("ui.ui.kit.window.main.2834f2a6ac") : uiText("ui.ui.kit.window.main.15b5779ec1", {p0: String(S.roomName)});
     say.disabled = !!room?.stub;
     const blocked = !!ownerState?.stopped || !!engineOperation;
     send.disabled = !!room?.stub || sending || blocked;
@@ -1373,9 +1378,9 @@ export function start(opts: WindowOptions): void {
   say.addEventListener("keydown", onComposerKeydown);
   send.addEventListener("click", () => void doSend());
   const readQueued = document.createElement("button");
-  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прочитать сейчас";
+  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = uiText("ui.ui.kit.window.main.472a148430");
   readQueued.hidden = true;
-  readQueued.title = "Отправляет черновик, прерывает текущие процессы шага и читает очередь вместе. Субагенты не останавливаются; вызов модели дочитывается до границы.";
+  readQueued.title = uiText("ui.ui.kit.window.main.549be13db7");
   activityRow.append(readQueued);
   readQueued.addEventListener("click", async () => {
     if (sending) return;
@@ -1384,9 +1389,9 @@ export function start(opts: WindowOptions): void {
     readQueued.disabled = true;
     try {
       if ((say.value.trim() || attachments.length) && !(await doSend())) return;
-      if (talk.currentTurn()?.key !== target.key) { toast("Ход уже сменился — сообщение осталось в очереди"); return; }
+      if (talk.currentTurn()?.key !== target.key) { toast(uiText("ui.ui.kit.window.main.6b1c13e101")); return; }
       const receipt = await post("/api/interrupt-step", { run_id: target.run_id });
-      toast(String(receipt?.note || "Просьба записана"));
+      toast(String(receipt?.note || uiText("ui.ui.kit.window.main.fd0121b78c")));
     } catch (e) { toast(humanError(e).text); }
     finally { readQueued.disabled = false; }
   });
@@ -1397,16 +1402,16 @@ export function start(opts: WindowOptions): void {
   /** Куда делась реплика владельца — словами, по настоящему состоянию агента. */
   function sendNote(chat: string, midturn: boolean, sleeping = false): string {
     // Ревью 26.09 (W3 S1): сон — не ход; записка ждёт его конца, а не «читается сейчас».
-    if (sleeping) return "агент спит — прочтёт, когда проснётся";
-    if (chat && !isWindowRoom(chat)) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
-    if (midturn) return "принято — ждёт чтения в текущем ходе";
+    if (sleeping) return uiText("ui.ui.kit.window.main.b89927dd5a");
+    if (chat && !isWindowRoom(chat)) return midturn ? uiText("ui.ui.kit.window.main.b52c4f8fa9", {p0: String(S.roomName)}) : uiText("ui.ui.kit.window.main.cb71b203d4", {p0: String(S.roomName)});
+    if (midturn) return uiText("ui.ui.kit.window.main.a2ee0ebb6e");
     const st = S.agentState;
     // «Квитанции не было ни разу» — это не «агент выключен», а «этот агент окно не
     // читает»: так выглядит окно к серверу, где записка ложится в дерево и ждёт
     // читателя, которого там нет. Обещать «прочитает в следующий ход» здесь — врать.
-    if (st && st.runner && st.runner.ever === false) return "лежит в дереве: этот агент окно не читает";
-    if (st && st.runner && !st.runner.alive) return "ждёт запуска агента";
-    return "ждёт следующего хода";
+    if (st && st.runner && st.runner.ever === false) return uiText("ui.ui.kit.window.main.0f88b1a5b5");
+    if (st && st.runner && !st.runner.alive) return uiText("ui.ui.kit.window.main.542ca765de");
+    return uiText("ui.ui.kit.window.main.7ab25e77b2");
   }
 
   async function doSend() {
@@ -1418,19 +1423,19 @@ export function start(opts: WindowOptions): void {
     // Пустая реплика с картинкой — тоже реплика: в ленте и в памяти она названа словами.
     const voices = files.filter((f) => f.kind === "audio").length;
     const text = typedText || (files.length === 1
-      ? (voices ? "[голосовое]" : "[картинка]")
-      : voices === files.length ? `[голосовые: ${files.length}]` : voices ? `[вложения: ${files.length}]` : `[картинки: ${files.length}]`);
+      ? (voices ? uiText("ui.ui.kit.window.main.0b30bca027") : uiText("ui.ui.kit.window.main.0b830a7eec"))
+      : voices === files.length ? uiText("ui.ui.kit.window.main.507c8bf0d9", {p0: String(files.length)}) : voices ? uiText("ui.ui.kit.window.main.a746ed6e63", {p0: String(files.length)}) : uiText("ui.ui.kit.window.main.ed5f5b353c", {p0: String(files.length)}));
     const room = S.room;
     const current = S.rooms.find((r) => r.key === room);
     if (current?.stub) {
-      toast("Этот чат — заглушка: код агента ещё не умеет несколько чатов. Пиши в основной.");
+      toast(uiText("ui.ui.kit.window.main.897744de8d"));
       return;
     }
     const chat = room === WINDOW_ROOM ? "" : room;
     // Канал принимает записку в telegram-комнату и без бота, а руннер потом молча
     // выбрасывает её. Состояние это знает заранее — спрашиваем его.
     if (chat && !isWindowRoom(chat) && S.agentState?.telegram && !S.agentState.telegram.enabled) {
-      toast(`Telegram не подключён: везти сообщение в «${S.roomName}» некуда. Настройки → Telegram.`);
+      toast(uiText("ui.ui.kit.window.main.46f883d1b0", {p0: String(S.roomName)}));
       return;
     }
     // Оптимистичное эхо: реплика ложится в ленту сразу.
@@ -1440,7 +1445,7 @@ export function start(opts: WindowOptions): void {
       text,
       at: new Date().toISOString(),
       state: "sending",
-      note: "отправляется…",
+      note: uiText("ui.ui.kit.window.main.2af38e008e"),
     };
     S.pending.push(pending);
     sending = true;
@@ -1452,7 +1457,7 @@ export function start(opts: WindowOptions): void {
     talk.paintPending();
     const slow = window.setTimeout(() => {
       if (pending.state === "sending") {
-        pending.note = "отправка ещё идёт…";
+        pending.note = uiText("ui.ui.kit.window.main.353bca1e88");
         talk.paintPending();
       }
     }, 5000);
@@ -1480,7 +1485,7 @@ export function start(opts: WindowOptions): void {
       } else {
         saveDraft(room, typed);
       }
-      toast("Не ушло: " + humanError(e).text);
+      toast(uiText("ui.ui.kit.window.main.f540c1e81c") + humanError(e).text);
     }
     clearTimeout(slow);
     sending = false;
@@ -1545,7 +1550,7 @@ export function start(opts: WindowOptions): void {
 
   // ---------------------------------------------------------------- старт
 
-  S.agent = (cfg.agent || "").trim() || "Агент";
+  S.agent = (cfg.agent || "").trim() || uiText("ui.ui.kit.window.main.d5fd08be28");
   // Подпись внизу полки и заголовок вкладки — имя продукта хостинга: у издания к
   // серверу это «Praxis» (config.js), у Hélène — Hélène (слово владельца 07.09).
   const product = (cfg.product || "").trim() || PRODUCT_NAME;
@@ -1663,7 +1668,7 @@ export function start(opts: WindowOptions): void {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.
     void show("now");
-    stateText.textContent = "Нужна настройка модели";
+    stateText.textContent = uiText("ui.ui.kit.window.main.91451ad81a");
     statePill.dataset.level = "warn";
     stateAction.hidden = true;
     return;

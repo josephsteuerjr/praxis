@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,15 @@ class Canon(unittest.TestCase):
 
 
 class Translations(unittest.TestCase):
+    def test_all_four_catalogs_cover_the_same_keys_and_parameters(self):
+        canonical = _load('ru')
+        parameters = lambda text: sorted(re.findall(r'\{([A-Za-z_][A-Za-z_0-9]*)\}', text))
+        for language in LANGS:
+            translated = _load(language)
+            self.assertEqual(set(translated), set(canonical), language)
+            for key, text in canonical.items():
+                self.assertEqual(parameters(translated[key]), parameters(text), f'{language}:{key}')
+
     def test_no_stray_keys(self):
         ru = _load("ru")
         for code in LANGS:

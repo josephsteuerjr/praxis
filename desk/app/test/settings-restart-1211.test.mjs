@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Run the actual settings decisions and button receipt against runtime boundaries.
 import {readFileSync,writeFileSync,mkdtempSync,rmSync} from 'node:fs';
 import {join} from 'node:path';

@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 // Форм-кит — одна копия DOM-обёрток на окно, установщик, телефон и мини-апп.
 // Раньше `toggle` жил в четырёх файлах, `button` — в пяти (ревью 06.09, §6).
 // Классы те же, что стояли в каждой копии (`field`, `switch`, `btn`, `choice`,
@@ -14,7 +15,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ""
 
 export function q<E extends Element = HTMLElement>(sel: string, root: ParentNode = document): E {
   const node = root.querySelector<E>(sel);
-  if (!node) throw new Error(`нет элемента ${sel}`);
+  if (!node) throw new Error(uiText("ui.ui.kit.dom.a1859d81e6", {p0: String(sel)}));
   return node;
 }
 
@@ -237,10 +238,10 @@ export function toast(text: string) {
 export function failHTML(e: unknown, opts: { retry?: boolean; message?: string } = {}): string {
   const h = humanError(e);
   if (opts.message) h.text = opts.message;
-  const retry = opts.retry === false ? "" : '<button class="btn btn-quiet" data-fail-retry type="button">Повторить</button>';
+  const retry = opts.retry === false ? "" : uiText("ui.ui.kit.dom.ec91b3d998");
   const detail = h.detail
-    ? `<details class="fail-detail"><summary>Подробности</summary><pre class="mono">${esc(h.detail)}</pre>` +
-      '<button class="btn btn-quiet" data-fail-copy type="button">Скопировать</button></details>'
+    ? uiText("ui.ui.kit.dom.e4abe30362", {p0: String(esc(h.detail))}) +
+      uiText("ui.ui.kit.dom.865c16c6ed")
     : "";
   return `<div class="fail"><b>${esc(h.text)}</b><div class="fail-actions">${retry}</div>${detail}</div>`;
 }
@@ -255,7 +256,7 @@ export function bindFail(root: ParentNode, retry?: () => void) {
     b.addEventListener("click", () => {
       const pre = b.parentElement?.querySelector("pre");
       const text = pre?.textContent || "";
-      void copyText(text).then((ok) => toast(ok ? "Скопировано" : "Скопировать не вышло — выдели текст мышью"));
+      void copyText(text).then((ok) => toast(ok ? uiText("ui.ui.kit.dom.d2d08c715e") : uiText("ui.ui.kit.dom.7c12b584b4")));
     });
   }
 }

@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../lang/lang";
 // Текст и форматы — одна копия на окно, установщик, телефон и мини-апп.
 // Ни строчки DOM: всё здесь можно прогнать в node (app/test/*).
 
@@ -9,7 +10,7 @@ export const esc = (s: unknown): string =>
 export function fmtTime(iso?: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 }
 
 export function fmtTimeSec(iso?: string | null): string {
@@ -17,7 +18,7 @@ export function fmtTimeSec(iso?: string | null): string {
   const d = new Date(iso);
   return isNaN(d.getTime())
     ? ""
-    : d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    : d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export function fmtDay(iso?: string | null): string {
@@ -28,9 +29,9 @@ export function fmtDay(iso?: string | null): string {
   const that = new Date(d);
   that.setHours(0, 0, 0, 0);
   const diff = Math.round((today.getTime() - that.getTime()) / 86400000);
-  if (diff === 0) return "Сегодня";
-  if (diff === 1) return "Вчера";
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+  if (diff === 0) return uiText("ui.ui.kit.text.b688b4c0d7");
+  if (diff === 1) return uiText("ui.ui.kit.text.6bc6210fc2");
+  return d.toLocaleDateString(locale(), { day: "numeric", month: "long" });
 }
 
 // Данные приходят из дерева агента, которое продукт не контролирует: кривое
@@ -38,48 +39,42 @@ export function fmtDay(iso?: string | null): string {
 export const fmtN = (n: unknown): string => {
   if (n == null || n === "") return "";
   const v = Number(n);
-  return isNaN(v) ? "—" : v.toLocaleString("ru-RU");
+  return isNaN(v) ? "—" : v.toLocaleString(locale());
 };
 
 /** Короткая запись токенов: 12 345 → «12,3 тыс.», 1 234 567 → «1,2 млн». */
 export const fmtK = (n: unknown): string => {
   const v = Number(n);
-  if (n == null || n === "" || isNaN(v)) return "—";
-  if (v >= 1_000_000) return (v / 1_000_000).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " млн";
-  if (v >= 10_000) return Math.round(v / 1000).toLocaleString("ru-RU") + " тыс.";
-  if (v >= 1000) return (v / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " тыс.";
-  return v.toLocaleString("ru-RU");
+  if (n == null || n === "" || !Number.isFinite(v)) return "—";
+  return new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 }).format(v);
 };
 
 export const fmtTs = (ts?: number | string | null): string => {
   if (ts == null || ts === "") return "";
   const d = new Date(Number(ts) * 1000);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("ru-RU");
+  return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString(locale());
 };
 
 export function fmtAge(mtime: unknown): string {
   const s = Date.now() / 1000 - Number(mtime);
   if (!isFinite(s)) return "—";
-  if (s < 60) return "только что";
-  if (s < 3600) return Math.round(s / 60) + " мин";
-  if (s < 86400) return Math.round(s / 3600) + " ч";
-  return Math.round(s / 86400) + " дн";
+  if (s < 60) return uiText("ui.ui.kit.text.556f1e91d5");
+  if (s < 3600) return Math.round(s / 60) + uiText("ui.ui.kit.text.84d5d93d12");
+  if (s < 86400) return Math.round(s / 3600) + uiText("ui.ui.kit.text.e34d885124");
+  return Math.round(s / 86400) + uiText("ui.ui.kit.text.37e04cffd9");
 }
 
 /** Длительность в секундах словами: 4 → «4 с», 95 → «1 мин 35 с», 3700 → «1 ч 2 мин». */
 export function fmtDur(sec: number): string {
   if (!isFinite(sec) || sec < 0) return "—";
-  if (sec < 60) return Math.round(sec) + " с";
-  if (sec < 3600) return `${Math.floor(sec / 60)} мин ${Math.round(sec % 60)} с`;
-  return `${Math.floor(sec / 3600)} ч ${Math.round((sec % 3600) / 60)} мин`;
+  if (sec < 60) return Math.round(sec) + uiText("ui.ui.kit.text.ddae8eb8bf");
+  if (sec < 3600) return uiText("ui.ui.kit.text.aef6c8dfde", {p0: String(Math.floor(sec / 60)), p1: String(Math.round(sec % 60))});
+  return uiText("ui.ui.kit.text.c463a3b13d", {p0: String(Math.floor(sec / 3600)), p1: String(Math.round((sec % 3600) / 60))});
 }
 
 export function plural(n: number, a: string, b: string, c: string): string {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return a;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return b;
-  return c;
+  const form = new Intl.PluralRules(locale()).select(n);
+  return form === 'one' ? a : form === 'few' ? b : c;
 }
 
 /** Мини-маркдаун файлов и реплик агента: заголовки, списки, код, таблицы, цитаты. */
@@ -234,25 +229,25 @@ const OFFLINE_MARKS = ["failed to fetch", "networkerror", "load failed", "свя
 export function humanError(e: unknown): HumanError {
   const raw = (e instanceof Error ? e.message : String(e ?? "")).trim();
   const low = raw.toLowerCase();
-  if (!raw) return { text: "Не получилось, а причину программа не назвала.", detail: "" };
+  if (!raw) return { text: uiText("ui.ui.kit.text.b705d031e4"), detail: "" };
   // «доступно только в приложении Hélène» и подобное уже написано по-русски.
   if (raw.startsWith("доступно только")) return { text: raw, detail: "" };
   if (OFFLINE_MARKS.some((m) => low.includes(m))) {
-    return { text: "Агент не отвечает. Программа продолжает попытки сама.", detail: raw };
+    return { text: uiText("ui.ui.kit.text.67f604aa87"), detail: raw };
   }
   if (low.includes("filenotfounderror") || low.includes("winerror 2") || low.includes("winerror 3")) {
-    return { text: "Этого файла больше нет — возможно, агент его убрал.", detail: raw };
+    return { text: uiText("ui.ui.kit.text.0123487c98"), detail: raw };
   }
   // «Система», а не «Windows»: та же строка едет и на macOS (порт 0.7.1).
   if (low.includes("permissionerror") || low.includes("winerror 5")) {
-    return { text: "Система не дала сюда заглянуть.", detail: raw };
+    return { text: uiText("ui.ui.kit.text.cf15b1a364"), detail: raw };
   }
-  if (/\b40[13]\b/.test(raw)) return { text: "Канал не пустил: ключ доступа не подошёл.", detail: raw };
-  if (/\b404\b/.test(raw)) return { text: "Программа попросила у агента то, чего он не знает.", detail: raw };
-  if (/\b5\d\d\b/.test(raw)) return { text: "Не удалось прочитать память агента.", detail: raw };
+  if (/\b40[13]\b/.test(raw)) return { text: uiText("ui.ui.kit.text.600debbfff"), detail: raw };
+  if (/\b404\b/.test(raw)) return { text: uiText("ui.ui.kit.text.32407f31e1"), detail: raw };
+  if (/\b5\d\d\b/.test(raw)) return { text: uiText("ui.ui.kit.text.619eb5a1fd"), detail: raw };
   // Сырой Python-эксепшн из канала: `TypeError: …`, `OSError: …`.
   if (/^[A-Za-z_][A-Za-z_0-9]*(Error|Exception):/.test(raw)) {
-    return { text: "Агент не смог это прочитать.", detail: raw };
+    return { text: uiText("ui.ui.kit.text.3de4d3c410"), detail: raw };
   }
   // 12.11: our own replies are already written for a person («Сначала включи Stop…»,
   // «На компьютере: …»). Flattening them to «Не получилось.» hid the actual reason.
@@ -260,5 +255,5 @@ export function humanError(e: unknown): HumanError {
   if (/[А-Яа-яЁё]/.test(raw) && !/^\[(Errno|WinError) -?\d+\]|Traceback|File "|^\{/.test(raw)) {
     return { text: raw, detail: "" };
   }
-  return { text: "Не получилось.", detail: raw };
+  return { text: uiText("ui.ui.kit.text.00d268f7d8"), detail: raw };
 }

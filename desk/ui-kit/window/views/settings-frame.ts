@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 // Каркас экрана «Настройки», общий обоим приложениям.
 //
 // ⚠⚠ ПРАВИЛО ЭТОГО ЭКРАНА: БЛОКИ КОНФИГА СЛИВАЮТСЯ, А НЕ ПЕРЕСОБИРАЮТСЯ.
@@ -45,16 +46,18 @@ import { SERVER_TRANSFER_NOTICE } from '../feature-availability';
 import { updateOperationControls } from '../update-operation-controls';
 import { sourceModeCards } from '../source-mode-cards';
 import '../styles/source-mode-cards.css';
+import { t, saveLocale, localePreference, type Lang } from '../../../lang/lang';
+import { languageField } from '../../../lang/controls';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
-  ["network", "сеть Telegram"],
+  ["network", uiText("ui.ui.kit.window.views.settings.frame.47c853d7e7")],
   ["telegram", "Telegram"],
-  ["computer", "тело"],
-  ["agents", "агенты"],
-  ["sandbox", "ограда"],
-  ["agent_mode", "режим работы"],
-  ["owner_context", "контекст владельца"],
+  ["computer", uiText("ui.ui.kit.window.views.settings.frame.735c0193ca")],
+  ["agents", uiText("ui.ui.kit.window.views.settings.frame.1605473766")],
+  ["sandbox", uiText("ui.ui.kit.window.views.settings.frame.c880a9aac2")],
+  ["agent_mode", uiText("ui.ui.kit.window.views.settings.frame.00184094d8")],
+  ["owner_context", uiText("ui.ui.kit.window.views.settings.frame.85e47c0e2a")],
 ];
 
 /** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
@@ -95,16 +98,17 @@ export function restartForSettings(before: unknown, after: unknown, first = fals
 export function configureRestart(button: HTMLButtonElement, scope: SettingsRestart, blocks: string[]): string {
   button.dataset.scope=scope;
   button.hidden=!scope;
-  button.textContent=scope==='application' ? 'Перезапустить программу' : scope==='window'
-    ? 'Переподключить окно' : 'Перезапустить движок';
-  if(scope==='application')return ' Изменилось расположение или исполнение агента — перезапусти программу кнопкой ниже.';
-  if(scope==='window')return ' Подключение изменилось — переподключи окно кнопкой ниже.';
-  return scope ? ` ${blocks.join(', ')} — применится перезапуском движка (кнопка ниже).` : '';
+  button.textContent=scope==='application' ? uiText("ui.ui.kit.window.views.settings.frame.a489a6740a") : scope==='window'
+    ? uiText("ui.ui.kit.window.views.settings.frame.321f7b8033") : uiText("ui.ui.kit.window.views.settings.frame.bfa262aa90");
+  if(scope==='application')return uiText("ui.ui.kit.window.views.settings.frame.6bc9ebc797");
+  if(scope==='window')return uiText("ui.ui.kit.window.views.settings.frame.b82eb257f6");
+  return scope ? uiText("ui.ui.kit.window.views.settings.frame.ff28b94a92", {p0: String(blocks.join(', '))}) : '';
 }
 
 export interface Config {
   network?: { proxy?: Record<string, unknown>; bridge_profile?:string; [k: string]: unknown };
-  agent?: { name?: string };
+  lang?: Lang | '';
+  agent?: { name?: string; frame_language?: Lang; living_prose?: boolean; [key: string]: unknown };
   // `external` — внешний адрес канала (06.10): сервер с белым IP, под которым
   // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
   phone?: { enabled?: boolean; mode?: string; external?: string; local_port?: number; bridge_profile?:string };
@@ -223,7 +227,7 @@ export function focusUpdates(container: HTMLElement): void {
   container.querySelector<HTMLButtonElement>('[role="tab"][data-group="app"]')?.click();
   // The section navigation owns the custom scroller and sticky-tab offset.
   const about=Array.from(container.querySelectorAll<HTMLAnchorElement>('nav a'))
-    .find(link=>link.textContent?.trim()==='О программе');
+    .find(link=>link.textContent?.trim()===uiText("ui.ui.kit.window.views.settings.frame.254f667d9a"));
   if (about)about.click();
   else container.querySelector<HTMLElement>('[data-updates]')?.scrollIntoView({block:'start'});
 }
@@ -295,7 +299,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
-    center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
+    center.append(el("div", "card muted", uiText("ui.ui.kit.window.views.settings.frame.f2b95e109e", {p0: String(PRODUCT_NAME)})));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
     center.append(selfReviewCard(), lookCard());
     mountSettings(container, center);
@@ -319,6 +323,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // опирается на них полутора сотнями строк карточек, и «наверное, есть» в
   // каждой из них было бы глушением проверки на настоящей гарантии.
   const draft = JSON.parse(JSON.stringify(c)) as Draft;
+  // This client can differ from the installation default saved by another window.
+  draft.lang = localePreference();
   draft.agent = draft.agent || {};
   draft.owner = draft.owner || {};
   draft.model = draft.model || {};
@@ -330,12 +336,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // что делать. Экран обязан сказать это вслух до того, как человек начнёт тыкать.
   if (cfg.needs_local_setup) {
     center.append(el("div", "notice",
-      "Первый запуск. Чтобы агент поднялся, заполни карточку «Модель» в разделе «Мозг и связь»: " +
-      "выбери пресет, вставь ключ и сохрани. Без ключа модели движок не запускается, " +
-      "и окно останется без связи с агентом. Имена и остальные разделы можно заполнить потом."));
+      uiText("ui.ui.kit.window.views.settings.frame.3cd189bc2d") +
+      uiText("ui.ui.kit.window.views.settings.frame.a5c8db35d2") +
+      uiText("ui.ui.kit.window.views.settings.frame.1a1338d483")));
   }
   if (cfg.needs_subscription_login) {
-    center.append(el('div','notice','Реле установлено. В карточке «Подписки и реле» войди в ChatGPT, затем нажми «Продолжить» вверху. До этого агент остаётся на паузе.'));
+    center.append(el('div','notice',uiText("ui.ui.kit.window.views.settings.frame.eb5131b7d6")));
   }
 
   // Система агента — от оболочки, один раз (host.ts): на macOS автозапуск
@@ -361,13 +367,25 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // --- имена
   const names = el("div", "form-grid two");
   names.append(
-    field("Имя агента", String(draft.agent.name || ""), (v) => (draft.agent!.name = v)),
-    field("Твоё имя", String(draft.owner.name || ""), (v) => (draft.owner!.name = v)),
+    field(uiText("ui.ui.kit.window.views.settings.frame.ba527ef131"), String(draft.agent.name || ""), (v) => (draft.agent!.name = v)),
+    field(uiText("ui.ui.kit.window.views.settings.frame.1a399e1b3a"), String(draft.owner.name || ""), (v) => (draft.owner!.name = v)),
   );
   // Настройки пишут только helene.json. Конституцию (data/soul/SOUL.md) не
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
-  center.append(inGroup(card("Имена", names, built.namesHint), GROUP.agent));
+  center.append(inGroup(card(uiText("ui.ui.kit.window.views.settings.frame.140688c04f"), names, built.namesHint), GROUP.agent));
+  const agentLanguage = languageField(t('language.frame'), draft.agent.frame_language || 'ru',
+    value => { draft.agent.frame_language = value as Lang; });
+  agentLanguage.dataset.setting = 'agent.frame_language';
+  const prose = toggle(t('language.living_prose'), draft.agent.living_prose !== false,
+    value => { draft.agent.living_prose = value; });
+  prose.dataset.setting = 'agent.living_prose';
+  center.append(inGroup(card(t('language.agent_section'), agentLanguage,
+    t('language.frame_hint'), prose, t('language.living_prose_hint')), GROUP.agent));
+  const uiLanguage = languageField(t('language.interface'), draft.lang ?? localePreference(),
+    value => { draft.lang = value; }, true);
+  uiLanguage.dataset.setting = 'lang';
+  center.append(inGroup(card(t('language.interface'), uiLanguage, t('language.interface_hint')), GROUP.look));
   if (draft.mode !== "remote") center.append(inGroup(ownerContextCard(draft), GROUP.agent));
 
   for (const box of built.cards) center.append(box);
@@ -375,7 +393,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
 
   const chooseBridge=(bridge:ServerBridge)=>{
-    if(draft.mode==='remote')throw new Error('Этот мост подключает местного агента. Выбери его в программе перед настройкой.');
+    if(draft.mode==='remote')throw new Error(uiText("ui.ui.kit.window.views.settings.frame.18eb1ae156"));
     useBridge(draft,bridge);built.useServerBridge?.(bridge);
     phoneSettings.dispatchEvent(new CustomEvent('bridge-selected',{detail:bridge}));
     phoneSettings.dispatchEvent(new Event('input',{bubbles:true}));
@@ -392,14 +410,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   if (electron?.shell === "python") {
     center.append(inGroup(componentsCard(), GROUP.app),inGroup(serverBridgeCard(chooseBridge),GROUP.app));
     const serverBody=el('div');
-    const openServer=button('Открыть управление сервером','quiet',async()=>{
+    const openServer=button(uiText("ui.ui.kit.window.views.settings.frame.01c36d809c"),'quiet',async()=>{
       openServer.disabled=true;
       try{await (await import('../connection-guide')).mountServerManagement(serverBody);}
       catch(error){serverBody.textContent=humanError(error).text;}
       finally{openServer.disabled=false;}
     });
     const placement=el('div');placement.append(openServer,serverBody);
-    center.append(inGroup(card('Размещение агента',placement),GROUP.app));
+    center.append(inGroup(card(uiText("ui.ui.kit.window.views.settings.frame.bd9a72f72b"),placement),GROUP.app));
   }
 
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
@@ -410,13 +428,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   let autoState: boolean | null = null;
   const readAutostart = async () => {
     const value = await shell<boolean>("autostart_get");
-    if (typeof value !== "boolean") throw new Error("Не удалось определить состояние автозапуска");
+    if (typeof value !== "boolean") throw new Error(uiText("ui.ui.kit.window.views.settings.frame.9e2d9b6b18"));
     autoState = value;
     autoToggle.setAttribute("aria-checked", String(value));
     return value;
   };
   // На macOS это LaunchAgent при входе в систему — «Windows» в подписи был бы чужим словом.
-  const autoToggle = toggle(posix ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
+  const autoToggle = toggle(posix ? uiText("ui.ui.kit.window.views.settings.frame.9225bc7e7f") : uiText("ui.ui.kit.window.views.settings.frame.810f7494ef"), false, async (v) => {
     autoToggle.disabled = true;
     autoToggle.setAttribute("aria-busy", "true");
     let failure = "";
@@ -427,7 +445,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }
     try {
       const current = await readAutostart();
-      toast(failure || (current !== v ? "Изменение автозапуска не подтверждено" : current ? "Автозапуск включён" : "Автозапуск выключен"));
+      toast(failure || (current !== v ? uiText("ui.ui.kit.window.views.settings.frame.ad4d371d77") : current ? uiText("ui.ui.kit.window.views.settings.frame.e9ffca82ae") : uiText("ui.ui.kit.window.views.settings.frame.3989033996")));
     } catch (e) {
       autoToggle.setAttribute("aria-checked", String(autoState ?? false));
       autoState = null;
@@ -440,7 +458,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   autoToggle.disabled = true;
   readAutostart().then(() => { autoToggle.disabled = false; }).catch((e) => toast(humanError(e).text));
   auto.append(autoToggle);
-  center.append(inGroup(card("Автозапуск", auto), GROUP.app));
+  center.append(inGroup(card(uiText("ui.ui.kit.window.views.settings.frame.18d54d8fce"), auto), GROUP.app));
 
   // Тема — только как в системе (слово владельца 07.09): переключателя нет. Палитры дня
   // и ночи, фактура, текст и физика ленты — в «Виде» (28.09), применяются сразу.
@@ -452,20 +470,20 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const about = el("div");
   about.dataset.updates='';
   const aboutRow = el("div", "actions");
-  const ver = el("span", "mono", "версия …");
+  const ver = el("span", "mono", uiText("ui.ui.kit.window.views.settings.frame.eea5354739"));
   let aboutInfo: { version: string; exe_dir: string; log: string } | null = null;
   shell<{ version: string; exe_dir: string; log: string }>("app_info")
     .then((i) => {
       aboutInfo = i;
-      ver.textContent = `версия ${i.version}`;
+      ver.textContent = uiText("ui.ui.kit.window.views.settings.frame.0295e8b3df", {p0: String(i.version)});
     })
     .catch(() => {
       // Оболочки нет — окно открыто браузером (Praxis на сервере). Версию
       // тогда называет канал: пакет desk, которым он поднят.
       const d = S.agentState?.desk;
       ver.textContent = d?.version
-        ? `канал: desk ${d.version} (${d.digest})`
-        : "версия видна в окне программы";
+        ? uiText("ui.ui.kit.window.views.settings.frame.6e12de1fc8", {p0: String(d.version), p1: String(d.digest)})
+        : uiText("ui.ui.kit.window.views.settings.frame.804128629a");
     });
   const updOut = el("span", "receipt");
   // Кнопка создаётся один раз и переключается. Раньше её добавляли внутрь
@@ -483,30 +501,30 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const sourceChoices = el('div', 'field');
   const modeChoice = sourceModeCards(value => { sourceMode = value; showMode(); });
   modeChoice.configure([]);
-  const sourceHint = el('p', 'field-hint', 'Проверяем доступные режимы обновления…');
+  const sourceHint = el('p', 'field-hint', uiText("ui.ui.kit.window.views.settings.frame.5dfea6667f"));
   sourceHint.id = 'update-source-mode-hint';
-  const reopenHint = el('p', 'field-hint', 'Во время обновления окно закроется. Hélène откроется сама — это может занять несколько минут. Не запускай программу повторно.');
+  const reopenHint = el('p', 'field-hint', uiText("ui.ui.kit.window.views.settings.frame.9230125673"));
   reopenHint.id = 'update-reopen-hint';
   const developerDetails = el('details', 'muted');
-  developerDetails.append(el('summary', '', 'Если вы меняли код'), el('p', 'field-hint', 'При конфликте агент подготовит совмещённый код в отдельном кандидате. Обновление продолжится после проверок и ревью. До подтверждения нового запуска прежняя программа пригодна для восстановления.'));
+  developerDetails.append(el('summary', '', uiText("ui.ui.kit.window.views.settings.frame.0cb53306a0")), el('p', 'field-hint', uiText("ui.ui.kit.window.views.settings.frame.67d4dbcc9e")));
   const showMode = () => {
     sourceHint.textContent = sourceMode === 'preserve'
-      ? 'Правки пройдут проверку и ревью. Конфликты и неподтверждённый результат потребуют решения перед продолжением.'
+      ? uiText("ui.ui.kit.window.views.settings.frame.979af03eb7")
       : sourceMode === 'clean'
-        ? 'Установим чистый код нового выпуска. Локальные правки исходников не переносятся.'
-        : 'Выберите, что сделать с исходниками при обновлении.';
+        ? uiText("ui.ui.kit.window.views.settings.frame.6ca3b114d5")
+        : uiText("ui.ui.kit.window.views.settings.frame.c97dc36c30");
     developerDetails.hidden = sourceMode !== 'preserve';
   };
-  const preservedHint = el('p', 'field-hint', 'Память, переписка и настройки сохраняются в обоих режимах.');
+  const preservedHint = el('p', 'field-hint', uiText("ui.ui.kit.window.views.settings.frame.af97e7e3c9"));
   sourceChoices.append(modeChoice.el, preservedHint, sourceHint, reopenHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
   let agentProposalId = '';
-  const confirmAgentUpdate = button('Подтвердить предложение агента', 'primary', async () => {
+  const confirmAgentUpdate = button(uiText("ui.ui.kit.window.views.settings.frame.c339b28365"), 'primary', async () => {
     if (!agentProposalId) return;
     confirmAgentUpdate.disabled = true;
     beginUpdateObservation();
     try {
       await shell('update_agent_confirm', {id: agentProposalId});
-      updOut.textContent = 'Предложение подтверждено. Скачиваю и проверяю выбранный выпуск…';
+      updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.b45f90e702");
       confirmAgentUpdate.hidden = true;
       setTimeout(restoreUpdateProgress, 600);
     } catch (error) { confirmAgentUpdate.disabled = false; toast(humanError(error).text); }
@@ -531,7 +549,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     agentProposalId = row.id;
     confirmAgentUpdate.hidden = false;
   };
-  if (pythonUpdate) void loadSourceModes().catch(() => { sourceHint.textContent = 'Не удалось проверить режим обновления. Повтори попытку.'; });
+  if (pythonUpdate) void loadSourceModes().catch(() => { sourceHint.textContent = uiText("ui.ui.kit.window.views.settings.frame.427c3fa715"); });
   // Reconnecting the old UI reads the same operation, not a fresh invented
   // progress counter. Poll only while that operation is nonterminal; leaving
   // Settings ends the observer without retaining the removed view.
@@ -570,7 +588,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (updOut.isConnected && scope===activityScope() && scope===settingsScope
           && generation===updateObservationGeneration && sequence>=appliedProgressRead) {
         appliedProgressRead=sequence;
-        updOut.textContent = `Состояние обновления недоступно: ${humanError(error).text}`;
+        updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.4a25df072c", {p0: String(humanError(error).text)});
       }
     }
   };
@@ -586,50 +604,50 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   if (pythonUpdate) setTimeout(restoreUpdateProgress, 0);
   const legacyLinux = linux && !pythonUpdate;
   let updateHandedOff = false;
-  const cancelUpdate = button('Отменить автопродолжение', 'quiet', async () => {
+  const cancelUpdate = button(uiText("ui.ui.kit.window.views.settings.frame.326245a16e"), 'quiet', async () => {
     try {
       await shell('update_cancel');
       cancelUpdate.hidden = true;
-      updOut.textContent = 'Автопродолжение отменено. Старая версия остаётся открытой.';
+      updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.147cf6093c");
     } catch (error) { toast(humanError(error).text); }
   });
   cancelUpdate.hidden = true;
-  const manualUpdate = button('Открыть выпуск и помощник', 'quiet', async () => {
+  const manualUpdate = button(uiText("ui.ui.kit.window.views.settings.frame.d72d1a2146"), 'quiet', async () => {
     await shell('open_path', { path: 'https://github.com/josephsteuerjr/praxis/releases/latest' });
   });
   manualUpdate.hidden = true;
-  const dlBtn = button(legacyLinux ? "Открыть выпуск Linux" : pythonUpdate ? 'Обновить Hélène' : "Скачать и установить", "primary", async () => {
+  const dlBtn = button(legacyLinux ? uiText("ui.ui.kit.window.views.settings.frame.1ec432d1c1") : pythonUpdate ? uiText("ui.ui.kit.window.views.settings.frame.0381fb1a3b") : uiText("ui.ui.kit.window.views.settings.frame.be83518bd3"), "primary", async () => {
     if (!updUrl) return;
     if (pythonUpdate) {
       if (!sourceMode) { try { await loadSourceModes(); } catch { /* admission has not been sent */ } }
-      if (!sourceMode) { toast('Выберите режим обновления кода.'); return; }
+      if (!sourceMode) { toast(uiText("ui.ui.kit.window.views.settings.frame.c9ffe1b454")); return; }
       dlBtn.disabled = true;
       modeChoice.lock();
-      updOut.className = 'receipt'; updOut.textContent = 'Передаю задание владельцу процессов…';
+      updOut.className = 'receipt'; updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.30136bb0db");
       beginUpdateObservation();
       try {
         const admitted = await requestAgentUpdate(shell, updUrl, updSha, sourceMode);
         observedUpdateId = admitted.job.id;
         updateHandedOff = true;
-        updOut.textContent = 'Обновление принято. Окно закроется, затем Hélène откроется сама. Это может занять несколько минут — не запускай программу повторно.';
+        updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.c2537ad91a");
         setTimeout(restoreUpdateProgress, 600);
       } catch (error) {
         // A lost reply is not permission to submit another job or silently
         // fall back to the old window-owned download/installer path.
         updOut.className = 'receipt err';
-        updOut.textContent = `Принятие не подтверждено: ${humanError(error).text} Перечитываю состояние без повторной отправки.`;
+        updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.cc872491ac", {p0: String(humanError(error).text)});
         setTimeout(restoreUpdateProgress, 600);
       }
       return;
     }
     if (legacyLinux) {
       await shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
-      updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные сохранятся.";
+      updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.73ce8c4336");
       return;
     }
     dlBtn.disabled = true;
     updOut.className = "receipt";
-    updOut.textContent = pythonUpdate ? 'Скачиваю и проверяю обновление рядом с рабочей папкой…' : "Скачиваю в «Загрузки»…";
+    updOut.textContent = pythonUpdate ? uiText("ui.ui.kit.window.views.settings.frame.fb83912442") : uiText("ui.ui.kit.window.views.settings.frame.79700fcb96");
     let updateStage: 'download' | 'install' = 'download';
     // The Python owner emits the durable operation receipt throughout preclose
     // preparation. The small updater window keeps reading it after this exits.
@@ -642,39 +660,39 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       operationId = row.id;
       cancelUpdate.hidden = !['waiting_review','waiting_agent'].includes(row.stage);
       const details: string[] = [];
-      if (typeof row.bytes === 'number' && row.bytes > 0) details.push(`${(row.bytes / 1048576).toFixed(1)} МиБ`);
-      if (typeof row.files === 'number' && row.files > 0) details.push(`${row.files} файлов`);
+      if (typeof row.bytes === 'number' && row.bytes > 0) details.push(uiText("ui.ui.kit.window.views.settings.frame.5fcdadeb1a", {p0: String((row.bytes / 1048576).toFixed(1))}));
+      if (typeof row.files === 'number' && row.files > 0) details.push(uiText("ui.ui.kit.window.views.settings.frame.d6d7c420ce", {p0: String(row.files)}));
       updOut.textContent = [row.label, ...details].join(' · ');
     };
     if (pythonUpdate) window.addEventListener('helene:package-progress', updateProgress);
     try {
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
-      const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
-      updOut.textContent = `Скачано (${checked}). Подготавливаю обновление…`;
+      const checked = got.sha_ok === true ? uiText("ui.ui.kit.window.views.settings.frame.4b7e98a47f") : got.sha_ok === null ? uiText("ui.ui.kit.window.views.settings.frame.cca2165e0b") : uiText("ui.ui.kit.window.views.settings.frame.5fad0b7478");
+      updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.4c4325bbea", {p0: String(checked)});
       // Compatibility belongs to the current agent-owned update protocol.
       // The obsolete extension-incompatibility bypass is no longer an action.
       updateStage = 'install';
       const installed = await shell("update_install", { path: got.path, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
       if (installed?.state === 'installer_opened') {
-        updOut.textContent = installed.message || 'Мастер установки открыт. Выбери папку данных и подтверди обновление.';
+        updOut.textContent = installed.message || uiText("ui.ui.kit.window.views.settings.frame.7bcb42dd13");
         return;
       }
       if (installed?.state === 'needs_resolution') {
-        updOut.textContent = installed.message || 'Проверка слияния требует внимания. Старая версия остаётся открытой.';
+        updOut.textContent = installed.message || uiText("ui.ui.kit.window.views.settings.frame.7754f92b67");
         return;
       }
       if (installed?.state === 'cancelled') {
-        updOut.textContent = installed.message || 'Автопродолжение отменено.';
+        updOut.textContent = installed.message || uiText("ui.ui.kit.window.views.settings.frame.c59361b97c");
         return;
       }
       updateHandedOff = true;
-      updOut.textContent = pythonUpdate ? 'Окно закроется. Hélène откроется сама через несколько минут — не запускай программу повторно. Если запуск не удастся, вернём прежнюю версию.' : 'Установщик запущен; программа закроется для обновления.';
+      updOut.textContent = pythonUpdate ? uiText("ui.ui.kit.window.views.settings.frame.ccdfd7d5c7") : uiText("ui.ui.kit.window.views.settings.frame.bfa7b5f03a");
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (!pythonUpdate && /not found|неизвестн|unknown|command/i.test(text)) {
         updOut.textContent = mac
-          ? "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай архив для macOS и запусти из него Helene Setup."
-          : "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай и запусти helene-setup.exe.";
+          ? uiText("ui.ui.kit.window.views.settings.frame.03e1335b12")
+          : uiText("ui.ui.kit.window.views.settings.frame.6e78ef36f3");
         void shell("open_path", { path: updUrl }).catch((e2) => toast(humanError(e2).text));
       } else {
         updOut.className = "receipt err";
@@ -688,10 +706,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }
   });
   dlBtn.hidden = true;
-  const restoreUpstream = button('Вернуть код к upstream', 'quiet', () => {
-    const modal = paperDialog('Восстановить upstream-код');
-    modal.body.append(el('p', '', 'Вернём чистый код текущей установки. Программа перезапустится. Текущие папки данных, память, переписка и настройки сохранятся; прежние правки останутся для отката.'));
-    const apply = button('Восстановить код', 'primary', async () => {
+  const restoreUpstream = button(uiText("ui.ui.kit.window.views.settings.frame.644926f8cb"), 'quiet', () => {
+    const modal = paperDialog(uiText("ui.ui.kit.window.views.settings.frame.a975911637"));
+    modal.body.append(el('p', '', uiText("ui.ui.kit.window.views.settings.frame.e7957b9cdb")));
+    const apply = button(uiText("ui.ui.kit.window.views.settings.frame.5f50c277bd"), 'primary', async () => {
       apply.disabled = true;
       beginUpdateObservation();
       try {
@@ -699,8 +717,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         observedUpdateId = admitted?.state === 'admitted' ? admitted.operation_id || '' : '';
         restoreUpstream.disabled = true;
         updOut.textContent = admitted?.state === 'admitted'
-          ? 'Задание принято. Ход восстановления появится здесь.'
-          : 'Подготавливаю чистый upstream-код. После проверки программа перезапустится с прежними данными.';
+          ? uiText("ui.ui.kit.window.views.settings.frame.80090a6eb8")
+          : uiText("ui.ui.kit.window.views.settings.frame.15bf2e1c22");
         setTimeout(restoreUpdateProgress, 600);
         modal.dialog.close();
       } catch (error) {
@@ -710,29 +728,29 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         setTimeout(restoreUpdateProgress, 600);
       }
     });
-    modal.footer.append(button('Отмена', 'quiet', () => modal.dialog.close()), apply);
+    modal.footer.append(button(uiText("ui.ui.kit.window.views.settings.frame.8fbe9b75cb"), 'quiet', () => modal.dialog.close()), apply);
   });
   restoreUpstream.hidden = !pythonUpdate;
   about.append(manualUpdate);
   aboutRow.append(
     ver,
-    button("Проверить обновления", "quiet", async () => {
+    button(uiText("ui.ui.kit.window.views.settings.frame.93b08f7b14"), "quiet", async () => {
       updOut.className = "receipt";
-      updOut.textContent = "спрашиваю…";
+      updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.25cd3cf450");
       try {
         const r = await shell<{ current: string; latest: string; newer: boolean; url: string; notes: string; sha256?: string }>("update_check", {
           url: String(draft.update?.url || "").trim() || UPDATE_URL_DEFAULT,
         });
         if (r.newer) {
           updOut.className = "receipt ok";
-          updOut.textContent = `Есть версия ${r.latest}. ${r.notes || ""}`.trim();
+          updOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.0e1eac53ff", {p0: String(r.latest), p1: String(r.notes || "")}).trim();
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
         } else {
           updOut.textContent = r.latest === r.current
-            ? `Это последняя версия (${r.current}).`
-            : `Установлена ${r.current}. В источнике обновлений — ${r.latest}.`;
+            ? uiText("ui.ui.kit.window.views.settings.frame.270a544544", {p0: String(r.current)})
+            : uiText("ui.ui.kit.window.views.settings.frame.34e3f72dc4", {p0: String(r.current), p1: String(r.latest)});
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
@@ -751,23 +769,23 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   );
   const logsRow = el("div", "actions");
   logsRow.append(
-    button("Собрать логи для поддержки", "quiet", async () => {
+    button(uiText("ui.ui.kit.window.views.settings.frame.6580927797"), "quiet", async () => {
       try {
         const p = await shell<string>("logs_bundle");
-        toast("Логи собраны: " + p);
+        toast(uiText("ui.ui.kit.window.views.settings.frame.40da34e969") + p);
         await shell("reveal_path", { path: p });
       } catch (e) {
         toast(humanError(e).text);
       }
     }),
-    button("Открыть helene.log", "quiet", () => {
+    button(uiText("ui.ui.kit.window.views.settings.frame.02020a507f"), "quiet", () => {
       if (aboutInfo) void shell("open_path", { path: aboutInfo.log }).catch((e) => toast(humanError(e).text));
     }),
   );
   // Выпуск менял интерфейс, прежняя папка отложена рядом (КОНТРАКТ A→B §5).
   const prev = String((c.installed && (c.installed as Record<string, unknown>).static_prev) || "").trim();
   if (prev) {
-    about.append(el("p", "field-hint", `Интерфейс обновлён этим выпуском; твоя прежняя версия статики лежит рядом: ${prev}. Ключ исчезнет при следующей установке, если папки нет.`));
+    about.append(el("p", "field-hint", uiText("ui.ui.kit.window.views.settings.frame.04ee482f56", {p0: String(prev)})));
   }
   // Испытание новой версии после обновления (1.2.5): его ведёт установщик, агент проверяет
   // себя делом; владелец может сказать своё поверх — «Всё хорошо» / «Вернуть прежнюю».
@@ -783,20 +801,20 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   about.append(
     trialBox,
     aboutRow,
-    field("Адрес обновлений", String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
+    field(uiText("ui.ui.kit.window.views.settings.frame.1b821df2a9"), String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
       mono: true,
-      placeholder: "https://api.github.com/repos/<владелец>/helene/releases/latest",
-      hint: "Адрес выпусков на GitHub (…/releases/latest) или свой JSON с полями version, url и notes.",
+      placeholder: uiText("ui.ui.kit.window.views.settings.frame.b6d8935862"),
+      hint: uiText("ui.ui.kit.window.views.settings.frame.f54d268f73"),
     }),
     logsRow,
   );
-  center.append(inGroup(card("О программе", about), GROUP.app));
+  center.append(inGroup(card(uiText("ui.ui.kit.window.views.settings.frame.254f667d9a"), about), GROUP.app));
 
   // --- сохранить
   const save = el("div", "actions");
   const saveOut = el("span", "receipt");
   save.append(
-    button("Сохранить", "primary", async () => {
+    button(uiText("ui.ui.kit.window.views.settings.frame.b4d30cae52"), "primary", async () => {
       const out: Config = JSON.parse(JSON.stringify(draft));
       // Отказ издания — ожидаемая развилка, а не поломка: показываем словами
       // и НЕ пишем файл. Бросать здесь исключение значило бы уронить экран
@@ -833,17 +851,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         const restartBlocks = blocksNeedingRestart(before, out);
         const restartNote = configureRestart(restartBtn,restartForSettings(before,out,!!cfg.needs_local_setup),restartBlocks);
         saveOut.textContent =
-          "Сохранено. Модель и ключ движок перечитает перед следующим запросом." +
+          uiText("ui.ui.kit.window.views.settings.frame.f5a508aaaf") +
           relayWords + restartNote + modeNote;
-        if (cfg.needs_local_setup) saveOut.textContent = "Настройки сохранены. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
+        if (cfg.needs_local_setup) saveOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.09c42c74b7");
         // Пустой ключ при первом запуске — не «настройки сохранены», а полдела:
         // движок поднимется, но агент без мозга молчит. Обещать «впервые запустить
         // агента» здесь было бы ложью; кнопка перезапуска в этой тропе не нужна.
         if (cfg.needs_local_setup && !String(out.model?.key || "").trim()) {
           saveOut.className = "receipt err";
           saveOut.textContent =
-            "Сохранено, но ключ модели пуст — агент не сможет думать и отвечать. " +
-            "Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
+            uiText("ui.ui.kit.window.views.settings.frame.23d4a2e64e") +
+            uiText("ui.ui.kit.window.views.settings.frame.8907062253");
           restartBtn.hidden = true;
         } else {
           restartBtn.hidden = !restartNote;
@@ -854,7 +872,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           // Файл менял кто-то ещё (установщик, харнесс, Блокнот). Развилка
           // вместо молчаливой перезаписи — как у /api/md.
           saveOut.className = "receipt err";
-          saveOut.textContent = "Файл настроек изменился, пока экран был открыт.";
+          saveOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.ebb88e16a0");
           conflictBox.hidden = false;
           return;
         }
@@ -907,7 +925,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // КОНТРАКТ A→B §1: `{ok: false, code: "stale", mtime_ns, error}` — файл
       // менял кто-то ещё, черновик не записан.
       if (r && typeof r === "object" && r.ok === false && r.code === "stale") throw new StaleConfig(r.error || "stale");
-      if (r && typeof r === "object" && r.ok === false) throw new Error(r.error || "Настройки не сохранились");
+      if (r && typeof r === "object" && r.ok === false) throw new Error(r.error || uiText("ui.ui.kit.window.views.settings.frame.47078ae8ed"));
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
       if (revision === container.dataset.settingsRevision) delete container.dataset.settingsDirty;
       let saved = out;
@@ -928,6 +946,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // миллисекундная гонка, — один лишний хвост у расписки.
       });
       if (revision === container.dataset.settingsRevision) built.didSave?.(saved);
+      if (out.lang !== undefined && out.lang !== localePreference() && revision === container.dataset.settingsRevision) {
+        saveLocale(out.lang ?? '');
+        // The confirmed write owns this reload. A newer unsaved form is retained.
+        setTimeout(() => { if (!container.dataset.settingsDirty) location.reload(); }, 0);
+      }
       phoneSettings.dispatchEvent(new CustomEvent('configuration-saved',{detail:saved}));
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
@@ -940,13 +963,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   };
   const conflictBox = el("div");
   conflictBox.hidden = true;
-  conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px"><span class="dot failed"></span>
-    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, код агента или ты ${mac ? "в редакторе" : "в Блокноте"}. Если сохранить как есть, его правка пропадёт.</span></div>`;
+  conflictBox.innerHTML = uiText("ui.ui.kit.window.views.settings.frame.3de4278a00", {p0: String(mac ? uiText("ui.ui.kit.window.views.settings.frame.c4797349dd") : uiText("ui.ui.kit.window.views.settings.frame.8c06502737"))});
   const conflictRow = el("div", "actions");
   conflictRow.style.marginTop = "10px";
   conflictRow.append(
-    button("Перечитать (мои правки потеряются)", "primary", () => void render(container, edition)),
-    button("Перезаписать своим", "quiet", async () => {
+    button(uiText("ui.ui.kit.window.views.settings.frame.f7cc0e2a0a"), "primary", () => void render(container, edition)),
+    button(uiText("ui.ui.kit.window.views.settings.frame.444100de18"), "quiet", async () => {
       conflictBox.hidden = true;
       try {
         // Что лежит в файле ПРЯМО СЕЙЧАС: перезапись затирает именно это, и
@@ -991,15 +1013,15 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         const restartBlocks = blocksNeedingRestart(before, out);
         const restartNote = configureRestart(restartBtn,restartForSettings(before,out,!!cfg.needs_local_setup),restartBlocks);
         saveOut.textContent =
-          "Перезаписано. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
+          uiText("ui.ui.kit.window.views.settings.frame.fceeef4237") +
           (relayNote ? ` ${relayNote}.` : "") + restartNote + modeNote;
         // Первый запуск — те же слова, что у «Сохранить»: кнопка ниже зовёт
         // restart_self и поднимает агента впервые (симметрия, ревью 06.10).
-        if (cfg.needs_local_setup) saveOut.textContent = "Настройки перезаписаны. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
+        if (cfg.needs_local_setup) saveOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.f50957e168");
         restartBtn.hidden = !restartNote;
         if (cfg.needs_local_setup && !String(out.model?.key || "").trim()) {
           saveOut.className = "receipt err";
-          saveOut.textContent = "Перезаписано, но ключ модели пуст — агент не сможет думать и отвечать. Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
+          saveOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.d1bf9082ad");
           restartBtn.hidden = true;
         }
       } catch (e) {
@@ -1010,15 +1032,15 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   );
   conflictBox.append(conflictRow);
   // configureRestart names the exact scope on every save; this is only the initial label.
-  const restartBtn = button("Перезапустить движок", "quiet", () => {
+  const restartBtn = button(uiText("ui.ui.kit.window.views.settings.frame.bfa262aa90"), "quiet", () => {
     // 05.10: кнопка обязана уходить с экрана в момент нажатия — иначе владелец
     // жмёт её снова и снова, не зная, взялся ли перезапуск. Движок выйдет на
     // границе хода и поднимется с новыми настройками; ошибки придут тостом.
     restartBtn.hidden = true;
     saveOut.className = "receipt";
     const scope=restartBtn.dataset.scope || 'engine';
-    saveOut.textContent = scope==='application' ? 'Перезапускаю программу.' : scope==='window'
-      ? 'Переподключаю окно.' : 'Перезапускаю движок — настройки применятся на его старте.';
+    saveOut.textContent = scope==='application' ? uiText("ui.ui.kit.window.views.settings.frame.e40e49f2ec") : scope==='window'
+      ? uiText("ui.ui.kit.window.views.settings.frame.663113d2b7") : uiText("ui.ui.kit.window.views.settings.frame.b6c5d0add8");
     dispatchEvent(new CustomEvent("frame-restart",{detail:{scope}}));
   });
   restartBtn.hidden = true;
@@ -1026,7 +1048,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const saveCard = el("section", "card save-bar");
   saveCard.append(save, conflictBox);
   const sourceInfo = el("details", "settings-source");
-  sourceInfo.append(el("summary", "", "Где хранятся настройки"), el("p", "mono", loaded.path));
+  sourceInfo.append(el("summary", "", uiText("ui.ui.kit.window.views.settings.frame.682d554ec5")), el("p", "mono", loaded.path));
   center.append(sourceInfo, saveCard);
 
   if(activityScope()!==settingsScope)return;
@@ -1049,7 +1071,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 function mountSettings(container: HTMLElement, center: HTMLElement, groups: SettingsGroup[] = []) {
   const wrap = el("div", "settings");
   const nav = el("nav", "settings-nav");
-  nav.setAttribute("aria-label", "Разделы настроек");
+  nav.setAttribute("aria-label", uiText("ui.ui.kit.window.views.settings.frame.2d73b4c384"));
   const body = el("div", "settings-body");
   center.className = "";
   body.append(center);
@@ -1116,7 +1138,8 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
         t.setAttribute("aria-selected", String(t.dataset.group === id));
       }
       visible = buckets.get(id) || [];
-      // «Вид» применяется сразу — полоса «Сохранить» там не нужна и закрывала бы низ карточки.
+      // Appearance includes a saved interface-language setting as well as
+      // immediately applied visual preferences; keep the save action available.
       wrap.dataset.group = id;
       buildNav();
       try {
@@ -1207,18 +1230,18 @@ function backupCard(draft: Config): HTMLElement {
   const b = draft.backup;
   const box = el("div");
   const grid = el("div", "form-grid three");
-  const every = field("Раз в сколько дней", String(b.every_days ?? 7), (v) => {
+  const every = field(uiText("ui.ui.kit.window.views.settings.frame.54f58c5c72"), String(b.every_days ?? 7), (v) => {
     const n = Math.max(0, Math.min(365, Math.floor(Number(v))));
     b.every_days = Number.isFinite(n) ? n : 7;
-  }, { hint: "0 — не снимать по расписанию" });
-  const keep = field("Сколько хранить", String(b.keep ?? 8), (v) => {
+  }, { hint: uiText("ui.ui.kit.window.views.settings.frame.4bc9ef872d") });
+  const keep = field(uiText("ui.ui.kit.window.views.settings.frame.9da9101d3c"), String(b.keep ?? 8), (v) => {
     const n = Math.max(1, Math.min(1000, Math.floor(Number(v))));
     b.keep = Number.isFinite(n) ? n : 8;
-  }, { hint: "старые снимки по расписанию уходят, твои «сейчас» — никогда" });
-  const dir = field("Папка", String(b.dir ?? ""), (v) => (b.dir = v.trim()), {
+  }, { hint: uiText("ui.ui.kit.window.views.settings.frame.4cb0c81212") });
+  const dir = field(uiText("ui.ui.kit.window.views.settings.frame.73a0f69d54"), String(b.dir ?? ""), (v) => (b.dir = v.trim()), {
     mono: true,
-    placeholder: "backups рядом с программой",
-    hint: "пусто — рядом с программой, вне папки агента",
+    placeholder: uiText("ui.ui.kit.window.views.settings.frame.b604b54308"),
+    hint: uiText("ui.ui.kit.window.views.settings.frame.3ffb594e94"),
   });
   grid.append(every, ...(electron?.shell === "python" ? [] : [keep]), dir);
   const out = el("span", "receipt");
@@ -1229,31 +1252,31 @@ function backupCard(draft: Config): HTMLElement {
       .then((r) => {
         where = r.dir;
         listBox.replaceChildren();
-        const kinds: Record<string, string> = { auto: "по расписанию", manual: "по кнопке", before: "перед обновлением" };
+        const kinds: Record<string, string> = { auto: uiText("ui.ui.kit.window.views.settings.frame.51ec8d5076"), manual: uiText("ui.ui.kit.window.views.settings.frame.730255815d"), before: uiText("ui.ui.kit.window.views.settings.frame.1e33b27e8c") };
         for (const it of r.items.slice(0, 6)) {
           const kind = it.name.includes("-auto") ? kinds.auto : it.name.includes("-manual") ? kinds.manual : it.name.includes("-before-") ? kinds.before : "";
           const when = it.when ? new Date(it.when * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : it.name;
-          listBox.append(el("li", "", `${when}${kind ? " · " + kind : ""} · ${(it.bytes / 1048576).toFixed(1)} МБ`));
+          listBox.append(el("li", "", uiText("ui.ui.kit.window.views.settings.frame.95dafacad6", {p0: String(when), p1: String(kind ? " · " + kind : ""), p2: String((it.bytes / 1048576).toFixed(1))})));
         }
         // Период 0 — расписание выключено: обещать «снимется сама» было бы неправдой.
         if (!r.items.length)
           listBox.append(el("li", "muted", (b.every_days ?? 7) === 0
-            ? "Копий ещё нет, а по расписанию они выключены (0 дней): снимет кнопка выше и установщик перед обновлением."
-            : "Копий ещё нет — первая снимется сама, в течение получаса после запуска."));
+            ? uiText("ui.ui.kit.window.views.settings.frame.4fef4817b7")
+            : uiText("ui.ui.kit.window.views.settings.frame.06acdad79c")));
       })
       .catch(() => {
         // Окно без оболочки (браузер, Praxis): копии снимает сервер, здесь смотреть нечего.
-        listBox.replaceChildren(el("li", "muted", "Список копий виден в окне программы на компьютере агента."));
+        listBox.replaceChildren(el("li", "muted", uiText("ui.ui.kit.window.views.settings.frame.64e5c66bf4")));
       });
   };
-  const now = button("Сделать копию сейчас", "quiet", async () => {
+  const now = button(uiText("ui.ui.kit.window.views.settings.frame.b2bfec6cf1"), "quiet", async () => {
     now.disabled = true;
     out.className = "receipt";
-    out.textContent = "Снимаю…";
+    out.textContent = uiText("ui.ui.kit.window.views.settings.frame.a97c3726be");
     try {
       const r = await shell<{ path: string; files: number }>("backup_now");
       out.className = "receipt ok";
-      out.textContent = `Готово: ${r.files} файлов — ${r.path}`;
+      out.textContent = uiText("ui.ui.kit.window.views.settings.frame.8306e1de21", {p0: String(r.files), p1: String(r.path)});
       refresh();
     } catch (e) {
       out.className = "receipt err";
@@ -1262,7 +1285,7 @@ function backupCard(draft: Config): HTMLElement {
       now.disabled = false;
     }
   });
-  const open = button("Открыть папку копий", "quiet", () => {
+  const open = button(uiText("ui.ui.kit.window.views.settings.frame.7f58de8f04"), "quiet", () => {
     if (where) void shell("reveal_path", { path: where }).catch((e) => toast(humanError(e).text));
   });
   const row = el("div", "actions");
@@ -1275,23 +1298,23 @@ function backupCard(draft: Config): HTMLElement {
       "p",
       "field-hint",
       (electron?.shell === "python"
-        ? "Малая копия: конституция, память, досье, граф, состояния, inbox, Telegram-сессии и настройки всех агентов. Runtime, модели, кэши и проекты не копируются. Прежние архивы не удаляются. "
-        : "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. ") +
-        "Вход в ChatGPT, журналы и голосовые модели в копию не идут. Перед каждым обновлением установщик снимает свою копию сам. " +
-        "Вернуть — распаковать нужное из zip на место при закрытой программе.",
+        ? uiText("ui.ui.kit.window.views.settings.frame.e2db7985d8")
+        : uiText("ui.ui.kit.window.views.settings.frame.3592296efb")) +
+        uiText("ui.ui.kit.window.views.settings.frame.28ced6de7b") +
+        uiText("ui.ui.kit.window.views.settings.frame.d6ee4b3b15"),
     ),
   );
   refresh();
-  return card("Копии памяти", box);
+  return card(uiText("ui.ui.kit.window.views.settings.frame.0076b35b56"), box);
 }
 
 function transferCard(draft: Config, posix = false): HTMLElement {
   const box = el("div");
   if (electron?.shell === 'python' && platformOf(electron) === 'linux') {
-    const migrate = button('Перенести офлайн-профиль…', 'quiet', () => {
-      const dialog = paperDialog('Открыть мастер переноса?');
-      dialog.body.append(el('p', '', 'Приложение закроет своих детей и откроет мастер до нового запуска агента. Несохранённые настройки сначала сохрани.'));
-      dialog.footer.append(button('Открыть мастер', 'primary', async () => {
+    const migrate = button(uiText("ui.ui.kit.window.views.settings.frame.2131646a7a"), 'quiet', () => {
+      const dialog = paperDialog(uiText("ui.ui.kit.window.views.settings.frame.9aae280ba1"));
+      dialog.body.append(el('p', '', uiText("ui.ui.kit.window.views.settings.frame.b4d49323aa")));
+      dialog.footer.append(button(uiText("ui.ui.kit.window.views.settings.frame.9b126710ba"), 'primary', async () => {
         dialog.dialog.close();
         await shell('migration_wizard').catch(e => toast(humanError(e).text));
       }));
@@ -1302,18 +1325,18 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   // против runtime/bin/python3): подсказка, которую копируют в консоль, обязана
   // работать как есть.
   const importCmd = posix
-    ? "runtime/bin/python3 app/localharness/carry.py import --config helene.json --archive <архив>"
-    : "runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>";
+    ? uiText("ui.ui.kit.window.views.settings.frame.0438fd0ca1")
+    : uiText("ui.ui.kit.window.views.settings.frame.e801cd084c");
   const exportOut = el("span", "receipt");
-  const exportBtn = button("Экспорт агента", "quiet", async () => {
+  const exportBtn = button(uiText("ui.ui.kit.window.views.settings.frame.a340373cb7"), "quiet", async () => {
     exportBtn.disabled = true;
     exportOut.className = "receipt";
-    exportOut.textContent = "Собираю архив…";
+    exportOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.55c5a44b1b");
     try {
       const path = await shell<string>("carry_export");
       exportOut.className = "receipt ok";
-      exportOut.textContent = `Готово: ${path}`;
-      toast("Архив переноса собран");
+      exportOut.textContent = uiText("ui.ui.kit.window.views.settings.frame.e19fc67763", {p0: String(path)});
+      toast(uiText("ui.ui.kit.window.views.settings.frame.d3520ce558"));
       await shell("reveal_path", { path }).catch(() => {});
     } catch (e) {
       exportOut.className = "receipt err";
@@ -1324,31 +1347,31 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   exportRow.append(exportBtn, exportOut);
   const steps = el("ol", "field-hint");
   const unavailable = el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');box.append(unavailable);
-  steps.append(el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
-    el("li", "", "Ручные настройки ниже нужны, если адрес и ключ уже работающего сервера у тебя есть."));
-  box.append(button("Настроить подключения","primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
+  steps.append(el("li", "", uiText("ui.ui.kit.window.views.settings.frame.4624978ffe")),
+    el("li", "", uiText("ui.ui.kit.window.views.settings.frame.2d33c98813")));
+  box.append(button(uiText("ui.ui.kit.window.views.settings.frame.981be49c36"),"primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
   const details = el("details");
-  details.append(el("summary", "field-label", "Что переносится и как вернуться на этот ПК"),
-    el("p", "field-hint", "Архив содержит ключи модели, вход ChatGPT и сессию Telegram. Храни его у себя. Журналы, ключ окна, модели голоса и подключённые папки остаются на прежней машине."),
-    el("p", "field-hint", `Обратный импорт при закрытой программе: ${importCmd}. Прежняя папка данных останется рядом как data.before-<штамп>.`));
+  details.append(el("summary", "field-label", uiText("ui.ui.kit.window.views.settings.frame.709c03fe68")),
+    el("p", "field-hint", uiText("ui.ui.kit.window.views.settings.frame.c7ce599cdd")),
+    el("p", "field-hint", uiText("ui.ui.kit.window.views.settings.frame.5e8dfa0906", {p0: String(importCmd)})));
   box.append(steps, exportRow, details);
 
   // --- окно к харнессу на сервере
   const remote = el("div");
   remote.style.marginTop = "12px";
-  const remoteToggle = toggle("Подключить окно к агенту на сервере", draft.mode === "remote", (v) => {
+  const remoteToggle = toggle(uiText("ui.ui.kit.window.views.settings.frame.52ae75e074"), draft.mode === "remote", (v) => {
     draft.mode = v ? "remote" : "local";
     syncRemote();
   });
-  const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
+  const baseField = field(uiText("ui.ui.kit.window.views.settings.frame.db17a151fc"), String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "HTTPS-адрес работающего канала. Для переноса на новый VPS используй «Настроить подключения».",
+    hint: uiText("ui.ui.kit.window.views.settings.frame.904b7d082c"),
   });
-  const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
+  const keyField = field(uiText("ui.ui.kit.window.views.settings.frame.4a5a0cbeaa"), String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
     mono: true,
-    hint: "Ключ, который выдала серверная установка. Он даёт этому окну доступ к агенту.",
+    hint: uiText("ui.ui.kit.window.views.settings.frame.0a56711bbd"),
   });
   const remoteNote = el("p", "field-hint");
   const syncRemote = () => {
@@ -1356,13 +1379,13 @@ function transferCard(draft: Config, posix = false): HTMLElement {
     baseField.hidden = !on;
     keyField.hidden = !on;
     remoteNote.textContent = on
-      ? "После сохранения перезапусти окно. Для подключения с проверкой связи используй «Настроить подключения» выше. Если откроешь местную копию, в ней будут данные на момент переноса; сервер продолжит работать."
-      : "Сейчас окно работает с агентом на этом компьютере. Экспорт создаёт копию и сам по себе ничего не переключает.";
+      ? uiText("ui.ui.kit.window.views.settings.frame.ec6e09ac37")
+      : uiText("ui.ui.kit.window.views.settings.frame.779b741909");
   };
   remote.append(remoteToggle, baseField, keyField, remoteNote);
   syncRemote();
   box.append(remote);
-  return card("Перенос", box, "Применяется перезапуском.");
+  return card(uiText("ui.ui.kit.window.views.settings.frame.04120307c4"), box, uiText("ui.ui.kit.window.views.settings.frame.d6da472d31"));
 }
 
 /**
@@ -1379,22 +1402,22 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
   if(!['automatic','stable'].includes(draft.phone.mode || ''))draft.phone.mode = "automatic";
   const remote = !!remoteBase;
   const phone = el("div");
-  const hint = el("p", "field-hint", "Открывай Mini App через своего Telegram-бота: меню или /app каждый раз ведут к текущему подключению. У каждого локального агента должен быть свой бот. Компьютер или сервер с агентом должен оставаться включённым.");
+  const hint = el("p", "field-hint", uiText("ui.ui.kit.window.views.settings.frame.93de73e123"));
   const receipt = el("p", "receipt");
   receipt.setAttribute("aria-live", "polite");
   const checks = el("div", "phone-checks");
-  let status: PhoneState = {state:"waiting",message:"Проверяю вход через бота…"};
+  let status: PhoneState = {state:"waiting",message:uiText("ui.ui.kit.window.views.settings.frame.c2ae8db156")};
   const devicesBox = el("div", "devices");
   const drawDevices = async () => {
     try {
       const rows = await api<Array<{id:string;name:string;created:string}>>("/pair/devices");
       devicesBox.replaceChildren();
       if (!rows.length) return;
-      devicesBox.append(el("p", "field-label", "Подключённые устройства"));
+      devicesBox.append(el("p", "field-label", uiText("ui.ui.kit.window.views.settings.frame.be1cbefc60")));
       for (const device of rows) {
         const row = el("div", "device-row");
         row.append(el("span", "", `${device.name} · ${new Date(device.created).toLocaleDateString("ru-RU")}`));
-        row.append(button("Отвязать", "quiet", async () => {
+        row.append(button(uiText("ui.ui.kit.window.views.settings.frame.7ba56eea85"), "quiet", async () => {
           await post("/pair/revoke", {id:device.id}).catch(e => toast(humanError(e).text));
           void drawDevices();
         }));
@@ -1402,11 +1425,11 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
       }
     } catch { /* existing paired devices stay revocable through the channel */ }
   };
-  const retry = button("Обновить подключение", "quiet", async () => {
+  const retry = button(uiText("ui.ui.kit.window.views.settings.frame.12b40a98ab"), "quiet", async () => {
     await post("/api/phone/retry", {}).catch(e => toast(humanError(e).text));
     void refresh();
   });
-  const botLink = el("a", "btn btn-quiet", "Открыть своего бота");
+  const botLink = el("a", "btn btn-quiet", uiText("ui.ui.kit.window.views.settings.frame.74d51d1a52"));
   botLink.target = "_blank";
   botLink.rel = "noopener noreferrer";
   botLink.hidden = true;
@@ -1414,19 +1437,19 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode &&
       (savedMode!=='stable'||(savedExternal===(draft.phone?.external||'')&&savedBridge===(draft.phone?.bridge_profile||''))));
     const on = remote || !!draft.phone?.enabled;
-    receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved
-      ? "Нажми «Сохранить» — Hélène подготовит вход через бота." : status.message;
+    receipt.textContent = !on ? uiText("ui.ui.kit.window.views.settings.frame.6723fcf24b") : !saved
+      ? uiText("ui.ui.kit.window.views.settings.frame.3b7a4f138d") : status.message;
     receipt.classList.toggle("err", status.state === "error" || status.state === "retry");
     retry.hidden = !saved || !on;
     const validBot = /^https:\/\/t\.me\/[A-Za-z0-9_]+(?:\?start=helene)?$/.test(status.bot_url || '');
     botLink.hidden = !on || !saved || status.telegram !== "ready" || !validBot;
     if (validBot) botLink.href = status.bot_url!;
     checks.replaceChildren();
-    if (on && saved) for (const [key,label] of [['bot','Telegram-бот'],['https','Публичный HTTPS'],['menu','Кнопка бота'],['authorization','Вход владельца']]) {
+    if (on && saved) for (const [key,label] of [['bot',uiText("ui.ui.kit.window.views.settings.frame.33123129a8")],['https',uiText("ui.ui.kit.window.views.settings.frame.b97273e65d")],['menu',uiText("ui.ui.kit.window.views.settings.frame.d6ea7b8001")],['authorization',uiText("ui.ui.kit.window.views.settings.frame.661a9c5f29")]]) {
       const check=status.checks?.[key]; if(!check)continue;
       const row=el('p','receipt');row.classList.toggle('err',['error','retry'].includes(check.state));
-      const at=check.last_attempt ? ` Проверка: ${new Date(check.last_attempt*1000).toLocaleTimeString('ru-RU')}.` : '';
-      const retryAt=check.retry_at && check.retry_at*1000>Date.now() ? ` Повтор: ${new Date(check.retry_at*1000).toLocaleTimeString('ru-RU')}.` : '';
+      const at=check.last_attempt ? uiText("ui.ui.kit.window.views.settings.frame.b17ca685a7", {p0: String(new Date(check.last_attempt*1000).toLocaleTimeString('ru-RU'))}) : '';
+      const retryAt=check.retry_at && check.retry_at*1000>Date.now() ? uiText("ui.ui.kit.window.views.settings.frame.2bca132071", {p0: String(new Date(check.retry_at*1000).toLocaleTimeString('ru-RU'))}) : '';
       row.textContent=`${label}: ${check.message}${at}${retryAt}`;checks.append(row);
     }
   }
@@ -1436,31 +1459,31 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     catch (e) { const error=humanError(e); status={state:"error",message:error.detail || error.text}; }
     sync();
   }
-  const enabled=toggle("Подключать Mini App Telegram", !!draft.phone.enabled, v => { draft.phone!.enabled=v;sync(); });
+  const enabled=toggle(uiText("ui.ui.kit.window.views.settings.frame.ecaf7b4d6a"), !!draft.phone.enabled, v => { draft.phone!.enabled=v;sync(); });
   if (!remote && opts.showToggle!==false) phone.append(enabled);
   if(!remote) {
-    const route=document.createElement('select');route.setAttribute('aria-label','Подключение Mini App');
-    for(const [value,label] of [['automatic','Автоматически через Hélène'],['stable','Постоянный HTTPS-сервер']]) {
+    const route=document.createElement('select');route.setAttribute('aria-label',uiText("ui.ui.kit.window.views.settings.frame.f0589aa2cb"));
+    for(const [value,label] of [['automatic',uiText("ui.ui.kit.window.views.settings.frame.07a12aa6ea")],['stable',uiText("ui.ui.kit.window.views.settings.frame.f9705c60af")]]) {
       const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option);
     }
     route.value=draft.phone.mode || 'automatic';
-    const profiles=el('select','field-input');profiles.setAttribute('aria-label','Подключение сервера для HTTPS');
-    profiles.append(new Option('Свой HTTPS-адрес без встроенного моста',''));
+    const profiles=el('select','field-input');profiles.setAttribute('aria-label',uiText("ui.ui.kit.window.views.settings.frame.025baa7c2a"));
+    profiles.append(new Option(uiText("ui.ui.kit.window.views.settings.frame.bad301da45"),''));
     const profileNote=el('p','receipt');
-    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim();delete draft.phone!.bridge_profile;profiles.value='';sync()},
-      {placeholder:'https://…',hint:'Адрес уже настроенного сервера. Hélène проверяет его и обновляет вход в боте автоматически.'});
+    const fixed=field(uiText("ui.ui.kit.window.views.settings.frame.1c8caa8990"),draft.phone.external || '',value=>{draft.phone!.external=value.trim();delete draft.phone!.bridge_profile;profiles.value='';sync()},
+      {placeholder:'https://…',hint:uiText("ui.ui.kit.window.views.settings.frame.14cf28cced")});
     const stable=el('div');stable.append(profiles,fixed,profileNote);stable.hidden=route.value!=='stable';
     route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;else delete draft.phone!.bridge_profile;stable.hidden=route.value!=='stable';sync()});
     let bridges:ServerBridge[]=[];
     profiles.addEventListener('change',async()=>{
       const selected=bridges.find(value=>value.id===profiles.value);
       if(!selected){delete draft.phone!.bridge_profile;return;}
-      profiles.disabled=true;profileNote.textContent='Проверяю HTTPS и подключение сервера…';
+      profiles.disabled=true;profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.e2d027a902");
       try{
         const checked=await shell<{ok:boolean}>('server_bridge',{action:'check',request:JSON.stringify({id:selected.id})});
-        if(!checked.ok)throw new Error('Подключение не подтверждено. Проверь сервер в разделе программы.');
+        if(!checked.ok)throw new Error(uiText("ui.ui.kit.window.views.settings.frame.19aae8d623"));
         if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected);cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
-        profileNote.textContent='Подключение выбрано. Сохрани настройки.';
+        profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.1f37c24b41");
         profiles.dispatchEvent(new Event('input',{bubbles:true}));
       }catch(error){profiles.value=draft.phone?.bridge_profile||'';profileNote.textContent=humanError(error).text;}
       finally{profiles.disabled=false;}

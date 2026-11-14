@@ -1,3 +1,4 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Тест против одного класса: окно ругается на чужой харнесс.
 //
 // Praxis — это то же окно, но агент живёт НА СЕРВЕРЕ. Настройки же читались из
@@ -38,7 +39,7 @@ const remote = join(desk, "remote", "src");
 
 /** Комментарии — не код: в них те же слова разбираются словами. */
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-const read = (...p) => code(readFileSync(join(...p), "utf8"));
+const read = (...p) => code(resolvedUiLiterals(readFileSync(join(...p), "utf8")));
 
 const frame = read(win, "views", "settings-frame.ts");
 const chrome = read(win, "main.ts");

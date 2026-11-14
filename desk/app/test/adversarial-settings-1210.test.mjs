@@ -1,10 +1,11 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Actual save callbacks and writeConfig, with an isolated config store.
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
-const src = readFileSync(new URL('../../ui-kit/window/views/settings-frame.ts', import.meta.url), 'utf8');
+const src = resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/views/settings-frame.ts', import.meta.url), 'utf8'));
 const dir = mkdtempSync(join(tmpdir(), 'helene-review-settings-'));
 try {
   const normal = src.indexOf('button("Сохранить", "primary", async () => {');

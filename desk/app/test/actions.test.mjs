@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Поведение реального компонента: старый API, ожидание, ошибка, неполный результат.
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";

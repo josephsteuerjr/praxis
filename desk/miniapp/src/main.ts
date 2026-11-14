@@ -1,6 +1,8 @@
+import { t as uiText } from "../../lang/lang";
 // Authenticate first, then load the exact desktop program and its settings.
 import './styles.css';
 import { mountTelegramShell, type TelegramWebApp } from './telegram-shell';
+import { initializeLocale } from '../../lang/lang';
 
 declare global { interface Window { Telegram?: {WebApp?:TelegramWebApp} } }
 const tg=window.Telegram?.WebApp;
@@ -12,22 +14,22 @@ app.hidden=true;
 const login=document.createElement('section');login.className='program-login';
 const title=document.createElement('h1');title.textContent='Hélène';
 const note=document.createElement('p');
-const retry=document.createElement('button');retry.type='button';retry.textContent='Повторить вход';
+const retry=document.createElement('button');retry.type='button';retry.textContent=uiText("ui.miniapp.src.main.6b2057f65a");
 login.append(title,note,retry);document.body.append(login);
 let starting=false;
 async function start() {
   if(starting)return;starting=true;retry.disabled=true;
   try {
-    if(!tg?.initData)throw Error('Открой меню своего Telegram-бота или отправь /app.');
-    note.textContent='Подключаю программу…';
+    if(!tg?.initData)throw Error(uiText("ui.miniapp.src.main.92e90d993c"));
+    note.textContent=uiText("ui.miniapp.src.main.7cb5154f85");
     const response=await fetch(base+'/pair/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
-    if(!response.ok)throw Error(response.status===403?'Вход не подтверждён. Открой меню своего бота заново.':'Программа пока не отвечает. Проверь подключение и повтори вход.');
+    if(!response.ok)throw Error(response.status===403?uiText("ui.miniapp.src.main.5fc728bc66"):uiText("ui.miniapp.src.main.786de8a37e"));
     const paired=await response.json() as {key?:string;agent?:string};
-    if(!paired.key)throw Error('Ключ сеанса не получен. Открой меню бота заново.');
+    if(!paired.key)throw Error(uiText("ui.miniapp.src.main.5aea4f0c9f"));
     let selected=sessionStorage.getItem('helene.program.agent')||'';
     async function call(command:string,args:Record<string,unknown>) {
       const result=await fetch(base+'/api/program/invoke',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+paired.key},body:JSON.stringify({command,arguments:args,...(selected?{agent:selected}:{})})});
-      if(!result.ok)throw Error((await result.text()).trim()||'Программа не ответила на действие.');
+      if(!result.ok)throw Error((await result.text()).trim()||uiText("ui.miniapp.src.main.ece9432817"));
       return result.json();
     }
     async function invoke(command:string,args:Record<string,unknown>={}) {
@@ -39,12 +41,12 @@ async function start() {
         await call('restart_self',{full:true});
         setTimeout(()=>location.reload(),8000);return null;
       }
-      if(command==='voice_shortcuts')return {active:false,error:'В миниаппе сочетания работают внутри открытого окна.'};
+      if(command==='voice_shortcuts')return {active:false,error:uiText("ui.miniapp.src.main.7e67de20b3")};
       if(command==='voice_status'||command==='python_ready')return {ok:true};
       if(command==='open_path'&&/^https?:\/\//i.test(String(args.path||''))){window.open(String(args.path),'_blank','noopener,noreferrer');return null}
       if(command==='open_login_page') {
         const url=await invoke('relay_login_url',args);
-        if(typeof url!=='string'||!url.startsWith('https://'))throw Error('Ссылка входа ещё не готова');
+        if(typeof url!=='string'||!url.startsWith('https://'))throw Error(uiText("ui.miniapp.src.main.3fdd281945"));
         window.open(url,'_blank','noopener,noreferrer');return null;
       }
       const value=await call(command,args);
@@ -58,6 +60,7 @@ async function start() {
     catch(error){if(!selected)throw error;selected='';sessionStorage.removeItem('helene.program.agent');channel=await invoke('program_bootstrap')}
     selected=channel.agent_id;
     window.DESK_CONFIG_OVERRIDE={...channel,base:base+channel.base,key:paired.key,product:'Hélène'};
+    initializeLocale(channel.lang);
     const appearance=await invoke('appearance_read') as {values:Record<string,string>;seen?:string};
     for(const [key,value] of Object.entries(appearance.values||{}))localStorage.setItem(key,value);
     // Look and theme are the owner's preference, shared with the computer's window

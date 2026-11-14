@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Карточки МЕСТНОГО агента: модель, Telegram, ограда рук со службой, песочница,
 // монтирование, управление компьютером, папка данных.
 //
@@ -61,7 +62,7 @@ function providerOf(c: Config): Provider {
 
 function renderModels(box: HTMLElement, models: string[], current: string, pick: (id: string) => void) {
   const known = models.includes(current.trim());
-  const label = known || !models.length ? "Доступные модели" : `Модели «${current.trim() || "…"}» в списке нет. Доступные:`;
+  const label = known || !models.length ? uiText("ui.app.src.settings.agent.6b5b2dcdd5") : uiText("ui.app.src.settings.agent.297baea812", {p0: String(current.trim() || "…")});
   chips(box, models.slice(0, 40).map((value) => ({ value })), current.trim(), pick, label);
 }
 
@@ -130,10 +131,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   pick.setAttribute("role", "radiogroup");
   const panes: Record<Provider, HTMLElement> = { api: el("div"), anthropic: el("div"), chatgpt: el("div"), local: el("div") };
   const items: Array<[Provider, string, string]> = [
-    ["api", "Ключ API", "OpenAI и любой совместимый адрес"],
-    ["anthropic", "Anthropic API", "Anthropic, Z.ai, MiniMax, Kimi и совместимые"],
-    ["chatgpt", "Подписка ChatGPT", "вход через отдельный praxis-relay"],
-    ["local", "Локальная модель", "Ollama или LM Studio на этом ПК"],
+    ["api", uiText("ui.app.src.settings.agent.7a63ad80c1"), uiText("ui.app.src.settings.agent.56f4cbc5fd")],
+    ["anthropic", "Anthropic API", uiText("ui.app.src.settings.agent.5c06578d8c")],
+    ["chatgpt", uiText("ui.app.src.settings.agent.f4a43f895c"), uiText("ui.app.src.settings.agent.a98b31a41c")],
+    ["local", uiText("ui.app.src.settings.agent.1ad4d6964d"), uiText("ui.app.src.settings.agent.bc2889d0ea")],
   ];
   const syncPick = () => {
     for (const b of pick.querySelectorAll<HTMLButtonElement>(".choice-item")) b.setAttribute("aria-checked", String(b.dataset.value === provider));
@@ -162,11 +163,11 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   // gpt-5.2 реле не знает (SUPPORTED_MODELS её не содержит) и PLAN просил её
   // убрать: подставленная вслепую, она уезжала в конфиг как имя несуществующей.
   const apiDraft = { base_url: provider === "api" ? String(draft.model.base_url || "") : "https://api.openai.com/v1", model: provider === "api" ? String(draft.model.model || "") : "gpt-5.4", key: keyOf("api") };
-  const apiModelField = field("Модель", apiDraft.model, (v) => { apiDraft.model = v; syncEffort(); }, { mono: true });
+  const apiModelField = field(uiText("ui.app.src.settings.agent.f3bdf7cce3"), apiDraft.model, (v) => { apiDraft.model = v; syncEffort(); }, { mono: true });
   apiGrid.append(
-    field("Адрес", apiDraft.base_url, (v) => { apiDraft.base_url = v; syncEffort(); }, { mono: true }),
+    field(uiText("ui.app.src.settings.agent.da82e80563"), apiDraft.base_url, (v) => { apiDraft.base_url = v; syncEffort(); }, { mono: true }),
     apiModelField,
-    field("Ключ", apiDraft.key, (v) => (apiDraft.key = v), { type: "password", mono: true }),
+    field(uiText("ui.app.src.settings.agent.248f99a1d2"), apiDraft.key, (v) => (apiDraft.key = v), { type: "password", mono: true }),
   );
   const apiModels = el("div", "models");
   apiModels.hidden = true;
@@ -174,9 +175,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   probeRow.style.marginTop = "12px";
   const probeOut = el("span", "receipt");
   probeRow.append(
-    button("Проверить", "quiet", async () => {
+    button(uiText("ui.app.src.settings.agent.e4424a6df6"), "quiet", async () => {
       probeOut.className = "receipt";
-      probeOut.textContent = "проверяю…";
+      probeOut.textContent = uiText("ui.app.src.settings.agent.1bdd492f1c");
       try {
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: apiDraft.base_url, key: apiDraft.key, framework: "openai", refresh: true });
         probeOut.className = "receipt " + (r.ok ? "ok" : "err");
@@ -198,13 +199,13 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const anthDraft = { base_url: provider === "anthropic" ? String(draft.model.base_url || "") : "https://api.z.ai/api/anthropic", model: provider === "anthropic" ? String(draft.model.model || "") : "glm-5.3", key: keyOf("anthropic") };
   const anthGrid = el("div", "form-grid three");
   anthGrid.style.marginTop = "14px";
-  const anthBase = field("Адрес", anthDraft.base_url, (v) => { anthDraft.base_url = v; syncEffort(); }, { mono: true });
-  const anthModelField = field("Модель", anthDraft.model, (v) => {
+  const anthBase = field(uiText("ui.app.src.settings.agent.da82e80563"), anthDraft.base_url, (v) => { anthDraft.base_url = v; syncEffort(); }, { mono: true });
+  const anthModelField = field(uiText("ui.app.src.settings.agent.f3bdf7cce3"), anthDraft.model, (v) => {
     anthDraft.model = v;
     // Шкала рассуждения зависит от модели (glm-* против остальных).
     syncEffort();
   }, { mono: true });
-  anthGrid.append(anthBase, anthModelField, field("Ключ", anthDraft.key, (v) => (anthDraft.key = v), { type: "password", mono: true, placeholder: "sk-ant-…" }));
+  anthGrid.append(anthBase, anthModelField, field(uiText("ui.app.src.settings.agent.248f99a1d2"), anthDraft.key, (v) => (anthDraft.key = v), { type: "password", mono: true, placeholder: "sk-ant-…" }));
   const anthPresets = el("div", "actions");
   anthPresets.style.marginTop = "12px";
   // Кнопки провайдеров — из общей таблицы (ui-kit/providers.ts): адрес, модель
@@ -227,9 +228,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   anthModels.hidden = true;
   const anthOut = el("span", "receipt");
   anthPresets.append(
-    button("Проверить", "quiet", async () => {
+    button(uiText("ui.app.src.settings.agent.e4424a6df6"), "quiet", async () => {
       anthOut.className = "receipt";
-      anthOut.textContent = "проверяю…";
+      anthOut.textContent = uiText("ui.app.src.settings.agent.1bdd492f1c");
       try {
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: anthDraft.base_url, key: anthDraft.key, framework: "anthropic", refresh: true });
         anthOut.className = "receipt " + (r.ok ? "ok" : "err");
@@ -242,7 +243,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }),
     anthOut,
   );
-  panes.anthropic.append(anthGrid, anthPresets, presetNote, anthModels, el("p", "field-hint", "Все эти провайдеры говорят на протоколе Anthropic Messages: кнопка подставляет адрес и модель, ключ — из кабинета провайдера. Проверка спросит список моделей, если сервер его отдаёт."));
+  panes.anthropic.append(anthGrid, anthPresets, presetNote, anthModels, el("p", "field-hint", uiText("ui.app.src.settings.agent.bf696eb271")));
 
   const subscriptions = relayAccounts();
   const relayConnection = relayProxy(draft.relay?.proxy);
@@ -250,43 +251,43 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   let bridgeRoute=draft.network?.bridge_profile ? JSON.stringify(applicationConnection.collect()) : '';
   const relayRefresh = subscriptions.refresh;
   let relayExecutable=String(draft.relay?.executable||'');
-  const relayExecutableField=field('Путь к отдельному praxis-relay',relayExecutable,v=>{relayExecutable=v;},{placeholder:'Автоматически после установки компонента'});
+  const relayExecutableField=field(uiText("ui.app.src.settings.agent.536d9e28d6"),relayExecutable,v=>{relayExecutable=v;},{placeholder:uiText("ui.app.src.settings.agent.2c3cfbf2db")});
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
   let codexModels: ModelDetails[] = [];
   let catalogLoading = false;
   let catalogGeneration = 0;
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
-  const chatgptModelField = field("Модель", chatgptDraft.model, (v) => {chatgptDraft.model = v;syncEffort();syncFastMode();}, { mono: true });
+  const chatgptModelField = field(uiText("ui.app.src.settings.agent.f3bdf7cce3"), chatgptDraft.model, (v) => {chatgptDraft.model = v;syncEffort();syncFastMode();}, { mono: true });
   chatgptGrid.append(chatgptModelField);
   const chatgptModels = el("div", "models");
   chatgptModels.hidden = true;
   const chatgptProbeRow = el("div", "actions");
   const chatgptProbeOut = el("span", "receipt");
   chatgptProbeRow.append(
-    button("Обновить модели", "quiet", async () => {
+    button(uiText("ui.app.src.settings.agent.38d48e4be9"), "quiet", async () => {
       await relayRefresh();
       await loadCodexModels(true);
     }),
     chatgptProbeOut,
   );
-  panes.chatgpt.append(el("p", "field-hint", "Реле ходит в ChatGPT по подписке и поднимается само, когда подписка сохранена основным провайдером. Вход открывает браузер; после входа ключ не нужен."), chatgptGrid, chatgptProbeRow, chatgptModels);
+  panes.chatgpt.append(el("p", "field-hint", uiText("ui.app.src.settings.agent.4b1ac868c0")), chatgptGrid, chatgptProbeRow, chatgptModels);
 
   const localGrid = el("div", "form-grid three");
   localGrid.style.marginTop = "14px";
   const localDraft = { base_url: provider === "local" ? String(draft.model.base_url || "") : "http://127.0.0.1:11434/v1", model: provider === "local" ? String(draft.model.model || "") : "", key: keyOf("local") };
-  const localModelField = field("Модель", localDraft.model, (v) => { localDraft.model = v; syncEffort(); }, { mono: true, placeholder: "например, qwen3:14b" });
-  localGrid.append(field("Адрес", localDraft.base_url, (v) => (localDraft.base_url = v), { mono: true }), localModelField,
-    field("Ключ (если требуется)", localDraft.key === "local" ? "" : localDraft.key, (v) => (localDraft.key = v), { type: "password", mono: true, placeholder: "пусто — без авторизации" }));
+  const localModelField = field(uiText("ui.app.src.settings.agent.f3bdf7cce3"), localDraft.model, (v) => { localDraft.model = v; syncEffort(); }, { mono: true, placeholder: uiText("ui.app.src.settings.agent.ae5036bd22") });
+  localGrid.append(field(uiText("ui.app.src.settings.agent.da82e80563"), localDraft.base_url, (v) => (localDraft.base_url = v), { mono: true }), localModelField,
+    field(uiText("ui.app.src.settings.agent.2d92d28b90"), localDraft.key === "local" ? "" : localDraft.key, (v) => (localDraft.key = v), { type: "password", mono: true, placeholder: uiText("ui.app.src.settings.agent.9c1f6f097d") }));
   const localModels = el("div", "models");
   localModels.hidden = true;
   const localProbeRow = el("div", "actions");
   localProbeRow.style.marginTop = "12px";
   const localProbeOut = el("span", "receipt");
   localProbeRow.append(
-    button("Показать модели", "quiet", async () => {
+    button(uiText("ui.app.src.settings.agent.b46e85648e"), "quiet", async () => {
       localProbeOut.className = "receipt";
-      localProbeOut.textContent = "спрашиваю…";
+      localProbeOut.textContent = uiText("ui.app.src.settings.agent.25cd3cf450");
       try {
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: localDraft.base_url, key: localDraft.key === "local" ? "" : localDraft.key, framework: "openai", refresh: true });
         localProbeOut.className = "receipt " + (r.ok ? "ok" : "err");
@@ -302,7 +303,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }),
     localProbeOut,
   );
-  panes.local.append(localGrid, localProbeRow, localModels, el("p", "field-hint", "Ollama, LM Studio или другое совместимое реле. Ключ сохраняется отдельно; пустой подходит только серверу без авторизации. Реле ChatGPT выбирается отдельной вкладкой."));
+  panes.local.append(localGrid, localProbeRow, localModels, el("p", "field-hint", uiText("ui.app.src.settings.agent.1bba7d3ef3")));
   let effort = String(draft.model.reasoning_effort || "");
   let effortChanged = false;
   const effortRow = el("div", "models");
@@ -320,7 +321,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     const current = () => generation === catalogGeneration && provider === 'chatgpt'
       && baseUrl === relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT);
     catalogLoading = true;
-    if (refresh) { chatgptProbeOut.className = 'receipt'; chatgptProbeOut.textContent = 'спрашиваю реле…'; }
+    if (refresh) { chatgptProbeOut.className = 'receipt'; chatgptProbeOut.textContent = uiText("ui.app.src.settings.agent.85fd6f5cbe"); }
     try {
       // The public relay catalog needs no key; the port may belong to another process.
       const response = await shell<{ok:boolean; note:string; cached?:boolean; models?:string[]; model_details?:ModelDetails[]}>('probe_model', {
@@ -336,8 +337,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       }
       chatgptProbeOut.className = 'receipt' + (!response.ok && savedProvider === 'chatgpt' ? ' err' : '');
       chatgptProbeOut.textContent = response.cached ? response.note : response.ok
-        ? response.note + (subscriptions.authorized() ? ' Вход сохранён; доступ к модели проверяется при запросе.' : ' Вход в ChatGPT не подтверждён.')
-        : savedProvider !== 'chatgpt' ? 'Сначала войди в ChatGPT и сохрани выбор подписки: реле запустится автоматически.' : response.note;
+        ? response.note + (subscriptions.authorized() ? uiText("ui.app.src.settings.agent.f99b5ef471") : uiText("ui.app.src.settings.agent.471c71eab9"))
+        : savedProvider !== 'chatgpt' ? uiText("ui.app.src.settings.agent.6107241cf5") : response.note;
     } catch (error) {
       if (current()) { chatgptProbeOut.className = 'receipt err'; chatgptProbeOut.textContent = humanError(error).text; }
     } finally { if (generation === catalogGeneration) catalogLoading = false; }
@@ -350,7 +351,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   });
   const syncEffort = () => {
     const plan = effortPlan(provider, modelForEffort(), urlForEffort(), codexEfforts());
-    effortRow.replaceChildren(el("span", "models-label", "Усилие рассуждения"));
+    effortRow.replaceChildren(el("span", "models-label", uiText("ui.app.src.settings.agent.0cd8556749")));
     for (const { value, label } of plan.chips) {
       const chip = el("button", "model-chip", label);
       chip.type = "button";
@@ -363,14 +364,14 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       effortRow.append(chip);
     }
     if (!plan.chips.length) {
-      effortRow.append(el("span", "receipt", "шкала этого адреса не подтверждена"));
-      if (effort) effortRow.append(button('По умолчанию', 'quiet', () => {
+      effortRow.append(el("span", "receipt", uiText("ui.app.src.settings.agent.7e59230022")));
+      if (effort) effortRow.append(button(uiText("ui.app.src.settings.agent.fd0560ebbf"), 'quiet', () => {
         effort = '';effortChanged = true;syncEffort();
       }));
     }
     effortHint.textContent = plan.hint + (provider === 'chatgpt' && effort === 'none'
-      ? ' В старой настройке сохранено «none». Сейчас применяется рассуждение модели по умолчанию.'
-      : effort && !plan.chips.some((chip) => chip.value === effort) ? ` Сохранённое значение «${effort}» останется, пока ты его не изменишь.` : '');
+      ? uiText("ui.app.src.settings.agent.e62185e674")
+      : effort && !plan.chips.some((chip) => chip.value === effort) ? uiText("ui.app.src.settings.agent.addd346de3", {p0: String(effort)}) : '');
   };
   let serviceTier = String(draft.model.service_tier || '');
   let serviceTierChanged = false;
@@ -382,22 +383,22 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const syncFastMode = () => {
     fastMode.hidden = provider !== 'chatgpt';
     const available = fastAvailable();
-    const options = serviceTierChoices(serviceTier, 'По настройке провайдера', available === true);
+    const options = serviceTierChoices(serviceTier, uiText("ui.app.src.settings.agent.cfab7eeca6"), available === true);
     const pick = choice(options.map(([value, title]) => ({
       value, title,
-      text: value === '' ? 'Сохранить выбор сервера' : value === 'default' ? 'Запросить обычную обработку'
-        : ['priority', 'fast'].includes(value) ? 'Запросить ускоренную обработку' : 'Оставить текущий выбор',
+      text: value === '' ? uiText("ui.app.src.settings.agent.e9c10d614f") : value === 'default' ? uiText("ui.app.src.settings.agent.262c715723")
+        : ['priority', 'fast'].includes(value) ? uiText("ui.app.src.settings.agent.bf4af9f5ad") : uiText("ui.app.src.settings.agent.2cc38d072b"),
     })), serviceTier, value => {serviceTier = value;serviceTierChanged = true;syncFastMode();});
-    pick.el.setAttribute('aria-label', 'Скорость обработки модели');
+    pick.el.setAttribute('aria-label', uiText("ui.app.src.settings.agent.c081cbfe41"));
     pick.el.style.setProperty('--fast-mode-columns', String(options.length));
     fastChoices.replaceChildren(pick.el);
     fastHint.textContent = FAST_MODE_HINT + (available === null
-      ? ' Каталог ещё не подтвердил ускорение для выбранной модели.' : available === false
-        ? ' Выбранная модель не объявила поддержку Fast mode.'
-        : ' Выбранный режим будет запрошен для ответов и шагов управления компьютером.');
-    if (available !== true && ['priority','fast'].includes(serviceTier)) fastHint.textContent += ' Сохранён запрос Fast mode. Его можно снять обычным режимом или настройкой провайдера.';
+      ? uiText("ui.app.src.settings.agent.662a16b1bb") : available === false
+        ? uiText("ui.app.src.settings.agent.926cda0497")
+        : uiText("ui.app.src.settings.agent.692bc1c9c0"));
+    if (available !== true && ['priority','fast'].includes(serviceTier)) fastHint.textContent += uiText("ui.app.src.settings.agent.67240e13da");
   };
-  fastMode.append(el('h4', '', 'Скорость обработки'), fastChoices, fastHint,
+  fastMode.append(el('h4', '', uiText("ui.app.src.settings.agent.0a2afcf188")), fastChoices, fastHint,
     el('p', 'receipt', serviceTierReceipt(S.agentState?.brain?.service_tier_actual)));
   // Запасная и зрячая модели — ручки того же блока `model`, общие для всех провайдеров.
   // До 09.09 их можно было задать только правкой helene.json руками (boot.py их переносил,
@@ -419,12 +420,12 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     for (const b of sparePick.querySelectorAll<HTMLButtonElement>(".choice-item")) b.setAttribute("aria-checked", String(b.dataset.value === spare));
     for (const [k, pane] of Object.entries(sparePanes)) pane.hidden = k !== spare;
     spareOtherHint.textContent =
-      "Запасной хранит собственный адрес, ключ и протокол независимо от основного. Можно выбрать другой сервер того же протокола.";
+      uiText("ui.app.src.settings.agent.3a33f132d0");
   };
   for (const [value, title, text] of [
-    ["none", "Нет", "упала основная — ход не состоится"],
-    ["same", "Модель того же провайдера", "тот же адрес и ключ, другое имя модели"],
-    ["other", "Другой провайдер", "свой адрес, ключ и протокол"],
+    ["none", uiText("ui.app.src.settings.agent.43e5ab70f6"), uiText("ui.app.src.settings.agent.d1a6df0c8f")],
+    ["same", uiText("ui.app.src.settings.agent.9f0bafeb36"), uiText("ui.app.src.settings.agent.8b85f1bc67")],
+    ["other", uiText("ui.app.src.settings.agent.55cd8f709c"), uiText("ui.app.src.settings.agent.7a15b10009")],
   ] as Array<[Spare, string, string]>) {
     const b = el("button", "choice-item");
     b.type = "button";
@@ -446,31 +447,31 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   }
   // Одно значение — два поля (на разных панелях): ввод в одном отражается в другом,
   // иначе экран показывал старое имя, а сохранялось новое (ревью 25.09, A7 F5).
-  const spareModelSame = field("Запасная модель", fallbackModel, (v) => { fallbackModel = v; setField(spareModelOther, v); }, { mono: true, placeholder: "например, gpt-5.6-luna" });
-  const spareModelOther = field("Модель запасного", fallbackModel, (v) => { fallbackModel = v; setField(spareModelSame, v); }, { mono: true, placeholder: "например, glm-5.3" });
+  const spareModelSame = field(uiText("ui.app.src.settings.agent.af919964b2"), fallbackModel, (v) => { fallbackModel = v; setField(spareModelOther, v); }, { mono: true, placeholder: uiText("ui.app.src.settings.agent.ae0363ff9c") });
+  const spareModelOther = field(uiText("ui.app.src.settings.agent.d86d4e3fe9"), fallbackModel, (v) => { fallbackModel = v; setField(spareModelSame, v); }, { mono: true, placeholder: uiText("ui.app.src.settings.agent.5a255c9ad4") });
   sparePanes.same.append(spareModelSame);
-  const spareKeyField = field("Ключ запасного", spareKey, (v) => (spareKey = v), { mono: true, type: "password", placeholder: "ключ провайдера" });
-  const spareUrlField = field("Адрес запасного", spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" });
+  const spareKeyField = field(uiText("ui.app.src.settings.agent.8171c96f1e"), spareKey, (v) => (spareKey = v), { mono: true, type: "password", placeholder: uiText("ui.app.src.settings.agent.97ed6f7914") });
+  const spareUrlField = field(uiText("ui.app.src.settings.agent.38bc01d850"), spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" });
   const spareGridOther = el("div", "form-grid two");
   spareGridOther.append(spareUrlField, spareModelOther);
   const spareProtocol = el("div", "models");
-  const syncSpareProtocol = () => chips(spareProtocol, [{ value: "openai", label: "OpenAI-совместимый" }, { value: "anthropic", label: "Anthropic Messages" }], spareFramework,
-    (value) => { spareFramework = value; syncSpareProtocol(); }, "Протокол запасного");
+  const syncSpareProtocol = () => chips(spareProtocol, [{ value: "openai", label: uiText("ui.app.src.settings.agent.4254b12e13") }, { value: "anthropic", label: "Anthropic Messages" }], spareFramework,
+    (value) => { spareFramework = value; syncSpareProtocol(); }, uiText("ui.app.src.settings.agent.8374fd9384"));
   syncSpareProtocol();
   sparePanes.other.append(spareProtocol, spareGridOther, spareKeyField, spareOtherHint);
   const spareBox = el("div");
   spareBox.style.marginTop = "14px";
-  spareBox.append(el("span", "models-label", "Запасной провайдер"), sparePick, sparePanes.none, sparePanes.same, sparePanes.other);
+  spareBox.append(el("span", "models-label", uiText("ui.app.src.settings.agent.8090aa36c9")), sparePick, sparePanes.none, sparePanes.same, sparePanes.other);
   const visionGrid = el("div", "form-grid two");
   visionGrid.style.marginTop = "14px";
   visionGrid.append(
-    field("Зрячая модель", visionModel, (v) => (visionModel = v), { mono: true, placeholder: "пусто — по каталогу провайдера" }),
+    field(uiText("ui.app.src.settings.agent.7597a9977e"), visionModel, (v) => (visionModel = v), { mono: true, placeholder: uiText("ui.app.src.settings.agent.bbeb712006") }),
   );
   const spareHint = el("p", "field-hint",
-    "Запасной берёт ход, когда основная упала (обрыв, 5xx, пустой ответ) или подписка исчерпала окно — тогда ходы идут " +
-    "к запасному до часа восстановления, а окно говорит «подписка исчерпана до ЧЧ:ММ». " +
-    "Зрячая модель получает ход, в котором есть картинка, если основная её не видит; без поля берётся зрячая из каталога " +
-    "того же провайдера. Переключение происходит до вызова, роль и усилие не меняются.");
+    uiText("ui.app.src.settings.agent.4e893efc20") +
+    uiText("ui.app.src.settings.agent.50407323dd") +
+    uiText("ui.app.src.settings.agent.00aeea1710") +
+    uiText("ui.app.src.settings.agent.d107a580b1"));
   spareHint.style.marginTop = "8px";
   model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, fastMode, spareBox, visionGrid, spareHint);
   syncSpare();
@@ -478,10 +479,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   syncEffort();
   syncFastMode();
   if (provider === 'chatgpt') void loadCodexModels();
-  cards.push(inGroup(card("Модель", model), GROUP.brain));
+  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.f3bdf7cce3"), model), GROUP.brain));
   const subscriptionBody = el("div");
   subscriptionBody.append(subscriptions.element, relayConnection.element, relayExecutableField);
-  cards.push(inGroup(card("Подписки и реле", subscriptionBody), GROUP.brain));
+  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.4738e3ba9f"), subscriptionBody), GROUP.brain));
 
   // --- Telegram: бот или свой аккаунт агента
   const tgBox = el("div");
@@ -495,8 +496,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     tgPanes.account.hidden = tgMode !== "account";
   };
   for (const [value, title, text] of [
-    ["bot", "Бот", "токен от @BotFather, самый простой путь"],
-    ["account", "Свой аккаунт", "отдельный номер для агента, MTProto"],
+    ["bot", uiText("ui.app.src.settings.agent.aa691043b4"), uiText("ui.app.src.settings.agent.17b753a432")],
+    ["account", uiText("ui.app.src.settings.agent.df83af3f5c"), uiText("ui.app.src.settings.agent.e21a21393e")],
   ] as Array<["bot" | "account", string, string]>) {
     const b = el("button", "choice-item");
     b.type = "button";
@@ -517,41 +518,41 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const syncTgWarn = () => {
     const hasToken = !!String(draft.telegram!.bot_token || "").trim();
     tgWarn.hidden = !hasToken || ownerIdOk(draft.telegram!.owner_id);
-    tgWarn.textContent = "Токен есть, а твоего id нет: ход разрешён только владельцу, и без id бот будет молчать на всё. Узнать id: напиши @userinfobot — он ответит числом.";
+    tgWarn.textContent = uiText("ui.app.src.settings.agent.d3e9a16fbc");
   };
-  const ownerField = field("Твой Telegram id", String(draft.telegram.owner_id || "") === "0" ? "" : String(draft.telegram.owner_id || ""), (v) => {
+  const ownerField = field(uiText("ui.app.src.settings.agent.add56e0ee1"), String(draft.telegram.owner_id || "") === "0" ? "" : String(draft.telegram.owner_id || ""), (v) => {
     draft.telegram!.owner_id = v;
     syncTgWarn();
-  }, { mono: true, placeholder: "число, узнать у @userinfobot" });
+  }, { mono: true, placeholder: uiText("ui.app.src.settings.agent.cc5a073f3a") });
   const tg = el("div", "form-grid two");
   tg.style.marginTop = "14px";
-  tg.append(field("Токен бота", String(draft.telegram.bot_token || ""), (v) => {
+  tg.append(field(uiText("ui.app.src.settings.agent.81ff0c1357"), String(draft.telegram.bot_token || ""), (v) => {
     draft.telegram!.bot_token = v;
     syncTgWarn();
-  }, { type: "password", mono: true, placeholder: "от @BotFather" }));
-  tgPanes.bot.append(tg, tgWarn, el("p", "field-hint", "Бот — вторая дверь к агенту. Без токена агент живёт только в окне."));
+  }, { type: "password", mono: true, placeholder: uiText("ui.app.src.settings.agent.978a4520dd") }));
+  tgPanes.bot.append(tg, tgWarn, el("p", "field-hint", uiText("ui.app.src.settings.agent.0c7f16d9c4")));
   syncTgWarn();
   // 25.09 (F): «печатает…» идёт всё время хода само; пост «думаю (ЧЧ:ММ)…» у долгого
   // хода — по желанию владельца, для бота и для аккаунта одинаково.
   let tgStatus = draft.telegram.status_message === true;
-  const tgStatusRow = toggle("Пост «думаю…» у долгого хода", tgStatus, (v) => (tgStatus = v));
+  const tgStatusRow = toggle(uiText("ui.app.src.settings.agent.5ccc0495ca"), tgStatus, (v) => (tgStatus = v));
   tgStatusRow.style.marginTop = "14px";
   const tgStatusHint = el("p", "field-hint",
-    "«Печатает…» видно всё время хода и так. Если включить, через 20 секунд хода агент оставит в чате пост " +
-    "«думаю (ЧЧ:ММ)…», раз в минуту будет его править, пока никто не написал следом, и уберёт перед ответом; " +
-    "если ход не состоялся — напишет в нём «не вышло: …».");
+    uiText("ui.app.src.settings.agent.fe33ded2dc") +
+    uiText("ui.app.src.settings.agent.c2f5f3e04a") +
+    uiText("ui.app.src.settings.agent.4e128cf327"));
   const acc = el("div", "form-grid three");
   acc.style.marginTop = "14px";
   acc.append(
-    field("api_id", String(draft.telegram.api_id || ""), (v) => (draft.telegram!.api_id = v), { mono: true, placeholder: "с my.telegram.org" }),
+    field("api_id", String(draft.telegram.api_id || ""), (v) => (draft.telegram!.api_id = v), { mono: true, placeholder: uiText("ui.app.src.settings.agent.11dcb377b6") }),
     field("api_hash", String(draft.telegram.api_hash || ""), (v) => (draft.telegram!.api_hash = v), { type: "password", mono: true }),
-    field("Телефон агента", String(draft.telegram.phone || ""), (v) => (draft.telegram!.phone = v), { mono: true, placeholder: "+7…" }),
+    field(uiText("ui.app.src.settings.agent.bb974ed212"), String(draft.telegram.phone || ""), (v) => (draft.telegram!.phone = v), { mono: true, placeholder: "+7…" }),
   );
   const accRow = el("div", "actions");
   accRow.style.marginTop = "12px";
   const accOut = el("span", "receipt");
-  const codeField = field("Код из Telegram", "", (v) => (accCode = v), { mono: true, placeholder: "12345" });
-  const passField = field("Облачный пароль, если есть", "", (v) => (accPass = v), { type: "password", mono: true });
+  const codeField = field(uiText("ui.app.src.settings.agent.1b82d4050f"), "", (v) => (accCode = v), { mono: true, placeholder: "12345" });
+  const passField = field(uiText("ui.app.src.settings.agent.27a75cd4c2"), "", (v) => (accPass = v), { type: "password", mono: true });
   let accCode = "";
   let accPass = "";
   const codeGrid = el("div", "form-grid two");
@@ -560,7 +561,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   codeGrid.hidden = true;
   const accCall = async (step: string) => {
     accOut.className = "receipt";
-    accOut.textContent = "спрашиваю Telegram…";
+    accOut.textContent = uiText("ui.app.src.settings.agent.687c343dbb");
     try {
       const r = await shell<{ ok: boolean; state?: string; username?: string; name?: string; error?: string }>("telegram_account", {
         step,
@@ -572,17 +573,17 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       });
       if (r.state === "authorized") {
         accOut.className = "receipt ok";
-        accOut.textContent = `Вошла: ${r.name || ""} ${r.username ? "@" + r.username : ""}`.trim();
+        accOut.textContent = uiText("ui.app.src.settings.agent.785fb51f7a", {p0: String(r.name || ""), p1: String(r.username ? "@" + r.username : "")}).trim();
         codeGrid.hidden = true;
       } else if (r.state === "code_sent" || r.state === "password_needed") {
         accOut.className = "receipt " + (r.ok ? "" : "err");
-        accOut.textContent = r.error || "Код отправлен в Telegram агента — введи его ниже";
+        accOut.textContent = r.error || uiText("ui.app.src.settings.agent.26186923a4");
         codeGrid.hidden = false;
       } else if (r.ok) {
-        accOut.textContent = "Вход ещё не выполнен";
+        accOut.textContent = uiText("ui.app.src.settings.agent.5382269d78");
       } else {
         accOut.className = "receipt err";
-        accOut.textContent = r.error || "не вышло";
+        accOut.textContent = r.error || uiText("ui.app.src.settings.agent.8735f485c3");
       }
     } catch (e) {
       accOut.className = "receipt err";
@@ -590,43 +591,43 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }
   };
   accRow.append(
-    button("Получить код", "quiet", () => void accCall("send")),
-    button("Войти с кодом", "primary", () => void accCall("code")),
-    button("Выйти", "quiet", () => void accCall("logout")),
+    button(uiText("ui.app.src.settings.agent.94b683c81c"), "quiet", () => void accCall("send")),
+    button(uiText("ui.app.src.settings.agent.af4aafe264"), "primary", () => void accCall("code")),
+    button(uiText("ui.app.src.settings.agent.5690c2e63b"), "quiet", () => void accCall("logout")),
     accOut,
   );
   tgPanes.account.append(
     acc,
     accRow,
     codeGrid,
-    el("p", "field-hint", "Агент говорит из своего аккаунта Telegram, как человек: нужен отдельный номер и ключи приложения с my.telegram.org. Вход один раз; сессия лежит в data/telegram. Применяется перезапуском."),
+    el("p", "field-hint", uiText("ui.app.src.settings.agent.be67c540d7")),
   );
   const tgProxy = { ...(draft.telegram.proxy || {}) };
   const proxyFields = el("div", "form-grid two");
   proxyFields.style.marginTop = "12px";
   proxyFields.hidden = !tgProxy.enabled;
   proxyFields.append(
-    field("Адрес сервера", String(tgProxy.url || ""), (v) => (tgProxy.url = v), { mono: true, placeholder: "https://…/helene/telegram" }),
-    field("Ключ доступа", String(tgProxy.key || ""), (v) => (tgProxy.key = v), { type: "password", mono: true }),
+    field(uiText("ui.app.src.settings.agent.4289b17137"), String(tgProxy.url || ""), (v) => (tgProxy.url = v), { mono: true, placeholder: "https://…/helene/telegram" }),
+    field(uiText("ui.app.src.settings.agent.8d611c515e"), String(tgProxy.key || ""), (v) => (tgProxy.key = v), { type: "password", mono: true }),
   );
-  const proxyToggle = toggle("Telegram через сервер", tgProxy.enabled === true, (v) => {
+  const proxyToggle = toggle(uiText("ui.app.src.settings.agent.e9efc66e29"), tgProxy.enabled === true, (v) => {
     tgProxy.enabled = v;
     proxyFields.hidden = !v;
   });
   proxyToggle.style.marginTop = "14px";
   const admission = String(draft.telegram.allow_from || "owner");
   const admissionHint = el("p", "field-hint", admission === "any"
-    ? "Запускать ход обращением в Telegram могут все участники. Аварийный стоп /panic принимает только владельца."
+    ? uiText("ui.app.src.settings.agent.506a3cd2c5")
     : admission === "listed"
-      ? "Запускать ход обращением могут владелец и участники из telegram.allowed_ids. Остальные сообщения сохраняются как контекст."
-      : "Сейчас запускать ход обращением в Telegram может только владелец. Сообщения других участников сохраняются как контекст; даже имя агента само по себе не запускает ответ.");
-  tgBox.append(el("p", "field-hint", "Подключение Telegram (бот или аккаунт, владелец, прокси) применится перезапуском движка: нажми «Сохранить», затем «Перезапустить движок». Кто может запускать ход — применяется сразу после сохранения."),
+      ? uiText("ui.app.src.settings.agent.48413fbfa0")
+      : uiText("ui.app.src.settings.agent.1bb7ba6826"));
+  tgBox.append(el("p", "field-hint", uiText("ui.app.src.settings.agent.16bcc4fad4")),
     admissionHint, tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
-    proxyToggle, proxyFields, el("p", "field-hint", "Сообщения и сессия остаются у агента. Сервер помогает Telegram подключиться без VPN. Сохрани настройки перед входом в аккаунт; новый маршрут применяется перезапуском движка."));
+    proxyToggle, proxyFields, el("p", "field-hint", uiText("ui.app.src.settings.agent.89574bde85")));
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
-  cards.push(inGroup(card("Сеть Telegram и Mini App", applicationConnection.element), GROUP.brain));
+  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.e2d6eafc73"), applicationConnection.element), GROUP.brain));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
   //
@@ -660,7 +661,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
   const sb = el("div");
-  const sbNet = toggle("Сеть из shell", draft.sandbox.network !== false, (v) => (draft.sandbox!.network = v));
+  const sbNet = toggle(uiText("ui.app.src.settings.agent.85a434ef5b"), draft.sandbox.network !== false, (v) => (draft.sandbox!.network = v));
   /**
    * Строка состояния ограды — БЕЗ единого утверждения о том, что ограда накрывает.
    *
@@ -676,16 +677,16 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
    * делает соседний тумблер.
    */
   function syncSandboxState(on: boolean, title: string) {
-    const named = title ? `«${title}»` : "выбранный режим";
+    const named = title ? `«${title}»` : uiText("ui.app.src.settings.agent.1c24c840bf");
     sandboxState.textContent = on
-      ? `Ограду ставит ${named} — что она накрывает, написано в карточке «Режим» выше. ` +
-        "Тумблер ниже решает, пустят ли команды агента в интернет из контейнера."
-      : `${title ? named : "Выбранный режим"} ограду не ставит: файлы и команды идут с твоими правами. ` +
-        "Тумблер ниже подействует только в песочнице.";
+      ? uiText("ui.app.src.settings.agent.ecafcb84c0", {p0: String(named)}) +
+        uiText("ui.app.src.settings.agent.24c1c51f5f")
+      : uiText("ui.app.src.settings.agent.02f924ff86", {p0: String(title ? named : uiText("ui.app.src.settings.agent.5d265c97f2"))}) +
+        uiText("ui.app.src.settings.agent.56aa937c86");
   }
   syncSandboxState(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false, mode.title());
   sb.append(sandboxState, sbNet);
-  cards.push(inGroup(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."), GROUP.rights));
+  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.060a298fa5"), sb, uiText("ui.app.src.settings.agent.10586395f2")), GROUP.rights));
 
   // --- монтирование: папки владельца, открытые агенту сверх его дома
   //
@@ -745,17 +746,17 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const homeRow = el("div", "actions");
   homeRow.append(
     el("span", "mono", loaded.tree),
-    button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
+    button(uiText("ui.app.src.settings.agent.cfbf342a29"), "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
   const soulRow = el("div", "actions");
   soulRow.style.marginTop = "8px";
   soulRow.append(
-    el("span", "field-hint", "Конституция:"),
+    el("span", "field-hint", uiText("ui.app.src.settings.agent.f2d87affaf")),
     el("span", "mono", soulPath),
-    button("Показать файл", "quiet", () => void shell("open_path", { path: soulPath }).catch((e) => toast(humanError(e).text))),
+    button(uiText("ui.app.src.settings.agent.7d0c4f43dc"), "quiet", () => void shell("open_path", { path: soulPath }).catch((e) => toast(humanError(e).text))),
   );
   data.append(homeRow, soulRow);
-  cards.push(inGroup(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."), GROUP.agent));
+  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.377f7639c2"), data, uiText("ui.app.src.settings.agent.1f0b5f9639")), GROUP.agent));
 
   return {
     cards,
@@ -770,17 +771,17 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     // смонтированные папки и управление компьютером. До этого они лежали в
     // общем списке из четырнадцати, вперемешку с моделью и телефоном.
     groups: [
-      { id: GROUP.agent, label: "Агент" },
-      { id: GROUP.brain, label: "Мозг и связь" },
-      { id: GROUP.rights, label: "Права на этом ПК" },
-      { id: GROUP.app, label: "Программа" },
-      { id: GROUP.look, label: "Вид" },
+      { id: GROUP.agent, label: uiText("ui.app.src.settings.agent.d5fd08be28") },
+      { id: GROUP.brain, label: uiText("ui.app.src.settings.agent.962dca1688") },
+      { id: GROUP.rights, label: uiText("ui.app.src.settings.agent.6a1fcd29f4") },
+      { id: GROUP.app, label: uiText("ui.app.src.settings.agent.075f39ec5a") },
+      { id: GROUP.look, label: uiText("ui.app.src.settings.agent.9022ba3739") },
     ],
     // Подпись у изданий разная: здесь имя агента правит того, кто живёт рядом.
     namesHint:
-      "Имя агента войдёт в подписи и в снимок состояния; имя владельца нужно агенту, чтобы знать, чьё слово решает. " +
-      "Конституция агента этим не меняется: имена в ней он написал при рождении, и правит их только он сам или ты руками — " +
-      "раздел «Файлы», soul/SOUL.md.",
+      uiText("ui.app.src.settings.agent.cb04782310") +
+      uiText("ui.app.src.settings.agent.754eadeb96") +
+      uiText("ui.app.src.settings.agent.954cdace82"),
     // Телефон подключается к ЭТОЙ машине: харнесс здесь.
     phoneBase: "",
     qrSvg: (text: string) =>
@@ -875,7 +876,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         const selectedPlan = effortPlan(provider, modelForEffort(), urlForEffort(), codexEfforts());
         const routeChanged = provider !== savedModelProvider || modelForEffort().trim() !== savedModelName;
         if ((routeChanged || effortChanged) && effort && !selectedPlan.chips.some(chip => chip.value === effort)) {
-          return 'Выбери допустимое усилие для новой модели или «По умолчанию». Сохранённая ступень не подходит выбранному маршруту.';
+          return uiText("ui.app.src.settings.agent.8ffdce2974");
         }
         const effortOut = effortChanged ? clampEffort(provider, modelForEffort(), effort, urlForEffort(), codexEfforts()) : effort;
         if (effortOut) out.model.reasoning_effort = effortOut;
@@ -890,7 +891,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         if (spare === "other" && !fallbackModel.trim()) {
           // Адрес и ключ без имени модели раньше сохранялись молча БЕЗ запасного —
           // введённый ключ пропадал без слова (ревью 25.09, A7 F6).
-          return "Запасному провайдеру нужно имя модели — или выбери «Нет».";
+          return uiText("ui.app.src.settings.agent.f32408fdf6");
         }
         if (spare === "none" || !fallbackModel.trim()) {
           delete out.model.fallback_model;
@@ -904,7 +905,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
           }
           if (spare === "other") {
             if (!spareUrl.trim() || !spareKey.trim()) {
-              return "Запасному провайдеру нужны и адрес, и ключ — или выбери «Модель того же провайдера».";
+              return uiText("ui.app.src.settings.agent.dc33e81cfa");
             }
             out.model.fallback_framework = spareFramework;
             out.model.fallback_base_url = spareUrl.trim();
@@ -925,15 +926,15 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         const ownerIdRaw = String(out.telegram?.owner_id ?? "").trim();
         const botToken = String(out.telegram?.bot_token || "").trim();
         if (botToken && !ownerIdOk(ownerIdRaw)) {
-          return "Для Telegram нужен и твой id: число. Без него бот включится и будет молчать на всё — "
-                 + "ход разрешён только владельцу. Узнать id: напиши @userinfobot в Telegram, он ответит числом.";
+          return uiText("ui.app.src.settings.agent.9b2b901b75")
+                 + uiText("ui.app.src.settings.agent.1c6036c7c3");
         }
         if (tgProxy.enabled) {
           try {
             const address = new URL(String(tgProxy.url || "").trim());
             if (address.protocol !== "https:" || address.username || address.password || address.search || address.hash || !String(tgProxy.key || "").trim()) throw new Error();
           } catch {
-            return "Для Telegram через сервер нужны адрес https://… и ключ доступа.";
+            return uiText("ui.app.src.settings.agent.ca8d94bcf3");
           }
         }
         out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode, status_message: tgStatus, proxy: tgProxy });
@@ -990,7 +991,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         });
       const needKey = provider === "api" || provider === "anthropic";
       noKeyNote = needKey && !String(out.model?.key || "").trim()
-        ? " Ключ модели не задан — агент будет молчать."
+        ? uiText("ui.app.src.settings.agent.c58f6fd250")
         : "";
       return "";
     },

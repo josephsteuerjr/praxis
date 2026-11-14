@@ -465,9 +465,6 @@ body::before {
   border-color: var(--ink);
 }
 
-.settings[data-group="look"] .save-bar {
-  display: none;
-}
 
 /* ---------------------------------------------------------------- рамка фокуса */
 

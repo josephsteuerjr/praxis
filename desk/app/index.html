@@ -16,24 +16,24 @@
     <div id="app">
       <header id="chrome" data-tauri-drag-region>
         <div class="chrome-left">
-          <button class="chrome-btn" id="toggle-rail" type="button" title="Полка слева · Ctrl+B" aria-label="Показать или скрыть полку слева">
+          <button class="chrome-btn" id="toggle-rail" type="button" title="Полка слева · Ctrl+B" data-i18n-title="shell.rail_title" aria-label="Показать или скрыть полку слева" data-i18n-aria-label="shell.rail_label">
             <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M6 2.5v11" /></svg>
           </button>
           <div class="rail-sign" id="rail-sign"></div>
         </div>
         <div class="chrome-drag" data-tauri-drag-region></div>
         <div class="chrome-right">
-          <button class="chrome-btn" id="toggle-panel" type="button" title="Действия справа · Ctrl+J" aria-label="Показать или скрыть действия">
+          <button class="chrome-btn" id="toggle-panel" type="button" title="Действия справа · Ctrl+J" data-i18n-title="shell.panel_title" aria-label="Показать или скрыть действия" data-i18n-aria-label="shell.panel_label">
             <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M10 2.5v11" /></svg>
           </button>
           <div class="controls">
-            <button class="win" data-win="minimize" type="button" aria-label="Свернуть">
+            <button class="win" data-win="minimize" type="button" aria-label="Свернуть" data-i18n-aria-label="shell.minimize">
               <svg viewBox="0 0 12 12"><path d="M1 6h10" /></svg>
             </button>
-            <button class="win" data-win="maximize" type="button" aria-label="Развернуть или восстановить">
+            <button class="win" data-win="maximize" type="button" aria-label="Развернуть или восстановить" data-i18n-aria-label="shell.maximize">
               <svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1" /></svg>
             </button>
-            <button class="win win-close" data-win="close" type="button" aria-label="Закрыть окно">
+            <button class="win win-close" data-win="close" type="button" aria-label="Закрыть окно" data-i18n-aria-label="shell.close">
               <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" /></svg>
             </button>
           </div>
@@ -41,18 +41,18 @@
       </header>
 
       <aside id="rail">
-        <nav class="rail-nav" id="rail-nav" aria-label="Разделы"></nav>
+        <nav class="rail-nav" id="rail-nav" aria-label="Разделы" data-i18n-aria-label="shell.sections"></nav>
         <div class="rail-rooms">
           <div class="rail-label">
-            <span>Чаты</span>
-            <button class="icon-btn" id="room-add" type="button" title="Новый чат · Ctrl+N" aria-label="Новый чат">
+            <span data-i18n-text="shell.chats">Чаты</span>
+            <button class="icon-btn" id="room-add" type="button" title="Новый чат · Ctrl+N" data-i18n-title="shell.new_chat_title" aria-label="Новый чат" data-i18n-aria-label="shell.new_chat">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11" /></svg>
             </button>
           </div>
           <div id="rooms" class="rooms scroll"></div>
         </div>
         <div class="rail-foot">
-          <nav class="rail-nav" id="rail-bottom" aria-label="Настройки"></nav>
+          <nav class="rail-nav" id="rail-bottom" aria-label="Настройки" data-i18n-aria-label="shell.settings"></nav>
         </div>
       </aside>
 
@@ -63,10 +63,10 @@
             <h1 id="head-title" class="head-title"></h1>
           </div>
           <div class="head-side">
-            <div id="pulse" class="pulse" title="последний вызов модели"></div>
+            <div id="pulse" class="pulse" title="последний вызов модели" data-i18n-title="shell.last_model_call"></div>
             <div id="state" class="state-pill">
               <span class="state-dot"></span>
-              <span id="state-text">Подключение…</span>
+              <span id="state-text" data-i18n-text="shell.connecting">Подключение…</span>
               <button id="state-action" class="state-action" type="button" hidden></button>
             </div>
             <span id="review-activity" class="review-activity" role="status" hidden>review</span>
@@ -80,19 +80,19 @@
           <div id="composer-files" class="composer-files" hidden></div>
           <div class="composer-box">
             <div id="composer-target" class="composer-target"></div>
-            <button id="attach" class="attach" type="button" title="Приложить картинку · можно вставить из буфера или перетащить" aria-label="Приложить картинку">
+            <button id="attach" class="attach" type="button" title="Приложить картинку · можно вставить из буфера или перетащить" data-i18n-title="shell.attach_title" aria-label="Приложить картинку" data-i18n-aria-label="shell.attach">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 7.2 8.3 12.4a1.6 1.6 0 0 1-2.3-2.3l5.6-5.6a3 3 0 0 1 4.2 4.2l-6 6a4.4 4.4 0 0 1-6.2-6.2L9.2 3" /></svg>
             </button>
             <input id="attach-input" type="file" multiple hidden>
-            <textarea id="say" rows="1" placeholder="Написать агенту…"></textarea>
-            <button id="mic" class="attach mic" type="button" title="Записать голосовое · Alt+Enter" aria-label="Записать голосовое" aria-keyshortcuts="Alt+Enter">
+            <textarea id="say" rows="1" placeholder="Написать агенту…" data-i18n-placeholder="shell.message"></textarea>
+            <button id="mic" class="attach mic" type="button" title="Записать голосовое · Alt+Enter" data-i18n-title="shell.record_title" aria-label="Записать голосовое" data-i18n-aria-label="shell.record" aria-keyshortcuts="Alt+Enter">
               <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3" /><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5" /></svg>
             </button>
-            <button id="send" class="send" type="button" title="Отправить · Enter" aria-label="Отправить">
+            <button id="send" class="send" type="button" title="Отправить · Enter" data-i18n-title="shell.send_title" aria-label="Отправить" data-i18n-aria-label="shell.send">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5v-11M5.8 8.7 10 4.5l4.2 4.2" /></svg>
             </button>
           </div>
-          <div class="composer-hint"><span id="composer-note"></span><span>Enter — отправить · Shift+Enter — новая строка</span></div>
+          <div class="composer-hint"><span id="composer-note"></span><span data-i18n-text="shell.composer_hint">Enter — отправить · Shift+Enter — новая строка</span></div>
         </footer>
       </main>
 

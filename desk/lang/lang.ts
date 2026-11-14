@@ -46,18 +46,26 @@ const CANON: Lang = "ru";
  * тайваньцу упрощённые иероглифы — это заметно чужой текст, а не «почти
  * правильно». Пока традиционного каталога нет, честнее английский.
  */
-function fromTag(tag: string): Lang | "" {
+export function fromTag(tag: string): Lang | "" {
   const t = String(tag || "").trim().toLowerCase().replace("_", "-");
   if (!t) return "";
   if (t === "zh" || t.startsWith("zh-hans") || t.startsWith("zh-cn") || t.startsWith("zh-sg")) return "zh";
   if (t.startsWith("zh")) return ""; // традиционное письмо — в английский
-  if (t.startsWith("ru")) return "ru";
-  if (t.startsWith("fr")) return "fr";
-  if (t.startsWith("en")) return "en";
+  if (t === "ru" || t.startsWith("ru-")) return "ru";
+  if (t === "fr" || t.startsWith("fr-")) return "fr";
+  if (t === "en" || t.startsWith("en-")) return "en";
   return "";
 }
 
-let chosen: Lang | "" = "";
+export const UI_LANGUAGE_KEY = "helene.ui-language";
+function savedPreference(): Lang | "" {
+  try {
+    const value = globalThis.localStorage?.getItem(UI_LANGUAGE_KEY);
+    if (value && ["ru", "en", "fr", "zh"].includes(value)) return value as Lang;
+  } catch { /* A private browser may deny storage; system selection still works. */ }
+  return "";
+}
+let chosen: Lang | "" = savedPreference();
 
 /**
  * Список предпочитаемых языков, как его назвала система.
@@ -86,17 +94,36 @@ export function locale(): Lang {
   for (const tag of systemTags()) {
     const lang = fromTag(tag);
     if (lang) {
-      chosen = lang;
-      return chosen;
+      return lang;
     }
   }
-  chosen = "en";
-  return chosen;
+  return "en";
 }
 
 /** Сменить язык руками (настройка). Пустая строка — вернуться к системному. */
 export function setLocale(lang: Lang | ""): void {
+  if (lang && !["ru", "en", "fr", "zh"].includes(lang)) throw new Error("Unsupported interface language");
   chosen = lang;
+  if (typeof document !== "undefined" && document.documentElement) document.documentElement.lang = locale() === "zh" ? "zh-Hans" : locale();
+}
+
+/** This preference never reads or writes agent.frame_language. */
+export function saveLocale(lang: Lang | ""): void {
+  setLocale(lang);
+  try { globalThis.localStorage?.setItem(UI_LANGUAGE_KEY, lang); } catch { /* Session-only preference. */ }
+}
+
+export function localePreference(): Lang | "" { return chosen; }
+
+export function initializeLocale(configured?: unknown): void {
+  try {
+    const saved = globalThis.localStorage?.getItem(UI_LANGUAGE_KEY);
+    if (saved === "" || ["ru", "en", "fr", "zh"].includes(String(saved))) {
+      setLocale(saved as Lang | "");return;
+    }
+  } catch { /* The injected application preference remains usable. */ }
+  if (configured === "" || ["ru", "en", "fr", "zh"].includes(String(configured))) setLocale(configured as Lang | "");
+  else setLocale(chosen);
 }
 
 function lookup(key: string): string {
@@ -115,10 +142,17 @@ function lookup(key: string): string {
  * в разработке, а не показываться человеку пустотой. Все ключи известны на
  * сборке: каталог канона лежит рядом в файле.
  */
-export function t(key: string): string {
+export function t(key: string, values?: Record<string, string | number>): string {
   const s = lookup(key);
   if (!s) throw new Error(`нет строки интерфейса: ${key}`);
-  return s;
+  if (!values) return s;
+  const used = new Set<string>();
+  const result = s.replace(/\{([A-Za-z_][A-Za-z_0-9]*)\}/g, (_, name: string) => {
+    if (!Object.hasOwn(values, name)) throw new Error(`Missing translation parameter: ${key}:${name}`);
+    used.add(name);return String(values[name]);
+  });
+  if (Object.keys(values).some(name => !used.has(name))) throw new Error(`Unexpected translation parameter: ${key}`);
+  return result;
 }
 
 /**
@@ -157,5 +191,10 @@ export const LANGS: Array<{ id: Lang; label: string }> = [
   { id: "ru", label: "Русский" },
   { id: "en", label: "English" },
   { id: "fr", label: "Français" },
-  { id: "zh", label: "中文" },
+  { id: "zh", label: "中文（简体）" },
 ];
+
+// Resolve before modules construct their static menus. MiniApp resolves again
+// after authentication, before importing the shared application.
+const bootstrap = globalThis as { DESK_CONFIG_OVERRIDE?: {lang?: unknown}; DESK_CONFIG?: {lang?: unknown} };
+initializeLocale(bootstrap.DESK_CONFIG_OVERRIDE?.lang ?? bootstrap.DESK_CONFIG?.lang);

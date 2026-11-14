@@ -1,3 +1,4 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Первый запуск без объяснения — как это было на Linux 03.10: человек встал перед
 // формой, не вставил ключ модели, движок не поднялся, и окно сказало «нет связи
 // с агентом» вместо «вставь ключ». Стенд держит три обещания экрана настроек:
@@ -16,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8");
+const source = resolvedUiLiterals(readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8"));
 
 /** Комментарии — не код: слова разбираем из кода, а не из пояснений к нему. */
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");

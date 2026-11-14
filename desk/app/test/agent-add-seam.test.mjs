@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Шов agent_add (фикс-волна 06.10, F1): конституция обязана доезжать ОБЕИМИ
 // формами — вложенной soul:{kind,text} (карточка «Агенты») и плоскими
 // soulKind/soulText/soulFrom (второй колер). Стенд сторожит ТРУБУ обеими

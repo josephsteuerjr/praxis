@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';

@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 import './paper-select.css';
 
 let nextId=0;
@@ -40,7 +41,7 @@ export function mountPaperSelects(root:HTMLElement) {
     if(view.button.disabled)return;
     if(active===view){close(true);return}close();active=view;sync(view);
     menu=document.createElement('div');menu.id='paper-select-'+(++nextId);menu.className='paper-select-menu';
-    menu.setAttribute('role','listbox');menu.setAttribute('aria-label',view.button.getAttribute('aria-label')||'Варианты');
+    menu.setAttribute('role','listbox');menu.setAttribute('aria-label',view.button.getAttribute('aria-label')||uiText("ui.ui.kit.paper.select.94061d0071"));
     view.button.setAttribute('aria-controls',menu.id);view.button.setAttribute('aria-expanded','true');
     let group='';
     typeahead='';typedAt=0;

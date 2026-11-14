@@ -1,3 +1,4 @@
+import {resolvedUiLiterals} from './fixtures/ru-localization.mjs';
 // Тест против одного класса: окно обещает на macOS то, чего там нет.
 //
 // Порт 0.7.1 на macOS (19.09) — без правила брандмауэра и UAC. Решение
@@ -36,7 +37,7 @@ const win = join(desk, "ui-kit", "window");
 
 /** Комментарии — не код: в них те же слова разбираются словами. */
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-const read = (...p) => code(readFileSync(join(...p), "utf8"));
+const read = (...p) => code(resolvedUiLiterals(readFileSync(join(...p), "utf8")));
 
 // --------------------------------------------------------------------------
 // 1. Слово системы: по контракту, и «не знаю» — это "" , а не догадка.
@@ -202,7 +203,7 @@ assert.match(modeScene, /mac && COMPUTER_OPTION_MACOS \? COMPUTER_OPTION_MACOS :
 assert.match(modeScene, /mac \? COMPUTER_NOTE_MACOS : COMPUTER_NOTE/, "примечание про два разрешения на Mac не показывается");
 // Атрибут hidden перебивается `display: grid` у карточки — без явного правила
 // карточка службы оставалась бы на экране (тот же класс, что у ряда 19.09).
-const setupCss = readFileSync(join(setupUi, "styles.css"), "utf8");
+const setupCss = resolvedUiLiterals(readFileSync(join(setupUi, "styles.css"), "utf8"));
 assert.match(setupCss, /\.options-row\[hidden\],\s*\.service-card\[hidden\]\s*\{\s*display:\s*none;/,
   "styles.css: у .service-card нет правила [hidden] — на macOS опция службы осталась бы на экране");
 assert.ok(!/\.options-row\.one\s*\{/.test(setupCss), "styles.css: правило ряда из одной карточки осталось мёртвым — опций снова две на обеих системах");
@@ -246,7 +247,7 @@ function walk(dir, out = []) {
 const sources = [...walk(join(desk, "ui-kit")), ...walk(src), ...walk(setupUi)];
 assert.ok(sources.length > 20, "исходники окна не нашлись — стенд устарел, а не код");
 for (const file of sources) {
-  const text = code(readFileSync(file, "utf8"));
+  const text = code(resolvedUiLiterals(readFileSync(file, "utf8")));
   const rel = file.slice(desk.length + 1);
   if (!rel.endsWith(join("ui-kit", "dom.ts"))) {
     assert.ok(!/navigator\.clipboard/.test(text), `${rel}: голый navigator.clipboard — на macOS это TypeError; зови copyText из ui-kit/dom.ts`);
@@ -261,7 +262,7 @@ assert.match(installScene, /copyText\(text\)/, "кнопка «Скопиров�
 
 // Каталог языков: у каждой новой строки Mac есть ключ во всех четырёх языках.
 const lang = join(desk, "lang");
-const ru = JSON.parse(readFileSync(join(lang, "ru.json"), "utf8"));
+const ru = JSON.parse(resolvedUiLiterals(readFileSync(join(lang, "ru.json"), "utf8")));
 for (const key of ["setup.mode.lead.macos", "setup.mode.install_note.interactive.macos", "setup.install.open_failed.macos",
                    "setup.uninstall.lead.macos", "setup.uninstall.purge_body.macos", "setup.mode.computer_note.macos",
                    "setup.mode.service_note.macos",
@@ -271,7 +272,7 @@ for (const key of ["setup.mode.lead.macos", "setup.mode.install_note.interactive
                    "settings.computer.no_body.macos"]) {
   assert.ok(ru[key], `в lang/ru.json нет ключа ${key}`);
   for (const c of ["en", "fr", "zh"]) {
-    const cat = JSON.parse(readFileSync(join(lang, `${c}.json`), "utf8"));
+    const cat = JSON.parse(resolvedUiLiterals(readFileSync(join(lang, `${c}.json`), "utf8")));
     assert.ok(cat[key], `в lang/${c}.json нет перевода ${key}`);
   }
 }
@@ -284,7 +285,7 @@ assert.ok(joined(modeScene).includes(ru["setup.mode.service_note.macos"]), "пр
 // Тексты самой опции службы живут в modes.py (их читает и окно, и сборка
 // установщика): каталог обязан повторять их слово в слово, иначе перевод
 // рассказывал бы про другую службу.
-const modesPy = readFileSync(join(desk, "localharness", "modes.py"), "utf8")
+const modesPy = resolvedUiLiterals(readFileSync(join(desk, "localharness", "modes.py"), "utf8"))
   .replace(/"\s*\n\s*"/g, "").replace(/"\s*$/gm, "\"");
 for (const [key, constant] of [["settings.service.title.macos", "SERVICE_TITLE_MACOS"],
                                ["settings.service.text.macos", "SERVICE_TEXT_MACOS"],
