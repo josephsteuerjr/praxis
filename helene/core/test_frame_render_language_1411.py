@@ -14,6 +14,21 @@ from test_frame_shadow import ShadowCase, _ctx, NOW
 
 
 class LocalizedFrame(ShadowCase):
+    def test_saved_owned_boundaries_change_language_without_rewriting_data(self):
+        fold_key='owned.frame_shadow.7efc6edb98f3'
+        flip_key='owned.frame_shadow.a13d766b7a29'
+        for origin in frame_language.LANGUAGES:
+            with frame_language.use(origin):
+                old=frame_language.text(fold_key,v0='2026-08-17 10:00 UTC',v1=12,v2=456)
+                flip=frame_language.text(flip_key)
+            for target in frame_language.LANGUAGES:
+                with frame_language.use(target):
+                    expected=frame_language.text(fold_key,v0='2026-08-17 10:00 UTC',v1=12,v2=456)
+                    self.assertEqual(frame_shadow._owned_boundary_text(fold_key,old),expected)
+                    self.assertEqual(frame_shadow._owned_boundary_text(flip_key,flip),frame_language.text(flip_key))
+                    custom='PRIVATE reason Русский Français 中文 {literal}'
+                    self.assertEqual(frame_shadow._owned_boundary_text(flip_key,custom),custom)
+
     def test_localized_address_rows_keep_current_place_and_inactive_first(self):
         for lang in frame_language.LANGUAGES:
             with self.subTest(lang=lang), frame_language.use(lang), frame_language.pin():

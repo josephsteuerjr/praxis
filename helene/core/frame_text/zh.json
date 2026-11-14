@@ -177,5 +177,18 @@
   "frame.transfer_group": "仅限来源（默认）",
   "frame.clock": "{utc} · {local} UTC{offset}",
   "frame.live_recap": "[先前回合摘要 · 实际路径快照 · 并非我的选择]\n",
-  "frame.live_canary": "\n[frame v6 canary：E 在本次模型调用前重新读取，并非来自冻结纪元；此处 E 块中的“冻结时”指本次构建时刻。实际传输 T 和角色消息序列均保留；累积历史未迁移。]"
+  "frame.live_canary": "\n[frame v6 canary：E 在本次模型调用前重新读取，并非来自冻结纪元；此处 E 块中的“冻结时”指本次构建时刻。实际传输 T 和角色消息序列均保留；累积历史未迁移。]",
+  "owned.frame_shadow.7370ebc0eb35": "[纪元 {v0} · 冻结于 {v1} · 流：{v2} · 边界：{v3}]",
+  "owned.frame_shadow.7efc6edb98f3": "[窗口由代码折叠 · 截至 {v0} · 当前尾部 {v1} 条消息（渲染文本 {v2} 字符）· 并非我的选择 · 完整来源：当前流的 memory_life 事件——memory/life/events/*.jsonl，kind conversation_message]",
+  "owned.frame_shadow.997a8395abdb": "[由代码移除 {v0} 个工具的描述以满足纪元上限：减少 {v1} 字符；名称完整，完整架构另在 tools 中提供；并非我的选择]",
+  "owned.frame_shadow.d9994b1f173a": "迁移至上下文架构 v{v0}（时钟和转移规则从地址簿移至尾部活动；当前 extra_system 完整保留在 T 中，已移除此前隐式冻结）",
+  "owned.frame_shadow.336743f08a89": "流受众范围缩小（{v0} → {v1}）",
+  "owned.frame_shadow.96c1b73db010": "\n[折叠边界已移出窗口：以下内容均更新；此处不声称已折叠的数量]",
+  "owned.frame_shadow.ac8ec9e4b4d0": "累积历史阈值（{v0} 条消息／{v1} 字符）",
+  "owned.frame_shadow.a13d766b7a29": "智能体决定（flip_epoch）",
+  "owned.frame_shadow.a185f2be60c0": "紧急重新冻结（纪元文件无法读取）",
+  "owned.frame_shadow.5c1faec0d222": "当前流首次冻结",
+  "owned.frame_shadow.5410b5426e49": "工具集已变化",
+  "owned.frame_shadow.e4ce9430270d": "意图发生实质变化（账本）",
+  "frame.language_boundary": "上下文语言或常驻技能设置已变化"
 }

@@ -177,5 +177,18 @@
   "frame.transfer_group": "source only (default)",
   "frame.clock": "{utc} · {local} UTC{offset}",
   "frame.live_recap": "[summary of earlier turns · live-path snapshot · NOT my selection]\n",
-  "frame.live_canary": "\n[frame v6 canary: E was reread before this model call, not taken from a frozen epoch; “freeze time” in E blocks here means the time of this assembly. Live transport T and the role message tape are preserved; the accumulated history has not been migrated.]"
+  "frame.live_canary": "\n[frame v6 canary: E was reread before this model call, not taken from a frozen epoch; “freeze time” in E blocks here means the time of this assembly. Live transport T and the role message tape are preserved; the accumulated history has not been migrated.]",
+  "owned.frame_shadow.7370ebc0eb35": "[epoch {v0} · frozen {v1} · stream: {v2} · boundary: {v3}]",
+  "owned.frame_shadow.7efc6edb98f3": "[window folded by code · through {v0} · live tail {v1} ({v2} rendered chars) · NOT my selection · complete source: memory_life events for this stream — memory/life/events/*.jsonl, kind conversation_message]",
+  "owned.frame_shadow.997a8395abdb": "[descriptions of {v0} tools removed by code to fit the epoch ceiling: −{v1} chars; names intact, full schemas supplied separately in tools; NOT my selection]",
+  "owned.frame_shadow.d9994b1f173a": "migration to frame schema v{v0} (clocks and transfer rules moved from the address book to tail activity; current extra_system is entirely in T, its former implicit freezing removed)",
+  "owned.frame_shadow.336743f08a89": "stream audience narrowed ({v0} → {v1})",
+  "owned.frame_shadow.96c1b73db010": "\n[fold boundary left the window: everything below is newer; no claim about the folded count is made here]",
+  "owned.frame_shadow.ac8ec9e4b4d0": "accumulated-history threshold ({v0} messages / {v1} chars)",
+  "owned.frame_shadow.a13d766b7a29": "agent decision (flip_epoch)",
+  "owned.frame_shadow.a185f2be60c0": "emergency refreeze (epoch file unreadable)",
+  "owned.frame_shadow.5c1faec0d222": "first freeze of this stream",
+  "owned.frame_shadow.5410b5426e49": "tool set changed",
+  "owned.frame_shadow.e4ce9430270d": "meaningful intention change (ledger)",
+  "frame.language_boundary": "context language or resident-skill setting changed"
 }

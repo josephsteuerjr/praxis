@@ -216,6 +216,19 @@ def _room_kind_pattern() -> str:
         'owned.frame_shadow.5ba87ed8f35f', 'owned.frame_shadow.232309a0a7bc')) + ')'
 
 
+def _owned_boundary_text(key: str, value: str) -> str:
+    """Re-render an exact owned boundary template after a locale switch.
+
+    Only the two known stored boundary fields call this helper. Authored history,
+    recaps and an unrecognized custom reason remain literal data.
+    """
+    for source_language in frame_language.LANGUAGES:
+        found = frame_language.match(key, value, source_language=source_language)
+        if found:
+            return frame_language.text(key, **found.groupdict())
+    return value
+
+
 # ---------------------------------------------------------------------- рычаг и пути
 
 
@@ -454,8 +467,7 @@ def _strip_hand_lines(text: str) -> str:
     if not cut:
         return text
     out.insert(len(out) - 1,
-               f"[описания {cut} рук сняты кодом ради потолка эпохи: −{saved} зн.; "
-               "имена целиком, схемы переданы отдельно в tools; это НЕ мой отбор]")
+               frame_language.text('owned.frame_shadow.997a8395abdb', v0=cut, v1=saved))
     return "\n".join(out)
 
 
@@ -1393,8 +1405,7 @@ def _freeze_epoch(stream_dir: Path, ctx, tools, now: datetime, n: int,
     # ломала бы префикс без права границы.
     recap_text = str((payload or {}).get("recap") or "")
     recap = ({"text": recap_text, "at": _minutes_utc(now)} if recap_text else None)
-    header = (f"[эпоха {n} · заморожена {_minutes_utc(now)} · "
-              f"поток: {stream_dir.name} · граница: {reason}]")
+    header = (frame_language.text('owned.frame_shadow.7370ebc0eb35', v0=n, v1=_minutes_utc(now), v2=stream_dir.name, v3=reason))
     saved = {
         "v": FRAME_SCHEMA, "n": n, "frozen_at": _minutes_utc(now), "reason": reason,
         # Аудитория стоит РЯДОМ с reason, до blocks: снапшот отвечает не только
@@ -1472,6 +1483,7 @@ def _epoch_drift(saved: dict, ctx, tools, now: datetime,
     return {"blocks": changed, "frozen_chars": total_old, "current_chars": total_new}
 
 
+@frame_language.pinned
 def flip_epoch(ctx) -> int:
     """Ручная граница (её рука / наш рычаг). Следующий захват заморозит E заново под
     номером n+1; сворачивание накопителя решается на захвате его же порогами.
@@ -1483,7 +1495,7 @@ def flip_epoch(ctx) -> int:
     stream_dir.mkdir(parents=True, exist_ok=True)
     _write_atomic(_epoch_path(stream_dir), json.dumps(
         {"v": FRAME_SCHEMA, "n": n, "frozen_at": None, "e_text": None,
-         "pending_reason": "её слово (flip_epoch)"}, ensure_ascii=False))
+         "pending_reason": frame_language.text('owned.frame_shadow.a13d766b7a29')}, ensure_ascii=False))
     return n
 
 
@@ -1857,6 +1869,7 @@ class Plan:
     places_now: str = ""
 
 
+@frame_language.pinned
 def prepare(*, ctx, history, tools, now: datetime | None = None,
             payload: dict | None = None) -> Plan:
     """Внешняя половина сборщика — та, что имеет право трогать диск: чтение эпохи,
@@ -2144,7 +2157,8 @@ def _fold_plan(history, saved: dict, now: datetime, *,
     rows = list(history or ())
     total = len(rows)
     old_fold, _by = _resolve_fold(rows, saved or {})
-    old_line = str((saved or {}).get("fold_line") or "")
+    old_line = _owned_boundary_text('owned.frame_shadow.7efc6edb98f3',
+                                   str((saved or {}).get("fold_line") or ""))
     old_anchor = (saved or {}).get("fold_anchor")
     old_anchor = old_anchor if isinstance(old_anchor, dict) else None
     if not force and not _needs_fold(rows, old_fold):
@@ -2168,10 +2182,7 @@ def _fold_plan(history, saved: dict, now: datetime, *,
                      "tail_chars": sum(len(_a_message(m)) for m in rows[old_fold:]),
                      "fold_chars": A_FOLD_CHARS}
         return old_fold, old_line, stuck, old_anchor
-    line = (f"[окно свёрнуто кодом · до {_minutes_utc(now)} · "
-            f"в живом хвосте {keep} ({kept_chars} зн. рендера) · это НЕ мой отбор · "
-            f"полностью: события memory_life этого потока — "
-            f"memory/life/events/*.jsonl, kind conversation_message]")
+    line = (frame_language.text('owned.frame_shadow.7efc6edb98f3', v0=_minutes_utc(now), v1=keep, v2=kept_chars))
     return new_fold, line, None, _fold_anchor(rows, new_fold, now)
 
 
@@ -2219,16 +2230,17 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
     if saved is None:
         recovered = _max_epoch_in_metrics(stream_dir)
         if _epoch_path(stream_dir).exists() or recovered:
-            n, reason = recovered + 1, "аварийная перезаморозка (файл эпохи нечитаем)"
+            n, reason = recovered + 1, frame_language.text('owned.frame_shadow.a185f2be60c0')
         else:
-            n, reason = 1, "первая заморозка потока"
+            n, reason = 1, frame_language.text('owned.frame_shadow.5c1faec0d222')
         fresh = _freeze_epoch(stream_dir, ctx, tools, now, n, reason, 0, "",
                              fold_anchor=None, audience=audience, payload=payload)
         return (fresh, None, {"reason": reason, "n": n, "folded": 0},
                 {"count": 0, "by": "граница", "line": ""}, None)
     if saved.get("e_text") is None:  # её flip ждёт заморозки
         n = int(saved.get("n") or 1)
-        reason = str(saved.get("pending_reason") or "её слово (flip_epoch)")
+        reason = _owned_boundary_text('owned.frame_shadow.a13d766b7a29',
+                    str(saved.get("pending_reason") or frame_language.text('owned.frame_shadow.a13d766b7a29')))
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
                       reason=reason, audience=audience, force=True, payload=payload)
     if (int(saved.get("v") or 1) != FRAME_SCHEMA
@@ -2237,10 +2249,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         # Отдельные границы на каждое из девяти решений стоили бы девять холодных
         # префиксов вместо одного.
         n = int(saved.get("n") or 1) + 1
-        reason = (f"переход на схему кадра v{FRAME_SCHEMA} "
-                  "(часы и формула переноса ушли из адресной книги в обстановку "
-                  "хвоста; текущий extra_system целиком в T, его прежняя "
-                  "неявная заморозка удалена)")
+        reason = (frame_language.text('owned.frame_shadow.d9994b1f173a', v0=FRAME_SCHEMA))
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
                       reason=reason,
                       # Миграция формата не является её явным flip: сохранённый
@@ -2256,7 +2265,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
     effective = _narrower(frozen_audience, audience)
     if effective != frozen_audience:
         n = int(saved.get("n") or 1) + 1
-        reason = f"сужение аудитории потока ({frozen_audience} → {effective})"
+        reason = frame_language.text('owned.frame_shadow.336743f08a89', v0=frozen_audience, v1=effective)
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
                       reason=reason, audience=effective, force=False,
                       payload=payload)
@@ -2267,7 +2276,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         # without folding or rewriting any conversation history.
         return _cross(stream_dir, ctx, tools, history, now, saved=saved,
                       n=int(saved.get('n') or 1) + 1,
-                      reason='context language or resident-skill setting changed',
+                      reason=frame_language.text('frame.language_boundary'),
                       audience=effective, force=False, payload=payload)
     frozen_sha = str(saved.get("tools_sha") or "")
     if not frozen_sha:
@@ -2285,7 +2294,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         # force=False: смена набора не повод трогать окно накопителя.
         n = int(saved.get("n") or 1) + 1
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
-                      reason="смена набора рук", audience=effective, force=False,
+                      reason=frame_language.text('owned.frame_shadow.5410b5426e49'), audience=effective, force=False,
                       extra={"tools_sha": tools_sha[:12],
                              "tools_sha_was": frozen_sha[:12]}, payload=payload)
     # ЕЁ слово 21.08 (№8): «границу эпохи вызывать по содержательному изменению
@@ -2297,7 +2306,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         if desires_ok and current_desires != saved["blocks"].get("desires"):
             n = int(saved.get("n") or 1) + 1
             return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
-                          reason="содержательное изменение желаний (ledger)",
+                          reason=frame_language.text('owned.frame_shadow.e4ce9430270d'),
                           audience=effective, force=False, payload=payload)
     fold_count, by = _resolve_fold(history, saved)
     stuck = None
@@ -2305,7 +2314,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         new_fold, fold_line, stuck, anchor = _fold_plan(history, saved, now, force=True)
         if stuck is None:
             n = int(saved.get("n") or 1) + 1
-            reason = f"порог накопителя ({A_FOLD_MESSAGES} сообщ. / {A_FOLD_CHARS} зн.)"
+            reason = frame_language.text('owned.frame_shadow.ac8ec9e4b4d0', v0=A_FOLD_MESSAGES, v1=A_FOLD_CHARS)
             fresh = _freeze_epoch(stream_dir, ctx, tools, now, n, reason, new_fold,
                                   fold_line, fold_anchor=anchor, audience=effective,
                                   payload=payload)
@@ -2327,8 +2336,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
             by = "якорь приживлён"
     if by == "якорь вне окна" and line:
         # Счёт не утверждается: граница ушла из окна вместе со срезанным фронтом.
-        line += ("\n[граница свёртки из окна ушла: всё ниже — новее её; "
-                 "сколько свёрнуто, здесь не утверждается]")
+        line += (frame_language.text('owned.frame_shadow.96c1b73db010'))
     drift = _epoch_drift(saved, ctx, tools, now, effective, payload)
     return saved, drift, None, {"count": fold_count, "by": by, "line": line}, stuck
 

@@ -177,5 +177,18 @@
   "frame.transfer_group": "source uniquement (par défaut)",
   "frame.clock": "{utc} · {local} UTC{offset}",
   "frame.live_recap": "[résumé des tours précédents · instantané du chemin actif · PAS ma sélection]\n",
-  "frame.live_canary": "\n[frame v6 canary : E a été relu avant cet appel au modèle, pas repris d’une époque gelée ; « au gel » dans les blocs E désigne ici le moment de cet assemblage. Le transport actif T et les messages par rôle sont conservés ; l’historique accumulé n’a pas été migré.]"
+  "frame.live_canary": "\n[frame v6 canary : E a été relu avant cet appel au modèle, pas repris d’une époque gelée ; « au gel » dans les blocs E désigne ici le moment de cet assemblage. Le transport actif T et les messages par rôle sont conservés ; l’historique accumulé n’a pas été migré.]",
+  "owned.frame_shadow.7370ebc0eb35": "[époque {v0} · gelée à {v1} · flux : {v2} · frontière : {v3}]",
+  "owned.frame_shadow.7efc6edb98f3": "[fenêtre repliée par le code · jusqu’à {v0} · fin active de {v1} messages ({v2} caractères rendus) · PAS ma sélection · source complète : événements memory_life de ce flux — memory/life/events/*.jsonl, kind conversation_message]",
+  "owned.frame_shadow.997a8395abdb": "[descriptions de {v0} outils retirées par le code pour respecter le plafond de l’époque : −{v1} caractères ; noms intacts, schémas complets fournis séparément dans tools ; PAS ma sélection]",
+  "owned.frame_shadow.d9994b1f173a": "migration vers le schéma de contexte v{v0} (horloges et règles de transfert déplacées du carnet d’adresses vers l’activité de fin de contexte ; extra_system actuel entièrement dans T, ancien gel implicite supprimé)",
+  "owned.frame_shadow.336743f08a89": "public du flux restreint ({v0} → {v1})",
+  "owned.frame_shadow.96c1b73db010": "\n[la frontière de repli a quitté la fenêtre : tout ce qui suit est plus récent ; aucun nombre d’éléments repliés n’est affirmé ici]",
+  "owned.frame_shadow.ac8ec9e4b4d0": "seuil de l’historique accumulé ({v0} messages / {v1} caractères)",
+  "owned.frame_shadow.a13d766b7a29": "décision de l’agent (flip_epoch)",
+  "owned.frame_shadow.a185f2be60c0": "nouveau gel d’urgence (fichier d’époque illisible)",
+  "owned.frame_shadow.5c1faec0d222": "premier gel de ce flux",
+  "owned.frame_shadow.5410b5426e49": "jeu d’outils modifié",
+  "owned.frame_shadow.e4ce9430270d": "changement significatif des intentions (registre)",
+  "frame.language_boundary": "langue du contexte ou réglage de compétence permanente modifié"
 }

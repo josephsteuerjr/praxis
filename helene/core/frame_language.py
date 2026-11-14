@@ -135,13 +135,13 @@ def text(key: str, **values) -> str:
     return template.format_map(values)
 
 
-def match(key: str, value: str):
+def match(key: str, value: str, *, source_language: str | None = None):
     """Read an owned rendered row using the same localized template.
 
     Labels are escaped literally, never interpreted as regular expressions.
     This is for internal presentation rows, not authorization or user input.
     """
-    template = catalog(language())[key]
+    template = catalog(source_language or language())[key]
     parts, seen = [], set()
     for literal, field, _format, _conversion in Formatter().parse(template):
         parts.append(re.escape(literal))
