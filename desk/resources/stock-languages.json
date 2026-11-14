@@ -33,6 +33,27 @@
       "zh": "6ce838390b1fb37498cf96e303df089e5aa5ad269aa60e6a5d63e1a76cf9be20",
       "identifiers": true
     },
+    "soul/skills/abstractdl-architecture-jargon.md": {
+      "ru": "ad3332b70c897f2de824f012a12bc5895b764584b8c3fbaf710e8c408074a8ad",
+      "en": "7e9292ab0e54a4305e131befbb375b92031ad29622f4a346ba180660255842a7",
+      "fr": "2d0ae0a0e370959dbefb7303bab01365e1fc6d08ff7c8826e0b4eb818e4b51a7",
+      "zh": "1807eec2192634655bb4c0b86bdd329402eb567031d85ffb309f7a568e3fd07d",
+      "identifiers": true
+    },
+    "soul/skills/artifact-revision-diff-check.md": {
+      "ru": "25f612f36035530dc6733b41052021757db15b38b453fe00f35c9ebf4fe0107e",
+      "en": "bde900c1512ac7543a132ec15ba2994052fe87687d4475a6ed2fff05cb3a285c",
+      "fr": "78a2b2eca630fb4019a73928e6ad4bb1076f19aa789353272cbe6cb98d93d1e3",
+      "zh": "c99308da294b125a3ada677361b083ed1806705bc05b310be68e0d2c10ab4a27",
+      "identifiers": true
+    },
+    "soul/skills/auto_join_owner_rooms.md": {
+      "ru": "ab66f377121a947399d6c40ba55fa99d9a6fdf89d070ab50a28872b831037197",
+      "en": "1b52ffb0161d483ad59cb37e9577f33090a13c91f4f9d5b80f9f1522ca5c11c1",
+      "fr": "dcd29ccefe3950d21df6b7ec6954c55a7cac9b44431a30da40eb3ed2ff52c8c6",
+      "zh": "543048ad6d4ad7527206154b3c4f94012298b1a8661b08b2e39f430e3633ea3c",
+      "identifiers": true
+    },
     "soul/skills/check-by-factual-name.md": {
       "ru": "3f6fce1fe5e5f5835065538551573806b1877955417aa00e4aeebd770f72ae59",
       "en": "0db0720078764eb641396f763d7d29dda186b3fce446a027699dca989661583c",
@@ -68,11 +89,32 @@
       "zh": "21b9694a59dcba9d54e7696d8f48fc2ce39e02cc78e0c7f814d3be956ec58508",
       "identifiers": true
     },
+    "soul/skills/cross-namespace-worktree-prune.md": {
+      "ru": "add625887acdfe26261b02b86e79f500158bf5c6c2f48baf766cd9f7077484d0",
+      "en": "59f1b6964aacf1a7553417f4f8582bb8a47b30cc8f1988f6ce3f01e8a6a512b8",
+      "fr": "4f3c47449e797d50a73bd1d635ecf10c8935bd98401941975eaf3ebd2f00d91e",
+      "zh": "629dad3fa908d672007a5c421179abd3d87941e16fcc0a67982dd671d588b894",
+      "identifiers": true
+    },
+    "soul/skills/crossover-h-gate-check.md": {
+      "ru": "57af4796c63d3fb02ce56ad5632e353b0b3a7a18da35020dd438f6c1701ed0ef",
+      "en": "74d8abc9685318e83de55ec20a45ebbac03913a43ab9983c92ee62d8af28372c",
+      "fr": "520b05debdd2fbbc214563993d4208694363100f7793625f55a7ac62599f9a43",
+      "zh": "effaa8cb11c43030277ae0875b8421b97cb231652703ed2f8fd81640713b07c2",
+      "identifiers": true
+    },
     "soul/skills/email.md": {
       "ru": "2527ba6cb1d20d4356ff9110c1c1e931a09d74c2c387010889b2dcc1e0ef9f65",
       "en": "746ca3fd2f954458fc8f20d7ec2058e97d0a3838eb9a90ec042180232368aab0",
       "fr": "20ab2ac9cd947d3c5d78f4002902cd082ee9ed92b0611869ce991e29b6152b33",
       "zh": "fa59a35271a59cb695df6169a7fc7eeac80942af31e3e3ee59ec372a87b6b39b",
+      "identifiers": true
+    },
+    "soul/skills/emergency-stop.md": {
+      "ru": "d1692687faf29909def4ab1882bf717161bc006a7c9b5549907b6e63ec91c5bf",
+      "en": "06653175343119f9b66a79ce39ada6ec38970b7832c9760876bc3147bb756910",
+      "fr": "a5af4373732f45ffd4215dc783c441455e57b6852f0542bed4d6aa7619f7560c",
+      "zh": "1b9cbd1482b08d94b17f3b5c047f2e3b28dbe83c479a6cfc2b6be835b0fd5c50",
       "identifiers": true
     },
     "soul/skills/error-is-a-class.md": {
@@ -203,6 +245,13 @@
       "fr": "8dd744c775086e40b2985f2531ff8b2f0229efef8f9aaaee6b0353cb836f3b36",
       "zh": "746413daae042365da9e8d81c66f5ec181e4bea273b8189b5173bda08fde1b79"
     },
+    "soul/skills/long-c-runs-stdbuf.md": {
+      "ru": "4b24fb00d8fc190ea34f21d36195ed212acc25b72966a3860f1b5a9a8e2036be",
+      "en": "19089ddb2f1ce85f40b58a6fa1169923c3a8b7a29aab14a991e755713aad56da",
+      "fr": "187c3a016b9fe6c1bcd8444971295846c080a4cc00add63ac3d72339c7d9f426",
+      "zh": "0285108379a19d2cc2d658d4c93b630a9db13d2642831e51c6d0fec7538dfef3",
+      "identifiers": true
+    },
     "soul/skills/looking-back.md": {
       "ru": "279ac2d27ebaf22dcbf1010fbf2f25017246d3905446525c96a6325cd9c9d91b",
       "en": "67c631c10fe49c8e37724ba215b024f79e1ac4a638550e11419ca0f83d55b03a",
@@ -245,6 +294,13 @@
       "zh": "52b23edca8157cfc96a7c94f7e523e61292f69d7c0b865ac2cf69bc48d045ad8",
       "identifiers": true
     },
+    "soul/skills/no_performance_layer.md": {
+      "ru": "d611713334c049d3c9041e51cd504bd8eb5e00cab6e8d7a07d2cfbbd1a54a68f",
+      "en": "02ec69bc8b2551f102fa2bbc3de9e6001babb9909742fff289119385602c6cda",
+      "fr": "ee698f6f9c72c655273f3506ee21e9d105785a5da5514e27bd37eee7bd0688f5",
+      "zh": "5426fee4583269c22e50771d3a6d043e6de31c358ccf85a173d80051f7de01db",
+      "identifiers": true
+    },
     "soul/skills/not-knowing.md": {
       "ru": "959e1e5eefbc537ac44a6ee08411edd87925a79198b476b99aa263efe9587e05",
       "en": "08d3ad37a7fab77743eee8df0915eedc054b99d1c7d0a526b73eccf30ef63e03",
@@ -271,6 +327,20 @@
       "en": "0cc13fe075c108bec6919590d2e42fe44d3ba89d38564a79130355cd3b87ea0a",
       "fr": "f299a60f26cfb846a013ac9b3a43568eab384a60876205b89c7a50af23e3347f",
       "zh": "4c984b06012783f23eb2637ae7831a5370af4776a412c7391219d48624185d30",
+      "identifiers": true
+    },
+    "soul/skills/quote-insertion-check.md": {
+      "ru": "8718fb0c28a9d7e6e82c99e17ae883dc3ce0bc3af71bffcd031a2e8bea2d0482",
+      "en": "0eaa70dceaa6bbd8d6af7ee86be5eb1d6337728e3ce3f51fa617245ccc0ca4d2",
+      "fr": "f6cff48185ea3d68d7f16dd2d103c6c1de18d51f9a23623fc9c84e2651cce1b8",
+      "zh": "123147e2b237383c232a14070ea2d639a4dcdbbc71148083a5b74a694cee13f4",
+      "identifiers": true
+    },
+    "soul/skills/reply-timeout-on-reconnect.md": {
+      "ru": "279194c481dac95be589fbfe9154d71ad3e52faaf593b611f8b2e0ca5bcaf4f6",
+      "en": "dbf6f5da84aa1c96a09d250b1f5fecc7ea06b27fb19f8d1a88358a5ea905d19c",
+      "fr": "6141abc0ca057e69742369150be518199b1ab5a196d56682a11d0472d410bb2a",
+      "zh": "e8cc4891483415a54d1acad94217e07b155241a69bd9c0dca17336ce7842c5b9",
       "identifiers": true
     },
     "soul/skills/rewriting-myself.md": {
@@ -327,6 +397,20 @@
       "en": "bc2ce6cb6b567eb49334c4afd4b79d6dadd433f88ab0b21d34f5454a2eeda6fc",
       "fr": "477492964497b089bae19862e81e8fbc6163de35c8580e378e43398402254127",
       "zh": "cc26598133d0697a37310a93667b056661cff333a63fb3b4d8c2377be8eeddbe",
+      "identifiers": true
+    },
+    "soul/skills/telegram-channel-comments-addressing.md": {
+      "ru": "44ce9943243b5c37889a0276a8b4ce91b33c4cc57dd161a799360a4ada80cdf2",
+      "en": "11145c675b29c1ef6fb6e05ed8644513def0f26c27aa6ed0dcc436792b60c721",
+      "fr": "f2cb591d2bbc70fa2f4515414c42d0e349a0dbc40d6781de393bf74fdbedfa97",
+      "zh": "1cee238a2aa7b56fd1560fb84ef47d5a0b88016a5544609b821e99b7c4a9cb51",
+      "identifiers": true
+    },
+    "soul/skills/telegram-mtproto-moderation.md": {
+      "ru": "19d98413d0f90320cc207ea88d2b1a0919a0a39da7971e0d5d270d987dc17618",
+      "en": "daac2512e53daef2e2e16cfd2fb91a0ea84262d5d7bf4ee54a9a8c4a23cd4d9b",
+      "fr": "d813834519178ee3a41b0c67eb7ec6fd661f16367505b5aefacaeb67569f833e",
+      "zh": "70441a11194bd42cada8b8b44d20aa917d613c409cfa571ec29afc2756346b6d",
       "identifiers": true
     },
     "soul/skills/telegram-reconnect-delivery.md": {
