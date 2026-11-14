@@ -1,0 +1,10 @@
+# Couches de mémoire et consolidation du contexte
+
+Les couches n'ont pas la même autorité :
+
+1. `memory_life` conserve événements canoniques en ajout seul et queue récente. Un ancien préfixe peut devenir compact immuable et épisodes avec `source_event_ids` / `source_compact_ids`. La frontière des compacts revient dans le cadre. La profondeur augmente la priorité de conservation, pas la vérité. Un matériau omis pour budget n'a pas cessé d'exister ; vérifier séparément l'accès aux événements initiaux.
+2. Un compact est une synthèse de modèle, pas une voix personnelle ni un fait durable établi. `formation` peut relire les sources et vérifier un claim dans un ensemble de preuves figé. `supported`, `contested` et `unsupported` diffèrent. La projection vers dossier/graphe est un transfert de confiance distinct. Une relation privée peut rester claim-only si les arêtes n'ont pas de visibilité. Un claim self/topic ne réécrit pas automatiquement identité ou règles.
+3. `memory/journal/` contient notes explicites et certains événements opérationnels. Le journal brut est une source épisodique, pas une constitution, un dossier ou une liste de désirs automatique. Ne pas supposer une entrée automatique distincte par conversation.
+4. `consolidate_context` est un recours manuel. Le code actuel exige une histoire à rôles `list[dict]` d'au moins huit entrées. Le résumé écrit `[контекст]` dans le journal. En `respond` direct, modifier la liste du code appelant peut raccourcir la source du contexte futur. Dans Telegram, `voice_turn_envelope` fournit un instantané : sa mutation ne réduit pas l'histoire du lanceur ni le cadre suivant. Lire le résultat au lieu de promettre de libérer la fenêtre parce qu'un résumé a été écrit.
+
+Pour la continuité : événements/frontière/épisodes et identifiants sources ; pour un fait durable : claim soutenu et projection ; pour une action : run, reçu, git ou artefact. Une ligne du journal reste un indice jusqu'à provenance plus forte. Réexaminer cet état lorsque `tool_consolidate_context` change.

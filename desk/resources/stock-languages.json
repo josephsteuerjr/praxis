@@ -131,6 +131,13 @@
       "zh": "21b9694a59dcba9d54e7696d8f48fc2ce39e02cc78e0c7f814d3be956ec58508",
       "identifiers": true
     },
+    "soul/skills/consolidate_context.md": {
+      "ru": "47d1b33288932953799d8cf7b0503ba3d6415b2533407ddb27f3f85cddfcce33",
+      "en": "e6b9b37c4c19f5d2f6487da507edd6058738ef8ab1d1fa08eddf1f31622ae47b",
+      "fr": "9584e22db0295ed03f96ece48072f8bc66c8e9f39443c336b702641a18a74370",
+      "zh": "4eeee9824aeb8b9735b0feb3a4e1905a9dc95386055e4041c78170dcc0314ea0",
+      "identifiers": true
+    },
     "soul/skills/cross-namespace-worktree-prune.md": {
       "ru": "add625887acdfe26261b02b86e79f500158bf5c6c2f48baf766cd9f7077484d0",
       "en": "59f1b6964aacf1a7553417f4f8582bb8a47b30cc8f1988f6ce3f01e8a6a512b8",
@@ -299,6 +306,13 @@
       "zh": "5b2aecdf4ef724d51b691f7e1842cd36cf0351aa6f2cdf0792c5e79149151f98",
       "identifiers": true
     },
+    "soul/skills/gui-check-without-graphics.md": {
+      "ru": "fa24181d6df572390bc5d47bd40095bbcb516418dfdba7edbce218811208b266",
+      "en": "c858637a06dc5e70b30805f38c7e9d64a3167b26b655bf15e5dc5c87ed9d5ddd",
+      "fr": "f0c641ba9645a911bcb2c0aad38a9bcf5101574d74aaa87542237b43cf67f446",
+      "zh": "072092ff5ef241773f0c051f28856299c5734d6dc764c14cf28f5318cc50bf1c",
+      "identifiers": true
+    },
     "soul/skills/hands-and-receipts.md": {
       "ru": "618601edf14d487b418c55235f9ba6a9b379cd73cc285e7cbd332b4b9eefede1",
       "en": "ad5e545901b1793897c188722a1cfe0b38808a1778eb931ba72336307570f313",
@@ -346,6 +360,13 @@
       "en": "2e0b3520daeb2a109f0bf22e65e40b600ce01561771ad904e0f9cd4ad1d40acb",
       "fr": "5aae3e0848ab0f004367f3a0804ad2fa938a0718923210c0ff150925391de2d2",
       "zh": "6605b4835ec31d2a540941d5e5300e05a8bb5bae3d896745aef888b71c323589",
+      "identifiers": true
+    },
+    "soul/skills/large-task-preflight.md": {
+      "ru": "92f08657da91a81275e068d9041a27d7be1b38591b630ffc7204b407c1463a00",
+      "en": "ceb86f78d8e1616317714dd23525983c579b9500ec95f1e76763bf4ef2543b1b",
+      "fr": "032d76f1f2b7bc216ce5a6d21e2028819d293d216d7a85cf43f4df33725afb61",
+      "zh": "3f7525091e2c7e7a61df819c01528dc92f0409823876a330fe4e73e757649f25",
       "identifiers": true
     },
     "soul/skills/linked_memory.md": {
@@ -469,6 +490,13 @@
       "zh": "cb977d75e63e5f306eb08570e7dd6dc62bb3e7b7c1def90c0e973383c8e962e6",
       "identifiers": true
     },
+    "soul/skills/praxis-relay-ouroboros-onboarding.md": {
+      "ru": "ef93f05072eb3363eca6ef4e0b6b90ff8166349d499aec187c74acba7244c5d3",
+      "en": "cfa885fe3624f524dde23dfc51c2b81d43e99a7214ba823eea13af90d02f6688",
+      "fr": "725db7c30da22b302dc94886508aca70458f86a7dfcb1b9d56102d90c7b9e889",
+      "zh": "60577e2206b6e45c933e5f2c9c631f35fd31b09940aca160178ac6ed44517fb9",
+      "identifiers": true
+    },
     "soul/skills/praxis-translation-check.md": {
       "ru": "1c2fd6dfbe237a44779a29598bd1ed36c47d4cd5a645b29a5a6a10ca87865e3e",
       "en": "e3b57abdf7371b78df9649190a13fdc0c8faa3561dc7d73fad53c2fb3816bcd2",
@@ -516,6 +544,13 @@
       "en": "0eaa70dceaa6bbd8d6af7ee86be5eb1d6337728e3ce3f51fa617245ccc0ca4d2",
       "fr": "f6cff48185ea3d68d7f16dd2d103c6c1de18d51f9a23623fc9c84e2651cce1b8",
       "zh": "123147e2b237383c232a14070ea2d639a4dcdbbc71148083a5b74a694cee13f4",
+      "identifiers": true
+    },
+    "soul/skills/radiation-emergency-practical-response.md": {
+      "ru": "7f4a2d07bd5770e0b2fa044972faa2ec76015c2b7e3893592619a2bdf22a31df",
+      "en": "3f27f89c3142cfaa6a8e2390ba207e538ab82ff763361076101fab9269ed0941",
+      "fr": "10dc2b26a1f63bfb2d1cff00221894ee62f67b699b5f1fd308dfbc00eb602303",
+      "zh": "be33520011a428e7b469023ea8a1f6f7e8cfbc386560cc1db327bfa71eaf7a05",
       "identifiers": true
     },
     "soul/skills/raw-mtproto-verify-people.md": {
@@ -602,6 +637,13 @@
       "zh": "de094de23e23d02e73f1b8e2a76e007d88c729ced4f6e8117ad0e94040f99fe2",
       "identifiers": true
     },
+    "soul/skills/stochastic-ensemble-audit.md": {
+      "ru": "92f04f1a8f6b539ad82c392227c777ae5711a1392ba5c15d0ec1ff2b14d45bea",
+      "en": "ef792cde51f048a0e7c91aaee005680020e029c443fd61dd80c1e2274c936bed",
+      "fr": "c39261a36c2f122fe967718c5b24b43385ac4da97c02508b13f25d17a4e96233",
+      "zh": "5ae7e539c8b215790b271ba6e3b28e28fa624a9f30469742516309b973290eb3",
+      "identifiers": true
+    },
     "soul/skills/stranger-first-search.md": {
       "ru": "20058c46c41193b48245fdfa55e09db91fd06b602f09725603131a346bd78a80",
       "en": "1167c832fec77c458cacfa811cc8920f1c79aaf800aca0dcf74b6a203b2718d4",
@@ -635,6 +677,13 @@
       "en": "11145c675b29c1ef6fb6e05ed8644513def0f26c27aa6ed0dcc436792b60c721",
       "fr": "f2cb591d2bbc70fa2f4515414c42d0e349a0dbc40d6781de393bf74fdbedfa97",
       "zh": "1cee238a2aa7b56fd1560fb84ef47d5a0b88016a5544609b821e99b7c4a9cb51",
+      "identifiers": true
+    },
+    "soul/skills/telegram-history-archaeology.md": {
+      "ru": "35a58031380977b39adbdff048bbb956ed8586a2872335965a13ba0e1077a09c",
+      "en": "b41c52082cd67d1daf6cc597fa5086c4e551f285f70e0e6e61e9826d3ddf8773",
+      "fr": "8b5db865074a5483375d8c7be0ab8e560e18c97101120a1c2e01cd2f55dd747d",
+      "zh": "c87c38aa70251723f304679fb81020b85dd3403c135f4f9c644d986579db98ba",
       "identifiers": true
     },
     "soul/skills/telegram-mtproto-moderation.md": {
