@@ -1,3 +1,4 @@
+import { t as uiText, locale } from "../../../../lang/lang";
 // Сцена «Ключи»: откуда приходит модель и нужен ли Telegram. Рядом с каждым
 // полем — зачем оно, человеческими словами.
 import { FormScene } from "./base";
@@ -17,22 +18,20 @@ export class KeysScene extends FormScene {
   constructor(root: HTMLElement) {
     super(root);
     const head = el("h2", "form-head");
-    head.append(el("span", "line", "Откуда приходит модель"));
+    head.append(el("span", "line", uiText("ui.setup.ui.src.scenes.keys.dcab2054e6")));
     const lead = el("p", "form-lead",
-      "Модель — единственное, что агент берёт извне. Всё остальное остаётся на этом компьютере.");
+      uiText("ui.setup.ui.src.scenes.keys.10668e9ff1"));
     // Про деньги установщик не говорил ни слова, а первая вкладка — платная по счётчику.
     const money = el("p", "form-lead muted",
-      "О деньгах прямо: по ключу API платишь за каждый ответ по счётчику, потолка нет. " +
-      "По подписке ChatGPT — фиксированная плата, но есть недельное окно запросов. " +
-      "Локальная модель бесплатна, но считает на твоём железе.");
+      uiText("ui.setup.ui.src.scenes.keys.2f6fcb7e68"));
 
     const picker = choice<Provider>({
       value: setup.provider,
       items: [
-        { value: "api", title: "Ключ API", text: "OpenAI и любой совместимый адрес" },
-        { value: "anthropic", title: "Anthropic API", text: "Anthropic, Z.ai, MiniMax, Kimi и совместимые" },
-        { value: "chatgpt", title: "Подписка ChatGPT", text: "вход в аккаунт, без ключа" },
-        { value: "local", title: "Локальная модель", text: "Ollama или LM Studio на этом ПК" },
+        { value: "api", title: uiText("ui.setup.ui.src.scenes.keys.7a63ad80c1"), text: uiText("ui.setup.ui.src.scenes.keys.56f4cbc5fd") },
+        { value: "anthropic", title: "Anthropic API", text: uiText("ui.setup.ui.src.scenes.keys.5c06578d8c") },
+        { value: "chatgpt", title: uiText("ui.setup.ui.src.scenes.keys.f4a43f895c"), text: uiText("ui.setup.ui.src.scenes.keys.1b16e85be8") },
+        { value: "local", title: uiText("ui.setup.ui.src.scenes.keys.1ad4d6964d"), text: uiText("ui.setup.ui.src.scenes.keys.bc2889d0ea") },
       ],
       onChange: (v) => {
         setup.provider = v;
@@ -43,20 +42,20 @@ export class KeysScene extends FormScene {
 
     const api = el("div", "pane");
     const apiGrid = el("div", "form-grid three");
-    const apiModelField = field({ label: "Модель", value: setup.api.model, mono: true, onInput: (v) => (setup.api.model = v) });
+    const apiModelField = field({ label: uiText("ui.setup.ui.src.scenes.keys.f3bdf7cce3"), value: setup.api.model, mono: true, onInput: (v) => (setup.api.model = v) });
     apiGrid.append(
-      field({ label: "Адрес", value: setup.api.base_url, mono: true, onInput: (v) => (setup.api.base_url = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.da82e80563"), value: setup.api.base_url, mono: true, onInput: (v) => (setup.api.base_url = v) }),
       apiModelField,
-      field({ label: "Ключ", value: setup.api.key, type: "password", mono: true, placeholder: "sk-…", onInput: (v) => (setup.api.key = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.248f99a1d2"), value: setup.api.key, type: "password", mono: true, placeholder: "sk-…", onInput: (v) => (setup.api.key = v) }),
     );
     const apiModels = el("div", "models");
     apiModels.hidden = true;
     const probeRow = el("div", "actions");
     const probeOut = el("span", "receipt");
     probeRow.append(
-      button("Проверить ключ", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.2babf9e4d1"), "quiet", async () => {
         probeOut.className = "receipt";
-        probeOut.textContent = "проверяю…";
+        probeOut.textContent = uiText("ui.setup.ui.src.scenes.keys.1bdd492f1c");
         const r = await probeModel(setup.api.base_url, setup.api.key).catch((e) => ({ ok: false, note: String(e), models: [] as string[] }));
         probeOut.className = "receipt " + (r.ok ? "ok" : "err");
         probeOut.textContent = r.note;
@@ -67,18 +66,18 @@ export class KeysScene extends FormScene {
       }),
       probeOut,
     );
-    api.append(apiGrid, probeRow, apiModels, explain("Зачем ключ",
-      "Ключ даёт агенту доступ к модели напрямую. Он лежит только в файле настроек на этом диске и никуда больше не уходит. Адрес и модель — любые OpenAI-совместимые."));
+    api.append(apiGrid, probeRow, apiModels, explain(uiText("ui.setup.ui.src.scenes.keys.77e5917e28"),
+      uiText("ui.setup.ui.src.scenes.keys.9d778cd59e")));
 
     // Anthropic-совместимые: Anthropic и Z.ai (тот же протокол, другой адрес).
     const anthropic = el("div", "pane");
     const anthGrid = el("div", "form-grid three");
-    const anthBase = field({ label: "Адрес", value: setup.anthropic.base_url, mono: true, onInput: (v) => (setup.anthropic.base_url = v) });
-    const anthModel = field({ label: "Модель", value: setup.anthropic.model, mono: true, onInput: (v) => { setup.anthropic.model = v; this.syncEffort(); } });
+    const anthBase = field({ label: uiText("ui.setup.ui.src.scenes.keys.da82e80563"), value: setup.anthropic.base_url, mono: true, onInput: (v) => (setup.anthropic.base_url = v) });
+    const anthModel = field({ label: uiText("ui.setup.ui.src.scenes.keys.f3bdf7cce3"), value: setup.anthropic.model, mono: true, onInput: (v) => { setup.anthropic.model = v; this.syncEffort(); } });
     anthGrid.append(
       anthBase,
       anthModel,
-      field({ label: "Ключ", value: setup.anthropic.key, type: "password", mono: true, placeholder: "sk-ant-…", onInput: (v) => (setup.anthropic.key = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.248f99a1d2"), value: setup.anthropic.key, type: "password", mono: true, placeholder: "sk-ant-…", onInput: (v) => (setup.anthropic.key = v) }),
     );
     // Кнопки провайдеров — из общей с окном таблицы (ui-kit/providers.ts):
     // адрес, модель по умолчанию и честная строка про план и рассуждение.
@@ -103,9 +102,9 @@ export class KeysScene extends FormScene {
     const anthProbeRow = el("div", "actions");
     const anthOut = el("span", "receipt");
     anthProbeRow.append(
-      button("Проверить ключ", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.2babf9e4d1"), "quiet", async () => {
         anthOut.className = "receipt";
-        anthOut.textContent = "проверяю…";
+        anthOut.textContent = uiText("ui.setup.ui.src.scenes.keys.1bdd492f1c");
         const r = await probeModel(setup.anthropic.base_url, setup.anthropic.key, "anthropic").catch((e) => ({ ok: false, note: String(e), models: [] as string[] }));
         anthOut.className = "receipt " + (r.ok ? "ok" : "err");
         anthOut.textContent = r.note;
@@ -117,8 +116,8 @@ export class KeysScene extends FormScene {
       }),
       anthOut,
     );
-    anthropic.append(anthGrid, anthPresets, presetNote, anthProbeRow, anthModels, explain("Один протокол, шесть дверей",
-      "Anthropic, Z.ai, MiniMax, Kimi, DeepSeek и Qwen говорят на протоколе Anthropic Messages: кнопка подставляет адрес и модель, ключ — из кабинета провайдера. Подписки (coding plan) — у Z.ai, MiniMax, Kimi и Qwen; DeepSeek и Anthropic — только по счётчику. Проверка спросит список моделей, если сервер его отдаёт."));
+    anthropic.append(anthGrid, anthPresets, presetNote, anthProbeRow, anthModels, explain(uiText("ui.setup.ui.src.scenes.keys.04ce954c0d"),
+      uiText("ui.setup.ui.src.scenes.keys.2c97eecea1")));
 
     const chatgpt = el("div", "pane");
     const relayRow = el("div", "actions");
@@ -130,14 +129,14 @@ export class KeysScene extends FormScene {
     linkRow.hidden = true;
     const linkOut = el("span", "receipt");
     linkRow.append(
-      button("Открыть страницу входа", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.23b5fabf7b"), "quiet", async () => {
         linkOut.textContent = "";
         await openLoginPage().catch((e) => (linkOut.textContent = String(e)));
       }),
-      button("Скопировать ссылку", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.8d81013698"), "quiet", async () => {
         linkOut.textContent = (await copyText(linkUrl))
-          ? "Ссылка скопирована — вставь её в адресную строку браузера"
-          : "Скопировать не вышло — нажми «Открыть страницу входа»";
+          ? uiText("ui.setup.ui.src.scenes.keys.20cee8c2e0")
+          : uiText("ui.setup.ui.src.scenes.keys.5377f3ed70");
       }),
       linkOut,
     );
@@ -147,16 +146,16 @@ export class KeysScene extends FormScene {
       relayOut.className = "receipt " + (st === "authorized" ? "ok" : "");
       relayOut.textContent =
         st === "authorized"
-          ? "Вход выполнен, он переедет вместе с установкой"
+          ? uiText("ui.setup.ui.src.scenes.keys.891a59bfe4")
           : st === "pending"
-            ? "Ждём вход в браузере. Вкладка не появилась — «Открыть страницу входа» ниже; «Начать вход заново» отменит эту попытку."
-            : "Вход ещё не выполнен";
-      loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
+            ? uiText("ui.setup.ui.src.scenes.keys.c34576dccd")
+            : uiText("ui.setup.ui.src.scenes.keys.5382269d78");
+      loginBtn.textContent = st === "pending" ? uiText("ui.setup.ui.src.scenes.keys.e3539b105f") : uiText("ui.setup.ui.src.scenes.keys.59624437c6");
       linkUrl = st === "pending" ? (await relayLoginUrl().catch(() => null)) || "" : "";
       linkRow.hidden = !linkUrl;
     };
     let poll = 0;
-    const loginBtn = button("Войти в ChatGPT", "quiet", async () => {
+    const loginBtn = button(uiText("ui.setup.ui.src.scenes.keys.59624437c6"), "quiet", async () => {
       relayOut.className = "receipt";
       relayOut.textContent = await relayLogin().catch((e) => String(e));
       window.clearInterval(poll);
@@ -170,20 +169,20 @@ export class KeysScene extends FormScene {
     relayRow.append(loginBtn, relayOut);
     void relayRefresh();
     const chatgptGrid = el("div", "form-grid two");
-    const chatgptModel = field({ label: "Модель", value: setup.chatgpt_model, mono: true, onInput: (v) => (setup.chatgpt_model = v) });
+    const chatgptModel = field({ label: uiText("ui.setup.ui.src.scenes.keys.f3bdf7cce3"), value: setup.chatgpt_model, mono: true, onInput: (v) => (setup.chatgpt_model = v) });
     chatgptGrid.append(chatgptModel);
     const relayModelsBox = el("div", "models");
     relayModelsBox.hidden = true;
     const relayModelsRow = el("div", "actions");
     const relayModelsOut = el("span", "receipt");
     relayModelsRow.append(
-      button("Показать модели реле", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.80b838e2ff"), "quiet", async () => {
         relayModelsOut.className = "receipt";
-        relayModelsOut.textContent = "спрашиваю реле…";
+        relayModelsOut.textContent = uiText("ui.setup.ui.src.scenes.keys.85fd6f5cbe");
         try {
           const ids = await relayModels();
           relayModelsOut.className = "receipt ok";
-          relayModelsOut.textContent = `Реле знает моделей: ${ids.length}`;
+          relayModelsOut.textContent = uiText("ui.setup.ui.src.scenes.keys.d2bc633950", {p0: new Intl.NumberFormat(locale()).format(ids.length)});
           renderModels(relayModelsBox, ids, setup.chatgpt_model, (id) => {
             setup.chatgpt_model = id;
             setInput(chatgptModel, id);
@@ -195,14 +194,14 @@ export class KeysScene extends FormScene {
       }),
       relayModelsOut,
     );
-    chatgpt.append(chatgptGrid, relayModelsRow, relayModelsBox, relayRow, linkRow, explain("Как это работает",
-      "Встроенное реле ходит в ChatGPT по твоей подписке. Вход откроет браузер; учётные данные переедут в установленную программу. Ключ не нужен. Войти можно и позже, в настройках; там же после входа виден список моделей подписки, и модель можно сменить."));
+    chatgpt.append(chatgptGrid, relayModelsRow, relayModelsBox, relayRow, linkRow, explain(uiText("ui.setup.ui.src.scenes.keys.b9f1fffef4"),
+      uiText("ui.setup.ui.src.scenes.keys.d71f679a03")));
 
     const local = el("div", "pane");
     const localGrid = el("div", "form-grid two");
-    const localModelField = field({ label: "Модель", value: setup.local.model, mono: true, placeholder: "например, qwen3:14b", onInput: (v) => (setup.local.model = v) });
+    const localModelField = field({ label: uiText("ui.setup.ui.src.scenes.keys.f3bdf7cce3"), value: setup.local.model, mono: true, placeholder: uiText("ui.setup.ui.src.scenes.keys.ae5036bd22"), onInput: (v) => (setup.local.model = v) });
     localGrid.append(
-      field({ label: "Адрес", value: setup.local.base_url, mono: true, onInput: (v) => (setup.local.base_url = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.da82e80563"), value: setup.local.base_url, mono: true, onInput: (v) => (setup.local.base_url = v) }),
       localModelField,
     );
     const localModels = el("div", "models");
@@ -210,9 +209,9 @@ export class KeysScene extends FormScene {
     const localProbeRow = el("div", "actions");
     const localProbeOut = el("span", "receipt");
     localProbeRow.append(
-      button("Показать модели", "quiet", async () => {
+      button(uiText("ui.setup.ui.src.scenes.keys.b46e85648e"), "quiet", async () => {
         localProbeOut.className = "receipt";
-        localProbeOut.textContent = "спрашиваю…";
+        localProbeOut.textContent = uiText("ui.setup.ui.src.scenes.keys.25cd3cf450");
         const r = await probeModel(setup.local.base_url, "").catch((e) => ({ ok: false, note: String(e), models: [] as string[] }));
         localProbeOut.className = "receipt " + (r.ok ? "ok" : "err");
         localProbeOut.textContent = r.note;
@@ -223,8 +222,8 @@ export class KeysScene extends FormScene {
       }),
       localProbeOut,
     );
-    local.append(localGrid, localProbeRow, localModels, explain("Всё остаётся здесь",
-      "Ollama или LM Studio на этом компьютере. Ключа нет, в сеть ничего не уходит. Модель должна быть уже скачана."));
+    local.append(localGrid, localProbeRow, localModels, explain(uiText("ui.setup.ui.src.scenes.keys.97c8d82d1b"),
+      uiText("ui.setup.ui.src.scenes.keys.c8726872b3")));
 
     this.panes = { api, anthropic, chatgpt, local };
     const paneBox = el("div", "panes");
@@ -236,7 +235,7 @@ export class KeysScene extends FormScene {
     // именно здесь. Прежний единый ряд low…xhigh обещал Anthropic-совместимым
     // серверам то, что до них не доезжало.
     const effortBox = el("div", "effort");
-    effortBox.append(el("h3", "form-sub", "Усилие рассуждения"));
+    effortBox.append(el("h3", "form-sub", uiText("ui.setup.ui.src.scenes.keys.0cd8556749")));
     const effortRow = el("div", "models");
     const effortHint = el("p", "effort-hint");
     const modelForEffort = () =>
@@ -258,22 +257,22 @@ export class KeysScene extends FormScene {
         });
         effortRow.append(chip);
       }
-      if (!plan.chips.length) effortRow.append(el("span", "receipt", "ступень сюда не передаётся"));
+      if (!plan.chips.length) effortRow.append(el("span", "receipt", uiText("ui.setup.ui.src.scenes.keys.f0c92f3ecb")));
       effortHint.textContent = plan.hint;
     };
     this.syncEffort();
     effortBox.append(effortRow, effortHint, explain("",
-      "Сколько модель думает перед ответом: выше усилие — дольше и дороже ответ (рассуждение оплачивается как выходные токены). Менять можно в настройках."));
+      uiText("ui.setup.ui.src.scenes.keys.f538bb04c3")));
 
     const tg = el("div", "tg");
-    tg.append(el("h3", "form-sub", "Telegram, если нужен"));
+    tg.append(el("h3", "form-sub", uiText("ui.setup.ui.src.scenes.keys.445d928971")));
     const tgGrid = el("div", "form-grid two");
     tgGrid.append(
-      field({ label: "Токен бота", value: setup.telegram.bot_token, type: "password", mono: true, placeholder: "от @BotFather", onInput: (v) => (setup.telegram.bot_token = v) }),
-      field({ label: "Твой Telegram id", value: setup.telegram.owner_id, mono: true, placeholder: "число, узнать у @userinfobot", onInput: (v) => (setup.telegram.owner_id = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.81ff0c1357"), value: setup.telegram.bot_token, type: "password", mono: true, placeholder: uiText("ui.setup.ui.src.scenes.keys.978a4520dd"), onInput: (v) => (setup.telegram.bot_token = v) }),
+      field({ label: uiText("ui.setup.ui.src.scenes.keys.add56e0ee1"), value: setup.telegram.owner_id, mono: true, placeholder: uiText("ui.setup.ui.src.scenes.keys.cc5a073f3a"), onInput: (v) => (setup.telegram.owner_id = v) }),
     );
     tg.append(tgGrid, explain("",
-      "Бот — вторая дверь к агенту, кроме окна. Токен выдаёт @BotFather, свой id подскажет @userinfobot: без него агент не поймёт, кто из пишущих его владелец. Можно оставить пустым. Свой аккаунт Telegram для агента (не бот) подключается после установки, в настройках."));
+      uiText("ui.setup.ui.src.scenes.keys.b5bdd20766")));
 
     this.mount(head, lead, money, picker, paneBox, effortBox, tg);
     this.showPane(setup.provider);
@@ -285,34 +284,34 @@ export class KeysScene extends FormScene {
 
   validate(): string | null {
     if (setup.provider === "api") {
-      if (!setup.api.base_url.trim()) return "Нужен адрес модели";
-      if (!setup.api.model.trim()) return "Назови модель";
-      if (!setup.api.key.trim()) return "Нужен ключ API";
+      if (!setup.api.base_url.trim()) return uiText("ui.setup.ui.src.scenes.keys.39d77b0e97");
+      if (!setup.api.model.trim()) return uiText("ui.setup.ui.src.scenes.keys.8947f32411");
+      if (!setup.api.key.trim()) return uiText("ui.setup.ui.src.scenes.keys.7a36ac251c");
     }
     // Ветки anthropic не было вовсе: можно было пройти дальше с пустым адресом,
     // моделью и ключом — установка проходила, а агент молчал навсегда.
     if (setup.provider === "anthropic") {
-      if (!setup.anthropic.base_url.trim()) return "Нужен адрес модели";
-      if (!setup.anthropic.model.trim()) return "Назови модель";
-      if (!setup.anthropic.key.trim()) return "Нужен ключ API";
+      if (!setup.anthropic.base_url.trim()) return uiText("ui.setup.ui.src.scenes.keys.39d77b0e97");
+      if (!setup.anthropic.model.trim()) return uiText("ui.setup.ui.src.scenes.keys.8947f32411");
+      if (!setup.anthropic.key.trim()) return uiText("ui.setup.ui.src.scenes.keys.7a36ac251c");
     }
     if (setup.provider === "local") {
-      if (!setup.local.base_url.trim()) return "Нужен адрес локальной модели";
-      if (!setup.local.model.trim()) return "Назови локальную модель";
+      if (!setup.local.base_url.trim()) return uiText("ui.setup.ui.src.scenes.keys.b091448e67");
+      if (!setup.local.model.trim()) return uiText("ui.setup.ui.src.scenes.keys.9537a18c89");
     }
     // Для chatgpt раньше не проверялось ничего: можно было поставить без входа,
     // и в расписке про подписку не появлялось ни строки — молчание вместо
     // предупреждения. Спрашиваем один раз и пускаем: войти можно и позже.
     if (setup.provider === "chatgpt") {
-      if (!setup.chatgpt_model.trim()) return "Назови модель подписки";
+      if (!setup.chatgpt_model.trim()) return uiText("ui.setup.ui.src.scenes.keys.12b9ad00f3");
       if (this.relay !== "authorized" && !this.relayWarned) {
         this.relayWarned = true;
-        return "Вход в ChatGPT не выполнен — без него агент не ответит. Нажми «Далее» ещё раз, если войдёшь позже в настройках.";
+        return uiText("ui.setup.ui.src.scenes.keys.dfd38810dd");
       }
     }
     const tg = setup.telegram;
     if (tg.bot_token.trim() && !/^\d+$/.test(tg.owner_id.trim())) {
-      return "Для Telegram нужен и твой id: число";
+      return uiText("ui.setup.ui.src.scenes.keys.f49c820746");
     }
     return null;
   }
@@ -335,7 +334,7 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
   // резался по алфавиту, и продукт заявлял «модели нет», хотя её просто обрезали.
   const known = models.includes(current.trim());
   const shown = models.filter((id) => id === current.trim()).concat(models.filter((id) => id !== current.trim())).slice(0, 40);
-  const label = el("span", "models-label", known ? "Доступные модели" : `Модели «${current.trim() || "…"}» в списке нет. Доступные:`);
+  const label = el("span", "models-label", known ? uiText("ui.setup.ui.src.scenes.keys.6b5b2dcdd5") : uiText("ui.setup.ui.src.scenes.keys.297baea812", {p0: String(current.trim() || "…")}));
   box.append(label);
   for (const id of shown) {
     const chip = el("button", "model-chip", id) as HTMLButtonElement;
@@ -344,11 +343,11 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
     chip.addEventListener("click", () => {
       pick(id);
       for (const other of box.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
-      label.textContent = "Доступные модели";
+      label.textContent = uiText("ui.setup.ui.src.scenes.keys.6b5b2dcdd5");
     });
     box.append(chip);
   }
   if (models.length > shown.length) {
-    box.append(el("span", "models-label", `и ещё ${models.length - shown.length} — впиши имя руками`));
+    box.append(el("span", "models-label", uiText("ui.setup.ui.src.scenes.keys.3247b49a56", {p0: new Intl.NumberFormat(locale()).format(models.length - shown.length)})));
   }
 }

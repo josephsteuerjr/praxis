@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../../lang/lang";
 // Сцена «Установить»: сводка решений, кнопка, ход установки листом фаз и кнопка
 // «Открыть». Установка начинается только нажатием кнопки.
 //
@@ -7,6 +8,7 @@
 // на каждом шаге до подмены (требование Егора): новая версия раскладывается рядом,
 // прежняя работает, отмена = откат, прежняя цела. Подмена — доли секунды, в это
 // время кнопка честно говорит, почему её нельзя нажать.
+import { modeOwnedText } from "../../../../ui-kit/window/mode-owned";
 import { MODE_CARDS } from "virtual:helene-modes";
 import { copyText } from "../../../../ui-kit/dom";
 import { FormScene } from "./base";
@@ -16,16 +18,16 @@ import { PRODUCT_NAME, isPraxis } from "../config";
 
 /** Слова фаз на листе — короче, чем в журнале. */
 const PHASE_WORDS: Record<string, string> = {
-  check: "Проверка установщика",
-  backup: "Снимок памяти агента",
-  lay: "Новая версия ложится рядом",
-  rehearse: "Проверка расширений",
-  stop: "Остановка прежней версии",
-  swap: "Подмена — одним движением",
-  configure: "Настройки и конституция",
-  register: "Ярлыки и «Приложения»",
-  service: "Служба Windows",
-  done: "Готово",
+  get check() { return uiText("ui.setup.ui.src.scenes.install.2e8bc78cec"); },
+  get backup() { return uiText("ui.setup.ui.src.scenes.install.99cb80c14e"); },
+  get lay() { return uiText("ui.setup.ui.src.scenes.install.2d3b6086e6"); },
+  get rehearse() { return uiText("ui.setup.ui.src.scenes.install.a1ece660fc"); },
+  get stop() { return uiText("ui.setup.ui.src.scenes.install.090bdaabf9"); },
+  get swap() { return uiText("ui.setup.ui.src.scenes.install.6a54fe1e09"); },
+  get configure() { return uiText("ui.setup.ui.src.scenes.install.f5dc496dbb"); },
+  get register() { return uiText("ui.setup.ui.src.scenes.install.2bbb1c4f2f"); },
+  get service() { return uiText("ui.setup.ui.src.scenes.install.36a571f31a"); },
+  get done() { return uiText("ui.setup.ui.src.scenes.install.ef05d57959"); },
 };
 
 type RowState = "pending" | "active" | "done" | "failed" | "cancelled";
@@ -39,6 +41,11 @@ const ORDER = ["check", "backup", "lay", "rehearse", "stop", "swap", "configure"
 function rank(phase: string): number {
   const i = ORDER.indexOf(phase);
   return i < 0 ? ORDER.length - 1 : i;
+}
+
+export function installCancelled(text: string): boolean {
+  // Native legacy errors keep their protocol prefix independently of UI.
+  return text.startsWith('Отменено') || text.startsWith(uiText("ui.setup.ui.src.scenes.install.23a2a9bfcf"));
 }
 
 export class InstallScene extends FormScene {
@@ -61,16 +68,16 @@ export class InstallScene extends FormScene {
     super(root);
     this.head = el("h2", "form-head");
     this.head.setAttribute("aria-live", "polite");
-    this.head.append(el("span", "line", "Готово к установке"));
+    this.head.append(el("span", "line", uiText("ui.setup.ui.src.scenes.install.359260512b")));
     this.summary = el("dl", "summary");
     this.note = el("p", "form-lead", ""); this.note.hidden = true;
     this.actions = el("div", "install-actions");
-    this.actions.append(button("Установить", "primary", () => void this.run()));
+    this.actions.append(button(uiText("ui.setup.ui.src.scenes.install.b7cd6fae08"), "primary", () => void this.run()));
     this.sheet = el("ol", "sheet");
     this.sheet.hidden = true;
     this.sheetFoot = el("div", "sheet-foot");
     this.sheetFoot.hidden = true;
-    this.cancelBtn = button("Отмена", "quiet", () => void this.cancel());
+    this.cancelBtn = button(uiText("ui.setup.ui.src.scenes.install.8fbe9b75cb"), "quiet", () => void this.cancel());
     this.sheetFoot.append(this.cancelBtn, el("span", "sheet-why", ""));
     this.result = el("div", "install-result");
     this.result.hidden = true;
@@ -92,16 +99,16 @@ export class InstallScene extends FormScene {
 
   prepare(version: string) {
     this.preparation = true;
-    this.head.replaceChildren(el("span", "line", "Подготовка обновления"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.install.4080ca2531")));
     const old = machine.installed?.version;
-    this.note.textContent = `${old ? "Версия " + old : "Установленная версия"}${version ? " → " + version : ""}. Читаю текущие настройки. Память и конституция останутся на месте.`;
+    this.note.textContent = uiText("ui.setup.ui.src.scenes.install.26d218928c", {p0: String(old ? uiText("ui.setup.ui.src.scenes.install.83c21cec4c") + old : uiText("ui.setup.ui.src.scenes.install.319b48dfe2")), p1: String(version ? " → " + version : "")});
     this.note.hidden = false; this.summary.hidden = true; this.actions.hidden = true;
   }
   preparationFailed(error: string, retry: () => void, back: () => void) {
     this.preparation = false;
-    this.head.replaceChildren(el("span", "line", "Обновление пока не началось"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.install.2b5f89a7e3")));
     this.note.textContent = error; this.note.hidden = false;
-    this.actions.replaceChildren(button("Повторить", "primary", retry), button("Вернуться", "quiet", back));
+    this.actions.replaceChildren(button(uiText("ui.setup.ui.src.scenes.install.5189135a61"), "primary", retry), button(uiText("ui.setup.ui.src.scenes.install.6c99e7d8fb"), "quiet", back));
     this.actions.hidden = false;
   }
 
@@ -116,16 +123,16 @@ export class InstallScene extends FormScene {
     if (this.started) return;
     this.summary.replaceChildren();
     if (isPraxis()) {
-      this.row("Что", "окно к агенту на твоём сервере — сам агент живёт там");
+      this.row(uiText("ui.setup.ui.src.scenes.install.c1c487fabc"), uiText("ui.setup.ui.src.scenes.install.07098fad90"));
       this.row(
-        "Подключение",
+        uiText("ui.setup.ui.src.scenes.install.ab71afb97f"),
         machine.installed
-          ? "адрес сервера и ключ канала останутся как были"
-          : "адрес сервера и ключ канала окно спросит при первом запуске",
+          ? uiText("ui.setup.ui.src.scenes.install.0185d25960")
+          : uiText("ui.setup.ui.src.scenes.install.7c86ac777c"),
       );
       const scope = machine.installedFound?.scope || setup.scope;
-      this.row("Для кого", scope === "machine" ? "для всех на этом компьютере" : "только для меня");
-      this.row("Папка", setup.dir);
+      this.row(uiText("ui.setup.ui.src.scenes.install.cc2bd4cf1a"), scope === "machine" ? uiText("ui.setup.ui.src.scenes.install.e6fd18f1d2") : uiText("ui.setup.ui.src.scenes.install.8e19c02a27"));
+      this.row(uiText("ui.setup.ui.src.scenes.install.73a0f69d54"), setup.dir);
       return;
     }
     // Явный switch, а не цепочка тернарников: провайдер anthropic проваливался
@@ -140,7 +147,7 @@ export class InstallScene extends FormScene {
         model = `${setup.anthropic.model} · ${setup.anthropic.base_url}`;
         break;
       case "chatgpt":
-        model = `подписка ChatGPT через встроенное реле · ${setup.chatgpt_model}`;
+        model = uiText("ui.setup.ui.src.scenes.install.90c78206e2", {p0: String(setup.chatgpt_model)});
         break;
       case "local":
         model = `${setup.local.model} · ${setup.local.base_url}`;
@@ -148,55 +155,55 @@ export class InstallScene extends FormScene {
     }
     const inst = machine.installed;
     if (inst) {
-      const ver = inst.version ? `версия ${inst.version}` : "прежняя установка";
+      const ver = inst.version ? uiText("ui.setup.ui.src.scenes.install.0295e8b3df", {p0: String(inst.version)}) : uiText("ui.setup.ui.src.scenes.install.a7a8fe885c");
       this.row(
-        "Уже установлено",
-        `${ver}${inst.agent ? `, агент ${inst.agent}` : ""} — это обновление: перед ним снимется копия памяти, ` +
-          "новая версия ляжет рядом и встанет на место одним движением; память, конституция и настройки останутся",
+        uiText("ui.setup.ui.src.scenes.install.7ca15e3d2d"),
+        uiText("ui.setup.ui.src.scenes.install.390cbcf7be", {p0: String(ver), p1: String(inst.agent ? uiText("ui.setup.ui.src.scenes.install.ac9614b48c", {p0: String(inst.agent)}) : "")}) +
+          uiText("ui.setup.ui.src.scenes.install.3c6abb8eff"),
       );
     } else if (setup.carry_from) {
       const same = setup.carry_from.replace(/[\\/]+$/, "").toLowerCase() === setup.dir.replace(/[\\/]+$/, "").toLowerCase();
       this.row(
-        "Память",
+        uiText("ui.setup.ui.src.scenes.install.3972116405"),
         same
-          ? "остаётся на месте — программа встанет рядом с ней; перед этим снимется её копия"
-          : `копия из ${setup.carry_from} — сама находка не тронется`,
+          ? uiText("ui.setup.ui.src.scenes.install.0f48215776")
+          : uiText("ui.setup.ui.src.scenes.install.cc28d6e60c", {p0: String(setup.carry_from)}),
       );
     }
-    this.row("Агент", setup.agent.trim());
-    this.row("Владелец", setup.owner.trim());
-    this.row("Модель", model);
-    this.row("Telegram", setup.telegram.bot_token.trim() ? "бот подключён" : "только окно");
+    this.row(uiText("ui.setup.ui.src.scenes.install.d5fd08be28"), setup.agent.trim());
+    this.row(uiText("ui.setup.ui.src.scenes.install.e26fad2853"), setup.owner.trim());
+    this.row(uiText("ui.setup.ui.src.scenes.install.f3bdf7cce3"), model);
+    this.row("Telegram", setup.telegram.bot_token.trim() ? uiText("ui.setup.ui.src.scenes.install.c245477077") : uiText("ui.setup.ui.src.scenes.install.b0b81b1661"));
     // Два вопроса — две строки сводки, ровно как на экране выбора. Одной
     // строкой их писать нельзя: из склейки ограды со службой и вырос P0
     // (см. шапку scenes/mode.ts).
     const picked = MODE_CARDS.find((m) => m.name === setup.agent_mode);
-    this.row("Ограда", picked?.title ?? setup.agent_mode);
+    this.row(uiText("ui.setup.ui.src.scenes.install.3c4a44adf1"), modeOwnedText(picked?.title ?? setup.agent_mode));
     this.row(
-      isMac() ? "Служба" : "Служба Windows",
+      isMac() ? uiText("ui.setup.ui.src.scenes.install.dc43cb0ba6") : uiText("ui.setup.ui.src.scenes.install.36a571f31a"),
       setup.service
         ? (isMac()
-            ? "поставить — система спросит пароль администратора"
-            : "поставить — Windows спросит права администратора") +
-          (!isMac() && setup.session0 ? "; нулевая сессия РАЗРЕШЕНА" : "")
-        : "не ставить — программа живёт из окна",
+            ? uiText("ui.setup.ui.src.scenes.install.b57021e8ec")
+            : uiText("ui.setup.ui.src.scenes.install.a04d20eab1")) +
+          (!isMac() && setup.session0 ? uiText("ui.setup.ui.src.scenes.install.fc6895e567") : "")
+        : uiText("ui.setup.ui.src.scenes.install.e76d45a688"),
     );
     this.row(
-      "Управление компьютером",
+      uiText("ui.setup.ui.src.scenes.install.d58fe7fd81"),
       setup.computer
-        ? "включить — агент получит окна, экран, клавиатуру и мышь; сузить права можно в настройках"
-        : "не включать — включается потом, в настройках",
+        ? uiText("ui.setup.ui.src.scenes.install.1eac8d364a")
+        : uiText("ui.setup.ui.src.scenes.install.e8a880c4ec"),
     );
     if (!isMac()) {
       const scope = machine.installedFound?.scope || setup.scope;
       this.row(
-        "Для кого",
+        uiText("ui.setup.ui.src.scenes.install.cc2bd4cf1a"),
         scope === "machine"
-          ? "для всех на этом компьютере" + (machine.elevated ? "" : " — Windows один раз спросит права администратора")
-          : "только для меня",
+          ? uiText("ui.setup.ui.src.scenes.install.e6fd18f1d2") + (machine.elevated ? "" : uiText("ui.setup.ui.src.scenes.install.42d65f070f"))
+          : uiText("ui.setup.ui.src.scenes.install.8e19c02a27"),
       );
     }
-    this.row("Папка", setup.dir);
+    this.row(uiText("ui.setup.ui.src.scenes.install.73a0f69d54"), setup.dir);
   }
 
   /** Лист фаз — целиком с первой секунды: человек видит весь путь, а не ждёт строку. */
@@ -216,7 +223,7 @@ export class InstallScene extends FormScene {
     const li = el("li", "sheet-row");
     li.dataset.state = "pending";
     const dot = el("span", "sheet-dot");
-    const own = this.updating && phase === "configure" ? "Сохранение текущих настроек" : isPraxis() && phase === "configure" ? "Настройки подключения" : PHASE_WORDS[phase];
+    const own = this.updating && phase === "configure" ? uiText("ui.setup.ui.src.scenes.install.7d976e55cf") : isPraxis() && phase === "configure" ? uiText("ui.setup.ui.src.scenes.install.f1e682238b") : PHASE_WORDS[phase];
     const words = el("span", "sheet-label", own || label || phase);
     const detail = el("span", "sheet-detail", "");
     li.append(dot, words, detail);
@@ -265,20 +272,20 @@ export class InstallScene extends FormScene {
     const had = !!machine.installed || !!machine.installedFound;
     why.textContent = can
       ? had
-        ? "Отмена вернёт всё как было: прежняя версия цела, пока новая ложится рядом."
-        : "Отмена уберёт всё разложенное: на диске ничего не останется."
+        ? uiText("ui.setup.ui.src.scenes.install.c10b5caa28")
+        : uiText("ui.setup.ui.src.scenes.install.1042330345")
       : phase === "done"
         ? ""
         : had
-          ? "Сейчас отменить нельзя — это секунды, и прежняя версия уже уступила место."
-          : "Сейчас отменить нельзя — это секунды: программа уже встала на место.";
+          ? uiText("ui.setup.ui.src.scenes.install.9da9fbfa59")
+          : uiText("ui.setup.ui.src.scenes.install.86e30fae03");
   }
 
   private async cancel() {
     this.cancelBtn.disabled = true;
-    this.cancelBtn.textContent = "Отменяю…";
+    this.cancelBtn.textContent = uiText("ui.setup.ui.src.scenes.install.1ec84de7b9");
     try { await cancelInstall(); }
-    catch (e) { this.cancelBtn.disabled = false; this.cancelBtn.textContent = "Отмена"; this.sheetFoot.querySelector<HTMLElement>(".sheet-why")!.textContent = "Отмена не подтверждена: " + String(e); }
+    catch (e) { this.cancelBtn.disabled = false; this.cancelBtn.textContent = uiText("ui.setup.ui.src.scenes.install.8fbe9b75cb"); this.sheetFoot.querySelector<HTMLElement>(".sheet-why")!.textContent = uiText("ui.setup.ui.src.scenes.install.947b008ac9") + String(e); }
   }
 
   private async run() {
@@ -288,12 +295,12 @@ export class InstallScene extends FormScene {
     this.actions.hidden = true;
     this.summary.hidden = true;
     this.result.hidden = true;
-    this.head.replaceChildren(el("span", "line", machine.installed ? "Обновляю" : "Ставлю"));
-    if (this.updating) { this.note.hidden = false; this.note.textContent = "Новая версия готовится рядом. Память, настройки и твои правки сохраняются."; }
+    this.head.replaceChildren(el("span", "line", machine.installed ? uiText("ui.setup.ui.src.scenes.install.6ab055b355") : uiText("ui.setup.ui.src.scenes.install.bb45594902")));
+    if (this.updating) { this.note.hidden = false; this.note.textContent = uiText("ui.setup.ui.src.scenes.install.84f638c3e3"); }
     this.buildSheet();
     this.sheet.hidden = false;
     this.sheetFoot.hidden = false;
-    this.cancelBtn.textContent = "Отмена";
+    this.cancelBtn.textContent = uiText("ui.setup.ui.src.scenes.install.8fbe9b75cb");
     this.cancelBtn.disabled = false;
     this.current = "";
     try {
@@ -304,11 +311,11 @@ export class InstallScene extends FormScene {
     } catch (err) {
       const text = String(err);
       this.sheetFoot.hidden = true;
-      if (text.startsWith("Отменено")) {
+      if (installCancelled(text)) {
         if (this.current) {
           this.mark(this.current, "cancelled");
           const row = this.rows.get(this.current);
-          if (row) row.detail.textContent = "отменено — убрано";
+          if (row) row.detail.textContent = uiText("ui.setup.ui.src.scenes.install.4af1ae1bc5");
         }
         this.showCancelled(text);
       } else {
@@ -321,11 +328,11 @@ export class InstallScene extends FormScene {
   /** Отмена — спокойный итог, не авария. */
   private showCancelled(text: string) {
     this.note.hidden = true;
-    this.head.replaceChildren(el("span", "line", "Отменено"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.install.23a2a9bfcf")));
     this.result.hidden = false;
     this.result.replaceChildren();
-    const lines = el("p", "", machine.installed ? text : "Ничего не установлено: новая версия убрана, на диске её не осталось.");
-    const again = button(this.updating ? "Повторить обновление" : "Начать снова", "primary", () => { this.reset(); if (this.updating) void this.run(); });
+    const lines = el("p", "", machine.installed ? text : uiText("ui.setup.ui.src.scenes.install.2f5d17f78d"));
+    const again = button(this.updating ? uiText("ui.setup.ui.src.scenes.install.976e03d39c") : uiText("ui.setup.ui.src.scenes.install.9c227fe8a7"), "primary", () => { this.reset(); if (this.updating) void this.run(); });
     this.result.append(lines, again);
     this.reveal(this.result);
     again.focus({ preventScroll: true });
@@ -333,19 +340,19 @@ export class InstallScene extends FormScene {
 
   private showFailure(text: string) {
     this.note.hidden = true;
-    this.head.replaceChildren(el("span", "line", "Не вышло"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.install.2f7d0e9398")));
     this.result.hidden = false;
     this.result.replaceChildren();
     const p = el("p", "err", text);
     // Отчёт живёт не только на экране: окно закроют — текст исчезнет навсегда.
     // `copyText`, а не голый `navigator.clipboard`: на macOS страница живёт на
     // helene://localhost без secure context (ui-kit/dom.ts).
-    const copy = button("Скопировать отчёт", "quiet", () => {
+    const copy = button(uiText("ui.setup.ui.src.scenes.install.8ec2c58498"), "quiet", () => {
       void copyText(text).then((ok) => {
-        copy.textContent = ok ? "Скопировано" : "Не скопировалось — выдели текст мышью";
+        copy.textContent = ok ? uiText("ui.setup.ui.src.scenes.install.d2d08c715e") : uiText("ui.setup.ui.src.scenes.install.80053e1245");
       });
     });
-    const again = button("Повторить", "primary", () => {
+    const again = button(uiText("ui.setup.ui.src.scenes.install.5189135a61"), "primary", () => {
       this.reset();
       void this.run();
     });
@@ -363,53 +370,53 @@ export class InstallScene extends FormScene {
     this.result.hidden = true;
     this.summary.hidden = this.updating;
     this.actions.hidden = this.updating;
-    this.head.replaceChildren(el("span", "line", "Готово к установке"));
+    this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.install.359260512b")));
     this.beforeEnter();
   }
 
   private showResult(r: Receipt) {
-    this.head.replaceChildren(el("span", "line", machine.installed ? "Обновлено" : isPraxis() ? "Установлен" : "Установлено"));
+    this.head.replaceChildren(el("span", "line", machine.installed ? uiText("ui.setup.ui.src.scenes.install.798343da0b") : isPraxis() ? uiText("ui.setup.ui.src.scenes.install.0a7f05b43a") : uiText("ui.setup.ui.src.scenes.install.0b29a3640f")));
     this.result.hidden = false;
     this.result.replaceChildren();
     // «absent» приходил и когда службы нет в поставке, и когда владелец отказал
     // в правах: людям говорили про UAC, которого они не видели.
     const service =
       r.service === "running"
-        ? "Служба работает."
+        ? uiText("ui.setup.ui.src.scenes.install.4c4129d446")
         : r.service === "stopped"
-          ? "Служба поставлена, но не запустилась: подробности в журнале службы."
+          ? uiText("ui.setup.ui.src.scenes.install.8804e1dbe5")
           : r.service === "absent"
-            ? "Служба не поставилась: права администратора не были даны."
+            ? uiText("ui.setup.ui.src.scenes.install.5e294efe19")
             : r.service === "missing"
-              ? `Служба не установлена: в этой сборке нет ${isMac() ? "helene-svc" : "helene-svc.exe"}.`
+              ? uiText("ui.setup.ui.src.scenes.install.97bbbd635a", {p0: String(isMac() ? "helene-svc" : "helene-svc.exe")})
               : r.service.startsWith("failed: ")
-                ? `Служба не поставилась: ${r.service.slice(8)}`
+                ? uiText("ui.setup.ui.src.scenes.install.997fb76aa5", {p0: String(r.service.slice(8))})
                 : "";
     const lines = el(
       "p",
       "",
-      isPraxis() ? `Praxis стоит в ${r.dir}. При первом запуске окно спросит адрес сервера и ключ канала, если их ещё нет.` : `${setup.agent.trim() || "Агент"} живёт в ${r.dir}. ${service}`.trim(),
+      isPraxis() ? uiText("ui.setup.ui.src.scenes.install.73d1f487d6", {p0: String(r.dir)}) : uiText("ui.setup.ui.src.scenes.install.b78d9adc3d", {p0: String(setup.agent.trim() || uiText("ui.setup.ui.src.scenes.install.d5fd08be28")), p1: String(r.dir), p2: String(service)}).trim(),
     );
     this.result.append(lines);
-    if (this.updating) { this.note.hidden = true; this.result.append(el("p", "", "Память, настройки и конституция сохранены.")); }
-    if (r.backup) this.result.append(el("p", "muted", `Копия памяти до обновления: ${r.backup}`));
+    if (this.updating) { this.note.hidden = true; this.result.append(el("p", "", uiText("ui.setup.ui.src.scenes.install.d5a146bc67"))); }
+    if (r.backup) this.result.append(el("p", "muted", uiText("ui.setup.ui.src.scenes.install.11166bb8cb", {p0: String(r.backup)})));
     // Предупреждение службы печатаем ТЕКСТОМ здесь: сама служба сказать этого
     // не может — её ставят скрытым поднятым процессом.
     if (r.warning) this.result.append(el("p", "err", r.warning));
     const fails = r.steps.filter((s) => !s.ok);
     if (fails.length) {
       const list = el("ul", "result-notes");
-      for (const s of fails) list.append(el("li", "", `${s.label}: ${s.note ?? "не вышло"}`));
+      for (const s of fails) list.append(el("li", "", `${s.label}: ${s.note ?? uiText("ui.setup.ui.src.scenes.install.8735f485c3")}`));
       this.result.append(list);
     }
     // Промис нельзя терять: если helene.exe не стартует, кнопка «Открыть»
     // молча не делала ничего — ни окна, ни сообщения.
-    const open = button(`Открыть ${PRODUCT_NAME}`, "primary", () => {
+    const open = button(uiText("ui.setup.ui.src.scenes.install.2fd1a2e652", {p0: String(PRODUCT_NAME)}), "primary", () => {
       open.disabled = true;
-      open.textContent = setup.service ? "Жду службу…" : "Открываю…";
+      open.textContent = setup.service ? uiText("ui.setup.ui.src.scenes.install.ad342db83f") : uiText("ui.setup.ui.src.scenes.install.8cee042d13");
       openFrame(r.exe).catch((err) => {
-        const how = isMac() ? "открой Helene.app оттуда" : "открой ярлык на рабочем столе";
-        this.result.append(el("p", "err", `Не удалось открыть Hélène: ${err}. Она установлена в ${r.dir} — ${how}.`));
+        const how = isMac() ? uiText("ui.setup.ui.src.scenes.install.77ed9e9bbb") : uiText("ui.setup.ui.src.scenes.install.bb3eac27d2");
+        this.result.append(el("p", "err", uiText("ui.setup.ui.src.scenes.install.e939683ffb", {p0: String(err), p1: String(r.dir), p2: String(how)})));
       });
     });
     this.result.append(open);

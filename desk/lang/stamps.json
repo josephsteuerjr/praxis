@@ -16038,5 +16038,850 @@
     "en": "880cabd9",
     "fr": "880cabd9",
     "zh": "880cabd9"
+  },
+  "ui.setup.ui.src.scenes.install.2e8bc78cec": {
+    "en": "2e8bc78c",
+    "fr": "2e8bc78c",
+    "zh": "2e8bc78c"
+  },
+  "ui.setup.ui.src.scenes.install.99cb80c14e": {
+    "en": "99cb80c1",
+    "fr": "99cb80c1",
+    "zh": "99cb80c1"
+  },
+  "ui.setup.ui.src.scenes.install.2d3b6086e6": {
+    "en": "2d3b6086",
+    "fr": "2d3b6086",
+    "zh": "2d3b6086"
+  },
+  "ui.setup.ui.src.scenes.install.a1ece660fc": {
+    "en": "a1ece660",
+    "fr": "a1ece660",
+    "zh": "a1ece660"
+  },
+  "ui.setup.ui.src.scenes.install.090bdaabf9": {
+    "en": "090bdaab",
+    "fr": "090bdaab",
+    "zh": "090bdaab"
+  },
+  "ui.setup.ui.src.scenes.install.6a54fe1e09": {
+    "en": "6a54fe1e",
+    "fr": "6a54fe1e",
+    "zh": "6a54fe1e"
+  },
+  "ui.setup.ui.src.scenes.install.f5dc496dbb": {
+    "en": "f5dc496d",
+    "fr": "f5dc496d",
+    "zh": "f5dc496d"
+  },
+  "ui.setup.ui.src.scenes.install.2bbb1c4f2f": {
+    "en": "2bbb1c4f",
+    "fr": "2bbb1c4f",
+    "zh": "2bbb1c4f"
+  },
+  "ui.setup.ui.src.scenes.install.36a571f31a": {
+    "en": "36a571f3",
+    "fr": "36a571f3",
+    "zh": "36a571f3"
+  },
+  "ui.setup.ui.src.scenes.install.ef05d57959": {
+    "en": "ef05d579",
+    "fr": "ef05d579",
+    "zh": "ef05d579"
+  },
+  "ui.setup.ui.src.scenes.install.359260512b": {
+    "en": "35926051",
+    "fr": "35926051",
+    "zh": "35926051"
+  },
+  "ui.setup.ui.src.scenes.install.b7cd6fae08": {
+    "en": "b7cd6fae",
+    "fr": "b7cd6fae",
+    "zh": "b7cd6fae"
+  },
+  "ui.setup.ui.src.scenes.install.8fbe9b75cb": {
+    "en": "8fbe9b75",
+    "fr": "8fbe9b75",
+    "zh": "8fbe9b75"
+  },
+  "ui.setup.ui.src.scenes.install.4080ca2531": {
+    "en": "4080ca25",
+    "fr": "4080ca25",
+    "zh": "4080ca25"
+  },
+  "ui.setup.ui.src.scenes.install.26d218928c": {
+    "en": "26d21892",
+    "fr": "26d21892",
+    "zh": "26d21892"
+  },
+  "ui.setup.ui.src.scenes.install.83c21cec4c": {
+    "en": "83c21cec",
+    "fr": "83c21cec",
+    "zh": "83c21cec"
+  },
+  "ui.setup.ui.src.scenes.install.319b48dfe2": {
+    "en": "319b48df",
+    "fr": "319b48df",
+    "zh": "319b48df"
+  },
+  "ui.setup.ui.src.scenes.install.2b5f89a7e3": {
+    "en": "2b5f89a7",
+    "fr": "2b5f89a7",
+    "zh": "2b5f89a7"
+  },
+  "ui.setup.ui.src.scenes.install.5189135a61": {
+    "en": "5189135a",
+    "fr": "5189135a",
+    "zh": "5189135a"
+  },
+  "ui.setup.ui.src.scenes.install.6c99e7d8fb": {
+    "en": "6c99e7d8",
+    "fr": "6c99e7d8",
+    "zh": "6c99e7d8"
+  },
+  "ui.setup.ui.src.scenes.install.c1c487fabc": {
+    "en": "c1c487fa",
+    "fr": "c1c487fa",
+    "zh": "c1c487fa"
+  },
+  "ui.setup.ui.src.scenes.install.07098fad90": {
+    "en": "07098fad",
+    "fr": "07098fad",
+    "zh": "07098fad"
+  },
+  "ui.setup.ui.src.scenes.install.ab71afb97f": {
+    "en": "ab71afb9",
+    "fr": "ab71afb9",
+    "zh": "ab71afb9"
+  },
+  "ui.setup.ui.src.scenes.install.0185d25960": {
+    "en": "0185d259",
+    "fr": "0185d259",
+    "zh": "0185d259"
+  },
+  "ui.setup.ui.src.scenes.install.7c86ac777c": {
+    "en": "7c86ac77",
+    "fr": "7c86ac77",
+    "zh": "7c86ac77"
+  },
+  "ui.setup.ui.src.scenes.install.cc2bd4cf1a": {
+    "en": "cc2bd4cf",
+    "fr": "cc2bd4cf",
+    "zh": "cc2bd4cf"
+  },
+  "ui.setup.ui.src.scenes.install.e6fd18f1d2": {
+    "en": "e6fd18f1",
+    "fr": "e6fd18f1",
+    "zh": "e6fd18f1"
+  },
+  "ui.setup.ui.src.scenes.install.8e19c02a27": {
+    "en": "8e19c02a",
+    "fr": "8e19c02a",
+    "zh": "8e19c02a"
+  },
+  "ui.setup.ui.src.scenes.install.73a0f69d54": {
+    "en": "73a0f69d",
+    "fr": "73a0f69d",
+    "zh": "73a0f69d"
+  },
+  "ui.setup.ui.src.scenes.install.90c78206e2": {
+    "en": "90c78206",
+    "fr": "90c78206",
+    "zh": "90c78206"
+  },
+  "ui.setup.ui.src.scenes.install.0295e8b3df": {
+    "en": "0295e8b3",
+    "fr": "0295e8b3",
+    "zh": "0295e8b3"
+  },
+  "ui.setup.ui.src.scenes.install.a7a8fe885c": {
+    "en": "a7a8fe88",
+    "fr": "a7a8fe88",
+    "zh": "a7a8fe88"
+  },
+  "ui.setup.ui.src.scenes.install.7ca15e3d2d": {
+    "en": "7ca15e3d",
+    "fr": "7ca15e3d",
+    "zh": "7ca15e3d"
+  },
+  "ui.setup.ui.src.scenes.install.390cbcf7be": {
+    "en": "390cbcf7",
+    "fr": "390cbcf7",
+    "zh": "390cbcf7"
+  },
+  "ui.setup.ui.src.scenes.install.ac9614b48c": {
+    "en": "ac9614b4",
+    "fr": "ac9614b4",
+    "zh": "ac9614b4"
+  },
+  "ui.setup.ui.src.scenes.install.3c6abb8eff": {
+    "en": "3c6abb8e",
+    "fr": "3c6abb8e",
+    "zh": "3c6abb8e"
+  },
+  "ui.setup.ui.src.scenes.install.3972116405": {
+    "en": "39721164",
+    "fr": "39721164",
+    "zh": "39721164"
+  },
+  "ui.setup.ui.src.scenes.install.0f48215776": {
+    "en": "0f482157",
+    "fr": "0f482157",
+    "zh": "0f482157"
+  },
+  "ui.setup.ui.src.scenes.install.cc28d6e60c": {
+    "en": "cc28d6e6",
+    "fr": "cc28d6e6",
+    "zh": "cc28d6e6"
+  },
+  "ui.setup.ui.src.scenes.install.d5fd08be28": {
+    "en": "d5fd08be",
+    "fr": "d5fd08be",
+    "zh": "d5fd08be"
+  },
+  "ui.setup.ui.src.scenes.install.e26fad2853": {
+    "en": "e26fad28",
+    "fr": "e26fad28",
+    "zh": "e26fad28"
+  },
+  "ui.setup.ui.src.scenes.install.f3bdf7cce3": {
+    "en": "f3bdf7cc",
+    "fr": "f3bdf7cc",
+    "zh": "f3bdf7cc"
+  },
+  "ui.setup.ui.src.scenes.install.c245477077": {
+    "en": "c2454770",
+    "fr": "c2454770",
+    "zh": "c2454770"
+  },
+  "ui.setup.ui.src.scenes.install.b0b81b1661": {
+    "en": "b0b81b16",
+    "fr": "b0b81b16",
+    "zh": "b0b81b16"
+  },
+  "ui.setup.ui.src.scenes.install.3c4a44adf1": {
+    "en": "3c4a44ad",
+    "fr": "3c4a44ad",
+    "zh": "3c4a44ad"
+  },
+  "ui.setup.ui.src.scenes.install.dc43cb0ba6": {
+    "en": "dc43cb0b",
+    "fr": "dc43cb0b",
+    "zh": "dc43cb0b"
+  },
+  "ui.setup.ui.src.scenes.install.b57021e8ec": {
+    "en": "b57021e8",
+    "fr": "b57021e8",
+    "zh": "b57021e8"
+  },
+  "ui.setup.ui.src.scenes.install.a04d20eab1": {
+    "en": "a04d20ea",
+    "fr": "a04d20ea",
+    "zh": "a04d20ea"
+  },
+  "ui.setup.ui.src.scenes.install.fc6895e567": {
+    "en": "fc6895e5",
+    "fr": "fc6895e5",
+    "zh": "fc6895e5"
+  },
+  "ui.setup.ui.src.scenes.install.e76d45a688": {
+    "en": "e76d45a6",
+    "fr": "e76d45a6",
+    "zh": "e76d45a6"
+  },
+  "ui.setup.ui.src.scenes.install.d58fe7fd81": {
+    "en": "d58fe7fd",
+    "fr": "d58fe7fd",
+    "zh": "d58fe7fd"
+  },
+  "ui.setup.ui.src.scenes.install.1eac8d364a": {
+    "en": "1eac8d36",
+    "fr": "1eac8d36",
+    "zh": "1eac8d36"
+  },
+  "ui.setup.ui.src.scenes.install.e8a880c4ec": {
+    "en": "e8a880c4",
+    "fr": "e8a880c4",
+    "zh": "e8a880c4"
+  },
+  "ui.setup.ui.src.scenes.install.42d65f070f": {
+    "en": "42d65f07",
+    "fr": "42d65f07",
+    "zh": "42d65f07"
+  },
+  "ui.setup.ui.src.scenes.install.7d976e55cf": {
+    "en": "7d976e55",
+    "fr": "7d976e55",
+    "zh": "7d976e55"
+  },
+  "ui.setup.ui.src.scenes.install.f1e682238b": {
+    "en": "f1e68223",
+    "fr": "f1e68223",
+    "zh": "f1e68223"
+  },
+  "ui.setup.ui.src.scenes.install.c10b5caa28": {
+    "en": "c10b5caa",
+    "fr": "c10b5caa",
+    "zh": "c10b5caa"
+  },
+  "ui.setup.ui.src.scenes.install.1042330345": {
+    "en": "0889b121",
+    "fr": "0889b121",
+    "zh": "0889b121"
+  },
+  "ui.setup.ui.src.scenes.install.9da9fbfa59": {
+    "en": "38b2bdcc",
+    "fr": "38b2bdcc",
+    "zh": "38b2bdcc"
+  },
+  "ui.setup.ui.src.scenes.install.86e30fae03": {
+    "en": "b1223f3e",
+    "fr": "b1223f3e",
+    "zh": "b1223f3e"
+  },
+  "ui.setup.ui.src.scenes.install.1ec84de7b9": {
+    "en": "1ec84de7",
+    "fr": "1ec84de7",
+    "zh": "1ec84de7"
+  },
+  "ui.setup.ui.src.scenes.install.947b008ac9": {
+    "en": "947b008a",
+    "fr": "947b008a",
+    "zh": "947b008a"
+  },
+  "ui.setup.ui.src.scenes.install.6ab055b355": {
+    "en": "6ab055b3",
+    "fr": "6ab055b3",
+    "zh": "6ab055b3"
+  },
+  "ui.setup.ui.src.scenes.install.bb45594902": {
+    "en": "bb455949",
+    "fr": "bb455949",
+    "zh": "bb455949"
+  },
+  "ui.setup.ui.src.scenes.install.84f638c3e3": {
+    "en": "84f638c3",
+    "fr": "84f638c3",
+    "zh": "84f638c3"
+  },
+  "ui.setup.ui.src.scenes.install.23a2a9bfcf": {
+    "en": "23a2a9bf",
+    "fr": "23a2a9bf",
+    "zh": "23a2a9bf"
+  },
+  "ui.setup.ui.src.scenes.install.4af1ae1bc5": {
+    "en": "4af1ae1b",
+    "fr": "4af1ae1b",
+    "zh": "4af1ae1b"
+  },
+  "ui.setup.ui.src.scenes.install.2f5d17f78d": {
+    "en": "907673ef",
+    "fr": "907673ef",
+    "zh": "907673ef"
+  },
+  "ui.setup.ui.src.scenes.install.976e03d39c": {
+    "en": "976e03d3",
+    "fr": "976e03d3",
+    "zh": "976e03d3"
+  },
+  "ui.setup.ui.src.scenes.install.9c227fe8a7": {
+    "en": "9c227fe8",
+    "fr": "9c227fe8",
+    "zh": "9c227fe8"
+  },
+  "ui.setup.ui.src.scenes.install.2f7d0e9398": {
+    "en": "2f7d0e93",
+    "fr": "2f7d0e93",
+    "zh": "2f7d0e93"
+  },
+  "ui.setup.ui.src.scenes.install.8ec2c58498": {
+    "en": "8ec2c584",
+    "fr": "8ec2c584",
+    "zh": "8ec2c584"
+  },
+  "ui.setup.ui.src.scenes.install.d2d08c715e": {
+    "en": "d2d08c71",
+    "fr": "d2d08c71",
+    "zh": "d2d08c71"
+  },
+  "ui.setup.ui.src.scenes.install.80053e1245": {
+    "en": "80053e12",
+    "fr": "80053e12",
+    "zh": "80053e12"
+  },
+  "ui.setup.ui.src.scenes.install.798343da0b": {
+    "en": "798343da",
+    "fr": "798343da",
+    "zh": "798343da"
+  },
+  "ui.setup.ui.src.scenes.install.0a7f05b43a": {
+    "en": "0a7f05b4",
+    "fr": "0a7f05b4",
+    "zh": "0a7f05b4"
+  },
+  "ui.setup.ui.src.scenes.install.0b29a3640f": {
+    "en": "0b29a364",
+    "fr": "0b29a364",
+    "zh": "0b29a364"
+  },
+  "ui.setup.ui.src.scenes.install.4c4129d446": {
+    "en": "4c4129d4",
+    "fr": "4c4129d4",
+    "zh": "4c4129d4"
+  },
+  "ui.setup.ui.src.scenes.install.8804e1dbe5": {
+    "en": "8804e1db",
+    "fr": "8804e1db",
+    "zh": "8804e1db"
+  },
+  "ui.setup.ui.src.scenes.install.5e294efe19": {
+    "en": "5e294efe",
+    "fr": "5e294efe",
+    "zh": "5e294efe"
+  },
+  "ui.setup.ui.src.scenes.install.97bbbd635a": {
+    "en": "97bbbd63",
+    "fr": "97bbbd63",
+    "zh": "97bbbd63"
+  },
+  "ui.setup.ui.src.scenes.install.997fb76aa5": {
+    "en": "997fb76a",
+    "fr": "997fb76a",
+    "zh": "997fb76a"
+  },
+  "ui.setup.ui.src.scenes.install.73d1f487d6": {
+    "en": "73d1f487",
+    "fr": "73d1f487",
+    "zh": "73d1f487"
+  },
+  "ui.setup.ui.src.scenes.install.b78d9adc3d": {
+    "en": "b78d9adc",
+    "fr": "b78d9adc",
+    "zh": "b78d9adc"
+  },
+  "ui.setup.ui.src.scenes.install.d5a146bc67": {
+    "en": "d5a146bc",
+    "fr": "d5a146bc",
+    "zh": "d5a146bc"
+  },
+  "ui.setup.ui.src.scenes.install.11166bb8cb": {
+    "en": "11166bb8",
+    "fr": "11166bb8",
+    "zh": "11166bb8"
+  },
+  "ui.setup.ui.src.scenes.install.8735f485c3": {
+    "en": "8735f485",
+    "fr": "8735f485",
+    "zh": "8735f485"
+  },
+  "ui.setup.ui.src.scenes.install.2fd1a2e652": {
+    "en": "2fd1a2e6",
+    "fr": "2fd1a2e6",
+    "zh": "2fd1a2e6"
+  },
+  "ui.setup.ui.src.scenes.install.ad342db83f": {
+    "en": "ad342db8",
+    "fr": "ad342db8",
+    "zh": "ad342db8"
+  },
+  "ui.setup.ui.src.scenes.install.8cee042d13": {
+    "en": "8cee042d",
+    "fr": "8cee042d",
+    "zh": "8cee042d"
+  },
+  "ui.setup.ui.src.scenes.install.77ed9e9bbb": {
+    "en": "77ed9e9b",
+    "fr": "77ed9e9b",
+    "zh": "77ed9e9b"
+  },
+  "ui.setup.ui.src.scenes.install.bb3eac27d2": {
+    "en": "bb3eac27",
+    "fr": "bb3eac27",
+    "zh": "bb3eac27"
+  },
+  "ui.setup.ui.src.scenes.install.e939683ffb": {
+    "en": "e939683f",
+    "fr": "e939683f",
+    "zh": "e939683f"
+  },
+  "ui.setup.ui.src.scenes.keys.dcab2054e6": {
+    "en": "dcab2054",
+    "fr": "dcab2054",
+    "zh": "dcab2054"
+  },
+  "ui.setup.ui.src.scenes.keys.10668e9ff1": {
+    "en": "d9eea35d",
+    "fr": "d9eea35d",
+    "zh": "d9eea35d"
+  },
+  "ui.setup.ui.src.scenes.keys.2f6fcb7e68": {
+    "en": "c424fd03",
+    "fr": "c424fd03",
+    "zh": "c424fd03"
+  },
+  "ui.setup.ui.src.scenes.keys.7a63ad80c1": {
+    "en": "7a63ad80",
+    "fr": "7a63ad80",
+    "zh": "7a63ad80"
+  },
+  "ui.setup.ui.src.scenes.keys.56f4cbc5fd": {
+    "en": "56f4cbc5",
+    "fr": "56f4cbc5",
+    "zh": "56f4cbc5"
+  },
+  "ui.setup.ui.src.scenes.keys.5c06578d8c": {
+    "en": "5c06578d",
+    "fr": "5c06578d",
+    "zh": "5c06578d"
+  },
+  "ui.setup.ui.src.scenes.keys.f4a43f895c": {
+    "en": "f4a43f89",
+    "fr": "f4a43f89",
+    "zh": "f4a43f89"
+  },
+  "ui.setup.ui.src.scenes.keys.1b16e85be8": {
+    "en": "1b16e85b",
+    "fr": "1b16e85b",
+    "zh": "1b16e85b"
+  },
+  "ui.setup.ui.src.scenes.keys.1ad4d6964d": {
+    "en": "1ad4d696",
+    "fr": "1ad4d696",
+    "zh": "1ad4d696"
+  },
+  "ui.setup.ui.src.scenes.keys.bc2889d0ea": {
+    "en": "bc2889d0",
+    "fr": "bc2889d0",
+    "zh": "bc2889d0"
+  },
+  "ui.setup.ui.src.scenes.keys.f3bdf7cce3": {
+    "en": "f3bdf7cc",
+    "fr": "f3bdf7cc",
+    "zh": "f3bdf7cc"
+  },
+  "ui.setup.ui.src.scenes.keys.da82e80563": {
+    "en": "da82e805",
+    "fr": "da82e805",
+    "zh": "da82e805"
+  },
+  "ui.setup.ui.src.scenes.keys.248f99a1d2": {
+    "en": "248f99a1",
+    "fr": "248f99a1",
+    "zh": "248f99a1"
+  },
+  "ui.setup.ui.src.scenes.keys.2babf9e4d1": {
+    "en": "2babf9e4",
+    "fr": "2babf9e4",
+    "zh": "2babf9e4"
+  },
+  "ui.setup.ui.src.scenes.keys.1bdd492f1c": {
+    "en": "1bdd492f",
+    "fr": "1bdd492f",
+    "zh": "1bdd492f"
+  },
+  "ui.setup.ui.src.scenes.keys.77e5917e28": {
+    "en": "77e5917e",
+    "fr": "77e5917e",
+    "zh": "77e5917e"
+  },
+  "ui.setup.ui.src.scenes.keys.9d778cd59e": {
+    "en": "c5b84c59",
+    "fr": "c5b84c59",
+    "zh": "c5b84c59"
+  },
+  "ui.setup.ui.src.scenes.keys.04ce954c0d": {
+    "en": "8e5e7056",
+    "fr": "8e5e7056",
+    "zh": "8e5e7056"
+  },
+  "ui.setup.ui.src.scenes.keys.2c97eecea1": {
+    "en": "7fa46406",
+    "fr": "7fa46406",
+    "zh": "7fa46406"
+  },
+  "ui.setup.ui.src.scenes.keys.23b5fabf7b": {
+    "en": "23b5fabf",
+    "fr": "23b5fabf",
+    "zh": "23b5fabf"
+  },
+  "ui.setup.ui.src.scenes.keys.8d81013698": {
+    "en": "8d810136",
+    "fr": "8d810136",
+    "zh": "8d810136"
+  },
+  "ui.setup.ui.src.scenes.keys.20cee8c2e0": {
+    "en": "20cee8c2",
+    "fr": "20cee8c2",
+    "zh": "20cee8c2"
+  },
+  "ui.setup.ui.src.scenes.keys.5377f3ed70": {
+    "en": "5377f3ed",
+    "fr": "5377f3ed",
+    "zh": "5377f3ed"
+  },
+  "ui.setup.ui.src.scenes.keys.891a59bfe4": {
+    "en": "891a59bf",
+    "fr": "891a59bf",
+    "zh": "891a59bf"
+  },
+  "ui.setup.ui.src.scenes.keys.c34576dccd": {
+    "en": "c34576dc",
+    "fr": "c34576dc",
+    "zh": "c34576dc"
+  },
+  "ui.setup.ui.src.scenes.keys.5382269d78": {
+    "en": "5382269d",
+    "fr": "5382269d",
+    "zh": "5382269d"
+  },
+  "ui.setup.ui.src.scenes.keys.e3539b105f": {
+    "en": "e3539b10",
+    "fr": "e3539b10",
+    "zh": "e3539b10"
+  },
+  "ui.setup.ui.src.scenes.keys.59624437c6": {
+    "en": "59624437",
+    "fr": "59624437",
+    "zh": "59624437"
+  },
+  "ui.setup.ui.src.scenes.keys.80b838e2ff": {
+    "en": "80b838e2",
+    "fr": "80b838e2",
+    "zh": "80b838e2"
+  },
+  "ui.setup.ui.src.scenes.keys.85fd6f5cbe": {
+    "en": "85fd6f5c",
+    "fr": "85fd6f5c",
+    "zh": "85fd6f5c"
+  },
+  "ui.setup.ui.src.scenes.keys.d2bc633950": {
+    "en": "d2bc6339",
+    "fr": "d2bc6339",
+    "zh": "d2bc6339"
+  },
+  "ui.setup.ui.src.scenes.keys.b9f1fffef4": {
+    "en": "b9f1fffe",
+    "fr": "b9f1fffe",
+    "zh": "b9f1fffe"
+  },
+  "ui.setup.ui.src.scenes.keys.d71f679a03": {
+    "en": "d71f679a",
+    "fr": "d71f679a",
+    "zh": "d71f679a"
+  },
+  "ui.setup.ui.src.scenes.keys.ae5036bd22": {
+    "en": "ae5036bd",
+    "fr": "ae5036bd",
+    "zh": "ae5036bd"
+  },
+  "ui.setup.ui.src.scenes.keys.b46e85648e": {
+    "en": "b46e8564",
+    "fr": "b46e8564",
+    "zh": "b46e8564"
+  },
+  "ui.setup.ui.src.scenes.keys.25cd3cf450": {
+    "en": "25cd3cf4",
+    "fr": "25cd3cf4",
+    "zh": "25cd3cf4"
+  },
+  "ui.setup.ui.src.scenes.keys.97c8d82d1b": {
+    "en": "2170c162",
+    "fr": "2170c162",
+    "zh": "2170c162"
+  },
+  "ui.setup.ui.src.scenes.keys.c8726872b3": {
+    "en": "f2fffc6a",
+    "fr": "f2fffc6a",
+    "zh": "f2fffc6a"
+  },
+  "ui.setup.ui.src.scenes.keys.0cd8556749": {
+    "en": "0cd85567",
+    "fr": "0cd85567",
+    "zh": "0cd85567"
+  },
+  "ui.setup.ui.src.scenes.keys.f0c92f3ecb": {
+    "en": "f0c92f3e",
+    "fr": "f0c92f3e",
+    "zh": "f0c92f3e"
+  },
+  "ui.setup.ui.src.scenes.keys.f538bb04c3": {
+    "en": "993d9e95",
+    "fr": "993d9e95",
+    "zh": "993d9e95"
+  },
+  "ui.setup.ui.src.scenes.keys.445d928971": {
+    "en": "445d9289",
+    "fr": "445d9289",
+    "zh": "445d9289"
+  },
+  "ui.setup.ui.src.scenes.keys.81ff0c1357": {
+    "en": "81ff0c13",
+    "fr": "81ff0c13",
+    "zh": "81ff0c13"
+  },
+  "ui.setup.ui.src.scenes.keys.978a4520dd": {
+    "en": "978a4520",
+    "fr": "978a4520",
+    "zh": "978a4520"
+  },
+  "ui.setup.ui.src.scenes.keys.add56e0ee1": {
+    "en": "add56e0e",
+    "fr": "add56e0e",
+    "zh": "add56e0e"
+  },
+  "ui.setup.ui.src.scenes.keys.cc5a073f3a": {
+    "en": "cc5a073f",
+    "fr": "cc5a073f",
+    "zh": "cc5a073f"
+  },
+  "ui.setup.ui.src.scenes.keys.b5bdd20766": {
+    "en": "b5bdd207",
+    "fr": "b5bdd207",
+    "zh": "b5bdd207"
+  },
+  "ui.setup.ui.src.scenes.keys.39d77b0e97": {
+    "en": "39d77b0e",
+    "fr": "39d77b0e",
+    "zh": "39d77b0e"
+  },
+  "ui.setup.ui.src.scenes.keys.8947f32411": {
+    "en": "8947f324",
+    "fr": "8947f324",
+    "zh": "8947f324"
+  },
+  "ui.setup.ui.src.scenes.keys.7a36ac251c": {
+    "en": "7a36ac25",
+    "fr": "7a36ac25",
+    "zh": "7a36ac25"
+  },
+  "ui.setup.ui.src.scenes.keys.b091448e67": {
+    "en": "b091448e",
+    "fr": "b091448e",
+    "zh": "b091448e"
+  },
+  "ui.setup.ui.src.scenes.keys.9537a18c89": {
+    "en": "9537a18c",
+    "fr": "9537a18c",
+    "zh": "9537a18c"
+  },
+  "ui.setup.ui.src.scenes.keys.12b9ad00f3": {
+    "en": "12b9ad00",
+    "fr": "12b9ad00",
+    "zh": "12b9ad00"
+  },
+  "ui.setup.ui.src.scenes.keys.dfd38810dd": {
+    "en": "dfd38810",
+    "fr": "dfd38810",
+    "zh": "dfd38810"
+  },
+  "ui.setup.ui.src.scenes.keys.f49c820746": {
+    "en": "f49c8207",
+    "fr": "f49c8207",
+    "zh": "f49c8207"
+  },
+  "ui.setup.ui.src.scenes.keys.6b5b2dcdd5": {
+    "en": "6b5b2dcd",
+    "fr": "6b5b2dcd",
+    "zh": "6b5b2dcd"
+  },
+  "ui.setup.ui.src.scenes.keys.297baea812": {
+    "en": "297baea8",
+    "fr": "297baea8",
+    "zh": "297baea8"
+  },
+  "ui.setup.ui.src.scenes.keys.3247b49a56": {
+    "en": "3247b49a",
+    "fr": "3247b49a",
+    "zh": "3247b49a"
+  },
+  "ui.setup.ui.src.setup.7f8130d74a": {
+    "en": "7f8130d7",
+    "fr": "7f8130d7",
+    "zh": "7f8130d7"
+  },
+  "ui.setup.ui.src.setup.d099722e22": {
+    "en": "d099722e",
+    "fr": "d099722e",
+    "zh": "d099722e"
+  },
+  "ui.setup.ui.src.setup.7b612ad1a0": {
+    "en": "7b612ad1",
+    "fr": "7b612ad1",
+    "zh": "7b612ad1"
+  },
+  "ui.setup.ui.src.setup.20cb3e9a13": {
+    "en": "20cb3e9a",
+    "fr": "20cb3e9a",
+    "zh": "20cb3e9a"
+  },
+  "ui.setup.ui.src.setup.f19a32fa3e": {
+    "en": "f19a32fa",
+    "fr": "f19a32fa",
+    "zh": "f19a32fa"
+  },
+  "ui.setup.ui.src.setup.75a74b18af": {
+    "en": "75a74b18",
+    "fr": "75a74b18",
+    "zh": "75a74b18"
+  },
+  "ui.setup.ui.src.setup.1e08d53d74": {
+    "en": "1e08d53d",
+    "fr": "1e08d53d",
+    "zh": "1e08d53d"
+  },
+  "ui.setup.ui.src.setup.ef05d57959": {
+    "en": "ef05d579",
+    "fr": "ef05d579",
+    "zh": "ef05d579"
+  },
+  "ui.setup.ui.src.setup.3b86448710": {
+    "en": "3b864487",
+    "fr": "3b864487",
+    "zh": "3b864487"
+  },
+  "ui.setup.ui.src.setup.009e3a5ea9": {
+    "en": "009e3a5e",
+    "fr": "009e3a5e",
+    "zh": "009e3a5e"
+  },
+  "ui.setup.ui.src.setup.139eb50193": {
+    "en": "139eb501",
+    "fr": "139eb501",
+    "zh": "139eb501"
+  },
+  "ui.setup.ui.src.setup.a490604ff3": {
+    "en": "a490604f",
+    "fr": "a490604f",
+    "zh": "a490604f"
+  },
+  "ui.setup.ui.src.setup.d94094bad6": {
+    "en": "d94094ba",
+    "fr": "d94094ba",
+    "zh": "d94094ba"
+  },
+  "ui.setup.ui.src.setup.fd204d9765": {
+    "en": "fd204d97",
+    "fr": "fd204d97",
+    "zh": "fd204d97"
+  },
+  "ui.setup.ui.src.setup.925cdc08d4": {
+    "en": "925cdc08",
+    "fr": "925cdc08",
+    "zh": "925cdc08"
+  },
+  "ui.setup.ui.src.setup.df26ca18a6": {
+    "en": "df26ca18",
+    "fr": "df26ca18",
+    "zh": "df26ca18"
+  },
+  "ui.setup.ui.src.setup.3697487299": {
+    "en": "36974872",
+    "fr": "36974872",
+    "zh": "36974872"
+  },
+  "ui.setup.ui.src.setup.0e3f54660e": {
+    "en": "0e3f5466",
+    "fr": "0e3f5466",
+    "zh": "0e3f5466"
   }
 }

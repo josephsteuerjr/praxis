@@ -1,3 +1,4 @@
+import { t as uiText } from "../../../lang/lang";
 // Состояние установки и мост к оболочке.
 //
 // Всё, что человек вводит по сценам, живёт здесь одним объектом; установка в
@@ -219,7 +220,7 @@ export async function loadDefaults(): Promise<Defaults> {
   if (!inTauri) {
     // Превью: `?platform=macos` показывает сцены глазами Mac — без службы и тела.
     if (new URLSearchParams(location.search).get("platform") === "macos") {
-      return { dir: "/Users/…/Applications/Helene", payload: null, version: "превью", installed: null, platform: "macos", arch: "aarch64" };
+      return { dir: "/Users/…/Applications/Helene", payload: null, version: uiText("ui.setup.ui.src.setup.7f8130d74a"), installed: null, platform: "macos", arch: "aarch64" };
     }
     const q = new URLSearchParams(location.search);
     const found: Found[] = q.has("found")
@@ -233,7 +234,7 @@ export async function loadDefaults(): Promise<Defaults> {
     return {
       dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
       payload: null,
-      version: q.has("installed") ? "1.2.6" : "превью",
+      version: q.has("installed") ? "1.2.6" : uiText("ui.setup.ui.src.setup.7f8130d74a"),
       installed,
       platform: "windows",
       found,
@@ -256,7 +257,7 @@ export async function uninstallLaunch(): Promise<void> {
 export async function installedSetup(dir: string): Promise<Setup | null> {
   if (!inTauri) {
     const params = new URLSearchParams(location.search);
-    if (params.has("readFail")) throw new Error("Превью: файл настроек недоступен");
+    if (params.has("readFail")) throw new Error(uiText("ui.setup.ui.src.setup.d099722e22"));
     if (params.has("installed")) return { ...setup, dir, agent: "Агент", owner: "Владелец", constitution: "Текущая конституция", accepted: true };
     return null;
   }
@@ -268,24 +269,24 @@ export async function runInstall(onProgress: (p: Progress) => void): Promise<Rec
   if (!inTauri) {
     previewCancel = false;
     const plan: Array<[string, string, boolean]> = [
-      ["check", "Проверяю установщик", true],
-      ["lay", "Раскладываю новую версию рядом", true],
-      ["swap", "Меняю версии местами", false],
-      ["configure", "Записываю настройки и конституцию", false],
-      ["register", "Ярлыки и запись в «Приложениях»", false],
-      ["done", "Готово", false],
+      ["check", uiText("ui.setup.ui.src.setup.7b612ad1a0"), true],
+      ["lay", uiText("ui.setup.ui.src.setup.20cb3e9a13"), true],
+      ["swap", uiText("ui.setup.ui.src.setup.f19a32fa3e"), false],
+      ["configure", uiText("ui.setup.ui.src.setup.75a74b18af"), false],
+      ["register", uiText("ui.setup.ui.src.setup.1e08d53d74"), false],
+      ["done", uiText("ui.setup.ui.src.setup.ef05d57959"), false],
     ];
     const labels = plan.map((p) => p[1]);
     for (const [i, [phase, label, cancellable]] of plan.entries()) {
       if (phase === "lay") {
         for (let f = 0; f <= 1.0001; f += 0.05) {
-          if (previewCancel) throw "Отменено — прежняя версия на месте, ничего не изменилось";
-          onProgress({ step: i + 1, total: plan.length, label, phase, frac: f, detail: `${Math.round(f * 15342)} файлов · ${Math.round(f * 649)} МБ`, cancellable });
+          if (previewCancel) throw uiText("ui.setup.ui.src.setup.3b86448710");
+          onProgress({ step: i + 1, total: plan.length, label, phase, frac: f, detail: uiText("ui.setup.ui.src.setup.009e3a5ea9", {p0: String(Math.round(f * 15342)), p1: String(Math.round(f * 649))}), cancellable });
           await new Promise((r) => setTimeout(r, 160));
         }
         continue;
       }
-      if (previewCancel && cancellable) throw "Отменено — прежняя версия на месте, ничего не изменилось";
+      if (previewCancel && cancellable) throw uiText("ui.setup.ui.src.setup.3b86448710");
       onProgress({ step: i + 1, total: plan.length, label, phase, cancellable });
       await new Promise((r) => setTimeout(r, 650));
     }
@@ -333,7 +334,7 @@ export async function adminRights(): Promise<AdminRights> {
 
 /** Живая проверка адреса и ключа через оболочку; в превью — заглушка. */
 export async function probeModel(baseUrl: string, key: string, framework = "openai"): Promise<{ ok: boolean; note: string; models?: string[] }> {
-  if (!inTauri) return { ok: true, note: "Превью: проверка доступна в установщике", models: ["пример-1", "пример-2"] };
+  if (!inTauri) return { ok: true, note: uiText("ui.setup.ui.src.setup.139eb50193"), models: ["пример-1", "пример-2"] };
   return invoke("probe_model", { baseUrl, key, framework });
 }
 
@@ -344,7 +345,7 @@ export async function relayModels(): Promise<string[]> {
 }
 
 export async function relayLogin(): Promise<string> {
-  if (!inTauri) return "Превью: вход доступен в установщике";
+  if (!inTauri) return uiText("ui.setup.ui.src.setup.a490604ff3");
   return invoke("relay_login");
 }
 
@@ -397,7 +398,7 @@ export async function legacyServices(home: string): Promise<LegacyService[]> {
 
 /** Снять названную службу — только по нажатию кнопки владельцем. */
 export async function removeService(name: string): Promise<string> {
-  if (!inTauri) return `Превью: служба «${name}» снимается в установщике`;
+  if (!inTauri) return uiText("ui.setup.ui.src.setup.d94094bad6", {p0: String(name)});
   return invoke("remove_service", { name });
 }
 
@@ -406,12 +407,12 @@ export async function removeService(name: string): Promise<string> {
 export async function runUninstall(purge: boolean, dir: string, onProgress?: (p: Progress) => void): Promise<string> {
   if (!inTauri) {
     const phases = ["service", "stop", "fence", "files", "done"];
-    const labels = ["Снимаю службу", "Останавливаю программу", "Снимаю ограду песочницы", "Убираю файлы программы", "Готово"];
+    const labels = [uiText("ui.setup.ui.src.setup.fd204d9765"), uiText("ui.setup.ui.src.setup.925cdc08d4"), uiText("ui.setup.ui.src.setup.df26ca18a6"), uiText("ui.setup.ui.src.setup.3697487299"), uiText("ui.setup.ui.src.setup.ef05d57959")];
     for (const [i, label] of labels.entries()) {
       onProgress?.({ step: i + 1, total: labels.length, label, phase: phases[i] });
       await new Promise((r) => setTimeout(r, 450));
     }
-    return "Превью: снятие доступно в установщике";
+    return uiText("ui.setup.ui.src.setup.0e3f54660e");
   }
   const { listen } = await import("@tauri-apps/api/event");
   const stop = await listen<Progress>("uninstall-progress", (e) => onProgress?.(e.payload));
