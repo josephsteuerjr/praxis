@@ -29,7 +29,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { strict as assert } from "node:assert";
 
-import { persistSession0 } from "../src/session0-persist.ts";
+const {persistSession0} = await import("../src/session0-persist.ts");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frameSource = readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8");

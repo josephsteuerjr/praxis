@@ -18213,5 +18213,385 @@
     "en": "6b61601c",
     "fr": "6b61601c",
     "zh": "6b61601c"
+  },
+  "ui.ui.kit.reply.preview.5cea446a41": {
+    "en": "5cea446a",
+    "fr": "5cea446a",
+    "zh": "5cea446a"
+  },
+  "ui.ui.kit.reply.preview.2a801d07ef": {
+    "en": "2a801d07",
+    "fr": "2a801d07",
+    "zh": "2a801d07"
+  },
+  "ui.ui.kit.reply.preview.6e9d47cd62": {
+    "en": "6e9d47cd",
+    "fr": "6e9d47cd",
+    "zh": "6e9d47cd"
+  },
+  "ui.ui.kit.reply.preview.1936a005f1": {
+    "en": "1936a005",
+    "fr": "1936a005",
+    "zh": "1936a005"
+  },
+  "ui.ui.kit.reply.preview.96968066f1": {
+    "en": "96968066",
+    "fr": "96968066",
+    "zh": "96968066"
+  },
+  "ui.ui.kit.reply.preview.8c98423b90": {
+    "en": "8c98423b",
+    "fr": "8c98423b",
+    "zh": "8c98423b"
+  },
+  "ui.ui.kit.reply.preview.48d8c3e9ee": {
+    "en": "48d8c3e9",
+    "fr": "48d8c3e9",
+    "zh": "48d8c3e9"
+  },
+  "ui.ui.kit.reply.preview.3e0ccd92fa": {
+    "en": "3e0ccd92",
+    "fr": "3e0ccd92",
+    "zh": "3e0ccd92"
+  },
+  "ui.ui.kit.reply.preview.1c21d8676a": {
+    "en": "1c21d867",
+    "fr": "1c21d867",
+    "zh": "1c21d867"
+  },
+  "ui.ui.kit.reply.preview.e1f7a3289f": {
+    "en": "e1f7a328",
+    "fr": "e1f7a328",
+    "zh": "e1f7a328"
+  },
+  "ui.app.src.tray.dc5d75e557": {
+    "en": "dc5d75e5",
+    "fr": "dc5d75e5",
+    "zh": "dc5d75e5"
+  },
+  "ui.app.src.tray.da0cbed896": {
+    "en": "da0cbed8",
+    "fr": "da0cbed8",
+    "zh": "da0cbed8"
+  },
+  "ui.app.src.tray.d5fd08be28": {
+    "en": "d5fd08be",
+    "fr": "d5fd08be",
+    "zh": "d5fd08be"
+  },
+  "ui.app.src.tray.05a2107ccd": {
+    "en": "05a2107c",
+    "fr": "05a2107c",
+    "zh": "05a2107c"
+  },
+  "ui.app.src.tray.fc616048bf": {
+    "en": "fc616048",
+    "fr": "fc616048",
+    "zh": "fc616048"
+  },
+  "ui.app.src.tray.eded461928": {
+    "en": "eded4619",
+    "fr": "eded4619",
+    "zh": "eded4619"
+  },
+  "ui.app.src.tray.de5b2d1b50": {
+    "en": "de5b2d1b",
+    "fr": "de5b2d1b",
+    "zh": "de5b2d1b"
+  },
+  "ui.app.src.tray.0d4f3f205a": {
+    "en": "0d4f3f20",
+    "fr": "0d4f3f20",
+    "zh": "0d4f3f20"
+  },
+  "ui.app.src.tray.bbddaa47ea": {
+    "en": "bbddaa47",
+    "fr": "bbddaa47",
+    "zh": "bbddaa47"
+  },
+  "ui.app.src.tray.278ceeea7e": {
+    "en": "278ceeea",
+    "fr": "278ceeea",
+    "zh": "278ceeea"
+  },
+  "ui.app.src.tray.776fccddab": {
+    "en": "776fccdd",
+    "fr": "776fccdd",
+    "zh": "776fccdd"
+  },
+  "ui.ui.kit.window.rooms.c44ad59fc3": {
+    "en": "c44ad59f",
+    "fr": "c44ad59f",
+    "zh": "c44ad59f"
+  },
+  "ui.ui.kit.window.rooms.f5db3a12b7": {
+    "en": "f5db3a12",
+    "fr": "f5db3a12",
+    "zh": "f5db3a12"
+  },
+  "ui.ui.kit.window.rooms.fdd0ed9eee": {
+    "en": "fdd0ed9e",
+    "fr": "fdd0ed9e",
+    "zh": "fdd0ed9e"
+  },
+  "ui.ui.kit.window.rooms.cf7bbf78c5": {
+    "en": "cf7bbf78",
+    "fr": "cf7bbf78",
+    "zh": "cf7bbf78"
+  },
+  "ui.ui.kit.window.rooms.c541a542d2": {
+    "en": "c541a542",
+    "fr": "c541a542",
+    "zh": "c541a542"
+  },
+  "ui.ui.kit.window.rooms.d819841ae5": {
+    "en": "d819841a",
+    "fr": "d819841a",
+    "zh": "d819841a"
+  },
+  "ui.ui.kit.window.source.mode.cards.ee2b81adfa": {
+    "en": "ee2b81ad",
+    "fr": "ee2b81ad",
+    "zh": "ee2b81ad"
+  },
+  "ui.ui.kit.window.source.mode.cards.087f363519": {
+    "en": "087f3635",
+    "fr": "087f3635",
+    "zh": "087f3635"
+  },
+  "ui.ui.kit.window.source.mode.cards.df5e7863ff": {
+    "en": "df5e7863",
+    "fr": "df5e7863",
+    "zh": "df5e7863"
+  },
+  "ui.ui.kit.window.source.mode.cards.fe0ff11387": {
+    "en": "fe0ff113",
+    "fr": "fe0ff113",
+    "zh": "fe0ff113"
+  },
+  "ui.ui.kit.window.source.mode.cards.30e397385e": {
+    "en": "30e39738",
+    "fr": "30e39738",
+    "zh": "30e39738"
+  },
+  "ui.ui.kit.window.source.mode.cards.e045908c0c": {
+    "en": "e045908c",
+    "fr": "e045908c",
+    "zh": "e045908c"
+  },
+  "ui.ui.kit.window.source.mode.cards.8ececa03ff": {
+    "en": "8ececa03",
+    "fr": "8ececa03",
+    "zh": "8ececa03"
+  },
+  "ui.ui.kit.window.source.mode.cards.9cf249e2a8": {
+    "en": "9cf249e2",
+    "fr": "9cf249e2",
+    "zh": "9cf249e2"
+  },
+  "ui.ui.kit.window.source.mode.cards.38aa0ac1ff": {
+    "en": "38aa0ac1",
+    "fr": "38aa0ac1",
+    "zh": "38aa0ac1"
+  },
+  "ui.ui.kit.tray.state.39e74d43c1": {
+    "en": "39e74d43",
+    "fr": "39e74d43",
+    "zh": "39e74d43"
+  },
+  "ui.ui.kit.tray.state.852f1440fa": {
+    "en": "852f1440",
+    "fr": "852f1440",
+    "zh": "852f1440"
+  },
+  "ui.ui.kit.tray.state.415b29cc9d": {
+    "en": "415b29cc",
+    "fr": "415b29cc",
+    "zh": "415b29cc"
+  },
+  "ui.ui.kit.tray.state.d0c0f49919": {
+    "en": "d0c0f499",
+    "fr": "d0c0f499",
+    "zh": "d0c0f499"
+  },
+  "ui.ui.kit.tray.state.3b44ef7af5": {
+    "en": "3b44ef7a",
+    "fr": "3b44ef7a",
+    "zh": "3b44ef7a"
+  },
+  "ui.ui.kit.tray.state.cf59bb7ddb": {
+    "en": "cf59bb7d",
+    "fr": "cf59bb7d",
+    "zh": "cf59bb7d"
+  },
+  "ui.ui.kit.tray.state.3383846d33": {
+    "en": "3383846d",
+    "fr": "3383846d",
+    "zh": "3383846d"
+  },
+  "ui.ui.kit.window.agents.58a2499769": {
+    "en": "58a24997",
+    "fr": "58a24997",
+    "zh": "58a24997"
+  },
+  "ui.ui.kit.window.agents.d5fd08be28": {
+    "en": "d5fd08be",
+    "fr": "d5fd08be",
+    "zh": "d5fd08be"
+  },
+  "ui.ui.kit.window.agents.90c1cf5c46": {
+    "en": "90c1cf5c",
+    "fr": "90c1cf5c",
+    "zh": "90c1cf5c"
+  },
+  "ui.ui.kit.window.agents.e023231fdc": {
+    "en": "e023231f",
+    "fr": "e023231f",
+    "zh": "e023231f"
+  },
+  "ui.ui.kit.window.agents.eefe383f4e": {
+    "en": "eefe383f",
+    "fr": "eefe383f",
+    "zh": "eefe383f"
+  },
+  "ui.ui.kit.window.text.menu.4bef5af780": {
+    "en": "4bef5af7",
+    "fr": "4bef5af7",
+    "zh": "4bef5af7"
+  },
+  "ui.ui.kit.window.text.menu.1ecddf40bf": {
+    "en": "1ecddf40",
+    "fr": "1ecddf40",
+    "zh": "1ecddf40"
+  },
+  "ui.ui.kit.window.text.menu.1399431d76": {
+    "en": "1399431d",
+    "fr": "1399431d",
+    "zh": "1399431d"
+  },
+  "ui.ui.kit.window.text.menu.d2d08c715e": {
+    "en": "d2d08c71",
+    "fr": "d2d08c71",
+    "zh": "d2d08c71"
+  },
+  "ui.ui.kit.window.text.menu.2073abc292": {
+    "en": "2073abc2",
+    "fr": "2073abc2",
+    "zh": "2073abc2"
+  },
+  "ui.ui.kit.window.text.menu.e12904848b": {
+    "en": "e1290484",
+    "fr": "e1290484",
+    "zh": "e1290484"
+  },
+  "ui.ui.kit.model.controls.54e6d12c0b": {
+    "en": "54e6d12c",
+    "fr": "54e6d12c",
+    "zh": "54e6d12c"
+  },
+  "ui.ui.kit.model.controls.cfab7eeca6": {
+    "en": "cfab7eec",
+    "fr": "cfab7eec",
+    "zh": "cfab7eec"
+  },
+  "ui.ui.kit.model.controls.e196cbb8d5": {
+    "en": "e196cbb8",
+    "fr": "e196cbb8",
+    "zh": "e196cbb8"
+  },
+  "ui.ui.kit.model.controls.7464edd852": {
+    "en": "7464edd8",
+    "fr": "7464edd8",
+    "zh": "7464edd8"
+  },
+  "ui.ui.kit.model.controls.8667cdb4e7": {
+    "en": "8667cdb4",
+    "fr": "8667cdb4",
+    "zh": "8667cdb4"
+  },
+  "ui.ui.kit.update.error.1766743687": {
+    "en": "17667436",
+    "fr": "17667436",
+    "zh": "17667436"
+  },
+  "ui.ui.kit.update.error.df2928736f": {
+    "en": "df292873",
+    "fr": "df292873",
+    "zh": "df292873"
+  },
+  "ui.ui.kit.update.error.6432324a5e": {
+    "en": "6432324a",
+    "fr": "6432324a",
+    "zh": "6432324a"
+  },
+  "ui.ui.kit.update.error.aaf727b786": {
+    "en": "aaf727b7",
+    "fr": "aaf727b7",
+    "zh": "aaf727b7"
+  },
+  "ui.ui.kit.window.release.notice.d4998bc841": {
+    "en": "d4998bc8",
+    "fr": "d4998bc8",
+    "zh": "d4998bc8"
+  },
+  "ui.ui.kit.window.release.notice.9c9ba0a56a": {
+    "en": "9c9ba0a5",
+    "fr": "9c9ba0a5",
+    "zh": "9c9ba0a5"
+  },
+  "ui.ui.kit.window.release.notice.5dc8127aa8": {
+    "en": "5dc8127a",
+    "fr": "5dc8127a",
+    "zh": "5dc8127a"
+  },
+  "ui.app.src.session0.persist.407d3da4ad": {
+    "en": "407d3da4",
+    "fr": "407d3da4",
+    "zh": "407d3da4"
+  },
+  "ui.app.src.session0.persist.eddf0a5584": {
+    "en": "eddf0a55",
+    "fr": "eddf0a55",
+    "zh": "eddf0a55"
+  },
+  "ui.ui.kit.feed.scroll.support.f9dbb70ebe": {
+    "en": "f9dbb70e",
+    "fr": "f9dbb70e",
+    "zh": "f9dbb70e"
+  },
+  "ui.ui.kit.feed.scroll.support.2019c0c170": {
+    "en": "2019c0c1",
+    "fr": "2019c0c1",
+    "zh": "2019c0c1"
+  },
+  "ui.ui.kit.window.panel.widths.8c26f9730c": {
+    "en": "8c26f973",
+    "fr": "8c26f973",
+    "zh": "8c26f973"
+  },
+  "ui.ui.kit.window.panel.widths.2f522e25b5": {
+    "en": "2f522e25",
+    "fr": "2f522e25",
+    "zh": "2f522e25"
+  },
+  "ui.ui.kit.window.state.d5fd08be28": {
+    "en": "d5fd08be",
+    "fr": "d5fd08be",
+    "zh": "d5fd08be"
+  },
+  "ui.ui.kit.window.update.operation.controls.1c45a130c3": {
+    "en": "1c45a130",
+    "fr": "1c45a130",
+    "zh": "1c45a130"
+  },
+  "ui.ui.kit.window.update.operation.controls.326245a16e": {
+    "en": "326245a1",
+    "fr": "326245a1",
+    "zh": "326245a1"
+  },
+  "ui.ui.kit.window.update.admission.758e9b696c": {
+    "en": "758e9b69",
+    "fr": "758e9b69",
+    "zh": "758e9b69"
   }
 }

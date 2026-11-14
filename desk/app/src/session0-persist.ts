@@ -1,3 +1,4 @@
+import { t as uiText, UiError } from "../../lang/lang";
 // Немедленная запись ключа верхней ступени (`service.session0`) в helene.json.
 //
 // 05.10, слово владельца: согласие «Разрешить права СИСТЕМЫ» — не черновик, и
@@ -18,7 +19,7 @@ export type ShellFn = (cmd: string, args?: Record<string, unknown>) => Promise<u
 /** Старая оболочка отказывается строкой `stale:<mtime>` — привести её к словам. */
 function toHumanError(e: unknown): Error {
   const text = e instanceof Error ? e.message : String(e ?? "");
-  return /^stale:/.test(text) ? new Error("файл менялся, пока экран был открыт") : e instanceof Error ? e : new Error(text);
+  return /^stale:/.test(text) ? new UiError(uiText("ui.app.src.session0.persist.407d3da4ad")) : e instanceof Error ? e : new Error(text);
 }
 
 /**
@@ -51,7 +52,7 @@ export async function persistSession0(shell: ShellFn, on: boolean): Promise<Pers
     : null;
   // Пустой конфиг — это «файла нет», а не «конфиг из одного ключа»: согласие
   // не должно создавать helene.json, состоящий из одной галочки (ревью 05.10).
-  if (!cfg || !Object.keys(cfg).length) throw new Error("настройки не прочитались");
+  if (!cfg || !Object.keys(cfg).length) throw new UiError(uiText("ui.app.src.session0.persist.eddf0a5584"));
   const svc = cfg.service && typeof cfg.service === "object"
     ? { ...(cfg.service as Record<string, unknown>) }
     : {};
@@ -66,7 +67,7 @@ export async function persistSession0(shell: ShellFn, on: boolean): Promise<Pers
     throw toHumanError(e);
   }
   if (r && typeof r === "object" && r.ok === false) {
-    throw new Error(r.error || "файл менялся, пока экран был открыт");
+    throw r.error ? new Error(r.error) : new UiError(uiText("ui.app.src.session0.persist.407d3da4ad"));
   }
   return {
     base: loaded && loaded.mtime_ns != null ? String(loaded.mtime_ns) : null,

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 const source=resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/update-admission.ts',import.meta.url),'utf8'));
-const code=stripTypeScriptTypes(source).replace(/export /g,'');
+const code=stripTypeScriptTypes(source).replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 const {requestAgentUpdate}=new Function(code+';return {requestAgentUpdate}')();
 const calls=[];
 const receipt={state:'admitted',job:{id:'one-persistent-job'},observer_may_close:true};
@@ -31,7 +31,7 @@ const pollerBegin=frame.indexOf('  // Reconnecting the old UI reads the same ope
 const pollerEnd=frame.indexOf('\n  const updateWork=',pollerBegin);
 assert.ok(pollerBegin>=0 && pollerEnd>pollerBegin,'existing Settings poller and its actual observation state are available');
 const poller=stripTypeScriptTypes(frame.slice(pollerBegin,pollerEnd));
-const controls=stripTypeScriptTypes(resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8'))).replace(/export /g,'');
+const controls=stripTypeScriptTypes(resolvedUiLiterals(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8'))).replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 const makeObserver=new Function('shell',`
  ${controls}
  const pythonUpdate=true,activityScope=()=> 'private-selected',settingsScope='private-selected';

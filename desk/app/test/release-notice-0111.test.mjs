@@ -10,7 +10,7 @@ class Element {
   click(){this.events.get('click')?.();}
   remove(){this.removed=true;}
 }
-const code=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/release-notice.ts',import.meta.url),'utf8')).replace(/export /g,'');
+const code=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/release-notice.ts',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(check){
   const events=new Map(),timers=new Map(),values=new Map();let opened=0;
@@ -36,7 +36,7 @@ await cold.component.refresh();assert.equal(coldCalls,1,'Overlapping refresh nev
 cold.component.dispose();resolve({current:'3.0.0',latest:'3.4.0',newer:true});await turn();
 assert.equal(cold.host.hidden,true);assert.equal(cold.host.removed,true);
 const outage=fixture(async()=>{throw new Error('offline');});await turn();assert.equal(outage.host.hidden,true);outage.component.dispose();
-const controlSource=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8')).replace(/export /g,'');
+const controlSource=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 const controls=new Function(controlSource+';return updateOperationControls;')();
 assert.deepEqual(controls('attention'),{active:true,cancellable:true,cancelLabel:'Закрыть неудавшуюся попытку'});
 assert.equal(controls('cancelled').active,false);assert.equal(controls('superseded').active,false);assert.equal(controls('running').active,true);

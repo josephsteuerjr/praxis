@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Состояние окна. Один объект, без магии; экраны читают его и дёргают bus.
 import contract from "../contract.json";
 import { RecentMap } from "../recent-map";
@@ -105,12 +106,12 @@ export interface Pending {
 }
 
 export const S = {
-  agent: "Агент",
+  agent: uiText("ui.ui.kit.window.state.d5fd08be28"),
   agentState: null as AgentState | null,
   view: "now" as View,
   room: "window",
   // Комната окна зовётся именем агента; до первого /api/state — как и он сам.
-  roomName: "Агент",
+  roomName: uiText("ui.ui.kit.window.state.d5fd08be28"),
   runs: [] as Run[],
   rooms: [] as Room[],
   evOpen: new Set<string>(),

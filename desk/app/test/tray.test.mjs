@@ -1,7 +1,8 @@
+import './fixtures/ru-localization.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { placeTray } from '../../ui-kit/tray-position.ts';
-import { trayStatus, exitNote, engineCommand } from '../../ui-kit/tray-state.ts';
+const {trayStatus,exitNote,engineCommand} = await import('../../ui-kit/tray-state.ts');
 
 test('paper remains inside the work area at every edge, including negative monitor origins', () => {
   for (const area of [{ x: 0, y: 0, width: 1920, height: 1040 }, { x: -1280, y: -720, width: 1280, height: 680 }, { x: 1920, y: 200, width: 640, height: 300 }]) {

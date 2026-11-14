@@ -1,3 +1,4 @@
+import { t as uiText, UiError } from "../../lang/lang";
 // Комнаты окна: список, создание, переименование, удаление.
 //
 // Контракт — desk-notes/КОНТРАКТ-B→A.md §1: `GET /api/chats` (с `kind`),
@@ -67,7 +68,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
     if (!byKey.has(key)) {
       byKey.set(key, {
         key,
-        name: c.title || (kind === "window" ? "Новый чат" : "Без названия"),
+        name: c.title || (kind === "window" ? uiText("ui.ui.kit.window.rooms.c44ad59fc3") : uiText("ui.ui.kit.window.rooms.f5db3a12b7")),
         kind,
         live: false,
         count: c.messages || 0,
@@ -88,7 +89,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
     if (chats !== undefined && isWindowRoom(key) && !byKey.has(key)) continue;
     const room = byKey.get(key) ?? {
       key,
-      name: r.chat_title || (isWindowRoom(key) ? "Новый чат" : "Без названия"),
+      name: r.chat_title || (isWindowRoom(key) ? uiText("ui.ui.kit.window.rooms.c44ad59fc3") : uiText("ui.ui.kit.window.rooms.f5db3a12b7")),
       kind: isWindowRoom(key) ? "window" : "telegram",
       live: false,
       count: 0,
@@ -106,7 +107,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
 }
 
 export async function createRoom(title: string): Promise<Room> {
-  const clean = title.trim() || "Новый чат";
+  const clean = title.trim() || uiText("ui.ui.kit.window.rooms.c44ad59fc3");
   try {
     const r = await post<{ peer_id: string; title: string }>("/api/rooms", { title: clean });
     return { key: r.peer_id, name: r.title || clean, kind: "window", live: false, count: 0, mtime: Date.now() * 1e6 };
@@ -133,12 +134,12 @@ export async function renameRoom(room: Room, title: string): Promise<void> {
   } catch (e) {
     if (!unsupported(e)) throw e;
     S.roomsUnsupported = true;
-    throw new Error("Этот код агента ещё не умеет переименовывать чаты: нужна версия с контрактом комнат (0.3.3).");
+    throw new UiError(uiText("ui.ui.kit.window.rooms.fdd0ed9eee"));
   }
 }
 
 export async function deleteRoom(room: Room): Promise<void> {
-  if (room.key === WINDOW_ROOM) throw new Error("Основной чат удалить нельзя — это голос агента здесь.");
+  if (room.key === WINDOW_ROOM) throw new UiError(uiText("ui.ui.kit.window.rooms.cf7bbf78c5"));
   if (room.stub) {
     writeStub(readStub().filter((r) => r.key !== room.key));
     return;
@@ -148,7 +149,7 @@ export async function deleteRoom(room: Room): Promise<void> {
   } catch (e) {
     if (!unsupported(e)) throw e;
     S.roomsUnsupported = true;
-    throw new Error("Этот код агента ещё не умеет убирать чаты: нужна версия с контрактом комнат (0.3.3).");
+    throw new UiError(uiText("ui.ui.kit.window.rooms.c541a542d2"));
   }
 }
 
@@ -157,7 +158,7 @@ export async function fetchRooms(): Promise<{ runs: Run[]; chats?: ChatRow[]; ch
   const [runs, catalog] = await Promise.all([
     api<Run[]>("/api/runs?limit=200"),
     api<ChatRow[]>("/api/chats").then(chats => ({ chats, chatsError: "" }))
-      .catch(() => ({ chats: undefined, chatsError: "Не удалось загрузить чаты и темы. Показан последний известный список; повторить чтение можно кнопкой ниже." })),
+      .catch(() => ({ chats: undefined, chatsError: uiText("ui.ui.kit.window.rooms.d819841ae5") })),
   ]);
   return { runs, ...catalog };
 }

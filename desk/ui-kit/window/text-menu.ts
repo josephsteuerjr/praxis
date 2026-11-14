@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Меню текста принадлежит окну: WebView не должен рисовать поверх бумаги
 // собственный список «Печать / Другие инструменты». Поля редактирования
 // сохраняют своё меню (вставка, проверка орфографии и отмена).
@@ -10,7 +11,7 @@ export function mountTextMenu(root: HTMLElement): () => void {
   const menu = el("div", "menu text-menu");
   menu.hidden = true;
   menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Действия с текстом");
+  menu.setAttribute("aria-label", uiText("ui.ui.kit.window.text.menu.4bef5af780"));
   document.body.append(menu);
   let previousFocus: HTMLElement | null = null;
   let ranges: Range[] = [];
@@ -63,13 +64,15 @@ export function mountTextMenu(root: HTMLElement): () => void {
     event.stopPropagation();
     close();
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    ranges = inRoot && selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+    // A collapsed caret is not selected text. Its pending selectionchange must
+    // not dismiss a context menu opened for the entire message.
+    ranges = inRoot && selected.trim() && selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
     menu.replaceChildren();
-    item(inRoot && selected.trim() ? "Копировать" : "Копировать сообщение", copyKey, () => {
+    item(inRoot && selected.trim() ? uiText("ui.ui.kit.window.text.menu.1ecddf40bf") : uiText("ui.ui.kit.window.text.menu.1399431d76"), copyKey, () => {
       close(true);
-      void copyText(text).then(ok => toast(ok ? "Скопировано" : "Скопировать не вышло — нажми " + copyKey));
+      void copyText(text).then(ok => toast(ok ? uiText("ui.ui.kit.window.text.menu.d2d08c715e") : uiText("ui.ui.kit.window.text.menu.2073abc292") + copyKey));
     });
-    if (message) item("Выделить сообщение", "", () => {
+    if (message) item(uiText("ui.ui.kit.window.text.menu.e12904848b"), "", () => {
       close(true);
       const range = document.createRange();
       range.selectNodeContents(message);

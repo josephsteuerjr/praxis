@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // Переключатель агентов на полке. Появляется только там, где агентов больше
 // одного, — и только в оболочке: в браузере и на телефоне переключать нечего,
 // они приходят к одному каналу по адресу.
@@ -30,7 +31,7 @@ export function currentId(): string {
 /** Попросить оболочку показать другого агента этой установки. */
 export async function switchTo(id: string): Promise<void> {
   if (!inTauri) {
-    toast("Переключение агентов есть только в приложении на этой машине.");
+    toast(uiText("ui.ui.kit.window.agents.58a2499769"));
     return;
   }
   try {
@@ -60,7 +61,7 @@ export function mountSwitch(host: HTMLElement): void {
   head.setAttribute("aria-expanded", "false");
   head.innerHTML =
     `<span class="agent-dot" aria-hidden="true"></span>` +
-    `<span class="agent-name">${esc(mine?.name || "Агент")}</span>` +
+    `<span class="agent-name">${esc(mine?.name || uiText("ui.ui.kit.window.agents.d5fd08be28"))}</span>` +
     `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>`;
   const menu = el("div", "agent-menu");
   menu.setAttribute("role", "listbox");
@@ -75,10 +76,10 @@ export function mountSwitch(host: HTMLElement): void {
       row.setAttribute("role", "option");
       row.setAttribute("aria-selected", String(a.id === here));
       const why = a.conflict
-        ? `спорит за порт ${a.port} с «${a.conflict}»`
+        ? uiText("ui.ui.kit.window.agents.90c1cf5c46", {p0: String(a.port), p1: String(a.conflict)})
         : !a.enabled
-          ? "снят в настройках"
-          : `порт ${a.port}`;
+          ? uiText("ui.ui.kit.window.agents.e023231fdc")
+          : uiText("ui.ui.kit.window.agents.eefe383f4e", {p0: String(a.port)});
       row.innerHTML =
         `<span class="agent-name">${esc(a.name)}</span><span class="agent-why">${esc(why)}</span>`;
       if (a.id === here) row.classList.add("is-current");

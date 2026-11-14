@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 /** Passive metadata checks. Installing an update always remains a user action. */
 export interface ReleaseSummary { current: string; latest: string; newer: boolean }
 export function releaseNotice(host: HTMLElement, check: () => Promise<ReleaseSummary>, open: () => void,
@@ -8,9 +9,9 @@ export function releaseNotice(host: HTMLElement, check: () => Promise<ReleaseSum
   const hiddenVersion=()=>{try{return storage?.getItem('helene.release-notice.dismissed') || '';}catch{return '';}};
   const label=document.createElement('span');
   const action=document.createElement('button');action.type='button';action.className='release-notice-open';
-  action.textContent='Посмотреть';action.addEventListener('click',()=>{if(alive&&latest)open();});
+  action.textContent=uiText("ui.ui.kit.window.release.notice.d4998bc841");action.addEventListener('click',()=>{if(alive&&latest)open();});
   const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='release-notice-close';
-  dismiss.textContent='×';dismiss.setAttribute('aria-label','Скрыть уведомление об этой версии');
+  dismiss.textContent='×';dismiss.setAttribute('aria-label',uiText("ui.ui.kit.window.release.notice.9c9ba0a56a"));
   dismiss.addEventListener('click',()=>{try{storage?.setItem('helene.release-notice.dismissed',latest);}catch{}host.hidden=true;});
   host.className='release-notice';host.hidden=true;host.setAttribute('role','status');host.append(label,action,dismiss);
   const refresh=async()=>{
@@ -22,7 +23,7 @@ export function releaseNotice(host: HTMLElement, check: () => Promise<ReleaseSum
       checkedAt=Date.now();
       latest=typeof value.latest==='string' ? value.latest.trim().slice(0,80) : '';
       host.hidden=!(value.newer===true&&latest&&latest!==hiddenVersion());
-      label.textContent=host.hidden ? '' : `Доступна новая версия Hélène ${latest}`;
+      label.textContent=host.hidden ? '' : uiText("ui.ui.kit.window.release.notice.5dc8127aa8", {p0: String(latest)});
     } catch { /* A background metadata outage never blocks the working agent. */ }
     finally {pending=false;}
   };

@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 // User-owned panel geometry. No task state or scroll writes belong here.
 export function boundedWidth(value: number, available: number): number {
   return Math.round(Math.min(Math.max(220, available), Math.max(220, value)));
@@ -15,7 +16,7 @@ export function mountPanelWidths(app: HTMLElement): () => void {
     handle.tabIndex = 0;
     handle.setAttribute("role", "separator");
     handle.setAttribute("aria-orientation", "vertical");
-    handle.setAttribute("aria-label", side === "rail" ? "Ширина списка чатов" : "Ширина истории ходов");
+    handle.setAttribute("aria-label", side === "rail" ? uiText("ui.ui.kit.window.panel.widths.8c26f9730c") : uiText("ui.ui.kit.window.panel.widths.2f522e25b5"));
     app.append(handle);
     let desired = parseFloat(getComputedStyle(app).getPropertyValue(variable));
     if (!Number.isFinite(desired)) desired = side === "rail" ? 300 : 380;

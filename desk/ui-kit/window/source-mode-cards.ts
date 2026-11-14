@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 import { el } from './lib';
 
 export type SourceMode = 'clean' | 'preserve';
@@ -6,7 +7,7 @@ let sourceModeSequence = 0;
 /** Native radios keep click, Tab, arrows and Space on the same paper cards. */
 export function sourceModeCards(onChange: (value: SourceMode) => void) {
   const root = el('fieldset', 'source-mode-cards');
-  root.append(el('legend', 'field-label', 'Код программы'));
+  root.append(el('legend', 'field-label', uiText("ui.ui.kit.window.source.mode.cards.ee2b81adfa")));
   const grid = el('div', 'choice source-mode-grid');
   const name = `source-mode-${++sourceModeSequence}`;
   const rows = (['clean', 'preserve'] as const).map(value => {
@@ -16,10 +17,10 @@ export function sourceModeCards(onChange: (value: SourceMode) => void) {
     const input = el('input');
     input.type = 'radio'; input.name = name; input.value = value;
     input.setAttribute('aria-describedby', 'update-source-mode-hint');
-    heading.append(input, el('span', 'choice-title', value === 'clean' ? 'Чистый код' : 'Сохранить правки'));
+    heading.append(input, el('span', 'choice-title', value === 'clean' ? uiText("ui.ui.kit.window.source.mode.cards.087f363519") : uiText("ui.ui.kit.window.source.mode.cards.df5e7863ff")));
     const text = el('span', 'choice-text', value === 'clean'
-      ? 'Установить исходники нового выпуска. Локальные правки кода не переносятся.'
-      : 'Перенести изменения агента в новую версию с проверкой результата и ревью.');
+      ? uiText("ui.ui.kit.window.source.mode.cards.fe0ff11387")
+      : uiText("ui.ui.kit.window.source.mode.cards.30e397385e"));
     const state = el('span', 'source-mode-state');
     label.append(heading, text, state); grid.append(label);
     input.addEventListener('change', () => {
@@ -31,8 +32,8 @@ export function sourceModeCards(onChange: (value: SourceMode) => void) {
   const sync = () => {
     for (const row of rows) {
       row.label.dataset.selected = String(row.input.checked);
-      row.state.textContent = row.input.disabled ? 'Недоступно в этой установке'
-        : row.input.checked ? root.disabled ? 'Выбрано для этой попытки' : 'Выбрано' : 'Выбрать';
+      row.state.textContent = row.input.disabled ? uiText("ui.ui.kit.window.source.mode.cards.e045908c0c")
+        : row.input.checked ? root.disabled ? uiText("ui.ui.kit.window.source.mode.cards.8ececa03ff") : uiText("ui.ui.kit.window.source.mode.cards.9cf249e2a8") : uiText("ui.ui.kit.window.source.mode.cards.38aa0ac1ff");
     }
   };
   root.append(grid);

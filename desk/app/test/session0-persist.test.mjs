@@ -1,3 +1,4 @@
+import './fixtures/ru-localization.mjs';
 // Согласие «Разрешить права СИСТЕМЫ» — не черновик (05.10, слово владельца).
 //
 // На Windows выбор верхней ступени слетал при каждом перезапуске программы
@@ -25,7 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 
-import { persistSession0 } from "../src/session0-persist.ts";
+const {persistSession0} = await import("../src/session0-persist.ts");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "src", "modecard.ts"), "utf8");

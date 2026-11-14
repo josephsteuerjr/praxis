@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 import {effortPlan, fastModeAvailability, type ModelDetails} from './providers';
 import {serviceTierChoices} from './service-tier';
 
@@ -10,7 +11,7 @@ export interface ModelCatalog {
 export function setEffortOptions(select: HTMLSelectElement, choices: Array<{value:string;label:string}>, current: string) {
   select.replaceChildren(...choices.map(choice => new Option(choice.label, choice.value)));
   if (current && !choices.some(choice => choice.value === current)) {
-    const stored = new Option('Сохранено · ' + current, '__stored_effort__', true, true);
+    const stored = new Option(uiText("ui.ui.kit.model.controls.54e6d12c0b") + current, '__stored_effort__', true, true);
     stored.disabled = true;
     select.prepend(stored);
     select.dataset.storedEffort = current;
@@ -21,10 +22,10 @@ export function setEffortOptions(select: HTMLSelectElement, choices: Array<{valu
 }
 
 export function setTierOptions(select: HTMLSelectElement, available: boolean | null, current: string) {
-  const choices = serviceTierChoices(current, 'По настройке провайдера', available === true);
+  const choices = serviceTierChoices(current, uiText("ui.ui.kit.model.controls.cfab7eeca6"), available === true);
   select.replaceChildren(...choices.map(([value,label]) => new Option(label,value)));
   if (current && !choices.some(([value]) => value === current)) {
-    const stored = new Option('Сохранён запрос Fast mode', '__stored_service_tier__', true, true);
+    const stored = new Option(uiText("ui.ui.kit.model.controls.e196cbb8d5"), '__stored_service_tier__', true, true);
     stored.disabled = true;
     select.prepend(stored);
     select.dataset.storedServiceTier = current;
@@ -67,7 +68,7 @@ export function bindBrainModelControls(root: HTMLElement, catalogs: Record<strin
         effort.closest('label')?.after(hint);
       }
       hint.textContent = codex && current === 'none'
-        ? 'В старой настройке сохранено «none». Сейчас применяется рассуждение модели по умолчанию.' : '';
+        ? uiText("ui.ui.kit.model.controls.7464edd852") : '';
       hint.hidden = !hint.textContent;
     };
     form.addEventListener('input', sync);
@@ -80,7 +81,7 @@ export function brainModelProblem(form: HTMLElement | null) {
   const effort = form?.querySelector<HTMLSelectElement>('[data-f=reasoning_effort]');
   const changed = Array.from(form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f=model],[data-f=framework]') || [])
     .some(field => field.value !== field.dataset.was);
-  if (changed && effort?.dataset.storedEffort !== undefined) return 'Выбери допустимое усилие для новой модели или «По умолчанию».';
+  if (changed && effort?.dataset.storedEffort !== undefined) return uiText("ui.ui.kit.model.controls.8667cdb4e7");
   return '';
 }
 

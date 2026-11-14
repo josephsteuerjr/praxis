@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 import '../../ui-kit/fonts.css';
 import '../../ui-kit/tokens.css';
 import '../../ui-kit/window/styles/paper-tokens.css';
@@ -50,17 +51,17 @@ function paint() {
   root.style.maxHeight = Math.max(160, Math.min(580, state?.max_height ?? window.innerHeight) - 48) + 'px';
   root.append(element('div', 'tray-brand', 'Hélène'));
   if (!state) {
-    root.append(element('p', 'tray-status', error ? 'Не удалось уточнить состояние' : 'Уточняю состояние…'));
+    root.append(element('p', 'tray-status', error ? uiText("ui.app.src.tray.dc5d75e557") : uiText("ui.app.src.tray.da0cbed896")));
   } else {
     const current = state.agents.find(a => a.id === state!.current);
-    const name = element('h1', 'tray-name', current?.name || 'Агент'); name.title = name.textContent || '';
+    const name = element('h1', 'tray-name', current?.name || uiText("ui.app.src.tray.d5fd08be28")); name.title = name.textContent || '';
     root.append(name);
     const status = trayStatus(state.owner);
     const row = element('div', 'tray-status');
-    row.append(element('span', 'tray-dot ' + status.tone), element('span', '', pending ? 'Применяю…' : status.text));
+    row.append(element('span', 'tray-dot ' + status.tone), element('span', '', pending ? uiText("ui.app.src.tray.05a2107ccd") : status.text));
     root.append(row);
     if (state.agents.length > 1) {
-      const agents = element('div', 'tray-agents'); agents.setAttribute('aria-label', 'Выбрать агента');
+      const agents = element('div', 'tray-agents'); agents.setAttribute('aria-label', uiText("ui.app.src.tray.fc616048bf"));
       for (const a of state.agents) {
         const pick = button(a.name, () => shell('switch_agent', { id: a.id }));
         pick.dataset.action = 'agent:' + a.id;
@@ -71,22 +72,22 @@ function paint() {
       root.append(agents);
     }
   }
-  const open = button('Открыть Элен', () => shell('tray_open_main')); open.dataset.action = 'open'; root.append(open);
+  const open = button(uiText("ui.app.src.tray.eded461928"), () => shell('tray_open_main')); open.dataset.action = 'open'; root.append(open);
   if (state) {
     const cmd = engineCommand(state.owner);
     const stopped = !!state.owner.stopped || state.owner.enabled === false || state.owner.runner_alive === false;
-    const control = button(stopped ? 'Запустить движок' : 'Аварийный стоп', () => shell(cmd!.cmd, cmd!.args), false);
+    const control = button(stopped ? uiText("ui.app.src.tray.de5b2d1b50") : uiText("ui.app.src.tray.0d4f3f205a"), () => shell(cmd!.cmd, cmd!.args), false);
     control.dataset.action = 'engine'; control.disabled ||= !cmd;
-    if (!cmd) control.title = 'Управление движком на этой платформе недоступно';
+    if (!cmd) control.title = uiText("ui.app.src.tray.bbddaa47ea");
     root.append(control);
     if (state.owner.supported && !state.owner.stopped && stopped) {
-      const panic = button('Аварийный стоп всех агентов', () => shell('owner_control', { action: 'panic' }), false);
+      const panic = button(uiText("ui.app.src.tray.278ceeea7e"), () => shell('owner_control', { action: 'panic' }), false);
       panic.dataset.action = 'panic'; root.append(panic);
     }
   }
   if (error) { const msg = element('p', 'tray-error', error); msg.setAttribute('role', 'alert'); root.append(msg); }
   const footer = element('div', 'tray-footer');
-  const quit = button('Выйти из Элен', () => shell('tray_exit')); quit.dataset.action = 'exit'; footer.append(quit);
+  const quit = button(uiText("ui.app.src.tray.776fccddab"), () => shell('tray_exit')); quit.dataset.action = 'exit'; footer.append(quit);
   if (state) footer.append(element('p', 'tray-note', exitNote(state)));
   root.append(footer);
   root.scrollTop = scrollTop;
