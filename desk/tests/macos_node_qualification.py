@@ -33,7 +33,7 @@ def main():
     def install(name):return name,run([TOOLS/'bin/npm','ci','--prefix',REPO/'desk'/name,'--cache',TOOLS/'cache','--audit=false','--fund=false'],name.replace('/','-')+'-ci.log')
     with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:installed=dict(pool.map(install,names))
     assert not any(installed.values()),installed
-    files=sorted((REPO/'desk/app/test').glob('*.mjs'))
+    files=sorted((REPO/'desk/app/test').glob('*.test.mjs'))
     code=run([TOOLS/'bin/node','--test','--test-concurrency='+str(os.cpu_count()),*files],'all-node-tests.log',timeout=1800)
     # Logs are diagnostics, never executor/cache material copied to a user.
     for name in ('_logs','_update-notifier-last-checked'):

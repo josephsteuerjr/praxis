@@ -41,7 +41,8 @@ def python_stands() -> list[Path]:
 
 
 def window_stands() -> list[Path]:
-    return sorted((DESK / "app" / "test").glob("*.mjs"))
+    # Browser acceptance has a separate real-browser fixture/executable gate.
+    return sorted((DESK / "app" / "test").glob("*.test.mjs"))
 
 
 def run(cmd: list[str], cwd: Path, name: str, quiet: bool,
