@@ -2733,14 +2733,23 @@ def _forge_maintenance_tick(tree, forge, review) -> None:
     from deskd import forge_control
     from localharness import source_update
 
-    def control(task_id, action, *, agent_id="", expected_generation=""):
+    def control(task_id, action, *, agent_id="", expected_generation="", host_binding="", reason=""):
         callback = getattr(forge, "control", None)
         if not callable(callback):
             return {"ok": False, "status": "unsupported",
                     "reason": "Selected preserved Forge lacks the owner-control API"}
         if action == "resume" and (owner_stop.stopped() or owner_stop.paused()):
             return {"ok": False, "status": "refused", "reason": "Owner Stop/Pause is active"}
-        receipt = callback(task_id, action, agent_id=agent_id, expected_generation=expected_generation)
+        recovery = {}
+        if action == 'prepare_recovery':
+            import inspect
+            parameters = inspect.signature(callback).parameters
+            if not ('host_binding' in parameters and 'reason' in parameters) and not any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                return {'ok': False, 'status': 'unsupported',
+                        'reason': 'Selected preserved Forge lacks the custody-recovery API'}
+            recovery = {'host_binding': host_binding, 'reason': reason}
+        receipt = callback(task_id, action, agent_id=agent_id, expected_generation=expected_generation, **recovery)
         if isinstance(receipt, dict) and "ok" not in receipt:
             receipt = {**receipt, "ok": receipt.get("status") not in {
                 "refused", "unknown", "unsupported", "error", "failed"}}

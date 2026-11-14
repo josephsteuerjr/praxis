@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 from functools import lru_cache
 import json
+import os
 import re
 from pathlib import Path
 
@@ -154,6 +155,8 @@ def _recovered_status(folder: Path, result: dict) -> str | None:
     root = Path(__file__).resolve().parents[2]
     path = root/'tree/forge_recovery.py'
     if not path.is_file():
+        path = root/'helene/core/forge_recovery.py'
+    if not path.is_file():
         path = root/'praxis/forge_recovery.py'
     if not path.is_file():
         return None
@@ -225,6 +228,10 @@ def _unit(folder: Path, task_id: str) -> dict:
         "request_status": str(request.get("status") or ""),
         "custody": "recovered_boundary" if recovered is not None else "unresolved_stop" if unresolved else "result" if result else "unknown",
         "custody_recovered": recovered is not None,
+        "recovery": {"available": (os.name == 'nt' and request.get('scope', 'self') == 'self'
+                                      and not request.get('device_id') and not request.get('remote')
+                                      and not (folder/'windows-job.json').exists() and recovered is None),
+                     "witness_recorded": (folder/'custody-reboot-witness.json').is_file()},
         "created": request.get("created"), "finished": result.get("finished"),
         "started": process.get('birth') if isinstance(process,dict) and process.get('adapter')=='psutil-v1' else None,
         "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,

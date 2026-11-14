@@ -3,6 +3,7 @@ from contextlib import nullcontext
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -144,6 +145,36 @@ class RecoveredReader(unittest.TestCase):
             self.assertEqual(self.row()['status'],'stop_pending')
             stock.unlink()
             self.assertEqual(self.row()['status'],'stop_pending')
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows same-host proof reader')
+class WindowsProofReader(unittest.TestCase):
+    def test_shipped_companion_validates_proof_without_ambient_profile_imports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary);root=base/'workspace';root.mkdir()
+            task=base/'memory/.forge/tasks/code-windows-reader'
+            unit=task/'agents/agent-old';unit.mkdir(parents=True)
+            def put(path,value): path.write_text(json.dumps(value),encoding='utf-8')
+            put(task/'task.json',{'id':task.name,'root':str(root),'scope':'self','status':'active'})
+            put(unit/'request.json',{'id':unit.name,'task_id':task.name,'root':str(root),'scope':'self',
+                'status':'running','supervisor_pid':111,'supervisor_started_at':'fixture-birth'})
+            put(unit/'stop.json',{'state':'unresolved'})
+            code=ROOT/'helene/core/forge_recovery.py'
+            stat=code.stat();validator=reader._recovery_validator(code,(stat.st_ino,stat.st_mtime_ns,stat.st_size))
+            custody=validator.windows_custody()
+            owner=SimpleNamespace(_mutation_lock=lambda *a:nullcontext(),_atomic_json=put,
+                                  _proc_started_at=lambda *a:'fixture-birth',_event=mock.Mock())
+            proc=SimpleNamespace(pid=111,custody_identity=lambda:{'kind':'windows-job','job_name':custody.new_job_name()})
+            custody.bind(owner,unit,proc)
+            with mock.patch.object(custody,'stop_job',return_value='job_empty'): custody.reconcile(owner,unit)
+            before={p:p.read_bytes() for p in unit.iterdir() if p.is_file()}
+            with mock.patch.dict(sys.modules,{'forge_windows_custody':None,'forge_recovery':None}):
+                row=reader.task_detail(base,task.name)['agents'][0]
+            self.assertTrue(row['custody_recovered']);self.assertEqual(row['status'],'lost')
+            self.assertFalse(row['recovery']['available'])
+            self.assertEqual({p:p.read_bytes() for p in unit.iterdir() if p.is_file()},before)
+            put(unit/'progress.json',{'generation':'changed-after-recovery'})
+            self.assertFalse(reader.task_detail(base,task.name)['agents'][0]['custody_recovered'])
 
 
 if __name__=='__main__':

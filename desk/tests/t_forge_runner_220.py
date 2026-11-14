@@ -79,6 +79,27 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(forge_control.receipt(self.tree, "a" * 32)["state"], "observed")
         pipeline.assert_called_once_with(self.tree, self.core, self.review.service, paused=False, stopped=False)
 
+    def test_actual_maintenance_forwards_recovery_confirmation_without_reboot(self):
+        fields={'host_binding':'verified-local-execution-host','reason':'owner confirmed original Windows host'}
+        forge_control.enqueue(self.tree,self.task,'prepare_recovery',command_id='f'*32,**fields)
+        self.core.control.return_value={'status':'prepared'}
+        with mock.patch.object(source_update,'tick'): self.tick()
+        self.core.control.assert_called_once_with(self.task,'prepare_recovery',agent_id='',expected_generation='',**fields)
+        self.assertEqual(forge_control.receipt(self.tree,'f'*32)['result']['status'],'prepared')
+
+    def test_old_authored_core_gets_explicit_unsupported_recovery(self):
+        forge_control.enqueue(self.tree,self.task,'prepare_recovery',command_id='f'*32,
+            host_binding='verified-local-execution-host',reason='owner confirmation')
+        calls=[]
+        def old_control(task_id,action,*,agent_id='',expected_generation=''):
+            calls.append(action)
+        self.core.control=old_control
+        with mock.patch.object(source_update,'tick'): self.tick()
+        self.assertEqual(calls,[])
+        receipt=forge_control.receipt(self.tree,'f'*32)
+        self.assertFalse(receipt['ok'])
+        self.assertEqual(receipt['result']['status'],'unsupported')
+
     def test_pause_and_stop_block_queue_resume_but_still_consume_stop(self):
         for stopped in (False, True):
             with self.subTest(stopped=stopped):

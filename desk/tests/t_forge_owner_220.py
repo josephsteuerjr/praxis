@@ -140,6 +140,34 @@ class OwnerForge(unittest.TestCase):
             self.assertEqual(control.consume_pending(self.base, callback), [])
             callback.assert_called_once()
 
+    def test_recovery_confirmation_roundtrips_through_owner_route_and_queue(self):
+        generation = reader.tasks(self.base)[0]['agents'][0]['observation']['generation']
+        body = {'task_id':self.task.name, 'agent_id':self.unit.name,
+                'expected_generation':generation, 'command_id':'b'*32,
+                'action':'prepare_recovery', 'host_binding':'verified-local-execution-host',
+                'reason':'confirmed original computer; old tree unknown'}
+        with mock.patch.object(readers,'tree',return_value=self.base):
+            queued = asyncio.run(deskapp._r_forge_control(deskapp.Call({}, {}, body, False, 'owner')))
+        self.assertEqual(queued['state'],'queued')
+        callback=mock.Mock(return_value={'status':'prepared'})
+        observed=control.consume_pending(self.base,callback)
+        callback.assert_called_once_with(self.task.name,'prepare_recovery',agent_id=self.unit.name,
+            expected_generation=generation,host_binding=body['host_binding'],reason=body['reason'])
+        self.assertEqual(observed[0]['result']['status'],'prepared')
+        self.assertEqual(observed[0]['command']['host_binding'],body['host_binding'])
+        control.consume_pending(self.base,callback);self.assertEqual(callback.call_count,1)
+
+    def test_preparation_needs_explicit_confirmation_and_cannot_rebind_command(self):
+        kwargs={'command_id':'c'*32}
+        with self.assertRaises(reader.ReadError):
+            control.enqueue(self.base,self.task.name,'prepare_recovery',**kwargs)
+        fields={'host_binding':'verified-local-execution-host','reason':'original computer confirmed'}
+        control.enqueue(self.base,self.task.name,'prepare_recovery',**kwargs,**fields)
+        with self.assertRaises(reader.ReadError):
+            control.enqueue(self.base,self.task.name,'prepare_recovery',**kwargs,**{**fields,'reason':'changed'})
+        with self.assertRaises(reader.ReadError):
+            control.enqueue(self.base,self.task.name,'recover',command_id='d'*32,**fields)
+
     def test_arbitrary_paths_identity_mismatch_and_read_failures_not_empty(self):
         for value in ("../code-fixture", "C:\\secret", "/secret", "..", "a/b"):
             with self.assertRaises(reader.ReadError):

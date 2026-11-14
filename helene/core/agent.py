@@ -6819,8 +6819,10 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
     return f"Марки убраны в {cleared} {plural}; правки владельца теперь часть текста без служебных строк."
 
 
-def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '') -> str:
-    return json.dumps(forge.control(task_id,action,agent_id,expected_generation),ensure_ascii=False)
+def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '',
+                        host_binding: str = '', reason: str = '') -> str:
+    return json.dumps(forge.control(task_id,action,agent_id,expected_generation,
+                                   host_binding=host_binding,reason=reason),ensure_ascii=False)
 
 
 def tool_coding_review(task_id: str,action: str = 'status',**kwargs) -> str:
@@ -9139,7 +9141,7 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'coding_checkpoint': 'коммит-чекпоинт рабочего дерева задачи',
  'coding_verify': 'план и матрица проверок задачи',
  'coding_swarm': 'координация субагентов: план, запуск, почта',
- 'coding_control': 'пауза, остановка и явное безопасное продолжение задачи или ветки команды',
+ 'coding_control': 'пауза, остановка, безопасное продолжение и доказательное восстановление владения задачей',
  'coding_review': 'независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями проверок',
  'coding_learn': 'уроки инженерии по задаче: recall / record',
  'server_status': 'сервер, где я живу: здоровье и сервисы (только чтение)',

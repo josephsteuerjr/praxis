@@ -1,14 +1,17 @@
-"""Explicit local/host custody recovery from a witnessed kernel reboot.
+"""Validate explicit custody recovery without relabelling historical outcomes.
 
 Original request/result/Stop bytes stay untouched. This proves extinction of an
-old execution boundary, never success or a clean Stop. Windows/remote-device
-executions and unbound launch histories remain unknown.
+old execution boundary, never success or a clean Stop. Windows named-Job and
+prepared reboot proofs live in the shipped companion. Remote-device executions
+and executions without an independent local boundary proof remain unknown.
 """
 from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import importlib.util
 import json
+from functools import lru_cache
 from pathlib import Path
 import sys
 
@@ -18,6 +21,17 @@ KINDS = {'agents':('agent_spawned','agent_id'),
          'processes':('process_started','process_id'),
          'verifications':('verification_started','verification_id')}
 TERMINAL = {'done','error','failed','stalled','stopped','timed_out','passed','passed_with_skips','cancelled'}
+
+
+@lru_cache(maxsize=1)
+def windows_custody():
+    # Desk loads this validator by absolute path. Load its companion from the
+    # same shipped tree, never a mutable profile module on ambient sys.path.
+    path = Path(__file__).with_name('forge_windows_custody.py')
+    spec = importlib.util.spec_from_file_location('_helene_windows_custody_validator', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def kernel_boundary() -> dict:
@@ -103,6 +117,8 @@ def read_recovery(directory: Path) -> dict | None:
         proof = json.loads(_bytes(directory/FILE))
         if not isinstance(proof,dict):
             return None
+        if proof.get('schema') in {'helene.forge.windows-job-recovery.v1', 'helene.forge.windows-reboot-recovery.v1'}:
+            return windows_custody().read_recovery(directory)
         if proof.get('schema') != SCHEMA or proof.get('unit_id') != directory.name:
             return None
         if proof.get('task_id') != directory.parents[1].name or proof.get('unit_kind') != directory.parent.name:

@@ -41,13 +41,14 @@ def group_live(pgid: int) -> bool | None:
 
 class WindowsJob:
     """No breakaway permission: descendants inherit this exact job."""
-    def __init__(self):
+    def __init__(self, name=None, *, open_existing=False, terminate=False):
         import ctypes as c
         from ctypes import wintypes as w
         self.c = c
         self.api = k = c.WinDLL('kernel32', use_last_error=True)
-        for name, args, result in (
+        for api_name, args, result in (
             ('CreateJobObjectW', [c.c_void_p, w.LPCWSTR], w.HANDLE),
+            ('OpenJobObjectW', [w.DWORD, w.BOOL, w.LPCWSTR], w.HANDLE),
             ('SetInformationJobObject', [w.HANDLE, c.c_int, c.c_void_p, w.DWORD], w.BOOL),
             ('QueryInformationJobObject', [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p], w.BOOL),
             ('AssignProcessToJobObject', [w.HANDLE, w.HANDLE], w.BOOL),
@@ -55,7 +56,7 @@ class WindowsJob:
             ('OpenThread', [w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
             ('ResumeThread', [w.HANDLE], w.DWORD),
             ('CloseHandle', [w.HANDLE], w.BOOL)):
-            fn = getattr(k, name);fn.argtypes = args;fn.restype = result
+            fn = getattr(k, api_name);fn.argtypes = args;fn.restype = result
         class Limits(c.Structure):
             _fields_ = [('user', c.c_int64), ('job_user', c.c_int64), ('flags', w.DWORD),
                         ('min_ws', c.c_size_t), ('max_ws', c.c_size_t), ('active', w.DWORD),
@@ -69,8 +70,21 @@ class WindowsJob:
                         ('active', w.DWORD), ('terminated', w.DWORD)]
         self.Accounting = Accounting
         self.Extended = Extended
-        self.handle = k.CreateJobObjectW(None, None)
+        self.name = name
+        c.set_last_error(0)
+        self.handle = (k.OpenJobObjectW(0x4 | (0x8 if terminate else 0), False, name)
+                       if open_existing else k.CreateJobObjectW(None, name))
+        error = c.get_last_error()
         if not self.handle:raise c.WinError(c.get_last_error())
+        if open_existing:
+            limits = Extended()
+            if not k.QueryInformationJobObject(self.handle, 9, c.byref(limits), c.sizeof(limits), None):
+                error = c.WinError(c.get_last_error());self.close();raise error
+            if not limits.basic.flags & 0x2000 or limits.basic.flags & (0x800 | 0x1000):
+                self.close();raise OSError('Job does not retain non-breakaway kill-on-close custody')
+            return
+        if name and error == 183:  # ERROR_ALREADY_EXISTS: never adopt or alter a foreign job.
+            self.close();raise FileExistsError('Named command Job already exists')
         limits = Extended();limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE
         if not k.SetInformationJobObject(self.handle, 9, c.byref(limits), c.sizeof(limits)):
             error = c.WinError(c.get_last_error());self.close();raise error
@@ -128,7 +142,10 @@ class CommandProcess:
     """
     def __init__(self, command, **kwargs):
         self._lock = threading.RLock()
-        self._job = WindowsJob() if os.name == 'nt' else None
+        job_name = kwargs.pop('windows_job_name', None)
+        if job_name and os.name != 'nt':
+            raise ValueError('Named Windows Job requires Windows')
+        self._job = WindowsJob(job_name) if os.name == 'nt' else None
         self.returncode = None
         self._stopped = False
         self._deferred = bool(kwargs.pop('defer_start', False))
@@ -238,7 +255,8 @@ class CommandProcess:
         if self._custody:
             return {'kind': 'linux-subreaper-v1' if self._linux_custody else 'posix-admission-v1',
                     'pid': self.pid, 'directory': str(self._custody), 'nonce': self._nonce}
-        return {'kind': 'windows-job' if self._job else 'posix-group', 'pid': self.pid}
+        return {'kind': 'windows-job' if self._job else 'posix-group', 'pid': self.pid,
+                **({'job_name': self._job.name} if self._job and self._job.name else {})}
 
     def _leader_exited(self):
         if self._job:return self._proc.poll() is not None

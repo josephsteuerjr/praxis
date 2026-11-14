@@ -247,7 +247,8 @@ def argv_facts(*, executor, cwd, argv, program, stdin_text, started, code=None,
 
 
 def launch(command, *, cwd, stdout, stdin=None, env=None, shell=False,
-           executable=None, custody_directory=None, defer_start=False, parent_lifeline=False):
+           executable=None, custody_directory=None, defer_start=False, parent_lifeline=False,
+           windows_job_name=None):
     import hand_bridge
     import run_context
     import step_control
@@ -265,12 +266,13 @@ def launch(command, *, cwd, stdout, stdin=None, env=None, shell=False,
         from command_process import CommandProcess
         with step_control.starting(context.run_id) if controlled else contextlib.nullcontext():
             process = CommandProcess(command, custody_directory=custody_directory,
-                                     defer_start=defer_start, parent_lifeline=parent_lifeline, **kwargs)
+                                     defer_start=defer_start, parent_lifeline=parent_lifeline,
+                                     windows_job_name=windows_job_name, **kwargs)
             try:return step_control.track(process) if controlled else process
             except BaseException:
                 process.stop_tree()
                 raise
-    if defer_start:
+    if defer_start or windows_job_name:
         raise ValueError('deferred launch requires a custody directory')
     if os.name == 'nt':
         return _HomeWindowsProcess(command, **kwargs)

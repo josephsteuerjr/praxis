@@ -3086,6 +3086,9 @@ def _retain_foreground_unknown(task_id: str, proc: subprocess.Popen, command: st
         # A concurrent Stop may already have proved the exit. Do not downgrade
         # that exact receipt with our older failed census.
         settled = _read_json(d / 'stop.json', {}) or {}
+        import forge_recovery
+        if forge_recovery.read_recovery(d):
+            return unit_id
         if settled.get('state') == 'settled' and (d / 'result.json').exists():
             return unit_id
         _atomic_json(d / "state.json", {"child_pid": proc.pid, "foreground": True,
@@ -3267,17 +3270,25 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 proc = command_execution.launch(launch, shell=use_shell, executable=executable, stdin=source,
                                         cwd=str(place), stdout=log_file,defer_start=True,
                                         custody_directory=directory/'command-custody',
+                                        **({'windows_job_name': _windows_job_name()} if os.name == 'nt' else {}),
                                         env=command_execution.child_env(script_env, _env) if _env else script_env)
                 born = _proc_started_at(proc.pid)
                 _RUNNERS[int(proc.pid)] = proc
                 _atomic_json(directory / "request.json", {"id": unit_id, "task_id": task_id,
                     "command_custody": "foreground-group-v1", "script_edit_context":script_binding,
-                    "command": command, **typed, "cwd": str(place), "created": _now(), "status": "running",
+                    "command": command, **typed, "cwd": str(place), "created": intent['created'], "status": "running",
                     "supervisor_pid": proc.pid, "supervisor_started_at": born,
                     "parent_unit_id": parent_id, "log": str(log_path),
                     "command_identity": proc.custody_identity()})
                 _atomic_json(directory / "state.json", {"foreground": True,
                     "child_pid": proc.pid, "child_started_at": born})
+                if os.name == 'nt':
+                    try:
+                        import forge_windows_custody
+                        forge_windows_custody.bind(sys.modules[__name__], directory, proc)
+                    except BaseException:
+                        proc.stop_tree()
+                        raise
                 proc.admit()
             deadline = time.monotonic() + seconds if seconds else None
             while True:
@@ -3319,7 +3330,8 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     duration = round(time.monotonic() - t0, 3)
     if proc is not None and status != "unknown":
         with _mutation_lock(task_id):
-            if not (directory / "result.json").exists():
+            import forge_recovery
+            if not (directory / "result.json").exists() and not forge_recovery.read_recovery(directory):
                 _atomic_json(directory / "result.json", {"status": "done" if status == "ok" else status,
                     "code": code, "finished": _now(), "log": str(log_path), "duration_s": duration})
     out = log_path.read_text(encoding="utf-8", errors="replace")
@@ -3687,6 +3699,38 @@ def _unit_counts(rows: list[dict]) -> str:
     return ", ".join(f"{k} {v}" for k, v in counts.items()) or "нет"
 
 
+def _windows_job_name() -> str:
+    import forge_windows_custody
+    return forge_windows_custody.new_job_name()
+
+
+def _windows_stop(directory: Path) -> str | None:
+    """A bound Windows unit must settle its exact Job, never fall back to PID."""
+    import forge_recovery
+    recovery = forge_recovery.read_recovery(directory)
+    if recovery:
+        return f"{directory.name}: {recovery['outcome']}"
+    if os.name == 'nt' and (directory/'custody-reboot-witness.json').exists():
+        return f"{directory.name}: reboot witness retained; use recover after restarting the original Windows computer"
+    if os.name != 'nt' or not (directory/'windows-job.json').exists():
+        return None
+    try:
+        import forge_windows_custody
+        proof = forge_windows_custody.reconcile(sys.modules[__name__], directory)
+        binding = _read_json(directory/'windows-job.json', {}) or {}
+        local = _RUNNERS.get(int(binding.get('pid') or 0))
+        if (local is not None and hasattr(local, 'custody_identity')
+                and local.custody_identity().get('job_name') == binding.get('job_name')
+                and local.poll() is not None):
+            _RUNNERS.pop(int(binding['pid']), None)
+        return f"{directory.name}: {proof['outcome']}"
+    except (OSError, ValueError, TypeError, KeyError, TimeoutError) as exc:
+        note = f"Windows tree exit unconfirmed: {exc}; custody retained"
+        with _mutation_lock(directory.parents[1].name):
+            _atomic_json(directory/'stop.json', {'state': 'unresolved', 'observed_at': _now(), 'note': note})
+        return f"{directory.name}: {note}"
+
+
 def _spawn_runner(script: Path, request: Path, supervisor_log: Path) -> int:
     supervisor_log.parent.mkdir(parents=True, exist_ok=True)
     fh = supervisor_log.open("a", encoding="utf-8")
@@ -3698,7 +3742,22 @@ def _spawn_runner(script: Path, request: Path, supervisor_log: Path) -> int:
     else:
         kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen([sys.executable, str(script), "--request", str(request)], **kwargs)
+        task = get(request.parent.parents[1].name) or {}
+        local_windows = (os.name == 'nt' and task.get('scope', 'self') == 'self'
+                         and not task.get('device_id') and not (_read_json(request, {}) or {}).get('remote'))
+        if local_windows:
+            from command_process import CommandProcess
+            import forge_windows_custody
+            proc = CommandProcess([sys.executable, str(script), '--request', str(request)],
+                                  defer_start=True, windows_job_name=_windows_job_name(), **kwargs)
+            try:
+                forge_windows_custody.bind(sys.modules[__name__], request.parent, proc)
+                proc.admit()
+            except BaseException:
+                proc.stop_tree()
+                raise
+        else:
+            proc = subprocess.Popen([sys.executable, str(script), "--request", str(request)], **kwargs)
         _RUNNERS[int(proc.pid)] = proc
     finally:
         fh.close()
@@ -4010,6 +4069,9 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         # whose child PID was never published): that would hide the already
         # recorded result from poll/finish indefinitely. An EARLIER unresolved
         # stop is different: it must still prove its own tree quiescent.
+        recovered = _windows_stop(d)
+        if recovered is not None:
+            return recovered
         prior = _read_json(d / "result.json")
         previous_stop = _read_json(d / "stop.json")
         if isinstance(prior, dict) and not (
@@ -4222,6 +4284,9 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
             logs.append(f"--- {log.name} ---\n{_tail(log, max(500, min(int(tail or 12000), 30000)))}")
         return _cap(json.dumps(result, ensure_ascii=False, indent=2) + "\n" + "\n".join(logs), 40000)
     if action == "stop":
+        recovered = _windows_stop(d)
+        if recovered is not None:
+            return recovered
         prior = _read_json(d / "result.json")
         prior_stop = _read_json(d / "stop.json")
         if (str((prior or {}).get("status") or "") in
@@ -4769,7 +4834,7 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                        if _in_subtree(task_id, agent_id, r["id"])]
             for unit in targets:
                 directory = _unit_dir(task_id, "agents", unit)
-                if forge_recovery.read_recovery(directory):
+                if forge_recovery.read_recovery(directory) or (directory/'custody-reboot-witness.json').exists():
                     continue
                 if not (directory / "stop.json").exists():
                     _atomic_json(directory / "stop.json", {"requested_at": _now(),
@@ -4785,6 +4850,9 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
         if forge_recovery.read_recovery(directory):
             receipts.append(f'{unit}: old execution boundary extinct; historical outcome retained')
             continue
+        if os.name == 'nt' and (directory/'custody-reboot-witness.json').exists():
+            receipts.append(_windows_stop(directory))
+            continue
         # A synchronous command has its own process group, but its owning
         # handle lives in this worker. Ask it to stop before killing that
         # worker; an unresolved command must retain its live custodian.
@@ -4799,10 +4867,12 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
             verify(task_id, 'stop', verification_id=row['id'])
             visited.add(('verifications', row['id']))
         unresolved_commands = [row['id'] for row in commands
-            if _unit_state(_unit_dir(task_id, 'processes', row['id'])).get('status')
+            if not (current := _unit_state(_unit_dir(task_id, 'processes', row['id']))).get('custody_recovered')
+            and current.get('status')
             not in {'done', 'stopped', 'failed', 'timed_out', 'error'}]
         unresolved_commands += [row['id'] for row in checks
-            if _unit_state(_unit_dir(task_id, 'verifications', row['id'])).get('status')
+            if not (current := _unit_state(_unit_dir(task_id, 'verifications', row['id']))).get('custody_recovered')
+            and current.get('status')
             not in (_TERMINAL_AGENT_STATES | {'passed', 'passed_with_skips', 'stale'})]
         request = _read_json(directory / "request.json", {}) or {}
         never_started = request.get('status') == 'queued' and not request.get('supervisor_pid')
@@ -4812,6 +4882,10 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
             receipt.update(state='unresolved', observed_at=_now(), note=note)
             _atomic_json(directory / 'stop.json', receipt)
             receipts.append(f'{unit}: {note}')
+            continue
+        recovered = _windows_stop(directory)
+        if recovered is not None:
+            receipts.append(recovered)
             continue
         prior = _read_json(directory / "result.json")
         request = _read_json(directory / "request.json", {}) or {}
@@ -4913,13 +4987,18 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
     return message, visited
 
 
-def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "") -> dict:
+def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "",
+            host_binding: str = "", reason: str = "") -> dict:
     """Owner/coordinator control. Submission is not an assertion of process exit."""
     action = str(action or "").lower()
-    if action not in {"stop", "pause", "resume"}:
-        return {"status": "refused", "reason": "action: stop | pause | resume"}
+    if action not in {"stop", "pause", "resume", "prepare_recovery", "recover"}:
+        return {"status": "refused", "reason": "action: stop | pause | resume | prepare_recovery | recover"}
     if agent_id and not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", agent_id):
         return {"status": "refused", "reason": "invalid agent identity"}
+    if action in {'prepare_recovery', 'recover'}:
+        import forge_windows_custody
+        return forge_windows_custody.recovery_control(sys.modules[__name__], task_id, action,
+            agent_id, expected_generation, host_binding=host_binding, reason=reason)
     if action == "resume" and agent_id:
         return _resume_agent(task_id, agent_id, expected_generation)
     with _mutation_lock(task_id):

@@ -1061,7 +1061,8 @@ async def _r_forge_control(c: Call):
     value = c.body
     result = await _forge_owner(c, forge_control.enqueue, value.get("task_id") or "",
                               value.get("action") or "", value.get("agent_id") or "",
-                              value.get("expected_generation") or "", value.get("command_id") or "")
+                              value.get("expected_generation") or "", value.get("command_id") or "",
+                              value.get("host_binding") or "", value.get("reason") or "")
     from deskd import forge_snapshot
     forge_snapshot.invalidate()
     return result
