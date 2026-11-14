@@ -26,8 +26,8 @@ for (const m of frame.matchAll(/shell(?:<[^>]*>)?\("(\w+)",\s*\{([^}]*)\}/g)) {
 assert.match(frame, /blocksNeedingRestart\(before, out\)/, "расписка не сверяет блоки перезапуска по состоянию до записи");
 // Concrete restart/no-restart and scope behavior is executed by settings-restart-1211.
 // Informational edition warnings no longer imply a restart.
-assert.match(frame, /\["telegram", "Telegram"\]/);
-assert.match(frame, /\["sandbox", "ограда"\]/);
+assert.match(frame, /\["telegram", \(\) => "Telegram"\]/);
+assert.match(frame, /\["sandbox", \(\) => "ограда"\]/);
 
 // A7 F10: дубля строки forceToggle.hidden больше нет.
 assert.ok(!/forceToggle\.hidden = true;\s*\n\s*forceToggle\.hidden = true;/.test(frame), "forceToggle.hidden = true дублируется подряд");

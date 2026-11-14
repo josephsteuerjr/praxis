@@ -21,60 +21,60 @@ interface Accent extends Choice { fill: string; inkDay: string; inkNight: string
 
 /** Бумага днём: тон фона. Первый — референс Егора (`design-refs-2809/cat-paws.jpg`). */
 export const PAPER_DAY: Paper[] = [
-  { id: "warm", name: uiText("ui.ui.kit.window.look.6938395185"), color: "#f4e4cf" },
-  { id: "light", name: uiText("ui.ui.kit.window.look.ac7e899bd3"), color: "#f8eee0" },
-  { id: "white", name: uiText("ui.ui.kit.window.look.598217e88c"), color: "#fbf7f0" },
-  { id: "kraft", name: uiText("ui.ui.kit.window.look.723ff80038"), color: "#ecd4b4" },
-  { id: "peach", name: uiText("ui.ui.kit.window.look.48a1368cd3"), color: "#f6ded0" },
-  { id: "linen", name: uiText("ui.ui.kit.window.look.f2d58c4cc7"), color: "#eee8dc" },
-  { id: "sage", name: uiText("ui.ui.kit.window.look.b3fa5ae774"), color: "#e7ebdf" },
-  { id: "sky", name: uiText("ui.ui.kit.window.look.a0fde594ed"), color: "#e6ecef" },
+  { id: "warm", get name() { return uiText("ui.ui.kit.window.look.6938395185"); }, color: "#f4e4cf" },
+  { id: "light", get name() { return uiText("ui.ui.kit.window.look.ac7e899bd3"); }, color: "#f8eee0" },
+  { id: "white", get name() { return uiText("ui.ui.kit.window.look.598217e88c"); }, color: "#fbf7f0" },
+  { id: "kraft", get name() { return uiText("ui.ui.kit.window.look.723ff80038"); }, color: "#ecd4b4" },
+  { id: "peach", get name() { return uiText("ui.ui.kit.window.look.48a1368cd3"); }, color: "#f6ded0" },
+  { id: "linen", get name() { return uiText("ui.ui.kit.window.look.f2d58c4cc7"); }, color: "#eee8dc" },
+  { id: "sage", get name() { return uiText("ui.ui.kit.window.look.b3fa5ae774"); }, color: "#e7ebdf" },
+  { id: "sky", get name() { return uiText("ui.ui.kit.window.look.a0fde594ed"); }, color: "#e6ecef" },
 ];
 
 /** Бумага ночью: та же палитра в темноте, не инверсия. */
 export const PAPER_NIGHT: Paper[] = [
-  { id: "coal", name: uiText("ui.ui.kit.window.look.c0e2a255fd"), color: "#1d1914" },
-  { id: "deep", name: uiText("ui.ui.kit.window.look.280f470538"), color: "#14110e" },
-  { id: "cocoa", name: uiText("ui.ui.kit.window.look.206522bddd"), color: "#251d18" },
-  { id: "graphite", name: uiText("ui.ui.kit.window.look.4807faef19"), color: "#1b1c1e" },
-  { id: "navy", name: uiText("ui.ui.kit.window.look.10f77232f9"), color: "#151a22" },
-  { id: "pine", name: uiText("ui.ui.kit.window.look.e33c218ac0"), color: "#161c18" },
+  { id: "coal", get name() { return uiText("ui.ui.kit.window.look.c0e2a255fd"); }, color: "#1d1914" },
+  { id: "deep", get name() { return uiText("ui.ui.kit.window.look.280f470538"); }, color: "#14110e" },
+  { id: "cocoa", get name() { return uiText("ui.ui.kit.window.look.206522bddd"); }, color: "#251d18" },
+  { id: "graphite", get name() { return uiText("ui.ui.kit.window.look.4807faef19"); }, color: "#1b1c1e" },
+  { id: "navy", get name() { return uiText("ui.ui.kit.window.look.10f77232f9"); }, color: "#151a22" },
+  { id: "pine", get name() { return uiText("ui.ui.kit.window.look.e33c218ac0"); }, color: "#161c18" },
 ];
 
 /** Акцент: заливка (кнопка отправки, точки) и цвет текста-ссылок с контрастом ≥ 4,5 днём и ночью. */
 export const ACCENTS: Accent[] = [
-  { id: "terra", name: uiText("ui.ui.kit.window.look.dcd6e2b7d9"), fill: "#e0915a", inkDay: "#9a4a1e", inkNight: "#eda676" },
-  { id: "ochre", name: uiText("ui.ui.kit.window.look.a69b1298db"), fill: "#d9a441", inkDay: "#7a5610", inkNight: "#e8c170" },
-  { id: "sage", name: uiText("ui.ui.kit.window.look.b3fa5ae774"), fill: "#8fae8b", inkDay: "#3f6a3b", inkNight: "#a9c9a4" },
-  { id: "plum", name: uiText("ui.ui.kit.window.look.4831c44fb7"), fill: "#b07a9e", inkDay: "#7a3f68", inkNight: "#d3a3c4" },
-  { id: "sea", name: uiText("ui.ui.kit.window.look.fa8e72e051"), fill: "#6f9fb5", inkDay: "#2d5d73", inkNight: "#9cc3d6" },
-  { id: "cinnabar", name: uiText("ui.ui.kit.window.look.5187a60ac4"), fill: "#d9674e", inkDay: "#9a3420", inkNight: "#ee9a86" },
+  { id: "terra", get name() { return uiText("ui.ui.kit.window.look.dcd6e2b7d9"); }, fill: "#e0915a", inkDay: "#9a4a1e", inkNight: "#eda676" },
+  { id: "ochre", get name() { return uiText("ui.ui.kit.window.look.a69b1298db"); }, fill: "#d9a441", inkDay: "#7a5610", inkNight: "#e8c170" },
+  { id: "sage", get name() { return uiText("ui.ui.kit.window.look.b3fa5ae774"); }, fill: "#8fae8b", inkDay: "#3f6a3b", inkNight: "#a9c9a4" },
+  { id: "plum", get name() { return uiText("ui.ui.kit.window.look.4831c44fb7"); }, fill: "#b07a9e", inkDay: "#7a3f68", inkNight: "#d3a3c4" },
+  { id: "sea", get name() { return uiText("ui.ui.kit.window.look.fa8e72e051"); }, fill: "#6f9fb5", inkDay: "#2d5d73", inkNight: "#9cc3d6" },
+  { id: "cinnabar", get name() { return uiText("ui.ui.kit.window.look.5187a60ac4"); }, fill: "#d9674e", inkDay: "#9a3420", inkNight: "#ee9a86" },
 ];
 
 export const GRAIN: Array<Choice & { day: number; night: number }> = [
-  { id: "none", name: uiText("ui.ui.kit.window.look.66818f25f4"), day: 0, night: 0 },
-  { id: "soft", name: uiText("ui.ui.kit.window.look.1361e61db2"), day: 0.06, night: 0.04 },
-  { id: "paper", name: uiText("ui.ui.kit.window.look.9b36d26c5c"), day: 0.1, night: 0.06 },
-  { id: "rough", name: uiText("ui.ui.kit.window.look.e7f6df3d98"), day: 0.16, night: 0.1 },
+  { id: "none", get name() { return uiText("ui.ui.kit.window.look.66818f25f4"); }, day: 0, night: 0 },
+  { id: "soft", get name() { return uiText("ui.ui.kit.window.look.1361e61db2"); }, day: 0.06, night: 0.04 },
+  { id: "paper", get name() { return uiText("ui.ui.kit.window.look.9b36d26c5c"); }, day: 0.1, night: 0.06 },
+  { id: "rough", get name() { return uiText("ui.ui.kit.window.look.e7f6df3d98"); }, day: 0.16, night: 0.1 },
 ];
 
 export const TEXT: Array<Choice & { px: number }> = [
-  { id: "s", name: uiText("ui.ui.kit.window.look.2a96d20118"), px: 14.5 },
-  { id: "m", name: uiText("ui.ui.kit.window.look.7c0ef1469b"), px: 15.5 },
-  { id: "l", name: uiText("ui.ui.kit.window.look.c238cb4a2e"), px: 17 },
-  { id: "xl", name: uiText("ui.ui.kit.window.look.8e7f1c567e"), px: 18.5 },
+  { id: "s", get name() { return uiText("ui.ui.kit.window.look.2a96d20118"); }, px: 14.5 },
+  { id: "m", get name() { return uiText("ui.ui.kit.window.look.7c0ef1469b"); }, px: 15.5 },
+  { id: "l", get name() { return uiText("ui.ui.kit.window.look.c238cb4a2e"); }, px: 17 },
+  { id: "xl", get name() { return uiText("ui.ui.kit.window.look.8e7f1c567e"); }, px: 18.5 },
 ];
 
 export const FEELS: Array<Choice & { id: FeelName; hint: string }> = [
-  { id: "brisk", name: uiText("ui.ui.kit.window.look.696f163be1"), hint: uiText("ui.ui.kit.window.look.becc31db10") },
-  { id: "smooth", name: uiText("ui.ui.kit.window.look.ed204d791a"), hint: uiText("ui.ui.kit.window.look.53364359ec") },
-  { id: "syrup", name: uiText("ui.ui.kit.window.look.1bd05468a1"), hint: uiText("ui.ui.kit.window.look.ace3f7647d") },
+  { id: "brisk", get name() { return uiText("ui.ui.kit.window.look.696f163be1"); }, get hint() { return uiText("ui.ui.kit.window.look.becc31db10"); } },
+  { id: "smooth", get name() { return uiText("ui.ui.kit.window.look.ed204d791a"); }, get hint() { return uiText("ui.ui.kit.window.look.53364359ec"); } },
+  { id: "syrup", get name() { return uiText("ui.ui.kit.window.look.1bd05468a1"); }, get hint() { return uiText("ui.ui.kit.window.look.ace3f7647d"); } },
 ];
 
 export const EDGES: Array<Choice & { id: Overscroll }> = [
-  { id: "rubber", name: uiText("ui.ui.kit.window.look.34eeb75e62") },
-  { id: "stretch", name: uiText("ui.ui.kit.window.look.23032301ab") },
-  { id: "none", name: uiText("ui.ui.kit.window.look.923d935453") },
+  { id: "rubber", get name() { return uiText("ui.ui.kit.window.look.34eeb75e62"); } },
+  { id: "stretch", get name() { return uiText("ui.ui.kit.window.look.23032301ab"); } },
+  { id: "none", get name() { return uiText("ui.ui.kit.window.look.923d935453"); } },
 ];
 
 export interface Look {

@@ -21,6 +21,14 @@ export function fmtTimeSec(iso?: string | null): string {
     : d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/** Calendar classification stays independent of translated date captions. */
+export function isToday(iso?: string | null): boolean {
+  const date = new Date(iso ?? "");
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+}
+
 export function fmtDay(iso?: string | null): string {
   const d = new Date(iso ?? "");
   if (isNaN(d.getTime())) return "…";

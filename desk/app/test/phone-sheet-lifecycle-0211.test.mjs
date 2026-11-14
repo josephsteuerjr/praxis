@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {stripTypeScriptTypes} from 'node:module';
+import './fixtures/ru-localization.mjs';
 const source=readFileSync(new URL('../../ui-kit/phone.ts',import.meta.url),'utf8');
 const section=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
 const functions=stripTypeScriptTypes(section('  function openDialog(', '  function openSettings(')+section('  function openSheet()','  function closeSheet()')+section('  function closeSheet()','  veil.addEventListener('));

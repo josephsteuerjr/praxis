@@ -50,14 +50,14 @@ import { t, saveLocale, localePreference, type Lang } from '../../../lang/lang';
 import { languageField } from '../../../lang/controls';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
-export const RESTART_BLOCKS: Array<[string, string]> = [
-  ["network", uiText("ui.ui.kit.window.views.settings.frame.47c853d7e7")],
-  ["telegram", "Telegram"],
-  ["computer", uiText("ui.ui.kit.window.views.settings.frame.735c0193ca")],
-  ["agents", uiText("ui.ui.kit.window.views.settings.frame.1605473766")],
-  ["sandbox", uiText("ui.ui.kit.window.views.settings.frame.c880a9aac2")],
-  ["agent_mode", uiText("ui.ui.kit.window.views.settings.frame.00184094d8")],
-  ["owner_context", uiText("ui.ui.kit.window.views.settings.frame.85e47c0e2a")],
+export const RESTART_BLOCKS: Array<[string, () => string]> = [
+  ["network", () => uiText("ui.ui.kit.window.views.settings.frame.47c853d7e7")],
+  ["telegram", () => "Telegram"],
+  ["computer", () => uiText("ui.ui.kit.window.views.settings.frame.735c0193ca")],
+  ["agents", () => uiText("ui.ui.kit.window.views.settings.frame.1605473766")],
+  ["sandbox", () => uiText("ui.ui.kit.window.views.settings.frame.c880a9aac2")],
+  ["agent_mode", () => uiText("ui.ui.kit.window.views.settings.frame.00184094d8")],
+  ["owner_context", () => uiText("ui.ui.kit.window.views.settings.frame.85e47c0e2a")],
 ];
 
 /** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
@@ -79,7 +79,7 @@ export function blocksNeedingRestart(before: unknown, after: unknown): string[] 
         sandbox:['mounts','mounts_denied'],computer:['scopes']};
       return Object.fromEntries(Object.entries(value).filter(([name])=>!hot[key]?.includes(name)));
     };
-    if (deep(startup(b[key])) !== deep(startup(a[key]))) out.push(title);
+    if (deep(startup(b[key])) !== deep(startup(a[key]))) out.push(title());
   }
   return out;
 }

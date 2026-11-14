@@ -1,3 +1,4 @@
+import { t as uiText } from "../lang/lang";
 // Телефон и мини-апп Telegram — одно приложение на двоих. Прежде всего это
 // МОНИТОР агента (слово владельца 07.09): открывается на «Сейчас» — идущий
 // ход живьём, кадр, недавние ходы; отдельно «Чаты» (переписка, писать можно
@@ -11,7 +12,7 @@
 // отдаёт (КОНТРАКТ-B→A §4); на 403 честно говорит «телефону не отдаётся».
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
-import { esc, fmtDay, fmtTime, md } from "./text";
+import { esc, fmtDay, fmtTime, isToday, md } from "./text";
 import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 import { RecentMap } from "./recent-map";
@@ -151,33 +152,6 @@ const ICON = {
   back: '<path d="M12.5 4.5 7 10l5.5 5.5"/>',
 };
 
-const TABS: Array<[Tab, string]> = [
-  ["now", "Сейчас"],
-  ["chats", "Чаты"],
-  ["tasks", "Задачи"],
-  ["wakes", "Пробуждения"],
-  // Пятая вкладка — управление в кармане: перезапустить упавшее, посмотреть ошибки,
-  // сменить модель. Она появляется, только если рядом с каналом объявлена
-  // служба управления; у телефона к домашней Элен её нет, и вкладка молчит об
-  // этом словами, а не пустым экраном.
-  ["system", "Система"],
-];
-
-const RUN_KIND: Record<string, string> = {
-  chat_turn: "сообщение",
-  wake: "пробуждение",
-  task_window: "окно задачи",
-  moderation: "модерация",
-};
-
-const AGENDA_KIND: Record<string, string> = {
-  wake: "будильник",
-  window: "окно",
-  message: "доставка",
-  note: "записка",
-  email: "письмо",
-};
-
 /** Подпись хода из слова агента или из входа: без скобок кадра и разметки. */
 const clean = (s: string) =>
   s
@@ -199,45 +173,48 @@ const noteLabel = (note: string) => {
   const raw = String(note || "").trim();
   const m = raw.match(/^(done|wait|blocked|silence)\s*:\s*(.*)$/i);
   const body = m ? m[2] : raw;
-  const head = m ? (m[1].toLowerCase() === "wait" ? "Жду: " : m[1].toLowerCase() === "blocked" ? "Препятствие: " : "") : "";
+  const head = m ? (m[1].toLowerCase() === "wait" ? uiText("ui.ui.kit.phone.eb451ec6a0") : m[1].toLowerCase() === "blocked" ? uiText("ui.ui.kit.phone.82a25559f5") : "") : "";
   return body.trim() ? head + clean(body) : "";
 };
 
 export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
+  // Resolve captions after the client has selected its UI language.
+  const TABS: Array<[Tab, string]> = [
+    ["now", uiText("ui.ui.kit.phone.460b59b99f")],
+    ["chats", uiText("ui.ui.kit.phone.b5121e526d")],
+    ["tasks", uiText("ui.ui.kit.phone.03cc1c2d5a")],
+    ["wakes", uiText("ui.ui.kit.phone.9643f15ecb")],
+    // Пятая вкладка — управление в кармане: перезапустить упавшее, посмотреть ошибки,
+    // сменить модель. Она появляется, только если рядом с каналом объявлена
+    // служба управления; у телефона к домашней Элен её нет, и вкладка молчит об
+    // этом словами, а не пустым экраном.
+    ["system", uiText("ui.ui.kit.phone.6da215b1bd")],
+  ];
+
+  const RUN_KIND: Record<string, string> = {
+    chat_turn: uiText("ui.ui.kit.phone.8eb484df7b"),
+    wake: uiText("ui.ui.kit.phone.0f3c3b6b95"),
+    task_window: uiText("ui.ui.kit.phone.871470f451"),
+    moderation: uiText("ui.ui.kit.phone.5cb789e9aa"),
+  };
+
+  const AGENDA_KIND: Record<string, string> = {
+    wake: uiText("ui.ui.kit.phone.601efa51bd"),
+    window: uiText("ui.ui.kit.phone.5943c4045e"),
+    message: uiText("ui.ui.kit.phone.682556de90"),
+    note: uiText("ui.ui.kit.phone.efc562bc9a"),
+    email: uiText("ui.ui.kit.phone.8f9e4e204d"),
+  };
+
   applyTheme(opts.theme ? opts.theme() : "system");
   applyLook(loadLook());
   if(opts.theme)applyTheme(opts.theme());
   const base = (opts.base || "").replace(/\/+$/, "");
 
   // ---------------------------------------------------------------- DOM
-  root.innerHTML = `
-    <header id="top">
-      <div class="top-main">
-        <div class="top-name" id="top-name">Агент</div>
-        <div class="top-state" id="top-state"><span class="state-dot"></span><span id="top-phrase">Подключение…</span></div>
-      </div>
-      <div class="top-btns">
-        <button class="icon-btn" id="btn-more" type="button" aria-label="Ещё"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.more}</svg></button>
-      </div>
-    </header>
-    <section id="screen" class="screen"></section>
-    <footer id="composer" class="composer" hidden>
-      <div id="composer-target" class="composer-target"></div>
-      <div id="composer-files" class="composer-files" hidden></div>
-      <div class="composer-row">
-        <button id="attach" class="attach" type="button" aria-label="Приложить картинку"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.attach}</svg></button>
-        <input id="attach-input" type="file" multiple hidden>
-        <textarea id="say" rows="1" placeholder="Написать…" enterkeyhint="send"></textarea>
-        <button id="send" class="send" type="button" aria-label="Отправить"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.send}</svg></button>
-      </div>
-    </footer>
-    <nav id="tabs" class="tabs" aria-label="Разделы">${TABS.map(
+  root.innerHTML = uiText("ui.ui.kit.phone.75101b23a1", {p0: String(ICON.more), p1: String(ICON.attach), p2: String(ICON.send), p3: String(TABS.map(
       ([id, label]) => `<button type="button" class="tab" data-tab="${id}"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON[id]}</svg><span>${label}</span></button>`,
-    ).join("")}</nav>
-    <div id="veil" class="veil" hidden></div>
-    <div id="sheet" class="sheet" hidden><div class="sheet-grip"></div><div class="sheet-head" id="sheet-head"></div><div class="sheet-body" id="sheet-body"></div></div>
-    <div id="pair" class="pair" hidden></div>
-    <div id="toast" class="toast" hidden></div>`;
+    ).join(""))});
 
   const topName = q<HTMLElement>("#top-name", root);
   const topState = q<HTMLElement>("#top-state", root);
@@ -256,7 +233,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   // ---------------------------------------------------------------- состояние
   let key = remembered(opts.auth.storageKey);
-  let agent = opts.agentFallback || "Агент";
+  let agent = opts.agentFallback || uiText("ui.ui.kit.phone.d5fd08be28");
   let tab: Tab = "now";
   /** Открытый чат на вкладке «Чаты»; "" — список. */
   let room = "";
@@ -289,7 +266,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     try {
       r = await fetch(withKey(path), init);
     } catch {
-      throw new Offline("нет связи");
+      throw new Offline(uiText("ui.ui.kit.phone.39562febe7"));
     }
     if (r.status === 403 && !sendKey && key) {
       sendKey = true;
@@ -297,10 +274,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       try {
         r = await fetch(withKey(path), init);
       } catch {
-        throw new Offline("нет связи");
+        throw new Offline(uiText("ui.ui.kit.phone.39562febe7"));
       }
     }
-    if (r.status === 403) throw new Denied("нет доступа");
+    if (r.status === 403) throw new Denied(uiText("ui.ui.kit.phone.82a9ee6629"));
     if (!r.ok) {
       const text=await r.text();let detail='';
       try{detail=JSON.parse(text).error||''}catch{/* non-JSON refusal */}
@@ -315,7 +292,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     try {
       return (await r.json()) as T;
     } catch {
-      throw new Broke(path + ": не разобрал ответ");
+      throw new Broke(path + uiText("ui.ui.kit.phone.12304c5de4"));
     }
   }
 
@@ -324,7 +301,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     try {
       return (await r.json()) as T;
     } catch {
-      throw new Broke(path + ": не разобрал ответ");
+      throw new Broke(path + uiText("ui.ui.kit.phone.12304c5de4"));
     }
   }
 
@@ -366,7 +343,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   setResultFetcher((run, rid) => scoped(`/api/run/${encodeURIComponent(run)}/result/${encodeURIComponent(rid)}`, "run"));
 
   const notGiven = (what: string) =>
-    `<div class="empty"><b>${esc(what)} телефону пока не отдаются</b>Канал откроет их телефону по контракту 0.3.3; в окне на компьютере они есть.</div>`;
+    uiText("ui.ui.kit.phone.b920f9dae4", {p0: String(esc(what))});
 
   // ---------------------------------------------------------------- запуски и живой ход
   const recent = (r: Run, minutes = 30) => {
@@ -409,7 +386,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     // В личке собеседник и комната — одно имя: не повторять.
     const sub = [RUN_KIND[r.kind] || r.kind, roomTitle, who && who !== roomTitle ? who : ""].filter(Boolean).join(" · ");
     return `<div class="ev ${evOpen.has(r.id) ? "open" : ""}" data-ev="${esc(r.id)}">
-      <button type="button" class="ev-head" aria-expanded="${evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}"><span class="ev-title">${esc(runLabel(r))}</span><span class="ev-time">${fmtDay(r.created_at) === "Сегодня" ? "" : fmtDay(r.created_at) + " "}${fmtTime(r.created_at)}</span><span class="dot ${dot}"></span><span class="ev-chevron" aria-hidden="true">›</span></button>
+      <button type="button" class="ev-head" aria-expanded="${evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}"><span class="ev-title">${esc(runLabel(r))}</span><span class="ev-time">${isToday(r.created_at) ? "" : fmtDay(r.created_at) + " "}${fmtTime(r.created_at)}</span><span class="dot ${dot}"></span><span class="ev-chevron" aria-hidden="true">›</span></button>
       ${sub ? `<div class="ev-sub">${esc(sub)}</div>` : ""}
       <div class="ev-steps" id="run-${esc(r.id)}" ${evOpen.has(r.id) ? "" : "hidden"}></div></div>`;
   }
@@ -421,10 +398,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const head = node.querySelector<HTMLButtonElement>(".ev-head")!;
       const steps = node.querySelector<HTMLElement>(".ev-steps")!;
       const load = () => {
-        steps.innerHTML = '<div class="muted">читаю шаги…</div>';
+        steps.innerHTML = uiText("ui.ui.kit.phone.45f2d8405e");
         void runDetail(id).then((d) => {
           if (!steps.isConnected) return;
-          steps.innerHTML = d ? stepsHTML(d) : closed.has("run") ? '<div class="muted">шаги телефону пока не отдаются</div>' : '<div class="muted">шаги не прочитались</div>';
+          steps.innerHTML = d ? stepsHTML(d) : closed.has("run") ? uiText("ui.ui.kit.phone.65c3a5f588") : uiText("ui.ui.kit.phone.71f13803e3");
         });
       };
       head.addEventListener("click", () => {
@@ -445,12 +422,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // ---------------------------------------------------------------- шапка
   function foreignPhrase(): { level: Level; phrase: string } {
     const live = runs.find((r) => r.status === "running" && recent(r));
-    if (live) return { level: "live", phrase: "Ведёт ход" + (live.chat_title ? ` · ${live.chat_title}` : "") };
+    if (live) return { level: "live", phrase: uiText("ui.ui.kit.phone.533b75df32") + (live.chat_title ? ` · ${live.chat_title}` : "") };
     const at = state?.brain?.last_call_at;
-    if (!at) return { level: "warn", phrase: "Вызовов модели ещё не было" };
+    if (!at) return { level: "warn", phrase: uiText("ui.ui.kit.phone.b0bb72c7e7") };
     const min = (Date.now() / 1000 - at) / 60;
-    const age = min < 1 ? "только что" : min < 60 ? `${Math.round(min)} мин назад` : `${Math.round(min / 60)} ч назад`;
-    return min < 15 ? { level: "ok", phrase: `На связи · модель отвечала ${age}` } : { level: "warn", phrase: `Модель молчит · ${age}` };
+    const age = min < 1 ? uiText("ui.ui.kit.phone.556f1e91d5") : min < 60 ? uiText("ui.ui.kit.phone.8303e995b7", {p0: String(Math.round(min))}) : uiText("ui.ui.kit.phone.b158de05c1", {p0: String(Math.round(min / 60))});
+    return min < 15 ? { level: "ok", phrase: uiText("ui.ui.kit.phone.c1f3a6d603", {p0: String(age)}) } : { level: "warn", phrase: uiText("ui.ui.kit.phone.90fd9bb4d5", {p0: String(age)}) };
   }
 
   type Access = "ok" | "denied" | "offline";
@@ -472,10 +449,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     } catch (e) {
       topState.dataset.level = "off";
       if (e instanceof Denied) {
-        topPhrase.textContent = "Нет ключа";
+        topPhrase.textContent = uiText("ui.ui.kit.phone.2eeb676774");
         return "denied";
       }
-      topPhrase.textContent = e instanceof Broke ? "Компьютер ответил ошибкой" : "Нет связи";
+      topPhrase.textContent = e instanceof Broke ? uiText("ui.ui.kit.phone.2dfb8651c5") : uiText("ui.ui.kit.phone.9f0c20cc22");
       return "offline";
     }
   }
@@ -519,25 +496,25 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     };
     if (spot.hasAttribute("data-panic")) {
       (spot as HTMLButtonElement).disabled = true;
-      say("включаю аварийный стоп…");
+      say(uiText("ui.ui.kit.phone.e04a7de0f0"));
       try {
         const answer = await post<{ ok: boolean; note: string }>("/api/panic", {});
         say(answer.note, !answer.ok);
         if (!answer.ok) (spot as HTMLButtonElement).disabled = false;
       } catch {
-        say("Связь оборвалась во время остановки; подтверждения нет. Проверь стоп в окне Hélène или используй /panic в Telegram.", true);
+        say(uiText("ui.ui.kit.phone.44cdeca66e"), true);
         (spot as HTMLButtonElement).disabled = false;
       }
       return;
     }
     if (spot.hasAttribute("data-interrupt")) {
-      say("прошу остановить ход…");
+      say(uiText("ui.ui.kit.phone.402838e4c8"));
       try {
         const answer = await post<{ ok: boolean; note: string }>("/api/interrupt", {
           scope: spot.getAttribute("data-interrupt") || "all" });
         say(answer.note, !answer.ok);
       } catch (e) {
-        say(e instanceof Denied ? "прерывание этому телефону не разрешено" : "не дошло", true);
+        say(e instanceof Denied ? uiText("ui.ui.kit.phone.3d8f416466") : uiText("ui.ui.kit.phone.4722c6562b"), true);
       }
       return;
     }
@@ -545,27 +522,27 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if (logName && view) {
       const errors = spot.hasAttribute("data-errors");
       view.hidden = false;
-      view.textContent = "читаю…";
+      view.textContent = uiText("ui.ui.kit.phone.b7eefd36b7");
       try {
         const got = await api<{ ok: boolean; text?: string; note?: string }>(
           `/api/container-log/${encodeURIComponent(logName)}?lines=120${errors ? "&errors=1" : ""}`);
         view.textContent = got.ok
-          ? got.text || (errors ? "ошибок в хвосте журнала нет" : "(пусто)")
-          : got.note || "журнал не прочитался";
+          ? got.text || (errors ? uiText("ui.ui.kit.phone.3bcdfe94c2") : uiText("ui.ui.kit.phone.0b5781e580"))
+          : got.note || uiText("ui.ui.kit.phone.d283094609");
       } catch (e) {
-        view.textContent = e instanceof Denied ? "журналы телефону не отдаются" : "не прочиталось";
+        view.textContent = e instanceof Denied ? uiText("ui.ui.kit.phone.9d550aced9") : uiText("ui.ui.kit.phone.2ad0ab044c");
       }
       return;
     }
     const boxName = spot.getAttribute("data-restart-box");
     if (boxName) {
-      say(`перезапускаю ${boxName}…`);
+      say(uiText("ui.ui.kit.phone.7b2658d842", {p0: String(boxName)}));
       try {
         const answer = await post<{ ok: boolean; note: string }>("/api/containers/restart", { name: boxName });
         say(answer.note, !answer.ok);
         if (answer.ok) setTimeout(() => void renderSystem(), 3000);
       } catch (e) {
-        say(e instanceof Denied ? "перезапуск этому телефону не разрешён" : "не дошло", true);
+        say(e instanceof Denied ? uiText("ui.ui.kit.phone.210cf7519a") : uiText("ui.ui.kit.phone.4722c6562b"), true);
       }
       return;
     }
@@ -583,19 +560,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       });
       if (tierClearedByRoute(form)) fields.service_tier = '';
       if (!Object.keys(fields).length) {
-        say("ничего не изменено");
+        say(uiText("ui.ui.kit.phone.f6dba6a0b4"));
         return;
       }
-      say(role === "images" ? "сохраняю настройки изображений…" : `меняю роль ${role}: ${Object.keys(fields).join(", ")}…`);
+      say(role === "images" ? uiText("ui.ui.kit.phone.f943dab47d") : uiText("ui.ui.kit.phone.57366a8072", {p0: String(role), p1: String(Object.keys(fields).join(", "))}));
       try {
         const answer = await post<{ ok: boolean; note?: string }>("/api/brain", { role, fields });
         say(answer.ok
-          ? role === "images" ? answer.note || "настройки изображений сохранены"
+          ? role === "images" ? answer.note || uiText("ui.ui.kit.phone.1f67f65d25")
             : `${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
-          : answer.note || "не вышло", !answer.ok);
+          : answer.note || uiText("ui.ui.kit.phone.8735f485c3"), !answer.ok);
         if (answer.ok) setTimeout(() => void renderSystem(), 1500);
       } catch (e) {
-        say(e instanceof Denied ? "смена модели этому телефону не разрешена" : "не дошло", true);
+        say(e instanceof Denied ? uiText("ui.ui.kit.phone.ea856508d5") : uiText("ui.ui.kit.phone.4722c6562b"), true);
       }
     }
   });
@@ -640,7 +617,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const k = String(c.peer_id);
       if (k === WINDOW_ROOM || k === LEGACY_WINDOW_KEY) continue;
       const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(k)) ? "window" : "telegram";
-      next.push({ key: k, name: c.title || (kind === "window" ? "Новый чат" : "Без названия"), kind, live: false, count: c.messages || 0, at: Number(c.mtime_ns) / 1e6 || 0 });
+      next.push({ key: k, name: c.title || (kind === "window" ? uiText("ui.ui.kit.phone.c44ad59fc3") : uiText("ui.ui.kit.phone.f5db3a12b7")), kind, live: false, count: c.messages || 0, at: Number(c.mtime_ns) / 1e6 || 0 });
     }
     for (const r of runs) {
       if (r.kind !== "chat_turn" || r.chat_id == null) continue;
@@ -648,7 +625,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       let found = next.find((x) => x.key === k);
       if (!found && isWindowRoom(k)) continue;
       if (!found) {
-        found = { key: k, name: r.chat_title || (isWindowRoom(k) ? "Новый чат" : "Без названия"), kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, at: 0 };
+        found = { key: k, name: r.chat_title || (isWindowRoom(k) ? uiText("ui.ui.kit.phone.c44ad59fc3") : uiText("ui.ui.kit.phone.f5db3a12b7")), kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, at: 0 };
         next.push(found);
       }
       const at = new Date(r.created_at ?? "").getTime();
@@ -673,12 +650,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       }
       const b = el("button", "room");
       b.type = "button";
-      const when = r.at ? (fmtDay(new Date(r.at).toISOString()) === "Сегодня" ? fmtTime(new Date(r.at).toISOString()) : fmtDay(new Date(r.at).toISOString())) : "";
+      const when = r.at ? (isToday(new Date(r.at).toISOString()) ? fmtTime(new Date(r.at).toISOString()) : fmtDay(new Date(r.at).toISOString())) : "";
       b.innerHTML = `<span class="dot ${r.live ? "live" : ""}"></span><span class="room-name${r.key === WINDOW_ROOM ? " hand" : ""}">${esc(r.name)}</span><span class="room-count">${esc(when)}</span>`;
       b.addEventListener("click", () => openRoom(r.key, r.name));
       nodes.push(b);
     }
-    screen.replaceChildren(el("div", "screen-title", "Чаты"), ...nodes);
+    screen.replaceChildren(el("div", "screen-title", uiText("ui.ui.kit.phone.b5121e526d")), ...nodes);
     composer.hidden = true;
   }
 
@@ -726,7 +703,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   async function renderRoom(guard: () => boolean = () => tab === "chats" && !!room) {
     if (!screen.querySelector("#feed")) {
-      screen.innerHTML = `<div class="back-row"><button type="button" class="back" id="back-rooms"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.back}</svg>Чаты</button><span class="back-title">${esc(roomName)}</span></div><div id="feed" class="feed-in"></div>`;
+      screen.innerHTML = uiText("ui.ui.kit.phone.9429695b38", {p0: String(ICON.back), p1: String(esc(roomName))});
       q("#back-rooms", screen).addEventListener("click", () => {
         room = "";
         composer.hidden = true;
@@ -746,8 +723,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       rows = await readArchive(peer);
     } catch (e) {
       if (!feedReady && guard()) {
-        const why = e instanceof Denied ? "Компьютер не пускает этот телефон." : e instanceof Broke ? "Компьютер ответил ошибкой." : "Телефон не дозвонился до компьютера.";
-        feed.innerHTML = `<div class="empty">Лента не прочиталась. ${esc(why)} Попробую сам.</div>`;
+        const why = e instanceof Denied ? uiText("ui.ui.kit.phone.13a99504fe") : e instanceof Broke ? uiText("ui.ui.kit.phone.1e0d9015cc") : uiText("ui.ui.kit.phone.1548e60ff9");
+        feed.innerHTML = uiText("ui.ui.kit.phone.3656c9bedb", {p0: String(esc(why))});
       }
       return false;
     }
@@ -782,7 +759,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if (next === lastFeed && feedReady) return false;
     lastFeed = next;
     const nearBottom = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 200;
-    feed.innerHTML = next || `<div class="empty"><b>Здесь пока тихо</b>${windowish ? "Напиши первое сообщение внизу." : "Архива этой комнаты ещё нет."}</div>`;
+    feed.innerHTML = next || uiText("ui.ui.kit.phone.a0e02db634", {p0: String(windowish ? uiText("ui.ui.kit.phone.38455fc008") : uiText("ui.ui.kit.phone.4b71346fa2"))});
     if (nearBottom || !feedReady) screen.scrollTop = screen.scrollHeight;
     feedReady = true;
     if (pendingJump) {
@@ -807,9 +784,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   // ---------------------------------------------------------------- композер (только в открытом чате)
   function syncComposer() {
-    target.textContent = isWindowRoom(room) ? "" : `Ответ агента — в «${roomName}»`;
-    say.placeholder = isWindowRoom(room) ? `Написать ${agent}…` : "Поручить агенту…";
-    say.setAttribute("aria-label", isWindowRoom(room) ? `Сообщение ${agent}` : `Поручение агенту в чате «${roomName}»`);
+    target.textContent = isWindowRoom(room) ? "" : uiText("ui.ui.kit.phone.5a6cd515aa", {p0: String(roomName)});
+    say.placeholder = isWindowRoom(room) ? uiText("ui.ui.kit.phone.c32d557b4c", {p0: String(agent)}) : uiText("ui.ui.kit.phone.6862dbe92b");
+    say.setAttribute("aria-label", isWindowRoom(room) ? uiText("ui.ui.kit.phone.0335ba9443", {p0: String(agent)}) : uiText("ui.ui.kit.phone.dffef81287", {p0: String(roomName)}));
   }
   say.addEventListener("input", () => {
     say.style.height = "auto";
@@ -833,7 +810,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function paintShots() {
     filesBox.hidden = shots.length === 0;
     filesBox.innerHTML = shots
-      .map((s, i) => `<span class="chip">${SHOT_MIME.includes(s.mime) ? `<img src="${s.url}" alt="">` : `<span>${esc(s.name)}</span>`}<button type="button" data-i="${i}" aria-label="Убрать">×</button></span>`)
+      .map((s, i) => uiText("ui.ui.kit.phone.09ce3e09e5", {p0: String(SHOT_MIME.includes(s.mime) ? `<img src="${s.url}" alt="">` : `<span>${esc(s.name)}</span>`), p1: String(i)}))
       .join("");
     filesBox.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => {
@@ -844,13 +821,13 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     });
   }
 
-  attach.setAttribute("aria-label", "Приложить файлы");
+  attach.setAttribute("aria-label", uiText("ui.ui.kit.phone.8bec1fdea7"));
   attach.addEventListener("click", () => attachInput.click());
   attachInput.addEventListener("change", async () => {
     for (const f of Array.from(attachInput.files || [])) {
-      if (f.size > 64 * 1024 * 1024) { toast("Файл больше 64 МБ."); continue; }
-      if (shots.reduce((sum, s) => sum + s.size, 0) + f.size > 128 * 1024 * 1024) { toast("Вложения вместе больше 128 МБ."); continue; }
-      if (shots.length >= 16) { toast("Не больше 16 файлов за раз."); break; }
+      if (f.size > 64 * 1024 * 1024) { toast(uiText("ui.ui.kit.phone.c949bcf5c9")); continue; }
+      if (shots.reduce((sum, s) => sum + s.size, 0) + f.size > 128 * 1024 * 1024) { toast(uiText("ui.ui.kit.phone.ba1f58135c")); continue; }
+      if (shots.length >= 16) { toast(uiText("ui.ui.kit.phone.2016a0a424")); break; }
       try {
         const data = await new Promise<string>((resolve, reject) => {
           const r = new FileReader();
@@ -858,9 +835,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
           r.onload = () => resolve(String(r.result || "").split(",", 2)[1] || "");
           r.readAsDataURL(f);
         });
-        shots.push({ name: f.name || "файл", mime: f.type || "application/octet-stream", data, url: URL.createObjectURL(f), size: f.size });
+        shots.push({ name: f.name || uiText("ui.ui.kit.phone.48d8c3e9ee"), mime: f.type || "application/octet-stream", data, url: URL.createObjectURL(f), size: f.size });
       } catch {
-        toast("Файл не прочитался.");
+        toast(uiText("ui.ui.kit.phone.d45a4c3109"));
       }
     }
     attachInput.value = "";
@@ -891,19 +868,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const unread = state?.runner?.ever === false;
       toast(
         !isWindowRoom(room)
-          ? `Поручение передано агенту. Его ответ придёт в «${roomName}».`
+          ? uiText("ui.ui.kit.phone.79e8352341", {p0: String(roomName)})
           : unread
-            ? "Легло в дерево: этот агент окно не читает"
-            : "Ушло — агент прочитает в следующий ход",
+            ? uiText("ui.ui.kit.phone.0584573586")
+            : uiText("ui.ui.kit.phone.8e8ad00b82"),
       );
       setTimeout(() => bumpFeed(), 1200);
     } catch (e) {
       toast(
         e instanceof Denied
-          ? "Не ушло: компьютер не пускает этот телефон. Текст остался в поле."
+          ? uiText("ui.ui.kit.phone.d3394ba2c9")
           : e instanceof Offline
-            ? "Не ушло: нет связи с компьютером. Текст остался в поле."
-            : "Не ушло: компьютер ответил ошибкой. Текст остался в поле.",
+            ? uiText("ui.ui.kit.phone.7f037cf79c")
+            : uiText("ui.ui.kit.phone.577168a5b5"),
       );
     }
     send.disabled = false;
@@ -924,7 +901,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   async function renderSystem(guard: () => boolean = () => tab === "system") {
-    screen.innerHTML = '<div class="empty">читаю…</div>';
+    screen.innerHTML = uiText("ui.ui.kit.phone.fe732bbd85");
     const [boxes, brain, models, panicState] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
       scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; service_tiers?:Record<string,{requested?:string|null;actual?:string|null;available?:boolean|null;codex?:boolean}>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
@@ -933,15 +910,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     ]);
     if (!guard()) return;
     // 12.09: прерывание живого хода — просьба в memory/.control, движок снимает ход на тике.
-    const interruptHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div><div class="screen-title">Агент</div>
-      <div class="task-row">
-        <div class="actions"><button type="button" class="chip emergency-stop" data-panic${panicState?.stopped ? " disabled" : ""}>${panicState?.stopped ? "Аварийный стоп включён" : "Аварийный стоп"}</button></div>
-        <div class="muted">Останавливает всех агентов Hélène и их процессы, включая привилегированные поручения. Работает при закрытом окне. Возобновление — явным действием владельца на компьютере или сервере.</div>
-      </div>
-      <div class="task-row">
-        <div class="actions" data-autonomy-box></div>
-        <div class="muted">Пауза останавливает ответы и фоновые ходы этого агента. Telegram сохраняется; накопившиеся обращения не вызывают отдельные ответы после продолжения.</div>
-      </div>`;
+    const interruptHTML = uiText("ui.ui.kit.phone.be5278eedd", {p0: String(panicState?.stopped ? " disabled" : ""), p1: String(panicState?.stopped ? uiText("ui.ui.kit.phone.d217567ac9") : uiText("ui.ui.kit.phone.0d4f3f205a"))});
     const mountPause = () => {
       const slot=screen.querySelector<HTMLElement>("[data-autonomy-box]");
       if (slot) mountAutonomy(slot,{read:()=>api<AutonomyState>("/api/autonomy"),write:action=>post("/api/autonomy",{action}),identity:()=>location.origin+location.pathname,buttonClass:"chip"});
@@ -949,21 +918,13 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if (!boxes || !boxes.available) {
       screen.innerHTML = interruptHTML + `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
         (closed.has("containers")
-          ? notGiven("Система")
-          : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
+          ? notGiven(uiText("ui.ui.kit.phone.6da215b1bd"))
+          : `<div class="empty">${esc(boxes?.why || uiText("ui.ui.kit.phone.07edf33241"))}</div>`);
       mountPause(); return;
     }
     const rows = boxes.containers
       .map(
-        (c) => `<div class="task-row" data-box="${esc(c.name)}">
-          <div class="task-head"><b>${esc(c.name)}</b> <span class="${c.up ? "muted" : "err"}">${esc(c.status)}</span></div>
-          <div class="muted">${esc(c.image)}</div>
-          <div class="actions">
-            <button type="button" class="chip" data-restart-box="${esc(c.name)}">Перезапустить</button>
-            <button type="button" class="chip" data-box-log="${esc(c.name)}">Журнал</button>
-            <button type="button" class="chip" data-box-log="${esc(c.name)}" data-errors="1">Ошибки</button>
-          </div>
-        </div>`,
+        (c) => uiText("ui.ui.kit.phone.fb4f73ddb3", {p0: String(esc(c.name)), p1: String(esc(c.name)), p2: String(c.up ? "muted" : "err"), p3: String(esc(c.status)), p4: String(esc(c.image)), p5: String(esc(c.name)), p6: String(esc(c.name)), p7: String(esc(c.name))}),
       )
       .join("");
     const live: string[] = [];
@@ -989,37 +950,18 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
             const select = (k: string, values: string[]) =>
               `<select data-f="${k}" data-was="${esc(f(k))}">${opt(values, f(k))}</select>`;
             const tier = `<select data-f="service_tier" data-was="${esc(f('service_tier'))}">${serviceTierChoices(f('service_tier')).map(([value,title])=>`<option value="${esc(value)}"${value===f('service_tier')?' selected':''}>${esc(title)}</option>`).join('')}</select>`;
-            return `<div class="task-row" data-brain-form="${esc(role)}" data-codex="${brain.service_tiers?.[role]?.codex===true || brain.service_tiers?.[role]?.available===true}" data-fast-available="${brain.service_tiers?.[role]?.available}">
-              <div class="task-head"><b>${esc(role)}</b> <span class="muted">${esc(f("framework"))} · ${esc(f("model"))}</span></div>
-              ${field("Модель", input("model"))}
-              ${field("Фреймворк", select("framework", frameworks))}
-              ${field("Запасная модель", input("fallback_model", "пусто — без запасной"))}
-              ${field("Фреймворк запасной", select("fallback_framework", ["", ...frameworks]))}
-              ${field("Усилие", select("reasoning_effort", efforts))}
-              <div data-service-tier-field${brain.service_tiers?.[role]?.codex || brain.service_tiers?.[role]?.available?'':' hidden'}>${field("Скорость обработки", tier)}</div>
-              <p class="muted">${esc(serviceTierReceipt(brain.service_tiers?.[role]?.actual))}</p>
-              <div class="actions"><button type="button" class="chip" data-brain-apply="${esc(role)}">Применить</button></div>
-            </div>`;
+            return uiText("ui.ui.kit.phone.9ea3780dec", {p0: String(esc(role)), p1: String(brain.service_tiers?.[role]?.codex===true || brain.service_tiers?.[role]?.available===true), p2: String(brain.service_tiers?.[role]?.available), p3: String(esc(role)), p4: String(esc(f("framework"))), p5: String(esc(f("model"))), p6: String(field(uiText("ui.ui.kit.phone.f3bdf7cce3"), input("model"))), p7: String(field(uiText("ui.ui.kit.phone.f1d6279c5a"), select("framework", frameworks))), p8: String(field(uiText("ui.ui.kit.phone.af919964b2"), input("fallback_model", uiText("ui.ui.kit.phone.e2efc81fb0")))), p9: String(field(uiText("ui.ui.kit.phone.058447cd97"), select("fallback_framework", ["", ...frameworks]))), p10: String(field(uiText("ui.ui.kit.phone.9397f57b74"), select("reasoning_effort", efforts))), p11: String(brain.service_tiers?.[role]?.codex || brain.service_tiers?.[role]?.available?'':' hidden'), p12: String(field(uiText("ui.ui.kit.phone.0a2afcf188"), tier)), p13: String(esc(serviceTierReceipt(brain.service_tiers?.[role]?.actual))), p14: String(esc(role))});
           })
           .join("")
-      : `<div class="empty">${esc(brain?.note || "мозг отсюда не читается")}</div>`;
+      : `<div class="empty">${esc(brain?.note || uiText("ui.ui.kit.phone.5121320c17"))}</div>`;
     const imageConfig = brain?.images || { enabled: false, model: "gpt-image-2", quality: "auto", size: "auto", background: "opaque" };
     const imageValue = (key: string) => String(imageConfig[key] ?? "");
     const imageSelect = (key: string, choices: Array<[string, string]>) => `<select data-f="${key}" data-was="${esc(imageValue(key))}">${choices.map(([value, title]) => `<option value="${esc(value)}"${imageValue(key) === value ? " selected" : ""}>${esc(title)}</option>`).join("")}</select>`;
-    const imageRows = brain?.ok ? `<div class="task-row" data-brain-form="images">
-      <div class="task-head"><b>Изображения</b></div>
-      <div class="muted">Генерация и правка через реле — доступна и когда основной голос работает на GLM.</div>
-      ${field("Генерация", imageSelect("enabled", [["true", "Включена"], ["false", "Выключена"]]))}
-      ${field("Модель", `<input data-f="model" data-was="${esc(imageValue("model"))}" value="${esc(imageValue("model"))}" list="image-models" autocapitalize="off" autocorrect="off" spellcheck="false"><datalist id="image-models">${(brain.image_models || ["gpt-image-2"]).map(model => `<option value="${esc(model)}"></option>`).join("")}</datalist>`)}
-      ${field("Качество", imageSelect("quality", [["auto", "Автоматически"], ["low", "Черновик"], ["medium", "Среднее"], ["high", "Высокое"]]))}
-      ${field("Размер", `<input data-f="size" data-was="${esc(imageValue("size"))}" value="${esc(imageValue("size"))}" placeholder="auto или 1024x1024" spellcheck="false">`)}
-      ${field("Фон", imageSelect("background", [["opaque", "Обычный"], ["transparent", "Прозрачный"], ["auto", "Автоматически"]]))}
-      <div class="actions"><button type="button" class="chip" data-brain-apply="images">Применить</button></div>
-    </div>` : "";
+    const imageRows = brain?.ok ? uiText("ui.ui.kit.phone.ccc53d11b4", {p0: String(field(uiText("ui.ui.kit.phone.44477977e7"), imageSelect("enabled", [["true", uiText("ui.ui.kit.phone.4b043d0b16")], ["false", uiText("ui.ui.kit.phone.1e4b686990")]]))), p1: String(field(uiText("ui.ui.kit.phone.f3bdf7cce3"), `<input data-f="model" data-was="${esc(imageValue("model"))}" value="${esc(imageValue("model"))}" list="image-models" autocapitalize="off" autocorrect="off" spellcheck="false"><datalist id="image-models">${(brain.image_models || ["gpt-image-2"]).map(model => `<option value="${esc(model)}"></option>`).join("")}</datalist>`)), p2: String(field(uiText("ui.ui.kit.phone.43c6960012"), imageSelect("quality", [["auto", uiText("ui.ui.kit.phone.353cf589e9")], ["low", uiText("ui.ui.kit.phone.65fd24f1cb")], ["medium", uiText("ui.ui.kit.phone.cca5c7ff9e")], ["high", uiText("ui.ui.kit.phone.71abc1e1f0")]]))), p3: String(field(uiText("ui.ui.kit.phone.572095d4a7"), uiText("ui.ui.kit.phone.eab971027c", {p0: String(esc(imageValue("size"))), p1: String(esc(imageValue("size")))}))), p4: String(field(uiText("ui.ui.kit.phone.2084425180"), imageSelect("background", [["opaque", uiText("ui.ui.kit.phone.7c0ef1469b")], ["transparent", uiText("ui.ui.kit.phone.504001466b")], ["auto", uiText("ui.ui.kit.phone.353cf589e9")]])))}) : "";
     screen.innerHTML = interruptHTML +
-      `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
-      `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
-      `<div class="screen-title">Мозг</div><p class="muted" style="padding:0 14px">${esc(FAST_MODE_HINT)} Основная роль voice выполняет также шаги управления компьютером.</p>${brainRows}${imageRows}` +
+      uiText("ui.ui.kit.phone.ed15ed17b2", {p0: String(boxes.containers.length), p1: String(rows)}) +
+      uiText("ui.ui.kit.phone.0be498f1ba") +
+      uiText("ui.ui.kit.phone.f25403400c", {p0: String(esc(FAST_MODE_HINT)), p1: String(brainRows), p2: String(imageRows)}) +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
     bindBrainModelControls(screen, models?.by_framework || {});
@@ -1027,7 +969,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   async function renderTasks(guard: () => boolean = () => tab === "tasks") {
-    screen.innerHTML = '<div class="empty">читаю…</div>';
+    screen.innerHTML = uiText("ui.ui.kit.phone.fe732bbd85");
     const [agenda, forge, board] = await Promise.all([
       scoped<Agenda>("/api/agenda", "agenda"),
       scoped<ForgeTask[]>("/api/forge", "forge"),
@@ -1035,57 +977,57 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     ]);
     if (!guard()) return;
     if (!agenda && !forge && !board && (closed.has("agenda") || closed.has("forge") || closed.has("board"))) {
-      screen.innerHTML = `<div class="screen-title">Задачи</div>` + notGiven("Задачи");
+      screen.innerHTML = uiText("ui.ui.kit.phone.1fb2c91e1a") + notGiven(uiText("ui.ui.kit.phone.03cc1c2d5a"));
       return;
     }
     const agendaHTML = agenda
-      ? `<div class="screen-title">Намеченное <span class="n">активных ${agenda.active.length} из ${agenda.total}</span></div>` +
+      ? uiText("ui.ui.kit.phone.e6d12e2a42", {p0: String(agenda.active.length), p1: String(agenda.total)}) +
         (agenda.active
           .slice(0, 40)
           .map(
             (t) => `<div class="task-row">
-              <div class="task-head"><span class="badge">${esc(AGENDA_KIND[t.kind || ""] || t.kind || "?")}</span>${t.when ? ` <b class="mono">${esc(t.when)}</b>` : ""}${t.recur ? ` <span class="muted mono">повтор: ${esc(t.recur)}</span>` : ""}<span class="muted"> · ${esc(t.status || "")}</span></div>
+              <div class="task-head"><span class="badge">${esc(AGENDA_KIND[t.kind || ""] || t.kind || "?")}</span>${t.when ? ` <b class="mono">${esc(t.when)}</b>` : ""}${t.recur ? uiText("ui.ui.kit.phone.2e7cadc42b", {p0: String(esc(t.recur))}) : ""}<span class="muted"> · ${esc(t.status || "")}</span></div>
               ${t.target ? `<div class="muted">→ ${esc(String(t.target))}</div>` : ""}
               <div class="task-goal">${esc((t.goal || "").slice(0, 220))}</div>
             </div>`,
           )
-          .join("") || '<div class="empty">Пока ничего не намечено.</div>')
-      : `<div class="screen-title">Намеченное</div><div class="empty">не прочиталось</div>`;
+          .join("") || uiText("ui.ui.kit.phone.bcccd4700b"))
+      : uiText("ui.ui.kit.phone.93b3a7a320");
     const forgeHTML = forge
-      ? `<div class="screen-title">Субагенты <span class="n">${forge.length}</span></div>` +
+      ? uiText("ui.ui.kit.phone.a80d93dab6", {p0: String(forge.length)}) +
         (forge
           .map((t) => {
             const units = (t.agents || [])
               .map((a) => `<div class="task-unit">
-                <span class="mono">${esc(a.id)}</span> <span class="badge">${esc(a.role || "исполнитель")}</span>
-                <b class="${a.status === "error" || a.status === "failed" || a.status === "unknown" ? "err" : ""}">${esc(a.status === "unknown" ? "живость не подтверждена" : a.status || "неизвестно")}</b>
-                ${a.custody === "unresolved_stop" ? '<div class="err">остановка не подтверждена</div>' : ""}
-                ${a.parent_unit_id ? `<div class="muted">родитель ${esc(a.parent_unit_id)}</div>` : ""}
-                ${a.ancestry_unknown ? '<div class="err">связь с родителем не подтверждена</div>' : ""}
+                <span class="mono">${esc(a.id)}</span> <span class="badge">${esc(a.role || uiText("ui.ui.kit.phone.5dcaaef2e4"))}</span>
+                <b class="${a.status === "error" || a.status === "failed" || a.status === "unknown" ? "err" : ""}">${esc(a.status === "unknown" ? uiText("ui.ui.kit.phone.dc0a8a936d") : a.status || uiText("ui.ui.kit.phone.222b4bc59f"))}</b>
+                ${a.custody === "unresolved_stop" ? uiText("ui.ui.kit.phone.d4980af364") : ""}
+                ${a.parent_unit_id ? uiText("ui.ui.kit.phone.89498b0745", {p0: String(esc(a.parent_unit_id))}) : ""}
+                ${a.ancestry_unknown ? uiText("ui.ui.kit.phone.d56e69fc3d") : ""}
               </div>`)
               .join("");
-            return `<details class="fold"><summary><span class="dot"></span> <b>${esc(t.id)}</b> · ${esc(t.status === "done" ? "завершено" : t.status || "неизвестно")} · исполнителей: ${(t.agents || []).length} · по записи, живость не подтверждена</summary><div class="fold-body">${units || '<span class="muted">юнитов нет</span>'}</div></details>`;
+            return uiText("ui.ui.kit.phone.5175045eae", {p0: String(esc(t.id)), p1: String(esc(t.status === "done" ? uiText("ui.ui.kit.phone.5f9b6607de") : t.status || uiText("ui.ui.kit.phone.222b4bc59f"))), p2: String((t.agents || []).length), p3: String(units || uiText("ui.ui.kit.phone.0919e6780c"))});
           })
-          .join("") || '<div class="empty">Субагентов сейчас нет.</div>')
-      : `<div class="screen-title">Субагенты</div>${closed.has("forge") ? notGiven("Субагенты") : '<div class="empty">не прочиталось</div>'}`;
-    const boardHTML = board ? `<div class="screen-title">Доска</div><div class="card md">${md(board.board || "Доска пуста.")}</div>` : "";
+          .join("") || uiText("ui.ui.kit.phone.de9c047de7"))
+      : uiText("ui.ui.kit.phone.a7ad297b8a", {p0: String(closed.has("forge") ? notGiven(uiText("ui.ui.kit.phone.cf5873b9b1")) : uiText("ui.ui.kit.phone.284c7e8638"))});
+    const boardHTML = board ? uiText("ui.ui.kit.phone.d737ca31bf", {p0: String(md(board.board || uiText("ui.ui.kit.phone.9df3b9ee07")))}) : "";
     screen.innerHTML = agendaHTML + forgeHTML + boardHTML;
   }
 
   // ---------------------------------------------------------------- «Пробуждения»
   async function renderWakes(guard: () => boolean = () => tab === "wakes") {
-    screen.innerHTML = '<div class="empty">читаю…</div>';
+    screen.innerHTML = uiText("ui.ui.kit.phone.fe732bbd85");
     const got = await scoped<Run[]>("/api/runs?kind=wake&limit=40", "runs");
     if (!guard()) return;
-    const next = state?.next_wake ? `<div class="now-idle"><span class="dot"></span><span>Следующее пробуждение: ${esc(fmtTime(state.next_wake) || state.next_wake)}</span></div>` : "";
+    const next = state?.next_wake ? uiText("ui.ui.kit.phone.b432327026", {p0: String(esc(fmtTime(state.next_wake) || state.next_wake))}) : "";
     if (!got) {
-      screen.innerHTML = `<div class="screen-title">Вейки</div>` + next + (closed.has("runs") ? notGiven("Пробуждения") : '<div class="empty">не прочиталось</div>');
+      screen.innerHTML = uiText("ui.ui.kit.phone.3640965d8e") + next + (closed.has("runs") ? notGiven(uiText("ui.ui.kit.phone.9643f15ecb")) : uiText("ui.ui.kit.phone.284c7e8638"));
       return;
     }
     screen.innerHTML =
-      `<div class="screen-title">Пробуждения <span class="n">${got.length}</span></div>` +
+      uiText("ui.ui.kit.phone.eb534b522c", {p0: String(got.length)}) +
       next +
-      (got.map((r) => runRow(r)).join("") || '<div class="empty">Пробуждений ещё не было.</div>');
+      (got.map((r) => runRow(r)).join("") || uiText("ui.ui.kit.phone.feb9c5c582"));
     bindRuns(screen, () => void renderWakes());
   }
 
@@ -1104,11 +1046,11 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     nowView?.stop();sheetKind=kind;sheet.classList.add('phone-dialog');
     sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',title);
     sheetHead.replaceChildren(el('span','',title));
-    const close=el('button','phone-dialog-close','×') as HTMLButtonElement;close.type='button';close.setAttribute('aria-label','Закрыть '+title.toLowerCase());close.addEventListener('click',closeSheet);sheetHead.append(close);
+    const close=el('button','phone-dialog-close','×') as HTMLButtonElement;close.type='button';close.setAttribute('aria-label',uiText("ui.ui.kit.phone.6e5154d19e")+title.toLowerCase());close.addEventListener('click',closeSheet);sheetHead.append(close);
     veil.hidden=false;sheet.hidden=false;requestAnimationFrame(()=>{if(opening!==sheetEpoch||sheetKind!==kind)return;veil.classList.add('show');sheet.classList.add('show');close.focus()});opts.onSheet?.(true);
   }
   function openSettings() {
-    openDialog('settings','Настройки');
+    openDialog('settings',uiText("ui.ui.kit.phone.985b5e0f2c"));
     if(!settingsRoot){settingsRoot=el('div');phoneSettings(settingsRoot,settingsRequest)}
     sheetBody.replaceChildren(settingsRoot);
   }
@@ -1157,7 +1099,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   });
   window.addEventListener('helene:shell-update',event=>{
     if(sheetKind==='settings'&&settingsRoot?.dataset.dirty==='true'){
-      event.preventDefault();toast('Доступна новая версия. Сначала сохрани правки настроек.');
+      event.preventDefault();toast(uiText("ui.ui.kit.phone.de8013f46a"));
     }
   });
   q("#btn-more", root).addEventListener("click", () => (sheetKind ? closeSheet() : openSheet()));
@@ -1169,34 +1111,34 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   });
 
   function drawMore() {
-    sheetHead.innerHTML = `<span>Ещё</span>`;
+    sheetHead.innerHTML = uiText("ui.ui.kit.phone.f7e4d55258");
     sheetBody.replaceChildren();
     const about = el("div", "more-row");
-    about.append(el("h4", "", "Об этом телефоне"));
-    const kind = opts.platform === "telegram" ? "мини-апп Telegram" : "телефонный интерфейс";
-    about.append(el("p", "field-hint", `${agent} · ${kind} · ключ устройства ${key ? "есть" : "нет"} · канал ${base || location.host}. Тема — как в системе. Переписка, ходы и задачи читаются живьём с компьютера, где живёт агент; на телефоне ничего не хранится, кроме ключа.`));
+    about.append(el("h4", "", uiText("ui.ui.kit.phone.6a17df41fb")));
+    const kind = opts.platform === "telegram" ? uiText("ui.ui.kit.phone.4f038f6ee0") : uiText("ui.ui.kit.phone.7d17732d49");
+    about.append(el("p", "field-hint", uiText("ui.ui.kit.phone.92fef093d2", {p0: String(agent), p1: String(kind), p2: String(key ? uiText("ui.ui.kit.phone.747f78e5a0") : uiText("ui.ui.kit.phone.dc9337ff5b")), p3: String(base || location.host)})));
     sheetBody.append(about);
     // Принудительное обновление руками — для iPhone, где WebView держит старую
     // сборку: та же сверка, что идёт сама при возврате на экран.
     const upd = el("div", "more-row");
-    upd.append(el("h4", "", "Оболочка"));
-    const updBtn = el("button", "btn btn-quiet", "Обновить оболочку");
+    upd.append(el("h4", "", uiText("ui.ui.kit.phone.baba778a13")));
+    const updBtn = el("button", "btn btn-quiet", uiText("ui.ui.kit.phone.d473fe8f09"));
     updBtn.type = "button";
-    const updNote = el("p", "field-hint", `Сборка ${(document.querySelector<HTMLScriptElement>('script[type="module"][src*="assets/index-"]')?.getAttribute("src") || "").split("/").pop()?.replace(/^index-|\.js$/g, "") || "?"}. Обновляется сама при открытии и возврате на экран; кнопка — если не дождался сам.`);
+    const updNote = el("p", "field-hint", uiText("ui.ui.kit.phone.412f95c00c", {p0: String((document.querySelector<HTMLScriptElement>('script[type="module"][src*="assets/index-"]')?.getAttribute("src") || "").split("/").pop()?.replace(/^index-|\.js$/g, "") || "?")}));
     updBtn.addEventListener("click", async () => {
       updBtn.disabled = true;
-      updNote.textContent = "Сверяю с сервером…";
+      updNote.textContent = uiText("ui.ui.kit.phone.2543857420");
       const went = window.heleneCheckShell ? await window.heleneCheckShell() : false;
       if (!went) {
-        updNote.textContent = "Это уже свежая сборка.";
+        updNote.textContent = uiText("ui.ui.kit.phone.ccfba118ff");
         updBtn.disabled = false;
       }
     });
     upd.append(updBtn, updNote);
     sheetBody.append(upd);
     const unpair = el("div", "more-row");
-    unpair.append(el("h4", "", "Отвязать"));
-    const b = el("button", "btn btn-danger", "Забыть ключ на этом телефоне");
+    unpair.append(el("h4", "", uiText("ui.ui.kit.phone.7ba56eea85")));
+    const b = el("button", "btn btn-danger", uiText("ui.ui.kit.phone.c6a2929dae"));
     b.type = "button";
     b.addEventListener("click", () => {
       remember(opts.auth.storageKey, "");
@@ -1205,7 +1147,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       closeSheet();
       accessLost();
     });
-    unpair.append(b, el("p", "field-hint", "Компьютер этот телефон помнит до отвязки в Настройках → Телефон; здесь только стирается ключ."));
+    unpair.append(b, el("p", "field-hint", uiText("ui.ui.kit.phone.6e1d35df60")));
     sheetBody.append(unpair);
   }
 
@@ -1377,7 +1319,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     clearTimeout(liveTimer);
     closeLive();
     const s = opts.auth.pairScreen(key ? "closed" : "none");
-    showPair(s.title, s.text, { label: key ? "Проверить снова" : "Попробовать снова", onClick: () => void (key ? recheck() : start()) });
+    showPair(s.title, s.text, { label: key ? uiText("ui.ui.kit.phone.dc7dbeb809") : uiText("ui.ui.kit.phone.89dbfb9516"), onClick: () => void (key ? recheck() : start()) });
   }
 
   async function recheck() {
@@ -1409,7 +1351,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const got = opts.auth.hasCredential() ? await opts.auth.redeem() : {result:'none' as Redeem};
       if (got.result !== 'ok' || !got.key) {
         const s = opts.auth.pairScreen(got.result);
-        showPair(s.title,s.text,s.retry ? {label:'Попробовать снова',onClick:()=>void start()} : undefined);
+        showPair(s.title,s.text,s.retry ? {label:uiText("ui.ui.kit.phone.89dbfb9516"),onClick:()=>void start()} : undefined);
         return;
       }
       key = got.key;
@@ -1425,7 +1367,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       if (current === 'ok') { enter(); return; }
       if (current === 'offline') {
         const s=opts.auth.pairScreen('offline');
-        showPair(s.title,s.text,{label:'Попробовать снова',onClick:()=>void start()});
+        showPair(s.title,s.text,{label:uiText("ui.ui.kit.phone.89dbfb9516"),onClick:()=>void start()});
         return;
       }
     }
@@ -1446,12 +1388,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     }
     if (access === "offline") {
       const s = opts.auth.pairScreen("offline");
-      showPair(s.title, s.text, { label: "Попробовать снова", onClick: () => void start() });
+      showPair(s.title, s.text, { label: uiText("ui.ui.kit.phone.89dbfb9516"), onClick: () => void start() });
       return;
     }
     if (pair && pair !== "ok") {
       const s = opts.auth.pairScreen(pair);
-      showPair(s.title, s.text, s.retry ? { label: "Попробовать снова", onClick: () => void start() } : undefined);
+      showPair(s.title, s.text, s.retry ? { label: uiText("ui.ui.kit.phone.89dbfb9516"), onClick: () => void start() } : undefined);
       return;
     }
     if (key) {
@@ -1459,7 +1401,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       return;
     }
     const s = opts.auth.pairScreen(null);
-    showPair(s.title, s.text, { label: "Попробовать снова", onClick: () => void start() });
+    showPair(s.title, s.text, { label: uiText("ui.ui.kit.phone.89dbfb9516"), onClick: () => void start() });
   }
 
   document.addEventListener("visibilitychange", () => {
