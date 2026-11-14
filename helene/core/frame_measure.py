@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import frame_language
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ def bind(*, system, ctx, live_sections):
         _BOUND.reset(token)
 
 
+@frame_language.pinned
 def assemble(*, ctx, live_sections, messages, tools, coverage=None) -> dict:
     """Build a complete, private in-memory measurement envelope from fresh sources.
 
@@ -129,11 +131,11 @@ def assemble(*, ctx, live_sections, messages, tools, coverage=None) -> dict:
                             for name, text in payload['machine'])
     # Compacted history may exist only in the live system, not the role tape.
     # Carry that channel-scoped recap as historical evidence, not fresh E.
-    recap = (frame_shadow._SEP_A
-             + '[сводка прошлых ходов · снимок живого пути · это НЕ мой отбор]\n'
+    recap = (frame_shadow.separator('A')
+             + frame_language.text('frame.live_recap')
              + payload['recap']) if payload['recap'] else ''
-    system = (frame_shadow._zone_k() + frame_shadow._SEP_E + e
-              + recap + frame_shadow._SEP_T + machine)
+    system = (frame_shadow._zone_k() + frame_shadow.separator('E') + e
+              + recap + frame_shadow.separator('T') + machine)
     return {'system': system, 'messages': messages, 'tools': tools}
 
 

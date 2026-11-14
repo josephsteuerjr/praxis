@@ -205,6 +205,17 @@ TRANSFER_DM_DEFAULT = "учитывать (умолчание)"
 TRANSFER_GROUP_DEFAULT = "только источник (умолчание)"
 
 
+def separator(zone: str) -> str:
+    """Localized zone boundary; old constants remain the RU fixture contract."""
+    return frame_language.text('frame.separator_' + zone)
+
+
+def _room_kind_pattern() -> str:
+    # Kind labels are presentation, not stored identifiers. Escape translated text.
+    return '(?:' + '|'.join(re.escape(frame_language.text(key)) for key in (
+        'owned.frame_shadow.5ba87ed8f35f', 'owned.frame_shadow.232309a0a7bc')) + ')'
+
+
 # ---------------------------------------------------------------------- рычаг и пути
 
 
@@ -295,7 +306,7 @@ def _text_of(content) -> str:
             if block.get("type") == "text":
                 parts.append(str(block.get("text") or ""))
             else:
-                parts.append(f"[вложение: {block.get('type') or 'unknown'}]")
+                parts.append(frame_language.text('owned.frame_shadow.dc2580bbe9a2', v0=block.get('type') or 'unknown'))
         return "\n".join(parts)
     return str(content or "")
 
@@ -310,7 +321,8 @@ def _clock_line(now: datetime) -> str:
     except ValueError:
         offset = 4
     local = now.astimezone(timezone.utc) + timedelta(hours=offset)
-    return f"{_minutes_utc(now)} · {local.strftime('%H:%M')} по Самаре"
+    return frame_language.text('frame.clock', utc=_minutes_utc(now),
+                               local=local.strftime('%H:%M'), offset=f'{offset:+d}')
 
 
 def _first_diff(a: str, b: str) -> int:
@@ -352,8 +364,7 @@ def _shrink_rows(text: str, limit: int, pointer: str) -> str:
         return text
     head, tail = lines[:rows[0]], lines[rows[-1] + 1:]
     for keep in range(len(rows) - 1, -1, -1):
-        note = (f"… ещё {len(rows) - keep} свёрнуто кодом (потолок блока {limit} зн.; "
-                f"это НЕ мой отбор): {pointer}")
+        note = (frame_language.text('owned.frame_shadow.2ad9d87933d4', v0=len(rows) - keep, v1=limit, v2=pointer))
         out = "\n".join(head + [lines[i] for i in rows[:keep]] + [note] + tail)
         if len(out) <= limit or keep == 0:
             return out
@@ -378,13 +389,13 @@ def _shrink_book(text: str, limit: int, here: str) -> str:
     head, tail = lines[:rows[0]], lines[rows[-1] + 1:]
     protected = {
         i for i in rows
-        if here and re.search(rf"(?:личка|группа) {re.escape(here)}(?:\s|·|$)",
+        if here and re.search(rf"{_room_kind_pattern()} {re.escape(here)}(?:\s|·|$)",
                               lines[i])
     }
 
     def activity(i: int) -> str:
-        m = re.search(r"последнее: (.+?) · перенос:", lines[i])
-        stamp = (m.group(1) if m else "—").strip()
+        m = frame_language.match('owned.frame_shadow.e144031c159f', lines[i])
+        stamp = (m.group('v1') if m else "—").strip()
         return "" if stamp == "—" else stamp
 
     victims = sorted((i for i in rows if i not in protected),
@@ -392,8 +403,7 @@ def _shrink_book(text: str, limit: int, here: str) -> str:
     kept, removed = set(rows), 0
 
     def assemble() -> str:
-        note = ([f"… ещё {removed} мест снято кодом (потолок блока {limit} зн.; "
-                 "неактивные сначала — её №4; это НЕ мой отбор): search_chats"]
+        note = ([frame_language.text('owned.frame_shadow.111dc3b46abd', v0=removed, v1=limit)]
                 if removed else [])
         return "\n".join(head + [lines[i] for i in rows if i in kept] + note + tail)
 
@@ -535,9 +545,9 @@ def identity_line(ident: dict) -> str:
 # ------------------------------------------------------------------------ зона K
 
 
-def _zone_k() -> str:
-    soul = _read(BASE / "soul" / "SOUL.md")
-    voice = _read(BASE / "soul" / "VOICE.md")
+def _zone_k(*, soul: str | None = None, voice: str | None = None) -> str:
+    soul = _read(BASE / "soul" / "SOUL.md") if soul is None else soul
+    voice = _read(BASE / "soul" / "VOICE.md") if voice is None else voice
     parts = [soul]
     if voice:
         parts.append("\n\n---\n" + voice)
@@ -638,25 +648,23 @@ def _block_hands(tools, meta: dict | None = None) -> str:
         pairs.append([name, line])
 
     def assemble(rows: list[list[str]], note: str = "") -> str:
-        body = ("руки (указатель; полные схемы переданы отдельно в tools):\n"
+        body = (frame_language.text('owned.frame_shadow.8bfc0ee77c1a')
                 + "\n".join(f"- {n}" + (f" — {d}" if d else "") for n, d in rows)
-                if rows else "руки: в этом ходе не предложены")
+                if rows else frame_language.text('owned.frame_shadow.84c4d71f522f'))
         return (body + (f"\n{note}" if note else "")
-                + "\n[из: реестр рук по способностям канала · зачем: что я умею здесь]")
+                + frame_language.text('owned.frame_shadow.44c88a2a66b4'))
 
     def render(rows: list[list[str]], stage: str, trim_at: int) -> str:
         if stage == "полный":
             return assemble(rows)
         cut = sum(1 for (_, was), (_, now) in zip(pairs, rows) if was != now)
         saved = sum(len(d) for _, d in pairs) - sum(len(d) for _, d in rows)
-        how = ("сняты кодом целиком: даже одни имена не влезают в камерный набор"
+        how = (frame_language.text('owned.frame_shadow.a2f571f2d41d')
                if stage == "имена" else
-               f"ужаты кодом до головной фразы и ≤{trim_at} зн. ради камерного набора"
+               frame_language.text('owned.frame_shadow.59d27b56b6c5', v0=trim_at)
                if trim_at else
-               "ужаты кодом до головной фразы ради камерного набора")
-        return assemble(rows, f"[описания {cut} рук {how} ≤{HANDS_MAX} зн.: "
-                              f"−{saved} зн.; имена целиком, схемы переданы отдельно "
-                              f"в tools; это НЕ мой отбор]")
+               frame_language.text('owned.frame_shadow.809cf7bd4fc5'))
+        return assemble(rows, frame_language.text('owned.frame_shadow.012a4e5eb0f7', v0=cut, v1=how, v2=HANDS_MAX, v3=saved))
 
     rows, stage, trim_at = pairs, "полный", 0
     text = render(rows, stage, trim_at)
@@ -714,33 +722,25 @@ def _block_memory_index(audience: str = "other", ctx=None) -> str:
     if audience == "owner":
         body = _read(BASE / "memory" / "INDEX.md").rstrip()
         if not body:
-            body = ("(карта памяти: memory/INDEX.md не прочитался — это отказ "
-                    "источника, не пустота памяти; синтетический список вместо "
-                    "канона не собирается — её №8)")
+            body = (frame_language.text('owned.frame_shadow.476d85cce207'))
         import skill_navigation
         skills = skill_navigation.owner_map(BASE / "soul" / "skills" / "INDEX.md")
         return (body
-                + "\n[из: memory/INDEX.md — полное каноническое тело (её №8) · "
-                  "тела: не загружены — поднимаются рукой; «не загружено» не значит "
-                  "«не существует»]"
+                + frame_language.text('owned.frame_shadow.9397a9511ce4')
                 + "\n\n" + skills)
     people_dir = BASE / "memory" / "people"
     names = sorted(p.stem for p in people_dir.glob("*.md")
                    if not p.stem.startswith("_")) if people_dir.exists() else []
     own = _dossier_for(str(getattr(ctx, "chat_id", "") or ""))
     mine = own.stem if own is not None and own.stem in names else ""
-    lines = ["указатель памяти (тела: не загружены — поднимаются рукой; перечень людей "
-             "сужен по аудитории потока — отбор: код, НЕ мой):"]
-    lines.append("люди: " + (f"{mine} · " if mine else "")
-                 + "остальные имена не приводятся вне owner-потока — ни списком, "
-                   "ни числом")
+    lines = [frame_language.text('owned.frame_shadow.ebd07f1bb283')]
+    lines.append(frame_language.text('owned.frame_shadow.4073648d6a02') + (f"{mine} · " if mine else "")
+                 + frame_language.text('owned.frame_shadow.c4589c470b0f'))
     # A filename's presence on disk does not make it a public name. The
     # canonical skill map is still available to the owner; other audiences
     # get no names or counts by default, including undescribed new skills.
-    lines.append("навыки: имена вне owner-потока не приводятся; открыть свой "
-                 "soul/skills/INDEX.md явно, когда нужен конкретный навык")
-    lines.append("[из: memory/people/ + soul/skills/ · внутренние адреса "
-                 "не означают разрешение на разглашение]")
+    lines.append(frame_language.text('owned.frame_shadow.16643f23b067'))
+    lines.append(frame_language.text('owned.frame_shadow.81b17225aa4f'))
     return "\n".join(lines)
 
 
@@ -764,9 +764,7 @@ def _block_desires() -> tuple[str, bool]:
         ]
     except Exception:
         log.exception("frame_shadow: леджер желаний не прочитался")
-        return ("мои живые намерения: источник не прочитался — это отказ прибора, "
-                "не пустота намерений\n"
-                "[из: memory/desires/events.jsonl · её №8: желания живут в эпохе]",
+        return (frame_language.text('owned.frame_shadow.1c0443252a6f'),
                 False)
     shown = states[:10]
     rows = []
@@ -776,15 +774,11 @@ def _block_desires() -> tuple[str, bool]:
         if state.get("next_move"):
             row += f"; next: {str(state.get('next_move'))[:500]}"
         rows.append(row)
-    lines = ["мои живые намерения (снимок на момент заморозки; внутреннее, "
-             "не обещание аудитории):"]
-    lines.extend(rows if rows else ["- живых намерений в леджере сейчас нет"])
+    lines = [frame_language.text('owned.frame_shadow.5cb902ad8ac4')]
+    lines.extend(rows if rows else [frame_language.text('owned.frame_shadow.565e2e47779a')])
     if len(states) > len(shown):
-        lines.append(f"Показано {len(shown)} из {len(states)} — остальные целиком "
-                     "через manage_desire(action=get, desire_id=…).")
-    lines.append("[из: memory/desires/events.jsonl (append-only канон) · отбор: код, "
-                 "НЕ мой · её №8: желания живут в эпохе, граница — содержательное "
-                 "изменение леджера]")
+        lines.append(frame_language.text('owned.frame_shadow.74142aebb798', v0=len(shown), v1=len(states)))
+    lines.append(frame_language.text('owned.frame_shadow.80bad995a602'))
     return "\n".join(lines), True
 
 
@@ -800,11 +794,8 @@ def _block_mail() -> str | None:
         letters = str(len(data)) if isinstance(data, dict) else "0"
     except Exception:
         log.debug("frame_shadow: mailbox.json не разобрался", exc_info=True)
-        letters = "не прочитался (отказ прибора, не пустота ящика)"
-    return ("почтовый ящик — локатор, не индекс. Писем на момент заморозки: "
-            f"{letters}. Индекс не в кадре; письмо — mail_read, список — "
-            "manage_mail; индекс приедет сам, если речь зайдёт о почте.\n"
-            "[из: memory/mailbox.json · её №8: локатор живёт в эпохе]")
+        letters = frame_language.text('owned.frame_shadow.5cd329c0bb3a')
+    return (frame_language.text('owned.frame_shadow.eb0f084cbe98', v0=letters))
 
 
 def _block_voice_frame(payload: dict | None) -> str | None:
@@ -816,8 +807,7 @@ def _block_voice_frame(payload: dict | None) -> str | None:
     if not text:
         return None
     return (text
-            + "\n[из: живой путь, явно стабильный payload.voice_frame · машинный "
-              "системный контракт, НЕ мой голос (её №8); текущий extra_system — в T]")
+            + frame_language.text('owned.frame_shadow.de4499ea1d3a'))
 
 
 def _room_last_activity(chat_id: str) -> str:
@@ -888,16 +878,16 @@ def _block_address_book(ctx, audience: str = "other",
                 except Exception:
                     log.debug("frame_shadow: профиль %s не разобрался", chat_id,
                               exc_info=True)
-            kind = "личка" if not chat_id.startswith("-") else "группа"
+            kind = frame_language.text('owned.frame_shadow.5ba87ed8f35f') if not chat_id.startswith("-") else frame_language.text('owned.frame_shadow.232309a0a7bc')
             # ЕЁ слово из реестра переноса читается РАНЬШЕ умолчаний (её №2, 18.08).
             her_word = str(header.get("transfer") or "").strip()
             if her_word:
                 at = str(header.get("transfer_at") or "")[:10]
-                transfer = f"{her_word} (моё слово" + (f", {at}" if at else "") + ")"
+                transfer = frame_language.text('owned.frame_shadow.91abeb4746b4', v0=her_word) + (f", {at}" if at else "") + ")"
             else:
-                transfer = (TRANSFER_DM_DEFAULT if kind == "личка"
-                            else TRANSFER_GROUP_DEFAULT)
-            hidden = (" · существование не подтверждается вне owner-потоков"
+                transfer = frame_language.text('frame.transfer_dm' if not chat_id.startswith('-')
+                                               else 'frame.transfer_group')
+            hidden = (frame_language.text('owned.frame_shadow.2ca6e60ff492')
                       if audience == "owner"
                       and str(header.get("presence_hidden") or "") == "yes" else "")
             # ⚠ ДВЕ ПРОЕКЦИИ ОДНОГО ОБХОДА, А НЕ ДВА ОБХОДА (её слово 27.08:
@@ -907,14 +897,13 @@ def _block_address_book(ctx, audience: str = "other",
             # последний раз говорили и по какой формуле оттуда переносится; срок
             # режима туда же, это дата. Два независимых обхода разошлись бы молча,
             # и книга в E называла бы одни места, а обстановка в T — другие.
-            mode_part = (f" · режим: {mode_word}"
+            mode_part = (frame_language.text('owned.frame_shadow.413ff5b7e57a', v0=mode_word)
                          if mode_word and mode_word != "normal" else "")
             if moving:
                 last = _room_last_activity(chat_id)
-                until_part = (f" · режим до {until}"
+                until_part = (frame_language.text('owned.frame_shadow.25ac69301389', v0=until)
                               if until and mode_word and mode_word != "normal" else "")
-                rows.append((chat_id, f"- {chat_id} · последнее: {last} · "
-                                      f"перенос: {transfer}{until_part}"))
+                rows.append((chat_id, frame_language.text('owned.frame_shadow.e144031c159f', v0=chat_id, v1=last, v2=transfer, v3=until_part)))
             else:
                 rows.append((chat_id,
                              f"- {title} — {kind} {chat_id}{mode_part}{hidden}"))
@@ -924,23 +913,18 @@ def _block_address_book(ctx, audience: str = "other",
         if not rows:
             return ""
         return "\n".join(
-            ["обстановка мест (пересобирается каждый ход; кто эти места — в эпохе):"]
+            [frame_language.text('owned.frame_shadow.5efd0df27540')]
             + [line for _cid, line in rows]
-            + ["[из: архивы мест + реестр переноса · зачем: когда там в последний раз "
-               "говорили и куда оттуда можно переносить]"])
-    lines = (["адресная книга (состояние на момент заморозки; список мест полный, "
-              "сведения — снимки со своими датами):"] if audience == "owner" else
-             ["адресная книга (вне owner-потока — только это место; остальные места "
-              "не приводятся ни именами, ни id, ни числом — отбор: код, НЕ мой):"])
+            + [frame_language.text('owned.frame_shadow.305be0552571')])
+    lines = ([frame_language.text('owned.frame_shadow.f552434c18d8')] if audience == "owner" else
+             [frame_language.text('owned.frame_shadow.dbd3af01b0a8')])
     lines.extend(line for _cid, line in rows)
     if not rows:
-        lines.append("- мест в реестре нет" if audience == "owner"
-                     else "- это место в реестре комнат ещё не заведено")
-    lines.append("[из: memory/rooms/ (профили) + архивы мест · зачем: карта «где я "
-                 "живу» и границ переноса; тела разговоров — рукой read_other_chat]"
+        lines.append(frame_language.text('owned.frame_shadow.4af03b2dfd7b') if audience == "owner"
+                     else frame_language.text('owned.frame_shadow.2f02802d36c2'))
+    lines.append(frame_language.text('owned.frame_shadow.8d24ec1a34cb')
                  if audience == "owner" else
-                 "[из: memory/rooms/ (профиль этого места) · зачем: границы переноса "
-                 "здесь; карта остальных мест живёт только в owner-потоке]")
+                 frame_language.text('owned.frame_shadow.f9439007b56e'))
     return _shrink_rows("\n".join(lines), limit, "search_chats")
 
 
@@ -997,23 +981,19 @@ def _block_recent(now: datetime, titles: dict[str, str] | None = None,
             picked.append((at, peer, msg_id))
             per_place[peer] = per_place.get(peer, 0) + 1
     picked.sort(reverse=True)
-    lines = (["недавнее (на момент заморозки; отбор: код (черновик), НЕ мой; "
-              "полные тексты — рукой):"] if audience == "owner" else
-             ["недавнее (вне owner-потока — только это место; события других мест не "
-              "приводятся; отбор: код (черновик), НЕ мой; полные тексты — рукой):"])
+    lines = ([frame_language.text('owned.frame_shadow.61c1da7811ea')] if audience == "owner" else
+             [frame_language.text('owned.frame_shadow.6294b234c087')])
     for at, peer, msg_id in picked:
         label = (titles or {}).get(peer) or peer
         stamp = at[:16].replace("T", " ")
-        lines.append(f"- {stamp} UTC · {label}: сказано"
+        lines.append(frame_language.text('owned.frame_shadow.7e8b2d6923a0', v0=stamp, v1=label)
                      + (f" (#{msg_id})" if msg_id else ""))
     if not picked:
-        lines.append("- журнал доставки пуст за горизонт" if audience == "owner"
-                     else "- журнал доставки по этому месту пуст за горизонт")
-    lines.append("выброшено из среза: события старше горизонта и виды, которых журнал "
-                 "не ведёт (входящие, чтения) — блок неполон ПО ИСТОЧНИКУ")
-    lines.append("[из: durable-леджер отправок · зачем: ориентация «где что "
-                 "произошло»; горизонт: 48 ч + 3 на место за 7 суток]")
-    return _shrink_rows("\n".join(lines), limit, "журнал доставки")
+        lines.append(frame_language.text('owned.frame_shadow.074a63efe3d6') if audience == "owner"
+                     else frame_language.text('owned.frame_shadow.0e18cf3ef0f4'))
+    lines.append(frame_language.text('owned.frame_shadow.3c6f8e88cd1f'))
+    lines.append(frame_language.text('owned.frame_shadow.b338adb62275'))
+    return _shrink_rows("\n".join(lines), limit, frame_language.text('owned.frame_shadow.fef720c4b7ca'))
 
 
 def _dossier_for(chat_id: str) -> Path | None:
@@ -1147,16 +1127,14 @@ def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
     отфильтрованное тело, иначе на полу 2000 знаков в кадр уехало бы то, что аудитория
     сняла.
     """
-    header = ("поднято в эпоху (тела ниже — байты файлов в служебных ограждениях; "
-              "результаты рук живут в накопителе; всё остальное в кадре — указатели):")
-    foot = "[зачем: реестр моего внимания; снятие — на границе, вслух]"
+    header = (frame_language.text('owned.frame_shadow.2291d7f43d2c'))
+    foot = frame_language.text('owned.frame_shadow.35392d84b0a6')
     chat_id = str(getattr(ctx, "chat_id", "") or "")
     if not (getattr(ctx, "is_dm", False) and chat_id and not chat_id.startswith("-")):
-        return (header + "\nничего: у потока нет собеседника-человека\n" + foot), None
+        return (header + frame_language.text('owned.frame_shadow.3ebd2b7741b8') + foot), None
     path = _dossier_for(chat_id)
     if path is None:
-        return (header + f"\nдосье собеседника: привязка id {chat_id} → файл не "
-                "однозначна — не поднимаю, чтобы не угадывать (правило свидетелей)\n"
+        return (header + frame_language.text('owned.frame_shadow.dfed4a705478', v0=chat_id)
                 + foot), None
     raw = path.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
@@ -1167,10 +1145,10 @@ def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
     try:
         import rooms as rooms_mod
         her = rooms_mod.transfer_of(chat_id)
-        transfer = (f"{her['transfer']} (моё слово)" if her["transfer"]
-                    else TRANSFER_DM_DEFAULT)
+        transfer = (frame_language.text('owned.frame_shadow.9635a4af7e41', v0=her['transfer']) if her["transfer"]
+                    else frame_language.text('frame.transfer_dm'))
     except Exception:
-        transfer = TRANSFER_DM_DEFAULT
+        transfer = frame_language.text('frame.transfer_dm')
     return header, {"path": path, "raw": raw, "sha": sha, "foot": foot,
                     "body": body, "transfer": transfer,
                     "private_hidden": private_hidden}
@@ -1199,31 +1177,20 @@ def _render_lifted(header: str, src: dict | None,
         verified, _against = _people.last_verified(path.stem)
         if verified:
             age = (_pt.today() - _dt.date.fromisoformat(verified)).days
-            fresh_mark = f" · сверено: {age}д"
+            fresh_mark = frame_language.text('owned.frame_shadow.ac49c6fbdfdb', v0=age)
         else:
-            fresh_mark = " · не сверено"
+            fresh_mark = frame_language.text('owned.frame_shadow.7d362a3c7ba4')
     except Exception:
         fresh_mark = ""
 
     def assemble(shown: str, cut: bool) -> str:
         # ЕЁ слово 21.08 (№8): «вся будущая обрезка только явно, с исходным размером,
         # sha и способом поднять полное тело».
-        cut_note = ((f"\n[обрезано: показано {len(shown)} из {len(body)} знаков "
-                     f"({len(raw)} байт) · sha256 полного тела {sha[:12]} · "
-                     f"целиком: memory/people/{path.name} — поднять рукой чтения "
-                     f"файла]")
+        cut_note = ((frame_language.text('owned.frame_shadow.ab67e4f76891', v0=len(shown), v1=len(body), v2=len(raw), v3=sha[:12], v4=path.name))
                     if cut else "")
         if private_hidden:
-            cut_note += (f"\n[вне owner-потока снято строк с пометкой [private]: "
-                         f"{private_hidden} — тело показано не байт-в-байт; sha256 выше "
-                         f"считан по файлу целиком]")
-        return (header + "\n"
-                f"↓ [досье собеседника · {path.name} · {len(raw)} байт · "
-                f"sha256 {sha[:12]}{fresh_mark} · перенос: {src['transfer']}]\n"
-                "   поднято кодом (черновик): собеседник этого потока · на границе эпохи\n"
-                f"——— тело {path.name}, байты как в файле ———\n"
-                f"{shown}{cut_note}\n"
-                f"——— конец тела {path.name} · sha256 {sha[:12]} ———\n"
+            cut_note += (frame_language.text('owned.frame_shadow.719286505796', v0=private_hidden))
+        return (header + frame_language.text('owned.frame_shadow.3d90d135e62a', v0=path.name, v1=len(raw), v2=sha[:12], v3=fresh_mark, v4=src['transfer'], v5=path.name, v6=shown, v7=cut_note, v8=path.name, v9=sha[:12])
                 + src["foot"])
 
     block, shown = _fit_body(assemble, body, limit)
@@ -1334,7 +1301,7 @@ def _epoch_blocks(ctx, tools, now: datetime,
     else:
         titles: dict[str, str] = {}
         for line in book.splitlines():
-            m = re.match(r"- (.+?) — (?:личка|группа) (-?\d+)", line)
+            m = re.match(rf"- (.+?) — {_room_kind_pattern()} (-?\d+)", line)
             if m:
                 titles[m.group(2)] = m.group(1)
         blocks["recent"] = _block_recent(now, titles, audience, here)
@@ -1352,7 +1319,7 @@ def _epoch_blocks(ctx, tools, now: datetime,
                 lifted_meta[:] = meta
             return text
         if name == "recent":
-            return _shrink_rows(blocks["recent"], target, "журнал доставки")
+            return _shrink_rows(blocks["recent"], target, frame_language.text('owned.frame_shadow.fef720c4b7ca'))
         if name == "address_book":
             return _shrink_book(blocks["address_book"], target, here)
         if name == "hands":
@@ -1546,11 +1513,7 @@ def _a_message(message) -> str:
         total = len(text)
         cut = total - (A_MSG_HEAD + A_MSG_TAIL)
         text = (text[:A_MSG_HEAD]
-                + f"\n{_A_CUT_MARK} первые {A_MSG_HEAD} и последние {A_MSG_TAIL} из "
-                  f"{total} знаков этого сообщения · вырезано {cut} зн. посередине · "
-                  "срез двусторонний · это НЕ мой отбор · целиком: события "
-                  "memory_life этого потока — memory/life/events/*.jsonl, kind "
-                  "conversation_message]\n"
+                + frame_language.text('owned.frame_shadow.0512cca6d75d', v0=frame_language.text('frame.cut_marker'), v1=A_MSG_HEAD, v2=A_MSG_TAIL, v3=total, v4=cut)
                 + text[-A_MSG_TAIL:])
     return f"\n[{role}]\n{text}\n"
 
@@ -1714,7 +1677,7 @@ def _zone_a(history, fold_count: int, recap_head: str) -> tuple[str, dict, str]:
     tail = list(history or ())[fold_count:] if fold_count else list(history or ())
     rows = [_a_message(m) for m in tail[-A_MAX_MESSAGES:]]
     dropped_by_count = max(0, len(tail) - len(rows))
-    capped = sum(1 for r in rows if _A_CUT_MARK in r)
+    capped = sum(1 for r in rows if frame_language.text('frame.cut_marker') in r)
     dropped_by_chars = 0
     dropped_chars = 0
     while len(rows) > 1 and sum(len(r) for r in rows) > A_MAX_CHARS:
@@ -1741,16 +1704,9 @@ def _zone_a(history, fold_count: int, recap_head: str) -> tuple[str, dict, str]:
     # меняется, то есть стабильна по построению (её №8).
     window = ""
     if floor_breach:
-        window += (f"⚠ [АВАРИЙНАЯ ДЕГРАДАЦИЯ ОКНА: живой хвост {kept} сообщ. — ниже "
-                   f"пола {A_KEEP_TAIL_MIN}; даже пол не влез в аварийный потолок "
-                   f"{A_MAX_CHARS} зн. Это названная авария, не молчаливое снижение "
-                   f"пола (её №2)]\n")
+        window += (frame_language.text('owned.frame_shadow.4ace7a98c56a', v0=kept, v1=A_KEEP_TAIL_MIN, v2=A_MAX_CHARS))
     if kept < live:
-        window += (f"[окно: {kept} из {live} живых сообщений · выброшено кодом "
-                   f"{dropped_by_count + dropped_by_chars}: {dropped_by_count} за "
-                   f"потолком {A_MAX_MESSAGES} сообщ., {dropped_by_chars} за потолком "
-                   f"{A_MAX_CHARS} зн. ({dropped_chars} зн. рендера) · выброшены самые "
-                   f"старшие, последнее сообщение остаётся всегда · это НЕ мой отбор]\n")
+        window += (frame_language.text('owned.frame_shadow.a29b582ee4d9', v0=kept, v1=live, v2=dropped_by_count + dropped_by_chars, v3=dropped_by_count, v4=A_MAX_MESSAGES, v5=dropped_by_chars, v6=A_MAX_CHARS, v7=dropped_chars))
     head = (recap_head + "\n") if recap_head else ""
     return head + "".join(rows), {
         "kept": kept, "total": total, "folded": fold_count,
@@ -1795,35 +1751,24 @@ def _zone_t(ctx, speaker, user_msg, now: datetime,
     if places:
         moving += places.rstrip("\n") + "\n"
     if moving:
-        moving = ("[состояние окна и обстановка мест — пересобирается каждый ход; "
-                  "стабильные слои этого не касаются]\n" + moving + "\n")
+        moving = (frame_language.text('owned.frame_shadow.a0f2f002afae') + moving + "\n")
     machine = ""
     rows = list((payload or {}).get("machine") or ())
     if rows:
         parts = [f"--- {name} ---\n{text}" for name, text in rows]
-        machine = ("[машинный хвост хода — действующий контракт и состояние; собрано "
-                   "кодом живого пути · это НЕ мой голос и НЕ эпоха (её №8: "
-                   "contract/state живут в T)]\n"
+        machine = (frame_language.text('owned.frame_shadow.d47fb84df4ee')
                    + "\n\n".join(parts) + "\n\n")
     chat_id = getattr(ctx, "chat_id", None)
-    place = ("личка" if getattr(ctx, "is_dm", False) else "группа")
+    place = (frame_language.text('owned.frame_shadow.5ba87ed8f35f') if getattr(ctx, "is_dm", False) else frame_language.text('owned.frame_shadow.232309a0a7bc'))
     if chat_id is not None:
         place += f" {chat_id}"
     who = str(speaker or "").strip() or "—"
     entry = _text_of(user_msg).strip()
     if len(entry) > T_INPUT_MAX:
-        entry = entry[:T_INPUT_MAX] + f"\n[обрезано: вход {len(_text_of(user_msg))} зн.]"
+        entry = entry[:T_INPUT_MAX] + frame_language.text('owned.frame_shadow.78aab61f128b', v0=len(_text_of(user_msg)))
     return (moving
             + machine
-            + "<ТЕКУЩЕЕ>\n"
-            f"место: {place}\n"
-            f"говорит: {who}\n"
-            f"адрес ответа: {who if who != '—' else place}\n"
-            f"время: {_clock_line(now)}\n"
-            "работа: —\n"
-            "</ТЕКУЩЕЕ>\n"
-            "вход:\n"
-            f"{entry}\n")
+            + frame_language.text('owned.frame_shadow.922c6c24130b', v0=place, v1=who, v2=who if who != '—' else place, v3=_clock_line(now), v4=entry))
 
 
 # --------------------------------------------------- тексты живого пути (её №8)
@@ -1956,6 +1901,7 @@ def prepare(*, ctx, history, tools, now: datetime | None = None,
                     ctx, str(saved.get("audience") or "owner"), moving=True))
 
 
+@frame_language.pinned
 def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
           plan: Plan, payload: dict | None = None) -> Frame:
     """Чистая сборка: никакого IO, кроме чтения source-файлов K. Всё подвижное
@@ -1974,9 +1920,7 @@ def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
     if recap and str(recap.get("text") or ""):
         # Сводка старше всего в A — стоит первой; снята на границе и не меняется
         # между границами (её №8: «сводка — A»; подпись — машинная, её №6).
-        fold_head = (f"[сводка прошлых ходов · снимок живого пути на границе "
-                     f"{recap.get('at')} · это НЕ мой отбор]\n"
-                     f"{recap.get('text')}").rstrip("\n")
+        fold_head = (frame_language.text('owned.frame_shadow.439a43811355', v0=recap.get('at'), v1=recap.get('text'))).rstrip("\n")
     a, a_meta, window = _zone_a(history, plan.fold_count, fold_head)
     if plan.fold_line:
         window = plan.fold_line.rstrip("\n") + "\n" + window
@@ -1984,10 +1928,10 @@ def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
                 window=window, places=plan.places_now)
     # Номер эпохи из заголовка НАД конституцией убран (18.08): он инвалидировал бы
     # 13k неизменной K на каждой границе. Номер живёт в шапке E и в метриках.
-    header = f"# Теневой кадр · {stream}\n"
-    stable = header + k + _SEP_E + e_text + _SEP_A + a
+    header = frame_language.text('owned.frame_shadow.164b9d845b0d', v0=stream)
+    stable = header + k + separator('E') + e_text + separator('A') + a
     return Frame(stream=stream, epoch_n=epoch_n, k=k, e=e_text, a=a, t=t,
-                 stable_text=stable, text=stable + _SEP_T + t, a_meta=a_meta)
+                 stable_text=stable, text=stable + separator('T') + t, a_meta=a_meta)
 
 
 # ------------------------------------------------------------- полнота против живого

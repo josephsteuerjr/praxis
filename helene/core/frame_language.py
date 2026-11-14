@@ -10,6 +10,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 from functools import lru_cache, wraps
 from pathlib import Path
 from string import Formatter
@@ -132,6 +133,24 @@ def text(key: str, **values) -> str:
     if expected != set(values):
         raise ValueError(f"frame template parameters differ: {key}")
     return template.format_map(values)
+
+
+def match(key: str, value: str):
+    """Read an owned rendered row using the same localized template.
+
+    Labels are escaped literally, never interpreted as regular expressions.
+    This is for internal presentation rows, not authorization or user input.
+    """
+    template = catalog(language())[key]
+    parts, seen = [], set()
+    for literal, field, _format, _conversion in Formatter().parse(template):
+        parts.append(re.escape(literal))
+        if field is not None:
+            if not field.isidentifier():
+                raise ValueError('template field must be a simple identifier')
+            parts.append(f'(?P={field})' if field in seen else f'(?P<{field}>.*?)')
+            seen.add(field)
+    return re.fullmatch(''.join(parts), value, flags=re.DOTALL)
 
 
 def fingerprint() -> str:
