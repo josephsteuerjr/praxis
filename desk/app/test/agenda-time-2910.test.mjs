@@ -4,8 +4,9 @@ import { test } from 'node:test';
 
 // Separate real JS processes make system timezone/DST independent of CI host.
 const moduleUrl = new URL('../../ui-kit/window/agenda-time.ts', import.meta.url).href;
+const languageFixture = new URL('./fixtures/ru-localization.mjs', import.meta.url).href;
 function format(zone, value) {
-  const code = `import {agendaWhen} from ${JSON.stringify(moduleUrl)};console.log(agendaWhen(${JSON.stringify(value)}));`;
+  const code = `await import(${JSON.stringify(languageFixture)});const {agendaWhen}=await import(${JSON.stringify(moduleUrl)});console.log(agendaWhen(${JSON.stringify(value)}));`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     env: { ...process.env, TZ: zone }, encoding: 'utf8',
   });

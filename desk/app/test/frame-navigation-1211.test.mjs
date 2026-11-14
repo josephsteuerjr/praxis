@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseHTML} from 'linkedom';
+import './fixtures/ru-localization.mjs';
 
 const {document,window}=parseHTML('<html><body><main></main></body></html>');
 // Linkedom does not implement the browser's select selection state.

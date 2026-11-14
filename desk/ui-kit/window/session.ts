@@ -1,3 +1,4 @@
+import { t as uiText } from "../../lang/lang";
 /** Observable lifecycle contracts. No timers, DOM or inferred text state here. */
 export interface OwnerState {
   agent_id?: string;
@@ -40,19 +41,19 @@ export function engineWords(owner: OwnerState | null, op: EngineOperation | null
   // границе ТЕКУЩЕГО хода (06.10, живая жалоба владельца «харнесс не
   // торопится»). Молчаливое «Перезапускается…» в это время неотличимо от
   // зависания — говорим прямо, чего ждём.
-  if (op) return op.action === "stop" ? "Останавливается…"
-    : op.action === "resume" ? "Запускается…" : "Перезапускается — ждёт границы текущего хода";
+  if (op) return op.action === "stop" ? uiText("ui.ui.kit.window.session.8c37f21b90")
+    : op.action === "resume" ? uiText("ui.ui.kit.window.session.fa6fb80316") : uiText("ui.ui.kit.window.session.16c5f6c752");
   // Снятый агент (1.4.1, живой случай 06.10): флаг enabled=false в конфиге, а
   // процессы при служебной установке держит служба до своего перезапуска.
   // Прежде окно молчало — кнопка «Остановить движок» выглядела сломанной, хотя
   // движок честно жив. Говорим состояние словами, и объясняем, кто исполнит.
   if (owner && owner.enabled === false && !owner.stopped) {
     return owner.service
-      ? "Агент снят в настройках; его держит служба — отпустит перезапуск службы («Система» → «Перезапустить»)"
-      : "Агент снят в настройках — движок не поднимется, пока не вернёшь галочку";
+      ? uiText("ui.ui.kit.window.session.178c4d60c2")
+      : uiText("ui.ui.kit.window.session.8832b08d7a");
   }
-  if (owner?.stopped) return owner.runner_alive === false ? "Движок остановлен"
-    : owner.runner_alive === true ? "Останавливается…" : "Остановка включена";
+  if (owner?.stopped) return owner.runner_alive === false ? uiText("ui.ui.kit.window.session.9782bf486b")
+    : owner.runner_alive === true ? uiText("ui.ui.kit.window.session.8c37f21b90") : uiText("ui.ui.kit.window.session.4b5e73b6a4");
   return "";
 }
 
@@ -66,7 +67,7 @@ export interface CurrentActivity {
 
 export function activityWords(activity: CurrentActivity | null | undefined): string {
   if (!activity) return "";
-  return activity.phase === "model" ? "Думает..." : "Работает...";
+  return activity.phase === "model" ? uiText("ui.ui.kit.window.session.2dd96b5034") : uiText("ui.ui.kit.window.session.88331fc7fe");
 }
 
 export function sameRoom(a: string, b: string, defaultRoom: string, legacyRoom: string): boolean {

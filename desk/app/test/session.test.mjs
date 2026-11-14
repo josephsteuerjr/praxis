@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
+import './fixtures/ru-localization.mjs';
 const code = readFileSync(new URL("../../ui-kit/window/session.ts", import.meta.url), "utf8");
 const { engineOperationObserved, engineWords, activityWords, sameRoom, interruptReceiptMatches } =
   await import("data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(code)).toString("base64"));

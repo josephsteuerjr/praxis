@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import './fixtures/ru-localization.mjs';
 const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'utf8');
 const block=main.slice(main.indexOf('  let roomsReading:'),main.indexOf('  async function newRoom()'));
 assert.ok(block.includes('async function readRooms'));

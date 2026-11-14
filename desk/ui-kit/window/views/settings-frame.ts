@@ -1,4 +1,4 @@
-import { t as uiText, UiError } from "../../../lang/lang";
+import { t as uiText, UiError, locale } from "../../../lang/lang";
 // Каркас экрана «Настройки», общий обоим приложениям.
 //
 // ⚠⚠ ПРАВИЛО ЭТОГО ЭКРАНА: БЛОКИ КОНФИГА СЛИВАЮТСЯ, А НЕ ПЕРЕСОБИРАЮТСЯ.
@@ -1255,7 +1255,7 @@ function backupCard(draft: Config): HTMLElement {
         const kinds: Record<string, string> = { auto: uiText("ui.ui.kit.window.views.settings.frame.51ec8d5076"), manual: uiText("ui.ui.kit.window.views.settings.frame.730255815d"), before: uiText("ui.ui.kit.window.views.settings.frame.1e33b27e8c") };
         for (const it of r.items.slice(0, 6)) {
           const kind = it.name.includes("-auto") ? kinds.auto : it.name.includes("-manual") ? kinds.manual : it.name.includes("-before-") ? kinds.before : "";
-          const when = it.when ? new Date(it.when * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : it.name;
+          const when = it.when ? new Date(it.when * 1000).toLocaleString(locale(), { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : it.name;
           listBox.append(el("li", "", uiText("ui.ui.kit.window.views.settings.frame.95dafacad6", {p0: String(when), p1: String(kind ? " · " + kind : ""), p2: String((it.bytes / 1048576).toFixed(1))})));
         }
         // Период 0 — расписание выключено: обещать «снимется сама» было бы неправдой.
@@ -1416,7 +1416,7 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
       devicesBox.append(el("p", "field-label", uiText("ui.ui.kit.window.views.settings.frame.be1cbefc60")));
       for (const device of rows) {
         const row = el("div", "device-row");
-        row.append(el("span", "", `${device.name} · ${new Date(device.created).toLocaleDateString("ru-RU")}`));
+        row.append(el("span", "", `${device.name} · ${new Date(device.created).toLocaleDateString(locale())}`));
         row.append(button(uiText("ui.ui.kit.window.views.settings.frame.7ba56eea85"), "quiet", async () => {
           await post("/pair/revoke", {id:device.id}).catch(e => toast(humanError(e).text));
           void drawDevices();
@@ -1448,8 +1448,8 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     if (on && saved) for (const [key,label] of [['bot',uiText("ui.ui.kit.window.views.settings.frame.33123129a8")],['https',uiText("ui.ui.kit.window.views.settings.frame.b97273e65d")],['menu',uiText("ui.ui.kit.window.views.settings.frame.d6ea7b8001")],['authorization',uiText("ui.ui.kit.window.views.settings.frame.661a9c5f29")]]) {
       const check=status.checks?.[key]; if(!check)continue;
       const row=el('p','receipt');row.classList.toggle('err',['error','retry'].includes(check.state));
-      const at=check.last_attempt ? uiText("ui.ui.kit.window.views.settings.frame.b17ca685a7", {p0: String(new Date(check.last_attempt*1000).toLocaleTimeString('ru-RU'))}) : '';
-      const retryAt=check.retry_at && check.retry_at*1000>Date.now() ? uiText("ui.ui.kit.window.views.settings.frame.2bca132071", {p0: String(new Date(check.retry_at*1000).toLocaleTimeString('ru-RU'))}) : '';
+      const at=check.last_attempt ? uiText("ui.ui.kit.window.views.settings.frame.b17ca685a7", {p0: String(new Date(check.last_attempt*1000).toLocaleTimeString(locale()))}) : '';
+      const retryAt=check.retry_at && check.retry_at*1000>Date.now() ? uiText("ui.ui.kit.window.views.settings.frame.2bca132071", {p0: String(new Date(check.retry_at*1000).toLocaleTimeString(locale()))}) : '';
       row.textContent=`${label}: ${check.message}${at}${retryAt}`;checks.append(row);
     }
   }

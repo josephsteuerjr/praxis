@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import './fixtures/ru-localization.mjs';
 const load = async (name) => import('data:text/javascript;base64,' + Buffer.from(stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/' + name, import.meta.url), 'utf8'))).toString('base64'));
 const { foldWords, deliveryWords } = await load('memory-fold.ts');
 const state = { room: '-1', hot: 921, keep: 250, offer_at: 400, hard_at: 500, offer_mode: true, backstop_hours: 26, offer: {hard: true}, pending: null, receipt: null };
