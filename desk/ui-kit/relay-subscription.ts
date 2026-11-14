@@ -2,7 +2,7 @@ import { electron, shell } from './window/api';
 import type { AccountView, RelayLogin } from '../app/src/relay-accounts';
 
 export type SubscriptionState = { available?: boolean; installed?: boolean; component_ready?: boolean; note?: string;
-  browser_login?: boolean; port?: number; catalog_revision?: string; slots?: Array<{slot: 'primary'|'secondary'; stored: boolean; active: boolean}>; login?: RelayLogin };
+  browser_login?: boolean; port?: number; catalog_revision?: string; slots?: Array<{slot: 'primary'|'secondary'; stored: boolean; active: boolean; cooldown_seconds_left?:number}>; login?: RelayLogin };
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 
 /** Uses the authenticated channel selected in this window, never local credentials. */
@@ -16,6 +16,7 @@ export function subscriptionTransport(request: Request, observed: (state: Subscr
         slots: (['primary', 'secondary'] as const).map(slot => {
           const row = state.slots?.find(row => row.slot === slot);
           return { slot, stored: !!row?.stored, loaded: !!row?.stored, serving: !!row?.active,
+            cooldown_seconds_left:row?.cooldown_seconds_left,
             pending: state.login?.pending && state.login.slot === slot,
             login_error: state.login?.slot === slot ? state.login.error : undefined };
         }) };

@@ -19,7 +19,7 @@ from . import speech_protocol as ipc
 
 FORMAT = 'helene-component-pins.v1'
 PINS = '.helene-component-pins.json'
-ROOTS = ('components/xtts', 'components/whisper', 'voice', 'voice-xtts')
+ROOTS = ('components/xtts', 'components/whisper', 'voice', 'voice-xtts', 'components/windows-mcp')
 MODELS = ('xtts', 'whisper')
 
 
@@ -286,7 +286,7 @@ def prepare_package(package, current, extensions):
     """Pin only explicitly selected optional payloads for a fresh programme."""
     selected=set(extensions);published=[]
     for relative in ROOTS:
-        extension='whisper' if relative in ('voice','components/whisper') else 'xtts'
+        extension='windows-mcp' if relative == 'components/windows-mcp' else ('whisper' if relative in ('voice','components/whisper') else 'xtts')
         if extension not in selected:continue
         ref=_pins(package)['pins'].get(relative)
         if ref:_reference(ref)

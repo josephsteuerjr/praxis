@@ -19,7 +19,7 @@ import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
 import { confirmedByFeed } from "../pending";
-import { interruptReceiptMatches, sameRoom } from "../session";
+import { sameRoom } from "../session";
 import * as scroll from "../scroll";
 import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Pending, type Run } from "../state";
 
@@ -179,7 +179,7 @@ export function interruptReceiptWords(receipt: Record<string, unknown> | null | 
 
 export function mountTurnControls(container: HTMLElement) {
   turnControls = container;
-  container.innerHTML = '<span class="turn-receipt" aria-live="polite"></span><button class="notice-action" data-stop-turn type="button" hidden>Остановить ход</button>';
+  container.innerHTML = '<span class="turn-receipt" aria-live="polite"></span><button class="notice-action" data-stop-turn type="button" hidden>Сбросить задачу</button>';
   container.querySelector("button")!.addEventListener("click", () => void stopCurrentTurn());
 }
 
@@ -191,8 +191,8 @@ export function onStateChange(blocked = false) {
     const button = turnControls.querySelector<HTMLButtonElement>("button")!;
     button.hidden = blocked || !target;
     button.disabled = !!stopReceipt?.pending;
-    button.textContent = stopReceipt?.pending ? "Останавливается…" : "Остановить ход";
-    button.title = "Остановить этот ход; уже выполненные действия сохранятся";
+    button.textContent = stopReceipt?.pending ? "Останавливается…" : "Сбросить задачу";
+    button.title = "Прервать этот ход и его процессы; сохранить историю и соседние задачи";
     const receipt = turnControls.querySelector<HTMLElement>(".turn-receipt")!;
     receipt.textContent = !blocked && target ? stopReceipt?.text || "" : "";
   }
@@ -209,30 +209,12 @@ async function stopCurrentTurn() {
   stopReceipt = record;
   onStateChange(controlsBlocked);
   try {
-    const answer = await post<{ ok: boolean; note?: string; request?: { id: string } }>("/api/interrupt", { scope: target.run_id });
+    const answer = await post<{ ok: boolean; confirmed?: boolean; note?: string }>(`/api/run/${encodeURIComponent(target.run_id)}/cancel`, {});
     if (!answer.ok) throw new Error(answer.note || "Просьба не записана");
     if (stopReceipt !== record) return;
-    const requestId = answer.request?.id;
-    if (!requestId) throw new Error("Запрос принят, но подтверждение остановки пока недоступно");
-    for (let i = 0; i < 15; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (stopReceipt !== record) return;
-      try {
-        const sup = await api<{ interrupt_receipt?: Record<string, unknown> }>("/api/supervisor");
-        const receipt = sup?.interrupt_receipt;
-        if (!interruptReceiptMatches(requestId, receipt)) continue;
-        if (stopReceipt !== record || currentTurn()?.key !== target.key) return;
-        record.text = interruptReceiptWords(receipt);
-        record.pending = Array.isArray(receipt?.pending_tool_outcomes) && receipt.pending_tool_outcomes.length > 0;
-        onStateChange(controlsBlocked);
-        return;
-      } catch { /* Connection can disappear while owned processes stop. */ }
-    }
-    if (stopReceipt === record) {
-      record.text = "Остановка ещё не подтверждена";
-      record.pending = false;
-      onStateChange(controlsBlocked);
-    }
+    record.text = answer.note || (answer.confirmed ? 'Ход остановлен' : 'Завершение действия пока не подтверждено');
+    record.pending = false;
+    onStateChange(controlsBlocked);
   } catch (error) {
     if (stopReceipt !== record) return;
     record.text = humanError(error).text;

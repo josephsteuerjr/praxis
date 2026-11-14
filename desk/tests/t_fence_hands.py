@@ -233,7 +233,7 @@ class Map(Ground):
                    if "команд" in touches}
         self.assertEqual(
             running,
-            {"shell", "python", "project", "proposal",
+        {"shell", "run_command", "python", "project", "proposal",
              "coding_run", "coding_process", "coding_agent", "coding_verify",
              "coding_swarm", "coding_checkpoint", "coding_session", "coding_review"})
 

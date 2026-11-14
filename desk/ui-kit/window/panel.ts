@@ -16,11 +16,12 @@ import { KeyedList } from "../feed/keyed";
 import { slide } from "../feed/disclosure";
 import type { Scroller } from "../feed/scroller";
 import { api, cfg } from "./api";
+import { resetRunHTML, bindRunReset } from './runlist';
 import { workActivity, observeActivity } from './work-activity';
 import './styles/work-activity.css';
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
-import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, toolSummary, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
+import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, toolSummary, toolTraceHTML, terminalLabel, textBox, modelProgressLabel, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { forgePanel } from './views/forge-panel';
@@ -175,6 +176,7 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
     if(thinking || it.status === "failed" || cut) rows.push({ key: "it:" + key, cls: `st st-think${thinking ? " is-live" : ""}${it.status === "failed" || cut ? " is-failed" : ""}`, html:
       `<div class="st-line">${icon(it.status === "failed" ? "fail" : "think")}<span class="st-label">Шаг ${i + 1}</span>` +
       `<span class="st-meta">${esc(meta)}</span>${state ? `<span class="st-state">${esc(state)}</span>` : ""}</div>` +
+      (thinking && modelProgressLabel(it) ? `<div class="muted" data-model-progress>${esc(modelProgressLabel(it))}</div>` : "") +
       (it.error ? `<div class="st-err">${esc(clip(it.error, 400))}</div>` : "") });
     (it.tools || []).forEach((t, j) => {
       const tkey = "tool:" + (t.call_id || `${key}:${j}`);
@@ -309,7 +311,8 @@ function turnEl(r: TurnRow): HTMLElement {
       <span class="turn-time"></span><span class="turn-dot"></span>
       <span class="turn-text"><span class="turn-title"></span><span class="turn-cause"></span><span class="turn-meta"></span></span>
     </button>
-    <div class="turn-body" hidden></div>`;
+    <div class="turn-body" hidden></div>${resetRunHTML(r.id)}`;
+  bindRunReset(el);
   fillTurn(el, r);
   const d = S.evCache.get(r.id) as RunDetail | undefined;
   if (d) setMeta(el, d);
@@ -322,6 +325,8 @@ function turnEl(r: TurnRow): HTMLElement {
 function fillTurn(el: HTMLElement, r: TurnRow) {
   el.dataset.run = r.id;
   el.dataset.status = r.status;
+  const reset=el.querySelector<HTMLElement>('.run-reset');
+  if(reset)reset.hidden=!r.live;
   el.querySelector(".turn-time")!.textContent = fmtTime(r.at);
   el.querySelector(".turn-title")!.textContent = r.title;
   const cause = el.querySelector<HTMLElement>(".turn-cause")!;

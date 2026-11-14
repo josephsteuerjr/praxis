@@ -1491,6 +1491,8 @@ def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_sourc
                                 addressed=True,
                                 origin_text=origin_text,
                                 title=_room_title(chat_id) or str(chat_id))
+    if pending_batch:
+        telegram_inputs.bind_origin(ctx,pending_batch[0])
     _bot.sent_now.clear()
     import addressing as _addressing
     all_priorities = _bot.take_priorities(chat_id)
@@ -3656,6 +3658,11 @@ def main() -> None:
         body.install(agent, tree, cfg, config_path=config_path)
     except Exception:
         log.exception("рука computer не подключена к телу")
+    try:
+        from localharness import windows_mcp_access
+        windows_mcp_access.install(agent, tree, cfg, config_path, Path(__file__).resolve().parents[2])
+    except Exception:
+        log.exception("Windows MCP не подключён к сеансу приложения")
     # Рука shell — словами этого компьютера (1.2.3): описание дерева говорит «контейнер,
     # /app», и агент на чистой установке решил, что живёт в Linux.
     try:
@@ -3740,6 +3747,9 @@ def main() -> None:
         log.exception("след switch_brain не подключился")
     owner_stop.configure(tree)
     tg = dict(cfg.get("telegram") or {})
+    # Only pre-existing runs belong to structural startup recovery. Transport
+    # admission below can create new runs while the startup scan is in flight.
+    startup_run_ids=tuple(agent._runs().run_ids())
     _desk_control()  # Ensure the shared deskd package is importable before Telegram starts.
     global _status_message
     _status_message = bool(tg.get("status_message", False))
@@ -3787,7 +3797,7 @@ def main() -> None:
     try:
         # Здесь только структурное восстановление WAL. Модель и доставка
         # продолжаются ниже, отдельным шагом того же последовательного цикла.
-        recovered = agent.recover_durable_state()
+        recovered = agent.recover_durable_state(run_ids=startup_run_ids)
         if recovered:
             log.warning("восстановлено прерванных ходов: %d", len(recovered))
     except Exception:
@@ -3814,6 +3824,9 @@ def main() -> None:
     import process_scope
     owner_stop.configure(tree)
     process_scope.configure_admission(lambda: not owner_stop.paused())
+    import step_control
+    exact_control=step_control.start(tree)
+    atexit.register(exact_control.close)
     control_stop, _control_thread = control_watch.start(
         tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES,
         started=_STARTED_UTC, before_resume=lambda: _bot.discard_pending() if _bot and hasattr(_bot, 'discard_pending') else None)

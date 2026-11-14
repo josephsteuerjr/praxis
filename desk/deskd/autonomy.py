@@ -84,6 +84,8 @@ def consume(tree,manager,statuses,started,before_resume=None):
                 try:
                     if control_watch._instant(row.get('created_at'))+dt.timedelta(milliseconds=1)>cutoff:continue
                     with control_watch._BOUNDARY_LOCK:
+                        from .run_control import known_run as exact_request
+                        exact_request(tree,rid,'owner pause')
                         processes=process_scope.cancel(rid)
                         if processes.get('failures'):receipt['failed'].append({'run_id':rid,'process_failures':processes['failures']})
                         manager.request_cancel(rid,actor='desk:'+str(asked.get('by') or 'owner'),reason='owner pause')

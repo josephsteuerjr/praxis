@@ -211,7 +211,7 @@ class Application:
                 from localharness import standalone_relay
                 return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
             if name == 'toolchain':raise ValueError('Инструменты сборки больше не поставляются с Hélène')
-            if name in ('xtts','whisper'):
+            if name in ('xtts','whisper','windows-mcp'):
                 if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
                 return self.host.invoke('component_install',{'name':name})
             from localharness import app_components

@@ -107,21 +107,30 @@ class RunDisplay(unittest.TestCase):
         for field, value in (("origin_chat_id", "456"), ("origin_message_ids", [10])):
             with self.subTest(field=field):
                 self.write(authority={**self.authority, field: value})
-                self.assertEqual(readers.run_detail(self.rid)["origin"]["source"], "unknown")
+                self.assertEqual(readers.run_detail(self.rid)["origin"], {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
 
     def test_missing_snapshot_does_not_label_conversation_head_as_trigger(self):
         self.write(); (self.path / "context.md").unlink()
-        self.assertEqual(readers.run_detail(self.rid)["origin"]["source"], "unknown")
+        self.assertEqual(readers.run_detail(self.rid)["origin"], {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
 
     def test_completed_turn_preserves_full_input_and_result(self):
-        self.write(); (self.path / "context.md").unlink()
         row = {"run_id": self.rid, "chat_id": "123", "in": "Current request " * 80, "out": "Complete response " * 100, "note": "Boundary note " * 30}
+        self.authority['origin_text']=row['in'];self.write()
         path = self.root / "memory/.state/turns.jsonl"; path.parent.mkdir(parents=True)
         path.write_text(json.dumps(row) + "\n", encoding="utf-8")
         detail = readers.run_detail(self.rid)
         self.assertEqual(detail["origin"]["text"], row["in"])
         self.assertEqual(detail["outcome"]["text"], row["out"])
         self.assertEqual(readers.chat_turns("123")[0]["note"], row["note"])
+
+    def test_origin_title_and_operator_history_are_separate(self):
+        self.context['principal_id']='42';self.write()
+        self.assertIn('Actual current request',readers.list_runs(audience='work')[0]['goal_head'])
+        self.assertNotIn('Old first',readers.list_runs(audience='work')[0]['goal_head'])
+        self.context['principal_id']='operator:fixture';self.write()
+        self.assertEqual(readers.list_runs(audience='work'),[])
+        rows=readers.list_runs(audience='operator')
+        self.assertEqual(rows[0]['goal_head'],'Проверка оператора (fixture)')
 
     def test_task_goal_is_still_a_legitimate_trigger(self):
         self.context["kind"] = "task_window"; self.write(); (self.path / "context.md").unlink()

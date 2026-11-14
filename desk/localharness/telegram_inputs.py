@@ -38,6 +38,19 @@ def marker(record):
             + record["sender_id"] + "; receipt " + record["nonce"] + "]\n")
 
 
+def bind_origin(context, item):
+    """The selected durable input, never the most recent room-buffer row."""
+    record=item['record']
+    message_id=int(record['message_id'])
+    if message_id <= 0:raise ValueError('Invalid Telegram origin message id')
+    content=item['message']['content']
+    prefix=marker(record)
+    if not isinstance(content,str) or not content.startswith(prefix):
+        raise ValueError('Selected Telegram origin does not match its input receipt')
+    context.origin_message_id=message_id
+    context.origin_text=content[len(prefix):]
+
+
 def included(record, messages):
     prefix = marker(record)
     for message in messages:

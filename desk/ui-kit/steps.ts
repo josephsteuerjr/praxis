@@ -2,6 +2,7 @@
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
 import { esc, fmtK, md } from "./text";
 import { copyText } from "./dom";
+import { lensHTML, lensState, toolTarget, type ToolLens } from "./tool-lens";
 
 /**
  * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
@@ -34,6 +35,8 @@ export interface RunDetail {
     at?: string;
     model?: string;
     ms?: number;
+    progress?: { argument_bytes?: number; argument_deltas?: number; attempt_ms?: number; outcome?: string };
+    progress_at?: string;
     /** stop_reason модели: max_tokens — ответ оборван потолком, а не получен. */
     stop?: string;
     text_chars?: number;
@@ -53,6 +56,10 @@ export interface RunDetail {
       model_observation?: string;
       model_response_image_count?: number;
       result?: { head?: string; tail?: string; truncated?: boolean; result_id?: string; size?: number | null } | null;
+      /** Сводка ответа руки (readers.py), когда сырой ответ велик для превью. */
+      lens?: ToolLens;
+      /** "result": исход взят из собственного отчёта руки — журнал его не записал. */
+      outcome_source?: string;
     }>;
   }>;
 }
@@ -72,8 +79,14 @@ export interface StepsOptions {
 }
 
 export const ACTIONS: Record<string, string> = {
-  shell: "Команда", read_file: "Чтение файла", write_file: "Запись файла",
+  shell: "Команда", run_command: "Программа", read_file: "Чтение файла", write_file: "Запись файла",
   edit_file: "Правка файла", search: "Поиск", web_search: "Поиск в интернете",
+  fs_read: "Чтение файла", fs_ls: "Список файлов", fs_search: "Поиск по файлам", edit: "Правка файла",
+  python: "Python", code_query: "Поиск по коду", task_control: "Ход задачи", coding_session: "Задача разработки",
+  coding_run: "Команда в задаче", coding_inspect: "Осмотр задачи", memory_compact: "Свёртка памяти",
+  manage_notes: "Заметки", telegram_account: "Аккаунт Telegram", "telegram.send_media": "Отправка медиа",
+  my_agenda: "Повестка", manage_loop: "Открытые петли", recent_turns: "Последние ходы", stay_silent: "Промолчать",
+  react: "Реакция", git: "Git",
   fetch_url: "Чтение страницы", read_url: "Чтение страницы",
   reply: "Ответ", end_turn: "Завершение работы", remind_self: "Напоминание",
   recall: "Поиск в памяти", remember: "Запись в память", read_memory: "Чтение памяти",
@@ -85,6 +98,16 @@ export const ACTIONS: Record<string, string> = {
   wake: "Будильник", set_wake: "Будильник", sleep: "Сон", voice: "Голос", speak: "Голос",
   browser: "Браузер", screenshot: "Снимок экрана", send_file: "Отправка файла",
   "telegram.deliver": "Доставка сообщения",
+  windows_mcp_Snapshot: "Обзор экрана", windows_mcp_Screenshot: "Снимок экрана",
+  windows_mcp_Click: "Нажатие", windows_mcp_Type: "Ввод текста", windows_mcp_Scroll: "Прокрутка",
+  windows_mcp_Move: "Перемещение указателя", windows_mcp_Shortcut: "Сочетание клавиш",
+  windows_mcp_App: "Приложение Windows", windows_mcp_PowerShell: "PowerShell",
+  windows_mcp_FileSystem: "Файлы Windows", windows_mcp_Registry: "Реестр Windows",
+  windows_mcp_Process: "Процессы Windows", windows_mcp_Clipboard: "Буфер обмена",
+  windows_mcp_ControlStatus: "Состояние управления", windows_mcp_DisplayInventory: "Дисплеи",
+  windows_mcp_MultiSelect: "Выбор элементов", windows_mcp_MultiEdit: "Ввод в поля",
+  windows_mcp_Notification: "Уведомление", windows_mcp_Scrape: "Чтение страницы",
+  windows_mcp_Wait: "Ожидание", windows_mcp_WaitFor: "Ожидание элемента",
 };
 const TERMINAL: Record<string, string> = {
   done: "Работа завершена", completed: "Работа завершена", failed: "Работа остановилась с ошибкой",
@@ -115,9 +138,18 @@ export function resultText(text: string): string {
   }
 }
 
+/** run_command's argv as one readable line; each item stays one argument (quoted like shlex). */
+export function argvLine(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const argv = (args as Record<string, unknown>).argv;
+  return Array.isArray(argv) && argv.length && argv.every(x => typeof x === "string")
+    ? (argv as string[]).map(shellQuote).join(" ") : "";
+}
+
 export function subject(args: unknown): string {
   if (!args || typeof args !== "object") return typeof args === "string" ? args : "";
   const a = args as Record<string, unknown>;
+  if (typeof a.command !== "string" && typeof a.cmd !== "string" && argvLine(a)) return argvLine(a);
   for (const key of ["command", "cmd", "path", "file_path", "query", "url", "text", "goal", "note", "task", "action"]) {
     if (typeof a[key] === "string" && a[key]) return a[key] as string;
   }
@@ -129,7 +161,7 @@ export function suppliedCommand(args: unknown): string {
   if (!args || typeof args !== "object" || Array.isArray(args)) return "";
   const fields = args as Record<string, unknown>;
   return typeof fields.command === "string" ? fields.command :
-    typeof fields.cmd === "string" ? fields.cmd : "";
+    typeof fields.cmd === "string" ? fields.cmd : argvLine(fields);
 }
 
 export type ToolDetail = NonNullable<NonNullable<RunDetail['iterations']>[number]['tools']>[number];
@@ -139,7 +171,8 @@ export function toolParameters(args: unknown): Array<[string, unknown]> {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
   const command = suppliedCommand(args);
   return Object.entries(args).filter(([key, value]) =>
-    !((key === 'command' || key === 'cmd') && typeof value === 'string' && value === command));
+    !((key === 'command' || key === 'cmd') && typeof value === 'string' && value === command) &&
+    !(key === 'argv' && command !== '' && command === argvLine(args)));
 }
 
 function traceBlock(key: string, label: string, content: string, kind: string, opts: Parameters<typeof textBox>[2] = {}): string {
@@ -157,22 +190,27 @@ export function toolSummary(t: ToolDetail, live = false) {
   const labels: Record<string,string> = {ok:'успех',confirmed:'подтверждено',failed:'ошибка',refused:'отказ',in_doubt:'нужна проверка',partial:'частично',unknown:'исход неизвестен'};
   const icons: Record<string,string> = {ok:'✓',confirmed:'✓',failed:'✗',refused:'⊘',in_doubt:'?',partial:'◐',unknown:'·'};
   const receipt = [t.execution, ...(t.operations || [])].filter(r => r?.exit_code != null).at(-1);
-  const state = active ? 'выполняется' : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
+  const lens = active ? null : lensState(t.lens);
+  const state = active ? 'выполняется' : lens ? lens.state : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
   const elapsed = Date.parse(t.finished_at || '') - Date.parse(t.at || '');
   const seconds = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed/1000 : null;
   const duration = seconds == null ? '' : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} с` : `${Math.floor(seconds/60)} мин ${Math.round(seconds%60)} с`;
   return {outcome,active,state,icon:active ? '◌' : icons[outcome],label:active ? 'выполняется' : labels[outcome],duration,
-    target:t.target || subject(t.args),failed:['failed','refused'].includes(outcome),attention:['partial','in_doubt'].includes(outcome)};
+    target:t.target || toolTarget(t.tool || '', t.args) || subject(t.args),
+    failed:['failed','refused'].includes(outcome) || !!lens?.failed,attention:['partial','in_doubt'].includes(outcome) || !!lens?.attention};
 }
 
 const selectedTraceTabs = new Map<string,string>();
 export const traceTabNames = [['args','Аргументы'],['definition','Функция'],['execution','Исполнение'],['request','JSON-запрос'],['response','JSON-ответ']] as const;
 export function traceTabsHTML(key:string, panels: Record<string,string>): string {
-  const selected = selectedTraceTabs.get(key) || 'args';
+  // «Сводка» есть только у рук с линзой и тогда открывается первой.
+  const tabs: ReadonlyArray<readonly [string,string]> = panels.summary ? [['summary','Сводка'],...traceTabNames] : traceTabNames;
+  const remembered = selectedTraceTabs.get(key);
+  const selected = remembered && tabs.some(([tab])=>tab===remembered) ? remembered : panels.summary ? 'summary' : 'args';
   const id = 'trace-' + encodeURIComponent(key);
   return `<div class="tool-trace" data-trace-key="${esc(key)}"><div class="tool-tabs" role="tablist" aria-label="Детали вызова">` +
-    traceTabNames.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
-    traceTabNames.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
+    tabs.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
+    tabs.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
 }
 function selectTraceTab(button:HTMLElement):void {
   const trace=button.closest<HTMLElement>('[data-trace-key]');if(!trace)return;
@@ -251,6 +289,8 @@ export function nestedText(rows: Record<string, unknown>[] | unknown[]): string 
 export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string {
   const missing=(text:string)=>`<p class="tool-trace-unrecorded">${esc(text)}</p>`;
   const panels:Record<string,string>={};
+  const summary=lensHTML(t.lens,t.args);
+  if(summary)panels.summary=summary+(t.outcome_source==='result'?'<p class="tool-trace-unrecorded">Исход в журнале не записан; значок взят из собственного отчёта инструмента (error/complete).</p>':'');
   panels.args=t.args!=null ? traceBlock(key+':args','Аргументы',pretty(t.args),'request') : missing('Аргументы не записаны.');
   panels.definition=t.definition ? traceBlock(key+':definition','Схема инструмента',pretty(t.definition),'definition') : missing('Схема инструмента в этом журнале не записана.');
   panels.request=t.model_request ? traceBlock(key+':request','Сохранённый JSON-запрос модели',pretty(t.model_request),'request') : missing('Исходный JSON-запрос модели не записан. Аргументы доступны отдельно.');
@@ -435,6 +475,14 @@ bindMore();
 // ---------------------------------------------------------------- лента шагов
 
 /** Шаги хода: один блок на итерацию модели — номер, время, токены, затем руки и слово. */
+export function modelProgressLabel(it: NonNullable<RunDetail["iterations"]>[number], now = Date.now()): string {
+  const p = it.progress;
+  if (p?.outcome !== "streaming" || !Number.isFinite(p.argument_bytes) || !Number.isFinite(p.attempt_ms)) return "";
+  const age = it.progress_at ? now - Date.parse(it.progress_at) : Infinity;
+  const label = age >= 0 && age < 15000 ? "Модель пишет аргументы" : "Последний прогресс аргументов";
+  return `${label}: ${((p.argument_bytes || 0) / 1024).toFixed(1)} КБ · ${((p.attempt_ms || 0) / 60000).toFixed(1)} мин`;
+}
+
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   const steps: string[] = [];
   const L = opts.lesson;
@@ -458,6 +506,8 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     const meta = [seconds, tokens].filter(Boolean).join(" · ");
     const parts: string[] = [];
     parts.push(`<div class="step-head"><span class="step-n">Шаг ${n}</span>${meta ? `<span class="step-meta">${esc(meta)}</span>` : ""}${status ? `<span class="action-status">${esc(status)}</span>` : ""}</div>`);
+    const progress = thinking ? modelProgressLabel(it) : "";
+    if (progress) parts.push(`<div class="step-meta" data-model-progress>${esc(progress)}</div>`);
     parts.push(details("model:" + key, [["Модель", it.model || ""], ["Время", seconds],
       ["Токены", u.in != null ? `вход ${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ответ ${fmtK(u.out || 0)}` : ""],
       ["Остановка", cut ? "max_tokens: потолок ответа исчерпан размышлением или длинным ответом" : ""], ["Ошибка", it.error || ""]], "Подробности шага"));

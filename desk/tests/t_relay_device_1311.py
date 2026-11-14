@@ -36,8 +36,17 @@ class DeviceLogin(unittest.TestCase):
         self.assertNotIn('PRIVATE', json.dumps(value))
         self.assertEqual(value['login']['id'], LOGIN_ID)
         self.assertEqual(value['login']['device_code']['user_code'], 'ABCD-EFGH')
-        self.assertEqual(value['slots'][0], {'slot':'primary','stored':True,'active':True})
+        self.assertEqual(value['slots'][0], {'slot':'primary','stored':True,'active':True,'cooldown_seconds_left':0})
         self.assertEqual(relay_login.account_view(value)['slots'][1]['pending'], True)
+
+    def test_cooldown_is_public_bounded_data_without_private_account_fields(self):
+        raw=raw_state();raw['accounts'][0].update(cooldown_seconds_left=590,access_token='PRIVATE-TOKEN')
+        value=relay_login.public_state(raw)
+        self.assertEqual(relay_login.account_view(value)['slots'][0]['cooldown_seconds_left'],590)
+        self.assertNotIn('PRIVATE',json.dumps(value))
+        for invalid in (-10,'PRIVATE-STRING',True,None):
+            raw['accounts'][0]['cooldown_seconds_left']=invalid
+            self.assertEqual(relay_login.public_state(raw)['slots'][0]['cooldown_seconds_left'],0)
 
     def test_cancel_completion_expiry_and_bad_origin_do_not_expose_code(self):
         for mutation in ('ended', 'expired', 'bad-origin', 'injection', 'far-future'):

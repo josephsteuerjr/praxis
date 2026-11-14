@@ -1,7 +1,7 @@
 // Список прогонов с раскрывающимися шагами — общий для «Сейчас» и «Вейков».
 // Подпись хода — слово агента из chat-turns комнаты (без скобок кадра),
 // без него — первая строка цели прогона.
-import { api } from "./api";
+import { api, post } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
 import { stepsHTML, type RunDetail } from "../steps";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, runIsLive, type Run } from "./state";
@@ -70,10 +70,10 @@ export function wordOf(runId: string): { out: string; note: string; who: string 
   return words.get(runId);
 }
 
-/** Подпись: слово агента → заметка границы → цель (если не обрезок кадра) → вид и время. */
+/** The backend resolves the actual triggering message, including origin ids. */
 export function runLabel(r: Run): string {
   const w = words.get(r.id);
-  const text = cleanLabel(w?.out || "") || noteLabel(w?.note || "") || goalLabel(r.goal_head || "");
+  const text = goalLabel(r.goal_head || "") || cleanLabel(w?.out || "") || noteLabel(w?.note || "");
   return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
 }
 
@@ -94,7 +94,29 @@ export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
     </button>
     ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? ` · <a href="#" data-room="${esc(roomKeyOf(r))}" data-room-name="${esc(r.chat_title)}">открыть чат →</a>` : ""}</div>` : ""}
     <div class="ev-steps" id="run-${esc(r.id)}" ${S.evOpen.has(r.id) ? "" : "hidden"}></div>
+    ${r.status === 'running' ? resetRunHTML(r.id) : ''}
   </div>`;
+}
+
+export function resetRunHTML(id: string): string {
+  return `<div class="run-reset"><button type="button" class="btn btn-quiet" data-reset-run="${esc(id)}">Сбросить задачу</button><span class="receipt" aria-live="polite"></span></div>`;
+}
+
+export function bindRunReset(box: HTMLElement): void {
+  for (const button of box.querySelectorAll<HTMLButtonElement>('[data-reset-run]')) {
+    if (button.dataset.bound) continue;
+    button.dataset.bound = 'true';
+    button.addEventListener('click', async () => {
+      const id=button.dataset.resetRun!, receipt=button.parentElement!.querySelector<HTMLElement>('.receipt')!;
+      button.disabled=true;receipt.textContent='Сброс запрошен…';
+      try {
+        const answer=await post<{ok:boolean;confirmed?:boolean;note?:string}>(`/api/run/${encodeURIComponent(id)}/cancel`,{});
+        if(!answer.ok)throw Error(answer.note || 'Не удалось записать запрос');
+        receipt.textContent=answer.note || (answer.confirmed ? 'Ход остановлен' : 'Завершение действия пока не подтверждено');
+      } catch(error) { receipt.textContent=humanError(error).text; }
+      finally { button.disabled=false; }
+    });
+  }
 }
 
 export async function runDetail(runId: string, fresh = false): Promise<RunDetail | undefined> {
@@ -109,6 +131,7 @@ export async function runDetail(runId: string, fresh = false): Promise<RunDetail
 
 /** Оживить раскрывающиеся ходы и ссылки «открыть чат» внутри узла. */
 export function bindRuns(box: HTMLElement, _redraw: () => void, openRoom: (key: string, name: string) => void) {
+  bindRunReset(box);
   for (const node of box.querySelectorAll<HTMLElement>(".ev[data-ev]")) {
     const id = node.dataset.ev!;
     const head = node.querySelector<HTMLButtonElement>(".ev-head")!;

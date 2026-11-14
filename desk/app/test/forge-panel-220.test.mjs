@@ -18,7 +18,8 @@ const moduleURL=source=>'data:text/javascript;base64,'+Buffer.from(stripTypeScri
 const kit=new URL('../../ui-kit/',import.meta.url);
 const txt=moduleURL(readFileSync(new URL('text.ts',kit),'utf8'));
 const dom=moduleURL(readFileSync(new URL('dom.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)));
-const {toolSummary,toolTraceHTML}=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)).replace('"./dom"',JSON.stringify(dom))));
+const lens = moduleURL(readFileSync(new URL('tool-lens.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)));
+const {toolSummary,toolTraceHTML}=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)).replace('"./dom"',JSON.stringify(dom)).replace('"./tool-lens"',JSON.stringify(lens))));
 const walk=node=>[node,...[...node.children].flatMap(walk)];
 const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===text);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));

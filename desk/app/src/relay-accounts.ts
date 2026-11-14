@@ -3,7 +3,7 @@ import { button, copyText } from "../../ui-kit/dom";
 import { el, humanError, toast } from "../../ui-kit/window/lib";
 
 type Slot = "primary" | "secondary";
-type SlotView = { slot: Slot; stored?: boolean; pending?: boolean; serving?: boolean; loaded?: boolean; login_error?: string };
+type SlotView = { slot: Slot; stored?: boolean; pending?: boolean; serving?: boolean; loaded?: boolean; login_error?: string; cooldown_seconds_left?:number };
 export type RelayLogin = { pending?: boolean; slot?: Slot; id?: string; method?: string; url?: string; error?: string; expired?: boolean;
   device_code?: { user_code: string; expires_at: number; verification_url: string } };
 export type AccountView = { reachable?: boolean; active_slot?: Slot; port?: number; slots?: SlotView[]; catalog_revision?: string;
@@ -45,7 +45,7 @@ export function relayAccounts(transport: typeof shell = shell) {
       if (changed) element.dispatchEvent(new CustomEvent("relay-account-change"));
       authorized = !!view.slots?.some(row => row.stored);
       overview.textContent = view.reachable
-        ? "Реле отвечает" + (view.active_slot ? " · используется слот " + (view.active_slot === "secondary" ? 2 : 1) : "") + ". Выбор аккаунта сохраняется сразу."
+        ? "Реле отвечает" + (view.active_slot ? " · используется слот " + (view.active_slot === "secondary" ? 2 : 1) : "") + ". При исчерпании лимита автоматически используется доступная подписка из другого слота."
         : view.note || "Реле на порту " + (view.port ?? 5011) + " пока недоступно. Обнови состояние после запуска.";
       const pending = !!view.login?.pending || !!view.slots?.some(row => row.pending);
       for (const [slot, row] of rows) {
@@ -58,7 +58,7 @@ export function relayAccounts(transport: typeof shell = shell) {
           ? expired ? "Срок кода истёк. Отмени эту попытку и запроси новый код."
             : login?.method === "device_code" ? device ? "Введи код на странице ChatGPT и подтверди вход" : "Запрашиваем код у ChatGPT…"
             : "Ждём подтверждения входа в браузере"
-          : state?.login_error || (state?.stored ? state.serving ? "Активен" : "Вход сохранён · резерв" : "Нет сохранённого входа");
+          : state?.login_error || (state?.stored ? state.cooldown_seconds_left && state.cooldown_seconds_left > 0 ? `Лимит исчерпан · повторная проверка через ${Math.ceil(state.cooldown_seconds_left/60)} мин.` : state.serving ? "Активен" : "Вход сохранён · резерв" : "Нет сохранённого входа");
         row.login.textContent = state?.stored ? "Сменить аккаунт по коду" : "Войти по коду";
         row.login.disabled = row.browser.disabled = changing || pending || !view.reachable;
         row.browser.hidden = view.browser_login === false || electron?.presentation === 'miniapp';
@@ -77,7 +77,7 @@ export function relayAccounts(transport: typeof shell = shell) {
         row.links.hidden = !row.url;
         row.links.style.display = row.url ? "flex" : "none";
       }
-      if (pending || changing || !view.reachable) schedule();
+      schedule(); // Quota failover can change the serving account without a UI action.
     } catch (error) {
       if (generation === epoch) {
         overview.textContent = "Состояние недоступно: " + humanError(error).text;

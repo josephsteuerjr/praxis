@@ -80,6 +80,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const recentTeams = el("div", "forge-teams forge-recent-teams");
   const activeReviews=el('div','forge-reviewers'),recentReviews=el('div','forge-reviewers');
   const renderActiveReviews=workActivity(activeReviews,{heading:false}),renderRecentReviews=workActivity(recentReviews,{heading:false});
+  const active=document.createElement('details');active.className='forge-active';active.hidden=true;
+  const activeSummary=el('summary');active.append(activeSummary,teams,activeReviews);
   const recent = document.createElement('details'); recent.className = 'forge-recent';
   const recentSummary=el('summary');recent.hidden=true;
   recent.append(recentSummary, recentTeams,recentReviews);
@@ -89,7 +91,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const heading = el("div", "forge-heading"); heading.append(el("h3", "section-title", options.compact ? 'Субагенты' : "Команды разработки"), refreshButton);
   if (options.onPlans) heading.append(button('Открыть обзор →', options.onPlans));
   root.className += options.compact ? ' forge-compact' : '';
-  root.replaceChildren(heading, message, teams,activeReviews, recent);
+  root.replaceChildren(heading, message, active, recent);
   const tasks = new Map<string, TaskView>();
   const controllers = new Set<AbortController>();
   let running = false, epoch = 0, timer: ReturnType<typeof setTimeout> | undefined, busy = false;
@@ -105,6 +107,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     activeRows = []; recentRows = []; nextCursor = null; next.hidden = true; recentBusy = false; busy = false;
     reviewers=[];recentReviewers=[];reviewCursor=null;reviewHead=undefined;reviewBusy=false;reviewNext.hidden=true;renderActiveReviews({});renderRecentReviews({});
     forgeError='';recentError='';reviewError='';forgeLoaded=false;recent.hidden=true;recent.open=false;
+    active.hidden=true;active.open=false;
     message.textContent = 'Читаю записи выбранного агента…';
     message.hidden=false;
   }
@@ -467,6 +470,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     const current=external(reviewers),finishedReviews=external(recentReviewers);renderActiveReviews({reviewers:current});renderRecentReviews({reviewers:finishedReviews});
     reviewNext.hidden=!reviewCursor;
     const participants=activeRows.reduce((n,task)=>n+task.agents.length,0)+current.length;
+    active.hidden=activeRows.length===0&&current.length===0;
+    activeSummary.textContent=`Активные субагенты · ${participants}`;
+    if(active.hidden)active.open=false;
     const completed=recentRows.filter(task=>!activeRows.some(active=>active.id===task.id)).reduce((n,task)=>n+task.agents.length,0)+finishedReviews.length;
     recent.hidden=completed===0;recentSummary.textContent=`Завершённые субагенты · ${completed}${nextCursor||reviewCursor?'+':''}`;
     if(recent.hidden)recent.open=false;

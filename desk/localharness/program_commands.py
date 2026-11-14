@@ -12,7 +12,8 @@ def invoke(root, program, command, args):
     if command == 'components_status':
         from . import standalone_relay, component_downloads
         from .server_bridge import component
-        return [standalone_relay.status(program),component()] + component_downloads.status(program)
+        from .windows_mcp_client import component_status
+        return [standalone_relay.status(program),component(),component_status(program)] + component_downloads.status(program)
     if command in ('backup_now', 'backup_list'):
         from . import essential_backup
         return (essential_backup.snapshot(root, essential_backup.destination(root))

@@ -6,7 +6,7 @@ if not __package__:
 from .package_notice import read
 from .first_start import _write
 
-NAMES={'xtts','whisper'}
+NAMES={'xtts','whisper','windows-mcp'}
 
 
 def path(program,name):
@@ -75,7 +75,11 @@ def execute(program,name,tree,operation,progress=None):
         update(program,name,operation,**selected)
         if progress:progress(value)
     try:
-        result=component_downloads.install(program,[name],report,tree=tree)
+        if name == 'windows-mcp':
+            from .windows_mcp_component import install
+            result=install(program,report)
+        else:
+            result=component_downloads.install(program,[name],report,tree=tree)
         update(program,name,operation,state='completed',stage='completed',error='',finished_at=time.time())
         return result
     except BaseException as error:
@@ -93,7 +97,11 @@ def start(owner,name):
     from .update_process import interpreter_for,permanent_environment
     with owner.lock:
         if owner.exiting or owner.stop.is_set():raise RuntimeError('Programme Exit is already in progress')
-        component_downloads.select(component_downloads.load(owner.root),[name])
+        if name == 'windows-mcp':
+            from .windows_mcp_component import require_platform, artifacts
+            require_platform();artifacts()
+        else:
+            component_downloads.select(component_downloads.load(owner.root),[name])
         children=getattr(owner,'component_jobs',{})
         previous=children.get(name)
         if previous is not None and previous.handle is not None:
@@ -112,6 +120,9 @@ def start(owner,name):
                 if not read(path(owner.root,name)).get('state') in ('completed','failed'):
                     raise RuntimeError('Установщик завершился до подтверждения запуска; подробности в журнале компонентов.')
             else:update(owner.root,name,value['id'],worker=pin)
+            if name == 'windows-mcp':
+                from .windows_mcp_runtime import after_install
+                after_install(owner,child)
         except BaseException as error:
             if child is not None and child.handle is not None:
                 try:child.stop()

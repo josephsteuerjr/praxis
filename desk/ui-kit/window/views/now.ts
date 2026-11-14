@@ -7,7 +7,7 @@ import { mountUsage, usageShell } from "../../usage";
 import { frameStripHTML, type RunDetail } from "../../steps";
 import { activityHTML, updateActivity } from "../../activity";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
-import { bindRuns, loadWords, runDetail, runRowHTML } from "../runlist";
+import { bindRuns, loadWords, runDetail, runRowHTML, resetRunHTML } from "../runlist";
 import { forgePanel } from './forge-panel';
 import { observeActivity } from '../work-activity';
 import './forge-panel.css';
@@ -126,7 +126,7 @@ export async function render(container: HTMLElement, opts: {openAgents?: boolean
   if(currentId!==(shown?.id || '')){currentId=shown?.id || '';currentOpen=true;}
   container.innerHTML = `<div class="center now">
     ${usageShell(true)}
-    ${shown ? `<details class="now-current" ${currentOpen ? 'open' : ''}><summary>Текущий ход</summary>${liveHTML}</details>` : liveHTML}
+    ${shown ? `<details class="now-current" ${currentOpen ? 'open' : ''}><summary>Текущий ход</summary>${liveHTML}${resetRunHTML(shown.id)}</details>` : liveHTML}
     <div data-now-agents></div>
     <details class="now-context"><summary>Контекст ${live ? 'сейчас' : 'последнего ответа'}</summary>${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}</details>
     <label class="now-history-toggle"><input type="checkbox" data-now-history ${showPrevious ? 'checked' : ''}> Предыдущие ходы <span class="muted">${rest.length}</span></label>
@@ -135,12 +135,28 @@ export async function render(container: HTMLElement, opts: {openAgents?: boolean
       <p>Здесь будут завершённые ходы. Поручи агенту дело в чате или выбери идею в онбординге.</p>
       <button class="btn btn-quiet" type="button" data-go="learn">Что ему можно поручить →</button></div>`}
     </section>
+    <details class="now-operator"><summary>Проверки оператора</summary><div data-operator-runs></div></details>
   </div>`;
   const previous=container.querySelector<HTMLInputElement>('[data-now-history]');
   previous?.addEventListener('change',()=>{showPrevious=previous.checked;const history=container.querySelector<HTMLElement>('.now-history');if(history)history.hidden=!showPrevious;});
   const current=container.querySelector<HTMLDetailsElement>('.now-current');
   current?.addEventListener('toggle',()=>{currentOpen=current.open;});
   mountAgents(container);
+  const operator=container.querySelector<HTMLDetailsElement>('.now-operator');
+  let operatorLoading=false, operatorLoaded=false;
+  operator?.addEventListener('toggle',async()=>{
+    if(!operator.open || operatorLoading || operatorLoaded)return;
+    const host=operator.querySelector<HTMLElement>('[data-operator-runs]')!;
+    operatorLoading=true;host.textContent='Читаю проверки…';
+    try {
+      const rows=await api<Run[]>('/api/runs?limit=80&audience=operator');
+      if(my!==gen || !host.isConnected)return;
+      host.innerHTML=rows.map(r=>runRowHTML(r,{showRoom:true})).join('') || '<p class="muted">Проверок пока нет.</p>';
+      bindRuns(host,()=>{},(key,name)=>dispatchEvent(new CustomEvent('frame-open-room',{detail:{key,name}})));
+      operatorLoaded=true;
+    } catch(error) { if(host.isConnected)host.textContent='Не удалось прочитать проверки. Сверни и открой раздел снова.'; }
+    finally { operatorLoading=false; }
+  });
   for (const a of container.querySelectorAll<HTMLElement>("[data-go]")) {
     a.addEventListener("click", (e) => {
       e.preventDefault();

@@ -2066,6 +2066,7 @@ def state() -> dict:
 MACHINE_HANDS: dict[str, tuple[str, tuple[str, ...] | None]] = {
     # Исполняют команды.
     "shell": ("команды", ("command_execution",)),
+    "run_command": ("команды", ("command_execution",)),
     "python": ("команды", ("command_execution",)),
     "project": ("файлы и команды", ("workshop", "hands", "command_execution")),
     "proposal": ("файлы и команды", ("selfdev",)),
@@ -2093,6 +2094,7 @@ MACHINE_HANDS: dict[str, tuple[str, tuple[str, ...] | None]] = {
     "fs_read": ("файлы", None),
     "fs_ls": ("файлы", None),
     "fs_search": ("файлы", None),
+    "code_query": ("файлы", None),
     "edit": ("файлы", None),
     # Водят окнами и процессами владельца. Тело живёт СНАРУЖИ контейнера по
     # устройству (у AppContainer нет доступа к чужим окнам), и это не дыра, а
@@ -2158,7 +2160,8 @@ def hands_report(agent_mod) -> list[dict]:
     rows: list[dict] = []
     for name in sorted(impl):
         fn = impl[name]
-        touches, modules = MACHINE_HANDS.get(name, ("", ()))
+        mcp = name.startswith('windows_mcp_')
+        touches, modules = (("компьютер владельца", None) if mcp else MACHINE_HANDS.get(name, ("", ())))
         if not touches:
             continue        # рука машину не трогает — ограде о ней сказать нечего
         # Считаем только ЗАГРУЖЕННЫЕ модули: незагруженный ничего не исполняет,
@@ -2174,6 +2177,8 @@ def hands_report(agent_mod) -> list[dict]:
                 fence_kind, why = "container", f"команда уходит в {container_word()}"
             else:
                 fence_kind, why = "outside", STATE.get("reason") or "контейнер не поднялся"
+        elif mcp:
+            fence_kind, why = "outside", "Windows MCP работает вне ограды: права дают галочки Управления компьютером"
         elif name in OUTSIDE_BY_DESIGN:
             fence_kind, why = "outside", OUTSIDE_BY_DESIGN[name]
         elif bare:

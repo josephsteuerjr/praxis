@@ -132,6 +132,8 @@ def consume(tree: Path, manager, statuses) -> dict | None:
                     continue
                 result["requested"].append(rid)
                 with _BOUNDARY_LOCK:
+                    from deskd.run_control import known_run as exact_request
+                    exact_request(tree,rid,reason)
                     result.setdefault("processes", {})[rid] = process_scope.cancel(rid)
                     receipt = manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
                 key = ("cancelled" if receipt.get("status") == "cancelled"

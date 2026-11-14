@@ -1083,8 +1083,16 @@ def _state_with_autonomy():
 
 
 async def _r_runs(c: Call):
+    audience=c.query.get('audience') or 'work'
+    if audience not in ('work','operator','all'):return Fail(400,'Неизвестный раздел истории')
     return await asyncio.to_thread(readers.list_runs, _int_arg(c.query, "limit", 80, 1, 200),
-                                   c.query.get("kind") or "", c.query.get("before") or "")
+                                   c.query.get("kind") or "", c.query.get("before") or "",audience=audience)
+
+
+async def _r_run_cancel(c: Call):
+    if c.role != 'owner':return Fail(403,'Сброс хода доступен владельцу')
+    from deskd import run_control
+    return await run_control.cancel(readers.tree(),c.match['run_id'])
 
 
 async def _r_run(c: Call):
@@ -1734,6 +1742,7 @@ ROUTES: tuple[Route, ...] = (
           http_handler=lambda request: request.app['_remote_computer'].connect(request)),
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
+    Route("POST", "/api/run/{run_id}/cancel", _r_run_cancel),
     Route("GET", "/api/run/{run_id}/result/{result_id}", _r_run_result),
     Route("GET", "/api/frame-stats", _r_frame_stats),
     Route("GET", "/api/spend", _r_spend),

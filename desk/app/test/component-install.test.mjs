@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 class Node {
- constructor(tag,cls='',text=''){this.tagName=tag;this.className=cls;this.textContent=text;this.children=[];this.isConnected=true;}
+ constructor(tag,cls='',text=''){this.tagName=tag;this.className=cls;this.textContent=text;this.children=[];this.isConnected=true;this.dataset={};}
  append(...nodes){this.children.push(...nodes);}
  removeAttribute(key){delete this[key];}
 }

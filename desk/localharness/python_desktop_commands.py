@@ -75,6 +75,16 @@ def probe_model(base_url, key="", framework="openai"):
 
 
 def invoke(owner, command, args):
+    if command in ('windows_mcp_status','windows_mcp_start','windows_mcp_call'):
+        from .windows_mcp_runtime import manager, component_status
+        if command == 'windows_mcp_status':return component_status(owner)
+        if command == 'windows_mcp_start':
+            manager(owner).start()
+            return component_status(owner)
+        from .windows_mcp_access import refusal
+        denied=refusal(load(owner.current().config),args.get('name'),args.get('arguments') or {})
+        if denied:raise ValueError(denied)
+        return manager(owner).call(args.get('name'),args.get('arguments'))
     if command=='restore_upstream':
         if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
         from . import upstream_recovery

@@ -19,7 +19,8 @@ try {
   const moduleURL=source=>'data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64');
   const text=moduleURL(readFileSync(new URL('text.ts',kit),'utf8'));
   const dom=moduleURL(readFileSync(new URL('dom.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
-  const steps=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)).replace('"./dom"',JSON.stringify(dom))));
+  const lens = moduleURL(readFileSync(new URL('tool-lens.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
+  const steps=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)).replace('"./dom"',JSON.stringify(dom)).replace('"./tool-lens"',JSON.stringify(lens))));
   const source=stripTypeScriptTypes(readFileSync(new URL('window/panel.ts',kit),'utf8'));
   const fragment=source.slice(source.indexOf('function stepRows('),source.indexOf('\nfunction openLink('));
   const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');

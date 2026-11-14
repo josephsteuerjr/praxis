@@ -82,10 +82,15 @@ async function route(path,method='GET',body=null) {
   }
   if(!alive) throw Object.assign(Error('Движок выключен'),{status:503});
   if(p==='/api/state') return state();
-  if(p==='/api/runs') return runs();
+  if(p==='/api/runs') return url.searchParams.get('audience')==='operator' ? [] : runs();
   if(p==='/api/chats') return [{peer_id:'window',title:'Hélène',kind:'window',messages:messages.length,mtime_ns:Date.now()*1e6}];
   if(p==='/api/chat/window') return messages;
   if(p==='/api/chat-turns/window') return [];
+  if(p.startsWith('/api/run/') && p.endsWith('/cancel')) {
+    interruptScope=decodeURIComponent(p.split('/')[3]);
+    if(!holdInterrupt)setTimeout(()=>{busy=false;receipt={id:interruptScope,status:'cancelled'};emit();},600);
+    return {ok:true,accepted:true,confirmed:!holdInterrupt,note:holdInterrupt?'Завершение действия пока не подтверждено':'Ход остановлен'};
+  }
   if(p.startsWith('/api/run/')) return detailOverride || {run:{...runs()[0],context:{kind:'chat_turn',delivery_chat_id:room},iterations:0},events:[],iterations:[]};
   if(p==='/api/pulse' && pulseOverride) return pulseOverride;
   if(p==='/api/supervisor') return {interrupt_receipt:receipt};

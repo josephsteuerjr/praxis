@@ -17,6 +17,7 @@ export async function verifyChatOpening(browser, url) {
     await page.goto(url);
     await page.locator('button[data-view="talk"]').click();
     await page.locator('.msg').first().waitFor();
+    assert.equal(await page.locator('#say').evaluate(node=>node===document.activeElement),true,'chat entry focuses the composer');
     await page.waitForFunction(() => window.__openingFrames.length >= 30);
     const opening = await page.evaluate(() => window.__openingFrames.slice());
     assert.ok(opening[0].max > 1000, 'history must span several screens');

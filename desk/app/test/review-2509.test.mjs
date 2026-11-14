@@ -41,9 +41,9 @@ assert.ok(!/spare === "other" && frameworkOf\(provider\) !== before/.test(agent)
 
 // A7 F8/F9: stop is scoped to the foreground run; receipts use request identity.
 const talk = read(win, "views", "talk.ts");
-assert.match(talk, /"\/api\/interrupt", \{ scope: target\.run_id \}/);
+assert.match(talk, /\/api\/run\/\$\{encodeURIComponent\(target\.run_id\)\}\/cancel/);
 assert.ok(!/scope: "all"/.test(talk), "foreground stop must not pause all autonomy");
-assert.match(talk, /"\/api\/supervisor"/);
-assert.match(talk, /interruptReceiptMatches\(requestId, receipt\)/);
+assert.match(talk, /answer\.confirmed/);
+assert.match(talk, /stopReceipt !== record/);
 assert.ok(!existsSync(join(here, "interrupt-browser.html")));
 console.log("review-2509: OK");

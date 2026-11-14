@@ -790,6 +790,12 @@ export function start(opts: WindowOptions): void {
     app.classList.add("no-anim");
     const mounting = viewInner.firstChild !== page;
     if (mounting) viewInner.replaceChildren(page);
+    // Focus on entry, before asynchronous history arrives. Polling/reconnect
+    // must not take focus back from a selection, menu or another input.
+    if (talking && mounting && !opts.quiet) {
+      syncComposer();
+      if (!say.disabled) say.focus({ preventScroll: true });
+    }
     // Лента чата липнет к низу и масштабируется; её узел масштаба ставит сама talk.render.
     if (!talking) scroll.sectionShown(false, null);
     else scroll.sectionShown(true, page.querySelector<HTMLElement>(".talk-zoom"));

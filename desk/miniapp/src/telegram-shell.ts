@@ -4,6 +4,8 @@
 type Insets = Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
 export interface TelegramWebApp {
   initData: string;
+  /** android, android_x, ios, tdesktop, macos, weba, webk, unigram, unknown… */
+  platform?: string;
   colorScheme: 'light' | 'dark';
   isFullscreen?: boolean;
   viewportHeight?: number;
@@ -11,6 +13,7 @@ export interface TelegramWebApp {
   contentSafeAreaInset?: Insets;
   isVersionAtLeast?(version: string): boolean;
   requestFullscreen?(): void;
+  exitFullscreen?(): void;
   setHeaderColor?(color: string): void;
   ready(): void;
   expand(): void;
@@ -21,7 +24,10 @@ export interface TelegramWebApp {
 export function mountTelegramShell(tg?: TelegramWebApp): void {
   const root = document.documentElement;
   root.classList.add('telegram-shell');
-  const supported = !!tg?.requestFullscreen && !!tg.isVersionAtLeast?.('8.0');
+  // Fullscreen only on phones (owner, 14.11: «на ПК мешает, на телефоне огонь»).
+  // Desktop and web clients keep Telegram's ordinary expanded window.
+  const phone = /^(android|ios)/.test(String(tg?.platform || ''));
+  const supported = phone && !!tg?.requestFullscreen && !!tg.isVersionAtLeast?.('8.0');
   let failed = false;
   let frame = 0;
   const px = (n: number | undefined) => Number.isFinite(n) ? Math.max(0, n!) : 0;
@@ -57,6 +63,9 @@ export function mountTelegramShell(tg?: TelegramWebApp): void {
   header();
   if (supported) {
     try { tg!.requestFullscreen!(); } catch { failed = true; tg?.expand(); }
+  } else if (!phone && tg?.isFullscreen) {
+    // A fullscreen launch mode/link still opens fullscreen on desktop: leave it once.
+    try { tg.exitFullscreen?.(); } catch { /* older client */ }
   }
   update();
 }

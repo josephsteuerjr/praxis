@@ -46,6 +46,7 @@ def public_state(state, *, browser=True):
     return {'available': True, 'installed': True, 'browser_login': browser,
             'port': state.get('port'), 'login': login,
             'slots': [{'slot': name, 'stored': row.get('configured') is True,
+                       'cooldown_seconds_left': max(0,row.get('cooldown_seconds_left',0)) if type(row.get('cooldown_seconds_left',0)) is int else 0,
                        'active': row.get('active') is True}
                       for name in SLOTS
                       for row in [next((a for a in state.get('accounts', []) if a.get('slot') == name), {})]]}
@@ -85,6 +86,7 @@ def account_view(state):
             'note': state.get('note'), 'browser_login': state.get('browser_login', True), 'login': login,
             'active_slot': next((a['slot'] for a in state.get('slots', []) if a.get('active')), None),
             'slots': [dict(slot=a['slot'], stored=a['stored'], loaded=a['stored'], serving=a['active'],
+                           cooldown_seconds_left=a.get('cooldown_seconds_left',0),
                            pending=bool(login.get('pending') and login.get('slot') == a['slot']),
                            login_error=login.get('error') if login.get('slot') == a['slot'] else None)
                       for a in state.get('slots', [])]}
