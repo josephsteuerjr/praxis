@@ -31,13 +31,27 @@ beyond that frozen desktop code.
 ## Current cloud Praxis mirror
 
 `praxis/` mirrors the selected public source of the running cloud Praxis on
-2026-11-14: HEAD `b2af030e605e58e6919c91298c69f942220de590` (runtime
-`e7e34ba305fc23417b4df6c8ad80615d6087efde`), with no deployed-uncommitted files.
-Since the previous mirror (`6acb9d4`, 2026-11-13) this brings in owner Stop/Start and
-selected-run reset, warm run-owned provider workers, owned search with exact-run
-reset, and the `run_command` hand: one program with exact argv and no shell, with
-stdin text, explicit environment pairs, declared outputs and scratch paths; the
-`git` hand takes paths as an array and long-running task processes accept argv.
+2026-11-14: docs HEAD `a3f18a7e439fb22ebc012b272e44ab30970b8100`, runtime
+`771695e8d184416e3ef98815d5780ca4f9f7f22a`, and final test-isolated source
+`7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e`, with no deployed-uncommitted
+product files. Since the previous mirror (`24d09a6`), this adds titles bound to
+the actual triggering messages, separate operator-probe history, numeric model
+generation progress, and the `code_query` hand shared with Forge. Semantic search
+runs through owned child processes; its Python AST evidence, hash-bound pages
+and structural cache make incomplete or uncertain results explicit. External
+roots use a process-memory cache; remote task roots are explicitly unsupported.
+
+The relay reports numeric progress without exposing argument text. Its three
+generation limits remain zero (disabled), pending owner approval of thresholds.
+The original long silent attempt's whitespace explanation remains unproven.
+The final source passed two identical 434-module gates, each with 7,307 tests,
+16 skips and no errors; all 24 installed semantic-search tests passed. Relay
+130 tests and strict Clippy, app backend 44/browser 12, and six live HTTPS groups
+passed. No paid provider probes were made; physical phone acceptance is separate.
+
+The semantic-search interface draws on Ouroboros v7.10.0 (MIT)
+`tools/query_code.py` and `code_navigation.py`; implementation reuses Praxis
+Forge and owned search, with no source copied.
 `CORE-SOURCE.json` records all selected source digests, mirror digests and
 executable modes, together with the canonical mirror digest.
 

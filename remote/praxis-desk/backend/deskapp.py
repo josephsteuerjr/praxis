@@ -798,8 +798,12 @@ def _reader(fn: Callable[[], Any]):
 
 
 async def _r_runs(c: Call):
+    audience = c.query.get("audience") or "work"
+    if audience not in ("work", "operator", "all"):
+        raise web.HTTPBadRequest(text="неизвестный вид ходов")
     return await asyncio.to_thread(readers.list_runs, _int_arg(c.query, "limit", 80, 1, 200),
-                                   c.query.get("kind") or "", c.query.get("before") or "")
+                                   c.query.get("kind") or "", c.query.get("before") or "",
+                                   audience=audience)
 
 
 async def _r_run(c: Call):

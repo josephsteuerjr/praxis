@@ -14,6 +14,7 @@
 | `mtproto_runner.py` | Живой Telethon client: update routing, buffers, forum topics, media, delivery/outbox replay, membership/account hooks и единые серверные часы. |
 | `llm.py` | Конфигурация ролей моделей, Anthropic/OpenAI protocol adapters, fallback, usage и hosted tools. |
 | `model_step.py` | Тёплые run/task SDK workers, private framed leases, typed errors и parent lifeline; policy остаётся в llm. |
+| `model_progress.py` | Числовая телеметрия аргументов relay, очистка и наблюдение прогресса; без текста и изменения provider input. |
 | `step_control.py` | Независимый reset watcher, общий pending-resource census и подтверждения фактических владельцев handles. |
 | `search_execution.py` | Typed private search transport через общий launcher с track-before-admit и tree settlement. |
 | `forge_search_step.py` | Общий read-only rg/regex effect Forge без agent/Telethon import и изменения task authority. |
@@ -233,3 +234,14 @@ Win32 process handle/wait и никогда не пробует Windows PID че
 - `test_forge_wave2_server.py` and focused donor consumer suites: server adaptation, process ownership, recovery, exact acceptance, independent review and prefix preservation.
 
 `forge_battery.py` exports the exact frozen composition and binds complete executed canonical-matrix logs; `command_child.py` is the Linux per-command subreaper used by `command_process.py`, including detached descendants.
+
+
+### Semantic code query (14 November 2026)
+- code_query.py: native/Forge entry, root checks, parent RAM cursor custody, owned search dispatch.
+- code_navigation.py: bounded inventory/hash/evidence/paging and fresh snippets; one shared engine.
+- code_query_inventory.py: audited source_files inventory, ignores/nested repos/symlink evidence.
+- code_query_facts.py: structural Python AST and tokenize facts, scoped import/shadowing evidence.
+- code_query_cache.py: disposable file-SHA/version facts; no source/snippets/literal values.
+- forge_intelligence.py: reused Budget/source_files/_python_symbols/references/overview/impact/verification.
+- catalog_families.py, agent.py, forge.py, forge_worker.py: code_query hand + shared inspect actions/K.
+- test_code_query_1411.py: evidence/privacy/pages/coverage/roots and real run-owned search/reset.

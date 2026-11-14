@@ -173,31 +173,6 @@ const AGENDA_KIND: Record<string, string> = {
   email: "письмо",
 };
 
-/** Подпись хода из слова агента или из входа: без скобок кадра и разметки. */
-const clean = (s: string) =>
-  s
-    .replace(/^\s*…?\s*\[[^\]]{0,200}\]\s*/, "")
-    .replace(/^[^:\n]{1,40}:\s*/, "")
-    .replace(/[*_`#>]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-/** Цель запуска годится в подпись, только если это не обрезок кадра. */
-const goalLabel = (goal: string) => {
-  if (/ЛЕНТА ОБРЕЗАНА|^\s*…|^\s*\[/.test(goal || "")) return "";
-  const t = clean(goal || "");
-  return /[\]»]$/.test(t) && t.length > 60 ? "" : t;
-};
-
-/** Заметка границы хода (`done: …`, `wait: …`) — словами. */
-const noteLabel = (note: string) => {
-  const raw = String(note || "").trim();
-  const m = raw.match(/^(done|wait|blocked|silence)\s*:\s*(.*)$/i);
-  const body = m ? m[2] : raw;
-  const head = m ? (m[1].toLowerCase() === "wait" ? "Жду: " : m[1].toLowerCase() === "blocked" ? "Препятствие: " : "") : "";
-  return body.trim() ? head + clean(body) : "";
-};
-
 export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   applyTheme(opts.theme ? opts.theme() : "system");
   applyLook(loadLook());
@@ -391,9 +366,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   function runLabel(r: Run): string {
-    const w = words.get(r.id);
-    const text = clean(w?.out || "") || noteLabel(w?.note || "") || goalLabel(r.goal_head || "");
-    return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
+    return r.goal_head || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
   }
 
   function runRow(r: Run, opts2: { showRoom?: boolean } = {}): string {

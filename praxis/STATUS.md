@@ -1,3 +1,44 @@
+## CURRENT14 November2026 — titles, generation telemetry and code_query live verified
+
+S1/S2phone source44ff961: true origin-message titles, separate operator probes and numeric
+generation progress. Backend44/argv10/bothbuilds/browser12/liveHTTPS6 PASS; screenshot evidence
+reviewed. Physical phone acceptance remains separate.
+
+S2core f42a8104 and relay31dc53d8 preserve the exact deployed provider/cache observation base.
+Rust130/strictclippy/release and two7283/16skip/0 core gates PASS. All three generation limits
+remain explicitly0/off pending Egor ratification. Original whitespace hypothesis is unproven.
+No paid provider probe was made.
+
+S3runtime771695e8d184416e3ef98815d5780ca4f9f7f22a, final source7a4dfea8f1f3b83dfaa2a87479cf1b3e36b30b0e:
+two exact434module gates each7307/16skip/0, IDs/skips equal; installed24tests PASS.
+CorePID1805299 ready50.267s,0repeated restarts/tracebacks. One core-only rollout; final fixture
+fix only restores import-time PYTHONPATH and required no service restart. Prior runtime fixture
+RED remains recorded. Self-authored4a80 and private dirt retained; rollback tar/immutable refs
+under /opt/deploy-operator/titles-stall-codequery-1411, no rollback used.
+
+Semantic code_query shares Forge intelligence and owned search, returns scoped evidence,
+ambiguity, coverage and revision-bound pages; heavy child/Git work stops with run reset.
+Structural cache stores no source/snippets/literal values; external roots RAM only.
+726file benchmark:6AST candidates,720prefiltered, cold4.6873s/warm4.4142s in separate processes,
+exact complete rows,6warmcachehits. No type/LSP/re-export or proven-call-edge claim.
+Native hand/catalog/K and Forge/worker definition/callers/callees use one engine.
+
+Public source mirror synchronization is a separate sanitized operation. Hélène/Jarvis port,
+installation and publication were not performed. Earlier checkpoints below are historical.
+
+---
+
+# Model argument telemetry CANDIDATE — 14.11.2026
+
+S2 adds numeric relay progress through existing warm worker leases to model-call
+events, and typed runaway_generation fallback. Provider inputs, outputs, cache and
+accounting contracts are retained. Relay ceilings remain zero/off pending Egor's
+ratification. This source is a candidate until two identical full gates and scoped
+runtime verification are recorded. App titles S1 e49846eb is already live; relay
+baseline includes the deployed provider/cache observation overlay over a262932.
+Private qualification and rollback evidence: /opt/deploy-operator/titles-stall-codequery-1411.
+No Hélène/Jarvis installation or public release is part of this stage.
+
 # run_command, git.paths array, process argv LIVE VERIFIED — 14.11.2026
 
 Runtime `e7e34ba305fc23417b4df6c8ad80615d6087efde` deployed fast-forward from `e761be44dd51d489674abff1e190b70cba0b185d` (Claude, spec
@@ -459,3 +500,19 @@ Qualified Python/source commit: `b615d14a295e47e4eae7e4a396bda4827c62793d`. Curr
 - Exact clean Linux gates: 6706, 6706 tests, 6, 6 skips. Real installed model produced 13.8667s OGG/Opus; 93/97 native parts preceded completion, final SHA/voice attribute/ffmpeg decode passed. Injected transport: no actual Telegram upload/message was sent. Final hot check again confirmed both models ready, exact source, current voice and same runtime image/container before the requested stop.
 - Capacity incidents are retained: 2 kernel OOM kills after source deployment under concurrent heavy workload. Runtime drop-in `/etc/systemd/system/praxis-xtts.service.d/30-critical-oom-hold.conf` biases critical OOM victim selection toward XTTS (`OOMScoreAdjust=900`) and prevents automatic restart after its main process's SIGKILL (`RestartPreventExitStatus=SIGKILL`). Syntax and isolated sleep-process kill/restart behavior verified without loading models or provoking OOM. This is not a general pressure watcher or absolute kernel immunity for Whisper. No new OOM or automatic restart occurred in the final owner check window.
 - Own temporary source/test/audio stands removed; permanent models, profiles, author work and bounded rollback retained in `/opt/deploy-operator/praxis-xtts-async-contract-3010`. No public push, Compose/image/environment/Caddy changes or cloud provider connection. Source qualification and later STATUS-only commits are separate identities.
+
+
+## 14 November 2026 — titles/progress live; semantic query candidate
+S1 app e49846eb and S2app44ff961 live. S2core f42a8104 preserved self-authored4a80;
+two identical7283/16skip/0 full gates, actual installed runtime9 and live HTTPS6 PASS.
+Core ready57.534s,0restart loops; relay31dc53d8 image3dbc60dc binaryb81b8b79:
+Rust130/strict clippy/release/smoke PASS, all3generation limits explicitly0/off.
+Original15minute whitespace hypothesis remains unproven. No paid provider probe.
+Rollback refs/tars and old stopped relay retained; unrelated services/private dirt retained.
+
+S3 code_query candidate now implements Python evidence, snapshot pages, owned search,
+shared Forge actions and structural cache. Targeted first266/2skip REDs (own control
+receipt in snapshot; page-limit fixture scanner) corrected; revised266/2skip/0 PASS.
+Final benchmark, full gates and runtime acceptance are in the task handoff/receipts;
+this source commit alone is not a live acceptance claim.
+Hélène/Jarvis port and physical phone acceptance remain separate.

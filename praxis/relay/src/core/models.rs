@@ -558,6 +558,9 @@ pub struct ResponseEvent {
     // Hosted actions are provenance only; they must never become client tool calls.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub relay_provider_observation: Option<serde_json::Value>,
+    /// Content-free optional progress; old clients ignore empty choices.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub relay_generation: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

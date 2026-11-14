@@ -2536,14 +2536,14 @@ def noted(out, default: str = ""):
 
 def inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
             glob: str = "**/*", start: int = 1, end: int = 0,
-            start_char: int = 0, expected_sha256: str = "") -> str:
-    out = _inspect(task_id, action, path, query, glob, start, end, start_char, expected_sha256)
+            start_char: int = 0, expected_sha256: str = "", module: str = "", limit: int = 40, cursor: str = "") -> str:
+    out = _inspect(task_id, action, path, query, glob, start, end, start_char, expected_sha256, module, limit, cursor)
     return out if isinstance(out, InspectReply) else InspectReply(out, "ok")
 
 
 def _inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
              glob: str = "**/*", start: int = 1, end: int = 0,
-             start_char: int = 0, expected_sha256: str = "") -> str:
+             start_char: int = 0, expected_sha256: str = "", module: str = "", limit: int = 40, cursor: str = "") -> str:
     # Рычаг наблюдения стоит ДО разбора задачи: перечислить и снять наблюдение она
     # вправе и тогда, когда задача, из чьей цели оно выросло, давно закрыта или
     # потеряна, — иначе «снять» работало бы ровно там, где оно уже не нужно.
@@ -2558,6 +2558,9 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
     assert task is not None
     if action == "history":
         return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
+    if action in {"definition", "callers", "callees"}:
+        result = forge_intelligence.code_query(action, "task:" + task_id, path, query, module, limit, cursor, home=BASE)
+        return InspectReply(json.dumps(result, ensure_ascii=False), "refused" if result.get("error") else "ok")
     remote = _remote_client(task) if root is not None else None
     if action == "orientation":
         return _orientation_text(task)

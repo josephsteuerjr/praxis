@@ -184,3 +184,26 @@ RUN_COMMAND_TOOL = schema("run_command",
         "outputs": field("Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size", type="array", items={"type": "string"}),
         "scratch": field("Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven", type="array", items={"type": "string"}),
     }, ["argv"])
+
+CODE_QUERY_TOOL = schema("code_query",
+    "Read-only code evidence in home, a local Forge task, or an absolute external tree; "
+    "never creates a task/project or a write right. Python AST definitions, calls, references "
+    "and import bindings; unknown receivers and shadowing stay ambiguous, never proven edges. "
+    "JS/TS use disclosed regex symbols and text mentions; no LSP/type or re-export resolution. "
+    "Returns snapshot, rows, total, next_cursor, coverage and methods. Empty incomplete scans "
+    "do not prove absence. line is 1-based, char Unicode code points, byte UTF-8 column; end "
+    "exclusive, CRLF excluded. Page limit is independent of the named Forge scan budget "
+    "(normally 12000 files/90 seconds). Cursor binds query and file hashes: changed files "
+    "refuse with paths; restart expires parent-held cursors. Structural cache is disposable "
+    "and stores no snippets/source/literals; external roots use process RAM only. "
+    "Heavy work uses the run-owned search process and stops with run reset. "
+    "Remote host/Windows tasks are explicitly unsupported. impact is heuristic; its "
+    "verification_plan(full=True) remains the full gate, overview is factual inventory.", {
+        "op": field("Evidence operation", enum=["symbols","definition","references","callers","callees","impact","overview"]),
+        "root": field("home (default), task:<id>, or an absolute local read-only tree"),
+        "path": field("Optional relative file/directory narrowing the scan; impact treats it as changed path"),
+        "name": field("Symbol name, dotted allowed; required for definition/references/callers/callees"),
+        "module": field("Defining module when known; distinguishes import bindings and same-name targets"),
+        "limit": field("Rows shown per page: default40, maximum200, independent of scan budget", type="integer"),
+        "cursor": field("Exact next_cursor snapshot:offset; keep root/path/op/name/module unchanged"),
+    }, ["op"])

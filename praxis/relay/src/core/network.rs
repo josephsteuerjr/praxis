@@ -1,97 +1,131 @@
-//! One process-owned outbound client for models, inference, limits and OAuth.
-//! Hélène owns persistence in helene.json; a changed relay spec restarts only
-//! this child. Explicit direct mode never falls back to ambient system proxies.
+//! One outbound route for generation, discovery, limits and token refresh.
+//! Settings are private; status never returns proxy credentials.
 use anyhow::{bail, Result};
 use reqwest::Client;
-use std::{sync::OnceLock, time::Duration};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{path::PathBuf, sync::{OnceLock, RwLock}, time::Duration};
 
-pub fn build(mode: &str, address: &str) -> Result<Client> {
-    let mut builder=Client::builder().tcp_keepalive(Duration::from_secs(30))
-        .pool_idle_timeout(Duration::from_secs(90));
-    match mode {
-        "system" => {},
-        "direct" => { builder=builder.no_proxy(); },
-        "proxy" => {
-            let url=reqwest::Url::parse(address).map_err(|_|anyhow::anyhow!("Invalid proxy address"))?;
-            if !matches!(url.scheme(),"http"|"https"|"socks5"|"socks5h") || url.host_str().is_none()
-                || url.query().is_some() || url.fragment().is_some() || !matches!(url.path(),""|"/") {
-                bail!("Proxy requires HTTP, HTTPS or SOCKS5 host and port without a path");
-            }
-            let proxy=reqwest::Proxy::all(address).map_err(|_|anyhow::anyhow!("Cannot initialize the selected proxy"))?;
-            builder=builder.no_proxy().proxy(proxy);
-        },
-        _=>bail!("Unknown relay network mode"),
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Settings { pub proxy_url: Option<String> }
+#[derive(Clone)]
+struct Snapshot { settings: Settings, client: Client, path: PathBuf }
+static CURRENT: OnceLock<RwLock<Snapshot>> = OnceLock::new();
+
+fn build(settings: &Settings) -> Result<Client> {
+    let mut builder = Client::builder().tcp_keepalive(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(90)).redirect(reqwest::redirect::Policy::none());
+    if let Some(raw) = &settings.proxy_url {
+        let url = reqwest::Url::parse(raw).map_err(|_| anyhow::anyhow!("Invalid proxy URL"))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+            || url.query().is_some() || url.fragment().is_some() {
+            bail!("Proxy must be an HTTP(S) URL without query or fragment");
+        }
+        builder = builder.no_proxy().proxy(reqwest::Proxy::all(raw)
+            .map_err(|_| anyhow::anyhow!("Invalid proxy configuration"))?);
     }
-    builder.build().map_err(|_|anyhow::anyhow!("Cannot initialize the selected outbound route"))
+    builder.build().map_err(|_| anyhow::anyhow!("Cannot initialize outbound route"))
+}
+
+pub fn init(home: &std::path::Path) -> Result<()> {
+    let path = std::env::var_os("RELAY_NETWORK_FILE").map(PathBuf::from)
+        .unwrap_or_else(|| home.join("network.json"));
+    let settings = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("Invalid network settings file"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+        Err(_) => bail!("Cannot read network settings file"),
+    };
+    let client = build(&settings)?;
+    let snapshot = Snapshot {settings, client, path};
+    if let Some(lock) = CURRENT.get() { *lock.write().map_err(|_| anyhow::anyhow!("Network state unavailable"))? = snapshot; }
+    else { let _ = CURRENT.set(RwLock::new(snapshot)); }
+    Ok(())
 }
 
 pub fn client() -> Result<Client> {
-    static CLIENT:OnceLock<Result<Client,String>>=OnceLock::new();
-    CLIENT.get_or_init(||build(&std::env::var("RELAY_NETWORK_MODE").unwrap_or_else(|_|"system".into()),
-        &std::env::var("RELAY_PROXY_URL").unwrap_or_default()).map_err(|e|e.to_string()))
-        .as_ref().cloned().map_err(|error|anyhow::anyhow!(error.clone()))
+    if let Some(lock) = CURRENT.get() {
+        return Ok(lock.read().map_err(|_| anyhow::anyhow!("Network state unavailable"))?.client.clone());
+    }
+    // Library/test callers without server startup retain the platform route.
+    build(&Settings::default())
 }
 
-pub fn status() -> serde_json::Value {
-    serde_json::json!({"mode":std::env::var("RELAY_NETWORK_MODE").unwrap_or_else(|_|"system".into()),
-        "proxy_configured":std::env::var("RELAY_PROXY_URL").is_ok_and(|s|!s.is_empty()),"generation_probe":false})
+pub fn status() -> Result<Value> {
+    let state = CURRENT.get().ok_or_else(|| anyhow::anyhow!("Network state unavailable"))?
+        .read().map_err(|_| anyhow::anyhow!("Network state unavailable"))?;
+    Ok(json!({"proxy_configured":state.settings.proxy_url.is_some(),
+        "route":if state.settings.proxy_url.is_some() {"configured_proxy"} else {"platform_default"},
+        "preflight":"disabled_server_deployment", "generation_probe":false}))
+}
+
+pub fn update(mut settings: Settings) -> Result<Value> {
+    settings.proxy_url = settings.proxy_url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let client = build(&settings)?;
+    let lock = CURRENT.get().ok_or_else(|| anyhow::anyhow!("Network state unavailable"))?;
+    let mut state = lock.write().map_err(|_| anyhow::anyhow!("Network state unavailable"))?;
+    let parent = state.path.parent().ok_or_else(|| anyhow::anyhow!("Invalid network settings path"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    use std::io::Write;
+    file.write_all(&serde_json::to_vec(&settings)?)?;
+    file.as_file().sync_all()?;
+    file.persist(&state.path).map_err(|_| anyhow::anyhow!("Cannot save network settings"))?;
+    state.settings = settings; state.client = client;
+    drop(state);
+    status()
+}
+
+/// Fresh, non-generating request, using the SAME client/account as the next POST.
+/// This proves endpoint reachability, not geographic eligibility or future immunity from bans.
+#[derive(Debug, thiserror::Error)]
+#[error("backend_unavailable: preflight HTTP {0}; generation not sent")]
+// Retained compatibility/test helper: this server deployment deliberately does
+// not probe before generation. Do not re-enable it to satisfy dead-code lint.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct ProbeStatus(pub u16);
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn preflight(client: &Client, token: &str, account: &str) -> Result<()> {
+    #[cfg(test)]
+    { if TEST_PROBE_URL.lock().unwrap().is_none() { return Ok(()); } }
+    let response = client.get(probe_url())
+        .query(&[("client_version", crate::core::chat_completions::codex_cli_version())])
+        .bearer_auth(token).header("ChatGPT-Account-ID",account)
+        .header("User-Agent",crate::core::chat_completions::codex_user_agent())
+        .header("originator",crate::core::chat_completions::CODEX_ORIGINATOR)
+        .timeout(Duration::from_secs(15)).send().await
+        .map_err(|_| anyhow::anyhow!("backend_unavailable: preflight transport failed; generation not sent"))?;
+    if !response.status().is_success() {
+        return Err(ProbeStatus(response.status().as_u16()).into());
+    }
+    Ok(())
+}
+#[cfg(test)]
+pub(crate) static TEST_PROBE_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg_attr(not(test), allow(dead_code))]
+fn probe_url() -> String {
+    #[cfg(test)] { return TEST_PROBE_URL.lock().unwrap().clone().unwrap_or_default(); }
+    #[cfg(not(test))] { "https://chatgpt.com/backend-api/codex/models".to_string() }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read,Write};
-    fn headers(stream:&mut std::net::TcpStream)->String {
-        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        let mut data=Vec::new();let mut byte=[0];
-        while !data.ends_with(b"\r\n\r\n") && data.len()<8192 {stream.read_exact(&mut byte).unwrap();data.push(byte[0]);}
-        String::from_utf8(data).unwrap()
+    #[test] fn invalid_proxy_does_not_build_or_echo_secret() {
+        let err=build(&Settings{proxy_url:Some("garbage://user:secret@host".into())}).unwrap_err();
+        assert!(!err.to_string().contains("secret"));
     }
-    fn respond(stream:&mut std::net::TcpStream) {stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();}
-    #[tokio::test]
-    async fn http_proxy_receives_target_and_basic_auth_without_direct_dns() {
-        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
-        let server=std::thread::spawn(move||{
-            let (mut stream,_)=listener.accept().unwrap();let request=headers(&mut stream);
-            assert!(request.starts_with("GET http://example.invalid/probe "));
-            use base64::Engine;
-            let authorization=request.lines().find(|line|line.to_ascii_lowercase().starts_with("proxy-authorization:")).unwrap().split_once(':').unwrap().1.trim();
-            assert_eq!(authorization,format!("Basic {}",base64::engine::general_purpose::STANDARD.encode(b"user:secret")));
-            respond(&mut stream);
-        });
-        let client=build("proxy",&format!("http://user:secret@{address}")).unwrap();
-        assert!(client.get("http://example.invalid/probe").timeout(Duration::from_secs(3)).send().await.unwrap().status().is_success());
-        server.join().unwrap();
+    #[test] fn explicit_proxy_builds_without_connecting() {
+        assert!(build(&Settings{proxy_url:Some("http://user:secret@127.0.0.1:9".into())}).is_ok());
     }
-    #[tokio::test]
-    async fn socks5h_uses_remote_dns_and_the_selected_username_password() {
-        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
-        let server=std::thread::spawn(move||{
-            let (mut stream,_)=listener.accept().unwrap();stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            let mut greeting=[0;2];stream.read_exact(&mut greeting).unwrap();assert_eq!(greeting[0],5);
-            let mut methods=vec![0;greeting[1] as usize];stream.read_exact(&mut methods).unwrap();assert!(methods.contains(&2));stream.write_all(&[5,2]).unwrap();
-            let mut login=[0;2];stream.read_exact(&mut login).unwrap();assert_eq!(login[0],1);
-            let mut username=vec![0;login[1] as usize];stream.read_exact(&mut username).unwrap();assert_eq!(username,b"user");
-            let mut size=[0];stream.read_exact(&mut size).unwrap();let mut password=vec![0;size[0] as usize];stream.read_exact(&mut password).unwrap();assert_eq!(password,b"secret");stream.write_all(&[1,0]).unwrap();
-            let mut connect=[0;4];stream.read_exact(&mut connect).unwrap();assert_eq!(connect,[5,1,0,3]);
-            stream.read_exact(&mut size).unwrap();let mut hostname=vec![0;size[0] as usize];stream.read_exact(&mut hostname).unwrap();assert_eq!(hostname,b"example.invalid");
-            let mut port=[0;2];stream.read_exact(&mut port).unwrap();assert_eq!(u16::from_be_bytes(port),80);
-            stream.write_all(&[5,0,0,1,127,0,0,1,0,80]).unwrap();assert!(headers(&mut stream).starts_with("GET /probe "));respond(&mut stream);
-        });
-        let client=build("proxy",&format!("socks5h://user:secret@{address}")).unwrap();
-        assert!(client.get("http://example.invalid/probe").timeout(Duration::from_secs(3)).send().await.unwrap().status().is_success());
-        server.join().unwrap();
-    }
-    #[test]
-    fn supported_routes_build_without_a_network_request() {
-        assert!(build("system","").is_ok()); assert!(build("direct","").is_ok());
-        for address in ["http://user:secret@127.0.0.1:9","https://127.0.0.1:9","socks5://user:secret@127.0.0.1:9","socks5h://127.0.0.1:9"] {
-            assert!(build("proxy",address).is_ok(),"supported proxy route");
-        }
-    }
-    #[test]
-    fn invalid_route_refuses_without_exposing_credentials() {
-        let error=build("proxy","unknown://user:secret@127.0.0.1").unwrap_err().to_string();
-        assert!(!error.contains("secret")); assert!(build("proxy","https://proxy.invalid/private-path").is_err());
+    #[tokio::test] async fn unreachable_preflight_is_not_a_generation() {
+        *TEST_PROBE_URL.lock().unwrap() = Some("http://127.0.0.1:9/preflight".into());
+        let result=preflight(&build(&Settings::default()).unwrap(),"fixture","fixture").await;
+        *TEST_PROBE_URL.lock().unwrap() = None;
+        assert!(result.unwrap_err().to_string().contains("generation not sent"));
     }
 }

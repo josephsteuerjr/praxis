@@ -1,8 +1,10 @@
 pub mod account_router;
 pub mod catalog;
+pub mod cache_observation;
 pub mod chat_completions;
 pub mod client_common;
 pub mod config;
+pub mod generation_telemetry;
 pub mod images;
 pub mod limits;
 pub mod models;

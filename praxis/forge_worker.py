@@ -139,19 +139,23 @@ INSPECT_TOOL = {
     "name": "inspect",
     "description": (
         "See the exact task place. Besides read/search/diff, model/symbols/references/diagnostics/"
-        "impact/checks expose normalized semantic and test facts; mailbox shows worker signals. "
+        "impact/checks expose normalized semantic and test facts; definition/callers/callees use "
+        "the shared code_query evidence engine, coverage and snapshot cursor; mailbox shows worker signals. "
         "Large read replies are exact UTF-8 JSON pages (<=8000 chars): continue with "
         "start=next_start, start_char=next_char, expected_sha256=sha256; a changed file refuses "
         "the old hash. Small reads retain the legacy numbered-line display."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
-                    "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+                    "references", "definition", "callers", "callees", "diagnostics", "impact", "checks", "lessons", "mailbox",
                     "read", "list", "search", "diff", "history"], "description": "What to inspect in this task."},
         "path": {"type": "string", "description": "File or directory relative to the task root."}, "query": {"type": "string", "description": "Text or symbol to find."},
         "glob": {"type": "string", "description": "File mask narrowing the search."}, "start": {"type": "integer", "description": "First line, one-based."}, "end": {"type": "integer", "description": "Last line, inclusive."},
         "start_char": {"type": "integer", "description": "Unicode character offset within start line, for paged reads."},
         "expected_sha256": {"type": "string", "description": "Full 64-hex source hash from a read page; pins continuation to those bytes."},
+        "module": {"type": "string", "description": "Target defining module for semantic evidence."},
+        "limit": {"type": "integer", "description": "Semantic rows per page: default40, maximum200."},
+        "cursor": {"type": "string", "description": "Semantic snapshot:offset; changed files refuse continuation."},
     }, ["action"]),
 }
 
@@ -318,7 +322,7 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
         return f"{role}: tool {name} refused (read-oriented role)."
     if role != "worker" and name == "inspect" and clean.get("action") not in {
         "status", "orientation", "overview", "review", "model", "symbols",
-        "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+        "references", "definition", "callers", "callees", "diagnostics", "impact", "checks", "lessons", "mailbox",
         "read", "list", "search", "diff", "history",
     }:
         return f"{role}: inspect action refused (read-oriented role)."

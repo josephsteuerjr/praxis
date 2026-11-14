@@ -34,6 +34,7 @@ def _error(error):
             ('code', 'slot', 'resets_at', 'attempts', 'synthetic')}
     if isinstance(error, llm.TornStreamError):
         value['partial'] = asdict(error.partial) if error.partial is not None else None
+    if isinstance(error, llm.RunawayGenerationError):value['metrics'] = error.metrics
     status = getattr(error, 'status_code', None)
     if type(status) is int:value['status_code'] = status
     return value
@@ -49,6 +50,7 @@ def _raise(value):
     if name == 'TornStreamError':
         partial = value.get('partial')
         raise llm.TornStreamError(message, partial=llm.LLMResponse(**partial) if partial else None)
+    if name == 'RunawayGenerationError':raise llm.RunawayGenerationError(message, metrics=value.get('metrics'))
     if name in ('EmptyResponseError', 'BrokenChannelError'):
         raise getattr(llm, name)(message)
     known = {'ValueError': ValueError, 'TypeError': TypeError, 'RuntimeError': RuntimeError,
@@ -173,7 +175,18 @@ class Worker:
         self._exchanging = True
         try:
             _write_all(self.input, _encode(request))
-            result = _read(self.output)
+            while True:
+                result = _read(self.output)
+                if 'progress' not in result:break
+                if set(result) != set(identity) | {'progress'} or any(type(result.get(k)) is not type(v) or result.get(k) != v for k,v in identity.items()):
+                    raise ValueError('adapter progress identity mismatch')
+                with self.lock:
+                    valid = self.state == 'busy' and self.attempt == request['attempt']
+                if not valid:raise ValueError('adapter lease retired')
+                if step_control.requested(self.pool.run_id,self.pool.base):
+                    raise ValueError('progress after reset')
+                import model_progress
+                model_progress.emit(result['progress'])
             _validate_result(result, identity)
             with self.lock:
                 valid = self.state == 'busy' and self.attempt == request['attempt']
@@ -302,6 +315,7 @@ def worker(generation, run_id):
     output = os.fdopen(os.dup(1), 'wb', buffering=0)
     with open(os.devnull, 'wb') as sink:os.dup2(sink.fileno(), 1)
     import llm
+    import model_progress
     source = sys.stdin.buffer
     try:
         while True:
@@ -317,9 +331,11 @@ def worker(generation, run_id):
                     llm._CLIENTS.pop(name, None)
                     with contextlib.suppress(Exception):cached[1].close()
             llm._config = lambda: config
+            identity = {key: request[key] for key in ('version', 'generation', 'run_id', 'lease', 'attempt')}
             try:
-                with llm.single_provider_attempt() if request['single_attempt'] else contextlib.nullcontext():
-                    response = llm._call(request['framework'], request['model'], _resolved=True, **request['kwargs'])
+                with model_progress.observe(lambda metrics: _write_all(output, _encode(dict(identity, progress=metrics)))):
+                    with llm.single_provider_attempt() if request['single_attempt'] else contextlib.nullcontext():
+                        response = llm._call(request['framework'], request['model'], _resolved=True, **request['kwargs'])
                 result = {'response': asdict(response)}
             except Exception as error:result = {'error': _error(error)}
             identity = {key: request[key] for key in ('version', 'generation', 'run_id', 'lease', 'attempt')}

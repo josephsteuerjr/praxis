@@ -654,6 +654,8 @@ SIGNATURE_LIMITS: dict[tuple[str, str], tuple[str | None, int]] = {
     ("tool_python", "timeout"): (None, 0),
     # run_command (14.11): the same 0 — home default, or no deadline in a local Forge task.
     ("tool_run_command", "timeout"): (None, 0),
+    ("tool_code_query", "limit"): (None, 40),
+    ("tool_coding_inspect", "limit"): (None, 40),
     ("tool_coding_process", "timeout"): (None, 0),
     ("tool_computer", "timeout_ms"): (None, 1500),
     # Не предел, а темп ввода; в таблице он затем, чтобы её изменение тоже требовало
@@ -681,7 +683,8 @@ def _signature_limits() -> dict[tuple[str, str], int]:
             default = param.default
             if default is inspect.Parameter.empty or isinstance(default, bool):
                 continue
-            if isinstance(default, (int, float)) and _TIME_PARAM_RE.search(pname):
+            semantic_page = pname == 'limit' and name in {'tool_code_query', 'tool_coding_inspect'}
+            if isinstance(default, (int, float)) and (_TIME_PARAM_RE.search(pname) or semantic_page):
                 found[(name, pname)] = int(default)
     return found
 

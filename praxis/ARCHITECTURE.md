@@ -26,6 +26,19 @@ its run census before Telegram connects instead of delaying normal message intak
 
 ## Run/task lifetimes and cross-executor census
 
+Relay argument progress uses optional `relay_generation` metadata with empty choices.
+`model_progress.py` projects only numeric counters, known outcomes and a generated
+attempt id. The warm worker transports these records on its existing framed pipe,
+bound to the exact generation/run/lease/attempt; the parent checks reset before
+writing `model_progress` events for the model call. Progress never enters model
+text, tools, usage accounting or the next provider request. Diagnostic sinks cannot
+change adapter success or retry policy. `runaway_generation` is a typed
+`BrokenChannelError`, carrying numeric evidence through the worker pipe and using
+the existing fallback path without a subscription hold or same-endpoint replay.
+The relay's `RELAY_ARGUMENT_BYTES_LIMIT`, `RELAY_ARGUMENT_WHITESPACE_RUN_LIMIT` and
+`RELAY_MODEL_ATTEMPT_MS_LIMIT` are all zero/off by default; enabling them or choosing
+values requires Egor's explicit ratification. No limit is enabled by this change.
+
 Normal provider pools follow their durable run. An explicit captured Forge task_id
 adds a distinct pool scope: the background worker owns its provider lifetime even
 after its historical origin chat turn ends. Atexit and the provider parent pidfd
@@ -983,3 +996,40 @@ UTF-8, сохраняет CRLF и сверяет текущие байты до 
 доказанный отказ до публикации; apply/after_error или неокончательный ответ не
 превращаются в refused. Remote ok остаётся подтверждением backend, без местной
 readback-гарантии. Remote batch по-прежнему не отправляется.
+
+
+## Code evidence and owned semantic search (14 November 2026)
+
+The native read-only code_query hand and Forge inspect definition/callers/callees use
+forge_intelligence.code_query -> code_query.query. Root resolution uses home, existing
+local task metadata or an explicit absolute external tree; it never creates a project or
+takes mutation admission. Host/Windows task roots refuse before any RPC. The same hand
+is present in every Praxis audience's catalog and capability text.
+
+With a bound run, code_navigation executes via search_execution.call and the existing
+deferred-admission command child, parent lifeline and run resource census. Reset kills
+the search and its Git subprocess tree; there is no new background launcher. Direct
+standalone calls without a run execute synchronously for read-only inspection/tests.
+
+Audited Forge source_files handles Git ignore rules, nested repositories and external
+symlinks. Python evidence uses AST+tokenize and the existing _python_symbols visitor.
+Name bytes prefilter candidates; references also admit the named module's import
+candidates. Import aliases carry derivation; parameters, writes, conditional imports,
+deletions, pattern/exception binding and unknown receivers remain ambiguous. No type,
+transitive re-export or proven-call-edge claim. JS/TS use existing regex/text fallback.
+
+Semantic snapshots hash sorted code paths and SHA256 plus engine version and query/root
+binding. Overview/impact also cover their inventory inputs. Each answer re-inventories
+and re-hashes, including same-size/restored-mtime changes; no mixed page is returned.
+Parent RAM retains cursor manifests for3600s/128snapshots, expires on process restart.
+The40(default)/200(max) page size is separate from the existing named Forge scan budget.
+Coverage reports parse failures, skip reasons, missing grammars, dynamic imports and
+budget exhaustion; incomplete empty results never establish absence.
+
+The optional structural cache is shared by hand and Forge, keyed by file SHA and engine
+version under memory/.cache/code-query for home/tasks. External roots use only child
+RAM. It stores definitions/import bindings/call ranges/token positions, no source text,
+snippets or literal values; displayed snippets come from freshly hash-checked files.
+Cache GC has explicit30day idle and256MiB capacity bounds; deletion loses no canon.
+Impact reuses Forge's heuristic and names its existing display caps; full verification
+planning remains distinct. No tree-sitter/LSP dependency or behavioral cap was added.

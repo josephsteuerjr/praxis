@@ -23,7 +23,7 @@ use core::catalog::ModelCatalog;
 use core::chat_completions;
 use core::config::Config;
 use core::limits::LimitsCache;
-use core::models::{ChatRequest, ModelList, MAX_CHAT_REQUEST_BYTES};
+use core::models::{ChatRequest, MAX_CHAT_REQUEST_BYTES};
 use login::lib::CodexAuth;
 
 // For CLI menu
@@ -97,17 +97,17 @@ async fn main() {
     info!("Log directory: {}", logs_dir.display());
     info!("Timestamp: {}", chrono::Utc::now().to_rfc3339());
 
-    // Запуск без человека. До 10.09 argv игнорировался целиком: оболочка
-    // Hélène зовёт `helene-relay serve`, реле печатало меню, читало из
-    // закрытого stdin конец файла, отвечало «Invalid choice» — и крутилось так,
-    // не заняв порта ни разу. Живая проба 10.09: 70 секунд процессора за
-    // минуту, `/v1/models` молчит; на машине владельца это было незаметно,
-    // потому что порт 5011 держало реле прежнего поколения. Контейнер её прода
-    // обходил ту же дыру снаружи (`echo 1 | relay` в Dockerfile).
+    // Р—Р°РїСѓСЃРє Р±РµР· С‡РµР»РѕРІРµРєР°. Р”Рѕ 10.09 argv РёРіРЅРѕСЂРёСЂРѕРІР°Р»СЃСЏ С†РµР»РёРєРѕРј: РѕР±РѕР»РѕС‡РєР°
+    // HГ©lГЁne Р·РѕРІС‘С‚ `helene-relay serve`, СЂРµР»Рµ РїРµС‡Р°С‚Р°Р»Рѕ РјРµРЅСЋ, С‡РёС‚Р°Р»Рѕ РёР·
+    // Р·Р°РєСЂС‹С‚РѕРіРѕ stdin РєРѕРЅРµС† С„Р°Р№Р»Р°, РѕС‚РІРµС‡Р°Р»Рѕ В«Invalid choiceВ» вЂ” Рё РєСЂСѓС‚РёР»РѕСЃСЊ С‚Р°Рє,
+    // РЅРµ Р·Р°РЅСЏРІ РїРѕСЂС‚Р° РЅРё СЂР°Р·Сѓ. Р–РёРІР°СЏ РїСЂРѕР±Р° 10.09: 70 СЃРµРєСѓРЅРґ РїСЂРѕС†РµСЃСЃРѕСЂР° Р·Р°
+    // РјРёРЅСѓС‚Сѓ, `/v1/models` РјРѕР»С‡РёС‚; РЅР° РјР°С€РёРЅРµ РІР»Р°РґРµР»СЊС†Р° СЌС‚Рѕ Р±С‹Р»Рѕ РЅРµР·Р°РјРµС‚РЅРѕ,
+    // РїРѕС‚РѕРјСѓ С‡С‚Рѕ РїРѕСЂС‚ 5011 РґРµСЂР¶Р°Р»Рѕ СЂРµР»Рµ РїСЂРµР¶РЅРµРіРѕ РїРѕРєРѕР»РµРЅРёСЏ. РљРѕРЅС‚РµР№РЅРµСЂ РµС‘ РїСЂРѕРґР°
+    // РѕР±С…РѕРґРёР» С‚Сѓ Р¶Рµ РґС‹СЂСѓ СЃРЅР°СЂСѓР¶Рё (`echo 1 | relay` РІ Dockerfile).
     //
-    // Правило простое: назван аргумент — делаем названное и выходим; аргумента
-    // нет и stdin не терминал (служба, контейнер, ребёнок оболочки) — поднимаем
-    // сервер; человеку за терминалом остаётся прежнее меню.
+    // РџСЂР°РІРёР»Рѕ РїСЂРѕСЃС‚РѕРµ: РЅР°Р·РІР°РЅ Р°СЂРіСѓРјРµРЅС‚ вЂ” РґРµР»Р°РµРј РЅР°Р·РІР°РЅРЅРѕРµ Рё РІС‹С…РѕРґРёРј; Р°СЂРіСѓРјРµРЅС‚Р°
+    // РЅРµС‚ Рё stdin РЅРµ С‚РµСЂРјРёРЅР°Р» (СЃР»СѓР¶Р±Р°, РєРѕРЅС‚РµР№РЅРµСЂ, СЂРµР±С‘РЅРѕРє РѕР±РѕР»РѕС‡РєРё) вЂ” РїРѕРґРЅРёРјР°РµРј
+    // СЃРµСЂРІРµСЂ; С‡РµР»РѕРІРµРєСѓ Р·Р° С‚РµСЂРјРёРЅР°Р»РѕРј РѕСЃС‚Р°С‘С‚СЃСЏ РїСЂРµР¶РЅРµРµ РјРµРЅСЋ.
     let action = std::env::args().nth(1).unwrap_or_default();
     match action.trim() {
         "serve" | "server" | "run" => {
@@ -133,7 +133,7 @@ async fn main() {
         }
         "" => {
             if !io::stdin().is_terminal() {
-                info!("stdin не терминал — поднимаю сервер без меню");
+                info!("stdin РЅРµ С‚РµСЂРјРёРЅР°Р» вЂ” РїРѕРґРЅРёРјР°СЋ СЃРµСЂРІРµСЂ Р±РµР· РјРµРЅСЋ");
                 if let Err(e) = run_server().await {
                     error!("Failed to start server: {}", e);
                     std::process::exit(1);
@@ -193,16 +193,12 @@ async fn main() {
 
 async fn run_login() -> anyhow::Result<()> {
     info!("Starting login process");
-    // RELAY_LOCAL=1: the host (Hélène) owns these credentials — they go to
+    // RELAY_LOCAL=1: the host (HГ©lГЁne) owns these credentials вЂ” they go to
     // ./local_auth next to the working directory, never to ~/.codex. The host
     // polls exactly that file; writing anywhere else looks to it like a login
     // that never completed.
     if login::lib::relay_local() {
-        let slot = std::env::var("RELAY_LOGIN_SLOT").unwrap_or_else(|_| "primary".into());
-        if !matches!(slot.as_str(), "primary" | "secondary") {
-            anyhow::bail!("RELAY_LOGIN_SLOT must be primary or secondary");
-        }
-        let local_auth_dir = std::env::current_dir()?.join("local_auth").join("accounts").join(slot);
+        let local_auth_dir = std::env::current_dir()?.join("local_auth");
         std::fs::create_dir_all(&local_auth_dir)?;
         let local_auth_path = local_auth_dir.join("auth.json");
         println!("RELAY_LOCAL is set: auth file path: {:?}", local_auth_path);
@@ -325,8 +321,7 @@ fn app_router(app_state: AppState) -> Router {
         .route("/v1/limits", get(limits_handler))
         .route("/v1/account", get(account_handler))
         .route("/v1/account/switch", post(account_switch_handler))
-        .route("/v1/network", get(network_handler))
-        .route("/v1/network/check", post(network_check_handler))
+        .route("/v1/relay/network", get(network_get).post(network_set))
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
         .with_state(app_state)
@@ -347,7 +342,8 @@ async fn run_server() -> anyhow::Result<()> {
         }
     };
 
-    // Load the active subscription and any standby before accepting traffic.
+    // Load routing before startup leases can refresh OAuth credentials.
+    core::network::init(&config.codex_home)?;
     let accounts = AccountRouter::load(&config.codex_home).await?;
 
     // Create app state
@@ -366,8 +362,8 @@ async fn run_server() -> anyhow::Result<()> {
     let app = app_router(app_state);
 
     // Configure server.  Loopback only, deliberately; RELAY_PORT rescues the
-    // rare machine where 5011 is already taken (и это ручка `relay.port`
-    // в helene.json: оболочка Hélène поднимает реле именно так).
+    // rare machine where 5011 is already taken (Рё СЌС‚Рѕ СЂСѓС‡РєР° `relay.port`
+    // РІ helene.json: РѕР±РѕР»РѕС‡РєР° HГ©lГЁne РїРѕРґРЅРёРјР°РµС‚ СЂРµР»Рµ РёРјРµРЅРЅРѕ С‚Р°Рє).
     let port = std::env::var("RELAY_PORT")
         .ok()
         .and_then(|value| value.trim().parse::<u16>().ok())
@@ -393,6 +389,7 @@ async fn refresh_token() -> anyhow::Result<()> {
 
     // Load configuration
     let config = Config::load()?;
+    core::network::init(&config.codex_home)?;
 
     // Get the codex auth
     let codex_auth = match CodexAuth::from_codex_home(&config.codex_home) {
@@ -642,7 +639,7 @@ async fn check_authentication(config: &Config) -> anyhow::Result<()> {
 }
 
 async fn health_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
-    info!("💓 Health check endpoint requested");
+    info!("рџ’“ Health check endpoint requested");
     let response = serde_json::json!({
         "status": "healthy",
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -655,12 +652,16 @@ async fn health_handler(State(state): State<AppState>) -> Json<serde_json::Value
         "model_catalog": state.catalog.status().await,
         "codex_client_version": chat_completions::codex_cli_version(),
     });
-    info!("✅ Health check response: {}", response);
+    info!("вњ… Health check response: {}", response);
     Json(response)
 }
 
-async fn models_handler(State(state): State<AppState>) -> Json<ModelList> {
-    info!("📋 Models endpoint requested");
+async fn models_handler(State(mut state): State<AppState>) -> Response {
+    state.client = match core::network::client() {
+        Ok(client) => client,
+        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, "Outbound route unavailable").into_response(),
+    };
+    info!("рџ“‹ Models endpoint requested");
     // The backend's own catalog (core::catalog), the same snapshot the request
     // validator below reads, so the advertised set cannot drift from the
     // accepted set. Static FALLBACK_MODELS only when the backend cannot be asked.
@@ -668,8 +669,8 @@ async fn models_handler(State(state): State<AppState>) -> Json<ModelList> {
         .catalog
         .model_list(&state.accounts, &state.client)
         .await;
-    info!("✅ Returning {} available models", list.data.len());
-    Json(list)
+    info!("вњ… Returning {} available models", list.data.len());
+    Json(list).into_response()
 }
 
 async fn limits_handler(State(state): State<AppState>) -> Response {
@@ -698,17 +699,16 @@ async fn limits_handler(State(state): State<AppState>) -> Response {
 
 /// Which subscriptions exist and which one is live right now.
 ///
-/// The active slot is persisted by the router; changes to the credential file
-/// set require the host's login-generation restart. Without this pair of
-/// endpoints "switch me to the other subscription" had no executor at all —
+/// The active slot lives in the router's memory, so editing auth files on a
+/// running relay changes nothing until a restart.  Without this pair of
+/// endpoints "switch me to the other subscription" had no executor at all вЂ”
 /// only an instruction telling a human to do it by hand.
-async fn account_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !key_ok(&headers) {return key_refusal()}
+async fn account_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "active_slot": state.accounts.active_slot().await,
         "configured_slots": state.accounts.account_count(),
         "slots": state.accounts.describe().await,
-    })).into_response()
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -718,10 +718,8 @@ struct AccountSwitchRequest {
 
 async fn account_switch_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
     payload: Result<Json<AccountSwitchRequest>, JsonRejection>,
 ) -> Response {
-    if !key_ok(&headers) {return key_refusal()}
     let requested = match payload {
         Ok(Json(request)) => request.slot,
         Err(rejection) => {
@@ -743,7 +741,7 @@ async fn account_switch_handler(
         Ok(lease) => {
             info!("account switch requested: {} -> {}", previous, lease.slot);
             // No cache to clear: LimitsCache is keyed by account, and `get`
-            // leases the active slot first — so "how much is left?" already
+            // leases the active slot first вЂ” so "how much is left?" already
             // answers about the subscription that is now live.
             Json(serde_json::json!({
                 "previous_slot": previous,
@@ -771,40 +769,14 @@ async fn account_switch_handler(
     }
 }
 
-fn key_refusal() -> Response {
-    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":{"code":"invalid_api_key","message":"Missing or wrong relay key"}}))).into_response()
-}
-
-async fn network_handler(headers: HeaderMap) -> Response {
-    if !key_ok(&headers) {return key_refusal()}
-    Json(core::network::status()).into_response()
-}
-
-async fn network_check_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !key_ok(&headers) {return key_refusal()}
-    let account=match state.accounts.lease_active().await {
-        Ok(value)=>value,
-        Err(_)=>return (StatusCode::CONFLICT,Json(serde_json::json!({"ok":false,"generation_sent":false,"error":"Selected subscription is unavailable"}))).into_response(),
-    };
-    let result=state.client.get(format!("{}/models",state.config.chatgpt_base_url.trim_end_matches('/')))
-        .query(&[("client_version",chat_completions::codex_cli_version())])
-        .bearer_auth(account.access_token).header("ChatGPT-Account-ID",account.account_id)
-        .header("User-Agent",chat_completions::codex_user_agent())
-        .timeout(std::time::Duration::from_secs(10)).send().await;
-    match result {
-        Ok(response)=>Json(serde_json::json!({"ok":response.status().is_success(),"http_status":response.status().as_u16(),"generation_sent":false,"network":core::network::status()})).into_response(),
-        Err(_)=>(StatusCode::BAD_GATEWAY,Json(serde_json::json!({"ok":false,"generation_sent":false,"error":"Selected outbound route did not reach the backend"}))).into_response(),
-    }
-}
-
-/// Ключ петли к реле: `RELAY_API_KEY`. Задан — вызов модели обязан принести его
-/// Bearer-ом; пусто — проверки нет вовсе (так живёт её серверное реле, у
-/// которого порт не выходит за контейнер).
+/// РљР»СЋС‡ РїРµС‚Р»Рё Рє СЂРµР»Рµ: `RELAY_API_KEY`. Р—Р°РґР°РЅ вЂ” РІС‹Р·РѕРІ РјРѕРґРµР»Рё РѕР±СЏР·Р°РЅ РїСЂРёРЅРµСЃС‚Рё РµРіРѕ
+/// Bearer-РѕРј; РїСѓСЃС‚Рѕ вЂ” РїСЂРѕРІРµСЂРєРё РЅРµС‚ РІРѕРІСЃРµ (С‚Р°Рє Р¶РёРІС‘С‚ РµС‘ СЃРµСЂРІРµСЂРЅРѕРµ СЂРµР»Рµ, Сѓ
+/// РєРѕС‚РѕСЂРѕРіРѕ РїРѕСЂС‚ РЅРµ РІС‹С…РѕРґРёС‚ Р·Р° РєРѕРЅС‚РµР№РЅРµСЂ).
 ///
-/// Обещание было старше проверки. Оболочка Hélène передаёт ключ этой
-/// переменной с 0.4.x, установщик пишет в helene.json `sk-frame-…` и объясняет
-/// в коде: «открытый локальный порт позволял бы любому процессу на машине жечь
-/// подписку владельца». Реле переменную не читало, и любой процесс мог.
+/// РћР±РµС‰Р°РЅРёРµ Р±С‹Р»Рѕ СЃС‚Р°СЂС€Рµ РїСЂРѕРІРµСЂРєРё. РћР±РѕР»РѕС‡РєР° HГ©lГЁne РїРµСЂРµРґР°С‘С‚ РєР»СЋС‡ СЌС‚РѕР№
+/// РїРµСЂРµРјРµРЅРЅРѕР№ СЃ 0.4.x, СѓСЃС‚Р°РЅРѕРІС‰РёРє РїРёС€РµС‚ РІ helene.json `sk-frame-вЂ¦` Рё РѕР±СЉСЏСЃРЅСЏРµС‚
+/// РІ РєРѕРґРµ: В«РѕС‚РєСЂС‹С‚С‹Р№ Р»РѕРєР°Р»СЊРЅС‹Р№ РїРѕСЂС‚ РїРѕР·РІРѕР»СЏР» Р±С‹ Р»СЋР±РѕРјСѓ РїСЂРѕС†РµСЃСЃСѓ РЅР° РјР°С€РёРЅРµ Р¶РµС‡СЊ
+/// РїРѕРґРїРёСЃРєСѓ РІР»Р°РґРµР»СЊС†Р°В». Р РµР»Рµ РїРµСЂРµРјРµРЅРЅСѓСЋ РЅРµ С‡РёС‚Р°Р»Рѕ, Рё Р»СЋР±РѕР№ РїСЂРѕС†РµСЃСЃ РјРѕРі.
 fn loop_key() -> Option<&'static str> {
     static KEY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     KEY.get_or_init(|| {
@@ -816,7 +788,7 @@ fn loop_key() -> Option<&'static str> {
     .as_deref()
 }
 
-/// Принёс ли запрос ключ петли. Нет ключа в среде — пускаем всех, как раньше.
+/// РџСЂРёРЅС‘СЃ Р»Рё Р·Р°РїСЂРѕСЃ РєР»СЋС‡ РїРµС‚Р»Рё. РќРµС‚ РєР»СЋС‡Р° РІ СЃСЂРµРґРµ вЂ” РїСѓСЃРєР°РµРј РІСЃРµС…, РєР°Рє СЂР°РЅСЊС€Рµ.
 fn key_ok(headers: &HeaderMap) -> bool {
     let Some(key) = loop_key() else { return true };
     headers
@@ -830,6 +802,40 @@ fn key_ok(headers: &HeaderMap) -> bool {
         })
         .map(|got| got.trim() == key)
         .unwrap_or(false)
+}
+
+fn network_reply(result: anyhow::Result<serde_json::Value>) -> Response {
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":{"code":"invalid_network_settings","message":"Cannot load or save outbound route"}}))).into_response(),
+    }
+}
+fn network_key_ok(headers: &HeaderMap) -> bool {
+    if let Ok(key) = std::env::var("RELAY_ADMIN_KEY") {
+        let key = key.trim();
+        if !key.is_empty() {
+            return headers.get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+                .map(|v| v.trim() == key).unwrap_or(false);
+        }
+    }
+    loop_key().is_some() && key_ok(headers)
+}
+async fn network_get(headers: HeaderMap) -> Response {
+    if !network_key_ok(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    network_reply(core::network::status())
+}
+async fn network_set(headers: HeaderMap, payload: Result<Json<core::network::Settings>, JsonRejection>) -> Response {
+    if !network_key_ok(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match payload {
+        Ok(Json(settings)) => network_reply(core::network::update(settings)),
+        Err(_) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":{"code":"invalid_network_settings"}}))).into_response(),
+    }
 }
 
 async fn image_models_handler(headers: HeaderMap) -> Response {
@@ -856,7 +862,7 @@ async fn image_edit_handler(
 }
 
 async fn image_handler(
-    state: AppState,
+    mut state: AppState,
     headers: HeaderMap,
     payload: Result<Json<core::images::ImageRequest>, JsonRejection>,
     edit: bool,
@@ -881,6 +887,10 @@ async fn image_handler(
         .filter(|value| !value.is_empty() && value.len() <= 200)
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    state.client = match core::network::client() {
+        Ok(client) => client,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
     let reply = core::images::forward(
         &state.accounts,
         &state.client,
@@ -894,12 +904,12 @@ async fn image_handler(
 }
 
 async fn chat_completions_handler(
-    State(state): State<AppState>,
+    State(mut state): State<AppState>,
     headers: HeaderMap,
     payload: Result<Json<ChatRequest>, JsonRejection>,
 ) -> Result<Response, StatusCode> {
     if !key_ok(&headers) {
-        warn!("chat/completions без ключа петли (RELAY_API_KEY задан) — отказ");
+        warn!("chat/completions Р±РµР· РєР»СЋС‡Р° РїРµС‚Р»Рё (RELAY_API_KEY Р·Р°РґР°РЅ) вЂ” РѕС‚РєР°Р·");
         return Ok((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
@@ -913,6 +923,10 @@ async fn chat_completions_handler(
         )
             .into_response());
     }
+    state.client = match core::network::client() {
+        Ok(client) => client,
+        Err(_) => return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+    };
     let mut request = match payload {
         Ok(Json(request)) => request,
         Err(rejection) => {
@@ -937,7 +951,7 @@ async fn chat_completions_handler(
         }
     };
 
-    info!("🚀 CHAT COMPLETIONS REQUEST RECEIVED!");
+    info!("рџљЂ CHAT COMPLETIONS REQUEST RECEIVED!");
     info!("Request messages count: {}", request.messages.len());
     info!("Request tools count: {}", request.tools.len());
     info!("Request image parts count: {}", request.image_part_count());
@@ -1030,7 +1044,7 @@ async fn chat_completions_handler(
     .await
     {
         Ok(response_stream) => {
-            info!("✅ Chat completion stream started successfully");
+            info!("вњ… Chat completion stream started successfully");
             // Convert the response stream to SSE
             let sse_stream = response_stream.map(|result| {
                     match result {
@@ -1058,7 +1072,7 @@ async fn chat_completions_handler(
             Ok(axum::response::Sse::new(sse_stream).into_response())
         }
         Err(e) => {
-            error!("❌ Chat completions error: {}", e);
+            error!("вќЊ Chat completions error: {}", e);
             error!("Error details: {:?}", e);
             Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,

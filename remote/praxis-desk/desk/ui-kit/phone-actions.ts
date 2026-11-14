@@ -8,7 +8,7 @@ import './window/views/forge-panel.css';
 import './window/styles/turns.css';
 import './window/styles/work-activity.css';
 
-type Run={id:string;kind?:string;status?:string;terminal_status?:string;created_at?:string;updated_at?:string;goal_head?:string};
+type Run={id:string;kind?:string;operator?:boolean;status?:string;terminal_status?:string;created_at?:string;updated_at?:string;goal_head?:string};
 type Request=<T>(path:string,body?:unknown,signal?:AbortSignal)=>Promise<T>;
 type State={runner?:{alive?:boolean;busy?:boolean;run?:string}};
 const PAGE_SIZE=40;
@@ -38,6 +38,11 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   agents.append(el('summary','','Субагенты'),forge);
   root.append(work);if(!options.agentsOnly)root.append(current);
   if(history&&!options.agentsOnly)root.append(previous);
+  const operators=document.createElement('details');operators.className='phone-operators muted';
+  const operatorList=el('div','turns'),operatorMessage=el('p','muted'),operatorMore=el('button','btn','Ещё проверки');
+  operatorList.setAttribute('role','list');operatorMessage.setAttribute('role','status');operatorMore.type='button';operatorMore.hidden=true;
+  operators.append(el('summary','','Проверки оператора'),operatorList,operatorMessage,operatorMore);
+  if(history&&!options.agentsOnly)root.append(operators);
   root.append(options.agentsOnly?forge:agents);
   const renderWork=workActivity(work,{reviewers:false});
   const teams=forgePanel(forge,async<T>(path:string,signal:AbortSignal,body?:unknown)=>{
@@ -55,6 +60,32 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   let currentState:State={};let lastRuns:Run[]=[];
   let resetMessage='';
   let olderController:AbortController|undefined,olderBusy=false,pagingStarted=false,hasMore=false,before='',historyError='';
+  let operatorController:AbortController|undefined,operatorBusy=false,operatorBefore='',operatorEpoch=0;
+  const operatorRows=new Map<string,ReturnType<typeof makeRow>>();
+  async function loadOperators(older=false) {
+    if(!active||operatorBusy||!operators.open)return;
+    const captured=epoch,capturedScope=scope(),requestEpoch=++operatorEpoch;operatorBusy=true;operatorMore.disabled=true;
+    operatorMessage.textContent='Читаю проверки…';operatorController=new AbortController();
+    try {
+      const page=await request<Run[]>(`/api/runs?audience=operator&limit=${PAGE_SIZE+1}${older?'&before='+encodeURIComponent(operatorBefore):''}`,undefined,operatorController.signal);
+      if(!active||captured!==epoch||capturedScope!==scope()||!operators.open||requestEpoch!==operatorEpoch)return;
+      if(!Array.isArray(page)||page.some(r=>!r.operator||(older&&r.id>=operatorBefore)))throw Error('Некорректная страница проверок');
+      if(!older){operatorRows.clear();operatorList.replaceChildren()}
+      const shown=page.slice(0,PAGE_SIZE);
+      for(const run of shown){
+        let row=operatorRows.get(run.id);
+        if(!row){row=makeRow(run);operatorRows.set(run.id,row);operatorList.append(row.node)}
+        row.run=run;row.title.textContent=run.goal_head||'Проверка оператора';row.time.textContent=fmtTime(run.created_at||'');
+        row.node.dataset.status=run.status==='failed'?'failed':'done';
+        const controls=row.node.querySelector<HTMLElement>('.actions');if(controls)controls.hidden=true;
+      }
+      operatorBefore=shown.at(-1)?.id||operatorBefore;operatorMore.hidden=page.length<=PAGE_SIZE;
+      operatorMessage.textContent=operatorRows.size?'':'Проверок оператора пока нет.';
+    }catch{if(active&&captured===epoch&&operators.open&&requestEpoch===operatorEpoch){operatorMessage.textContent='Не удалось прочитать проверки. Открой раздел ещё раз для повтора.'}}
+    finally{if(captured===epoch&&requestEpoch===operatorEpoch){operatorBusy=false;operatorMore.disabled=false}}
+  }
+  operators.addEventListener('toggle',event=>{if(event.target!==operators)return;if(operators.open)void loadOperators();else {operatorEpoch++;operatorBusy=false;operatorController?.abort()}});
+  operatorMore.addEventListener('click',()=>void loadOperators(true));
   agents.addEventListener('toggle',event=>{
     if(event.target!==agents)return;
     if(active&&agents.open)teams.start();else teams.stop();
@@ -142,7 +173,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   }
   async function refresh() {
     if(!active||busy||!root.isConnected)return;
-    if(owner!==scope()){epoch++;controller?.abort();olderController?.abort();olderBusy=false;pagingStarted=false;hasMore=false;before='';historyError='';resetMessage='';more.hidden=true;owner=scope();rows.clear();list.replaceChildren();currentList.replaceChildren();lastRuns=[];currentState={};liveRun='';activity={};renderWork({});if(!options.agentsOnly){agents.open=false;teams.stop()}}
+    if(owner!==scope()){epoch++;controller?.abort();olderController?.abort();operatorController?.abort();operatorBusy=false;operatorRows.clear();operatorList.replaceChildren();operators.open=false;operatorBefore='';operatorMore.hidden=true;operatorMessage.textContent='';olderBusy=false;pagingStarted=false;hasMore=false;before='';historyError='';resetMessage='';more.hidden=true;owner=scope();rows.clear();list.replaceChildren();currentList.replaceChildren();lastRuns=[];currentState={};liveRun='';activity={};renderWork({});if(!options.agentsOnly){agents.open=false;teams.stop()}}
     busy=true;const captured=epoch;
     const capturedScope=scope();
     controller=new AbortController();
@@ -156,6 +187,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     currentState=state.status==='fulfilled'?state.value:{};
     if(runs.status==='fulfilled'){
       const head=runs.value.slice(0,PAGE_SIZE);mergeRuns(head);liveRun=currentRunId(head,currentState);
+      if(!head.some(run=>run.id===liveRun))liveRun='';
       if(!pagingStarted){hasMore=runs.value.length>PAGE_SIZE;before=lastRuns.at(-1)?.id||'';}
     }
     if(work.status==='fulfilled'){activity=work.value;renderWork(activity);teams.setReviewers(activity)}
@@ -164,7 +196,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     busy=false;if(active)timer=setTimeout(()=>void refresh(),2500);
   }
   return {
-    start(){if(active)return;active=true;epoch++;if(options.agentsOnly||agents.open)teams.start();void refresh()},
-    stop(){active=false;epoch++;busy=false;olderBusy=false;more.disabled=false;clearTimeout(timer);controller?.abort();olderController?.abort();teams.stop()},
+    start(){if(active)return;active=true;epoch++;if(options.agentsOnly||agents.open)teams.start();void refresh();if(operators.open)void loadOperators()},
+    stop(){active=false;epoch++;busy=false;olderBusy=false;operatorBusy=false;more.disabled=false;clearTimeout(timer);controller?.abort();olderController?.abort();operatorController?.abort();teams.stop()},
   };
 }

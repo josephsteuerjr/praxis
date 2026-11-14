@@ -23,6 +23,15 @@ class PhoneContract(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):await self.client.close()
     async def test_no_key_cannot_read_phone_records(self):
         r=await self.client.get('/api/phone/forge/tasks');self.assertEqual(r.status,403)
+    async def test_runs_default_to_work_and_operator_inventory_is_explicit(self):
+        from unittest.mock import patch
+        with patch.object(app.readers,'list_runs',return_value=[]) as read:
+            for query,expected in [('', 'work'),('?audience=operator', 'operator'),('?audience=all', 'all')]:
+                r=await self.client.get('/api/runs'+query,headers=self.headers)
+                self.assertEqual(r.status,200);self.assertEqual(read.call_args.kwargs['audience'],expected)
+            read.reset_mock()
+            r=await self.client.get('/api/runs?audience=invalid',headers=self.headers)
+            self.assertEqual(r.status,400);read.assert_not_called()
     async def test_paired_phone_reads_real_server_layout_without_result_payload(self):
         r=await self.client.get('/api/phone/forge/tasks',headers=self.headers);self.assertEqual(r.status,200)
         text=await r.text();self.assertNotIn('PRIVATE-PAYLOAD-CANARY',text)

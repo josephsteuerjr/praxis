@@ -307,7 +307,7 @@ def other_rooms_digest(exclude_chat_id=None, max_rooms=6, per_room_lines=3, budg
 
 import workshop
 import catalog_families
-from catalog_families import PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, PYTHON_TOOL, RUN_COMMAND_TOOL
+from catalog_families import PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, PYTHON_TOOL, RUN_COMMAND_TOOL, CODE_QUERY_TOOL
 import tool_report
 import forge
 import body_client    # PASS 24: клиент к Windows execution body (единый server-side Forge)
@@ -5348,11 +5348,18 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+def tool_code_query(op: str, root: str = "home", path: str = "", name: str = "",
+                    module: str = "", limit: int = 40, cursor: str = "") -> str:
+    return json.dumps(forge.forge_intelligence.code_query(
+        op, root, path, name, module, limit, cursor, home=BASE), ensure_ascii=False)
+
+
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
-                        query: str = "", end: int = 0) -> str:
+                        query: str = "", end: int = 0, module: str = "", limit: int = 40, cursor: str = "") -> str:
     if str(action or "").strip().lower() in {"read", "list", "search"}:
         raise catalog_families.PreflightRefusal("Use fs_read/fs_ls/fs_search with task_id for task files.")
-    return forge.noted(forge.inspect(task_id, action=action, path=path, query=query, end=end))
+    extra = dict(module=module, limit=limit, cursor=cursor) if action in {"definition", "callers", "callees"} else {}
+    return forge.noted(forge.inspect(task_id, action=action, path=path, query=query, end=end, **extra))
 
 
 def _task_inspect(task_id: str, action: str = "status", path: str = "",
@@ -6923,6 +6930,7 @@ TOOL_IMPL = {
     'computer': tool_computer,
     'python': tool_python,
     'run_command': tool_run_command,
+    'code_query': tool_code_query,
     'proposal': catalog_families.proposal,
     'project': catalog_families.project,
     'memory_graph': catalog_families.memory_graph
@@ -7910,6 +7918,7 @@ FORGE_TOOLS = [
     {'name': 'coding_inspect',
  'description': 'Inspect durable task state and code facts: orientation/model/overview map the place; '
                 'review/symbols/references/diagnostics/impact/checks examine code and verification; '
+                'definition/callers/callees share code_query evidence, coverage and snapshot cursors; '
                 'observations show Windows evidence, mailbox shows worker messages. diff/history give '
                 'exact evidence. Task file reads/listings/searches use fs_read/fs_ls/fs_search with '
                 'task_id. watching/watch/unwatch observe another repository HEAD (address in query); a '
@@ -7925,6 +7934,7 @@ FORGE_TOOLS = [
                                                      'model',
                                                      'symbols',
                                                      'references',
+                                                     'definition', 'callers', 'callees',
                                                      'diagnostics',
                                                      'impact',
                                                      'checks',
@@ -7941,6 +7951,9 @@ FORGE_TOOLS = [
                                  'query': {'type': 'string',
                                            'description': 'Symbol, lesson query or repository address for '
                                                           'watching.'},
+                                 'module': {'type': 'string', 'description': 'Target defining module for semantic evidence.'},
+                                 'limit': {'type': 'integer', 'description': 'Semantic rows per page, default 40, max 200.'},
+                                 'cursor': {'type': 'string', 'description': 'Semantic snapshot:offset continuation; changed files refuse.'},
                                  'end': {'type': 'integer',
                                          'description': 'Result count for history, lessons, observations '
                                                         'or mailbox; zero uses their defaults.'}},
@@ -8716,7 +8729,7 @@ SHARED_CONTEXT_TOOLS = [SEARCH_CHATS_TOOL, SEARCH_PRIVATE_MESSAGES_TOOL,
                          ]
 
 # Полный набор owner-тулов (порядок не важен).
-OWNER_TOOLS = [PYTHON_TOOL, RUN_COMMAND_TOOL, PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, SHELL_TOOL, MANAGE_ROOM_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
+OWNER_TOOLS = [PYTHON_TOOL, RUN_COMMAND_TOOL, CODE_QUERY_TOOL, PROPOSAL_TOOL, PROJECT_TOOL, MEMORY_GRAPH_TOOL, SHELL_TOOL, MANAGE_ROOM_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
                 FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL,
                  MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
                MANAGE_LOOP_TOOL,
@@ -8961,6 +8974,7 @@ CALL_TOOL = {
 HAND_GROUPS = (('файлы и Python',
   ('python',
    'run_command',
+   'code_query',
    'shell',
    'fs_read',
    'fs_ls',
@@ -9125,6 +9139,7 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'call': 'позвать руку из указателя по имени',
  'python': 'выполнить Python с готовым h',
  'run_command': 'запустить программу точным argv, без shell',
+ 'code_query': 'свидетельства по коду дома, задачи или внешнего дерева: определения, вызовы и ссылки; покрытие и снимок',
  'proposal': 'изменить свой код через предложение',
  'project': 'создать, проверить и обслужить проект',
  'memory_graph': 'посмотреть и изменить связи памяти'}
@@ -9194,6 +9209,9 @@ def _hands_contract_text() -> str:
         f"fs_search: {workshop.SEARCH_SECONDS:.0f} с, {workshop.SEARCH_CAP} совпадений, "
         f"{workshop.SEARCH_SCAN_CAP} путей. Остановка, потолок или пропуск — неполный обход, "
         "не доказательство отсутствия; memory/runs назвать явно.\n"
+        "code_query: symbols/definition/references/callers/callees/impact/overview; "
+        "root=home|task:<id>|absolute. coverage/ambiguous; limit40≤200 — страница; "
+        "cursor по снимку. Remote нет; Stop убивает поиск.\n"
         "Из Python-скрипта любая рука: r=h.hand('имя', аргумент=значение); r['outcome'] — исход "
         "самой руки (confirmed/refused/in_doubt/partial/ok/failed; unknown, если рука его не "
         "сообщает), r['content'] — её ответ; h.describe('имя')['content'] даёт схему. "
@@ -12841,7 +12859,9 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         inbound = _TURN_ADDRESSED_INBOUND.get()
         if inbound is not None:
             inbound.presented(current.run_id if current is not None else "")
-        response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        import model_progress
+        with model_progress.observe(lambda metrics: _run_event("model_progress", call_id=call_id, metrics=metrics)):
+            response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
         frame_continuation.observe(system=system, messages=provider_messages,
                                    tools=tools, critical=bool(prior_secrets))
     except Exception as exc:

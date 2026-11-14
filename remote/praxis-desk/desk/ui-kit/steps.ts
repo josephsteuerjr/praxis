@@ -34,6 +34,8 @@ export interface RunDetail {
     at?: string;
     model?: string;
     ms?: number;
+    progress?: { argument_bytes?: number; argument_deltas?: number; attempt_ms?: number; outcome?: string };
+    progress_at?: string;
     /** stop_reason модели: max_tokens — ответ оборван потолком, а не получен. */
     stop?: string;
     text_chars?: number;
@@ -445,6 +447,14 @@ bindMore();
 // ---------------------------------------------------------------- лента шагов
 
 /** Шаги хода: один блок на итерацию модели — номер, время, токены, затем руки и слово. */
+export function modelProgressLabel(it: NonNullable<RunDetail["iterations"]>[number], now = Date.now()): string {
+  const p = it.progress;
+  if (p?.outcome !== "streaming" || !Number.isFinite(p.argument_bytes) || !Number.isFinite(p.attempt_ms)) return "";
+  const age = it.progress_at ? now - Date.parse(it.progress_at) : Infinity;
+  const label = age >= 0 && age < 15000 ? "Модель пишет аргументы" : "Последний прогресс аргументов";
+  return `${label}: ${((p.argument_bytes || 0) / 1024).toFixed(1)} КБ · ${((p.attempt_ms || 0) / 60000).toFixed(1)} мин`;
+}
+
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   const steps: string[] = [];
   const L = opts.lesson;
@@ -468,6 +478,8 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     const meta = [seconds, tokens].filter(Boolean).join(" · ");
     const parts: string[] = [];
     parts.push(`<div class="step-head"><span class="step-n">Шаг ${n}</span>${meta ? `<span class="step-meta">${esc(meta)}</span>` : ""}${status ? `<span class="action-status">${esc(status)}</span>` : ""}</div>`);
+    const progress = thinking ? modelProgressLabel(it) : "";
+    if (progress) parts.push(`<div class="step-meta" data-model-progress>${esc(progress)}</div>`);
     parts.push(details("model:" + key, [["Модель", it.model || ""], ["Время", seconds],
       ["Токены", u.in != null ? `вход ${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ответ ${fmtK(u.out || 0)}` : ""],
       ["Остановка", cut ? "max_tokens: потолок ответа исчерпан размышлением или длинным ответом" : ""], ["Ошибка", it.error || ""]], "Подробности шага"));

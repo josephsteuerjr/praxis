@@ -48,6 +48,24 @@ LSP_BINARIES = {
     "go": ("gopls",),
     "csharp": ("omnisharp", "csharp-ls"),
 }
+
+
+def code_query(op, root='home', path='', name='', module='', limit=40, cursor='', *, home=None):
+    """Shared read-only semantic engine for the native hand and Forge inspect."""
+    from code_query import query
+    return query(op, root, path, name, module, limit, cursor, home=home)
+
+
+def definition(root, name, **kwargs):
+    return code_query('definition', str(root), name=name, **kwargs)
+
+
+def callers(root, name, **kwargs):
+    return code_query('callers', str(root), name=name, **kwargs)
+
+
+def callees(root, name, **kwargs):
+    return code_query('callees', str(root), name=name, **kwargs)
 _GENERIC_SYMBOLS = {
     "rust": re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum|trait|fn|mod|type|const|static)\s+([A-Za-z_][A-Za-z0-9_]*)"),
     "typescript": re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(class|interface|type|enum|function|const|let|var)\s+([A-Za-z_$][\w$]*)"),
@@ -95,6 +113,7 @@ class Budget:
         self.started = now
         self.deadline = now + self.seconds
         self.stages: list[dict] = []
+        self.inventory: tuple[Path, list[Path]] | None = None
 
     def left(self) -> float:
         return self.deadline - time.monotonic()
@@ -196,11 +215,22 @@ def _ignored(path: Path, root: Path) -> bool:
 
 
 def source_files(root: Path, *, limit: int = 20000, suffixes: set[str] | None = None,
-                 budget: Budget | None = None, stage: str = "файлы") -> list[Path]:
+                 budget: Budget | None = None, stage: str = "файлы", audit: list | None = None) -> list[Path]:
     """Файлы дерева под капом. С `budget` ещё и честно записывает, сколько НЕ посмотрено."""
     root = root.resolve()
     if budget is not None:
         limit = min(int(limit), budget.files)
+    if budget is not None and budget.inventory is not None:
+        _, inventory = budget.inventory
+        selected = [p for p in inventory if p.is_relative_to(root)
+                    and (suffixes is None or p.suffix.lower() in suffixes)]
+        budget.stage(stage, taken=min(len(selected), limit), seen=len(selected),
+                     exhausted=len(selected)<=limit, stopped="file-cap" if len(selected)>limit else "")
+        return selected[:limit]
+    if audit is not None:
+        from code_query_inventory import collect
+        return collect(root, limit=limit, suffixes=suffixes, budget=budget or Budget(),
+                       audit=audit, skip_dirs=SKIP_DIRS, git_root=_git_root(root))
     out: list[Path] = []
     seen = 0
     exact = True
@@ -524,10 +554,13 @@ def review_snapshot(root: Path, base: str = "", *, budget: Budget | None = None)
     }
 
 
-def _python_symbols(path: Path, root: Path) -> tuple[list[dict], list[dict]]:
+def _python_symbols(path: Path, root: Path, *, parsed: ast.AST | None = None) -> tuple[list[dict], list[dict]]:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        tree = ast.parse(text, filename=str(path))
+        if parsed is None:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(text, filename=str(path))
+        else:
+            tree = parsed
     except SyntaxError as exc:
         return [], [{"path": str(path.relative_to(root)), "line": exc.lineno or 0,
                      "column": exc.offset or 0, "kind": "syntax", "message": exc.msg}]

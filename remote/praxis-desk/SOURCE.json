@@ -1,8 +1,8 @@
 {
   "format": "praxis-desk-source.v1",
-  "captured_at": "2026-11-14T01:41:15.023588+00:00",
+  "captured_at": "2026-11-14T03:46:55.265352+00:00",
   "source_repository": "private isolated checkout of the November 2026 phone work (not published history)",
-  "source_commit": "f8bfed5f028dd060813c807e2456bd2a996b747a",
+  "source_commit": "44ff96146be51428e50bd52dd4cf421d7da65060",
   "deployed": {
     "path": "/opt/praxisdesk",
     "container": "praxis-desk",
@@ -28,12 +28,12 @@
       "test_praxis_stop_1311.py"
     ],
     "backend_files_checked": 19,
-    "front_bundles": "built from desk/miniapp and desk/mobile at the source commit (tsc + vite); deployed front-only, bundles miniapp index-Cd6U3SRW.js and PWA index-CJ1jb4Xs.js, older assets retained",
+    "front_bundles": "tsc+vite both builds; MiniApp index-gVdIKZu6.js and PWA index-DiI3vJZO.js; all48deployed file hashes verified, old assets retained",
     "recipe": {
       "Dockerfile": "b5850d5c2c7d1728177053e3fc58ad7e6d42fd493e690f4284f1db4dc08693b6",
       "docker-compose.yml": "a9f37505cc0cb40079bbff308816de550d3cbddb3d3f71d7cc5491514a64031d"
     },
-    "front_applied": "2026-11-14: run_command cards (app f8bfed5), after the 13.11 owner controls/reset (3a55ae46)"
+    "front_applied": "2026-11-14: true origin titles/operator disclosure (S1), numeric generation progress (S2)"
   },
   "privacy": {
     "secret_values_rescan_matches": 0,
@@ -41,7 +41,9 @@
   },
   "files": {
     ".gitignore": "53ae52e4c5d14baa0094c548600a087832a2ef2ef4426a64c14245ed2055bdbc",
-    "backend/deskapp.py": "169e6cca6e3cf5c66faaa8a00074003b65268f2d586d367f51e9d5f97a41e457",
+    "README.md": "cce04b6a3eeab5c38e445e149d9339062e5e50f317f75b664e2c489df70cad40",
+    "VALIDATION.md": "b766eb92fed41f89b80dc18b2e73a5685c2ea83933a2691f04f6d05bf0ed9288",
+    "backend/deskapp.py": "6b6e7c0be302d46254c48ec5eeede3995cc6490c745145ff923785848e9d3076",
     "backend/deskctl.py": "8d91d8ba47fec3217b80f50ff6449da3f9a4437c5c9112b8dab1da1ce2d4a7a7",
     "backend/deskd/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "backend/deskd/agentcfg.py": "6e735f3f470c69e8514483d7f5611e24aaf5a77184bf5f5a99a07587c7894708",
@@ -53,19 +55,21 @@
     "backend/deskd/phone_activity.py": "23dba9cb764627a5e353193be33d84aae70d24655946c2c40d0ae6665639763a",
     "backend/deskd/praxis_control.py": "c6c654c86ab0714fcbd830a884aad8b34717c1e2b97902885d328a1a014f2bbc",
     "backend/deskd/praxis_phone.py": "823ca73e63f5cef0516805cfc11966b7622d366e3f95cb2acb57ce63ea4513bd",
-    "backend/deskd/readers.py": "4f4c7208e9aee925cf43f24769ec535c2fedb4c623c663b2b45cf04e2a9ffb09",
+    "backend/deskd/readers.py": "9b5dc23f86aa749af63442f3e6124b51ee09aa514dd6780b289c93b112a23948",
     "backend/deskd/rooms.py": "32cca28be685209882b3d7587bcd68180a24a521b5a92d5e9694a26b0d489160",
     "backend/deskd/spend.py": "7c73adcfbe7eedae8f9f7c014ba0167ff90b1baf0ad64508599a2574750193e3",
     "backend/deskd/usage.py": "865f99546800671181bf92552cb1a0a0ed76a08143037f524cd8a2cf678d98ff",
     "backend/deskd/xtts_ui.py": "8ac9999f36426c649ec85bc76f2b80522037f5c35c91f6e3a4b3f024b1fb3e0c",
     "backend/requirements-desk.txt": "47d9a342069699978282cdfe19db570bf11325ef7009034e46f53b98a2763d6d",
     "backend/test_forge_snapshot.py": "0fc04770eab9fad8fa154af96fb34b458169511dfd85e92bb78abb83ffa65295",
+    "backend/test_model_progress.py": "6e9ea8c5615769fb4431931426d55471b50ee904170b179a2d59cee3b1b00c04",
     "backend/test_praxis_controls.py": "bb4dc6d8edd1fbabebf1239ca8abb531129a4d7258cbd05c69891058faa0ec55",
-    "backend/test_praxis_phone.py": "bc38fab07c1b96f943e6f382b7eec2f539984e0c1852f996b2f398b21959532c",
+    "backend/test_praxis_phone.py": "d6f34106300b42e2336fb73e6f01c85cad52e933bab4e212428adc43c045d632",
     "backend/test_praxis_stop_1311.py": "833ad3db0b7f7383ea51a71172517cffb2685a2b821020400c3d9cea45b67f72",
+    "backend/test_run_titles_1411.py": "cdd570ea7fd143761d8bd8bffc9576ff36c779378506d35a6dc36fdba7d850c6",
     "backend/test_steps_outcome.py": "c8e85bc2ff65533c7be46e0a32c10749b193978d44e319b4a37aefa95a9fba1f",
     "backend/test_steps_phone_receipts.py": "f99c95dd10b7f8cf79164ddcad8c41c0207ffef891d0cc0fceb68cc7b308beb0",
-    "browser_steps.test.mjs": "a3fcee6a133e857a47fc3c725cd2033b1d7b01012a1f1fecd3b739ad8d79aa86",
+    "browser_steps.test.mjs": "a9cd01697a8de586fec546cf62063b513ba549a77748e02fd1d5e1e782c238f1",
     "desk/miniapp/.gitignore": "790e3169bc19b046fe55ba1da6d13b976c28363c8c00462a2195fe5faf260910",
     "desk/miniapp/index.html": "d53d9985701f22a208c5e99ef937dbbf2103edd38c9d418ef87cf6615ce55d34",
     "desk/miniapp/package-lock.json": "c22747fb876b571dc56222ef8764569a93404984036f2d4e4d4cb2ba270f7124",
@@ -104,6 +108,7 @@
     "desk/ui-kit/feed/scroll-support.ts": "16f1d64d954bd3239c4f3256cae6fa6614ab0eff6d083a5d6e9744987ae5c4d0",
     "desk/ui-kit/feed/scroller.ts": "27abb8c4856601c0415990787a9e228987f64c04e21afab4656ae06e4db5fd5a",
     "desk/ui-kit/feed/zoom.ts": "f1da7d8a0669bfa9fc4042b88b8b4d9420eb955db8d1e98173ebcaedfaefef74",
+    "desk/ui-kit/fonts.css": "1ec83b105a9badb57321b33546a37bd21aec876ddd2988fe5cd083643f730d40",
     "desk/ui-kit/fonts/GolosText-cyrillic-ext.woff2": "70cf502d77aa23c8a573db8853f20a8db705d18414d170f257a9e939113aad47",
     "desk/ui-kit/fonts/GolosText-cyrillic.woff2": "17d048ca05cb1218af3c0d6dcdf882989e6d1cc5dcb598ea50eaf54850ff7229",
     "desk/ui-kit/fonts/GolosText-latin.woff2": "9a69d0aa4734c4022224c002a3d944a702e0204972a49d892789f5668b922c2a",
@@ -118,7 +123,6 @@
     "desk/ui-kit/fonts/SourceSerif4-latin.woff2": "f2ea9c12d2fe9bd3a9589b02ad2c0909da88f30938c91adc838c4f4098f9f9e0",
     "desk/ui-kit/fonts/ZenKurenaido-cyrillic.woff2": "b143e4d89cc07a5c6e4bb56d6a6962ca5e32b7ed885fddb6d0c30b0e435fac9c",
     "desk/ui-kit/fonts/ZenKurenaido-latin.woff2": "8f6d05dfd2ac95edf905676a2b2edf5d797aa7d1a365974475c84b781fe6ef8c",
-    "desk/ui-kit/fonts.css": "1ec83b105a9badb57321b33546a37bd21aec876ddd2988fe5cd083643f730d40",
     "desk/ui-kit/memory-fold.ts": "6725f4c33ebf2e6aea0d7a680cace21448a8839b94e90f8895ac15f5e3dd57df",
     "desk/ui-kit/memory-line.ts": "fc846236c69696d329802bd84fe308cedfe0c75cc8f3ee01342551a3e9b616ad",
     "desk/ui-kit/paper-audio.ts": "1e8f6448bd675acd89af7f2e3721c49295e5c0d4f1e4f3c04c1063b870054312",
@@ -129,10 +133,10 @@
     "desk/ui-kit/paper-select.css": "2fde3484162eeb2a130143ba7494e4d7b10103d0f72cc038df09668c7d06ec20",
     "desk/ui-kit/paper-select.ts": "8aae0049c43edf2f0d5fd74f18f17d689459fb6b2c0cd24ef934994af532cded",
     "desk/ui-kit/paper-transfer.ts": "72fb061f1cdda8c8dea820252cdc82a72d2122e55243d5eae4d1b3b52c766ed7",
-    "desk/ui-kit/phone-actions.ts": "ff436c3ca4abdb9c3ff0511b256e705daf818b91ac41739588e4054fd0610907",
+    "desk/ui-kit/phone-actions.ts": "bec9caba480372b30411719014e7dea12c0c6ce61eecdcdf737e74a6af529403",
     "desk/ui-kit/phone-settings.ts": "a1d7f2a8a36a692265f011ebff618cbf57a0480c2d1b26a3dceaa3b5aa35b60b",
     "desk/ui-kit/phone.css": "6a20a80dceaf2a6410a38951d62d332987f52308bc8dffb876a74a1368eb0b80",
-    "desk/ui-kit/phone.ts": "826504404d9b6d9cebf9450be91ba544eab5c556a5bc762d08854d1f7376ab28",
+    "desk/ui-kit/phone.ts": "df95623baeb352d12e72d89e1b4ec3c42846fdf73d246f811abfb1ee15b187e0",
     "desk/ui-kit/platform.ts": "c1dc5626349831f38aa6bdf7a6751d10da4c4cf58176f25ac32627a1c5021534",
     "desk/ui-kit/praxis-control.ts": "ce70810724f445de79290dbb2287de1c16cc53caef769453f6372c3d6d3f171b",
     "desk/ui-kit/praxis-service.ts": "d0c34df1b8ec0443d1b2b9bff54e70ffdf5c00588198ae4d642fbd7a214946e3",
@@ -140,7 +144,7 @@
     "desk/ui-kit/praxis-voice.ts": "ef14a979cdb906397fade9d2300e6b84fec85420ef8bb3039675e69276074cff",
     "desk/ui-kit/providers.ts": "677460aa282998ca8d18c9375935b0fdbec008cbe23ea59aa0b586c3da89d16f",
     "desk/ui-kit/reply-preview.ts": "69d036f8819853460443faed97a5e38d03d62be72fa9319e3d5bc70acf27b318",
-    "desk/ui-kit/steps.ts": "4347c94ac2e47eff3a25602b4291a575e174a6ccb265eb6616610b353379509d",
+    "desk/ui-kit/steps.ts": "28b4a09a29cb94644c3a87e4fa8a409772abfc9afff9d0b00279bc0f4aaf1ff2",
     "desk/ui-kit/text.ts": "16dd46db91bdab7b3c14928d6c035c7c20e7bdf21ca4b24e5fc229d3a5ff68bc",
     "desk/ui-kit/tokens.css": "e666a36375e2c715da0f0943a8b34e6b64793e69c5510cd6a36db473e99d0be3",
     "desk/ui-kit/tray-position.ts": "3062efa015db5ab093dc82c57994c6e393cde4d4ba3d4bae70669a4c1861b13a",
@@ -164,7 +168,7 @@
     "desk/ui-kit/window/main.ts": "9a1251386c24a09d280fabfbfeddcc283b695ee88520935faee80aae86d2fac2",
     "desk/ui-kit/window/mode.ts": "a2b95a28299b52a1915b2301937776916e18fdeb91347e5eeeb5fbacf66fe509",
     "desk/ui-kit/window/panel-widths.ts": "bcb6be4d62eb062855f2b32c018da8b844d0d46f07419de83be942e826000bed",
-    "desk/ui-kit/window/panel.ts": "72bb9bae7f8a63512c961779bdde6d45f48aae788ec5f9a9efb9caddf8406a0f",
+    "desk/ui-kit/window/panel.ts": "e48f1bbc57fa54217f047883afd77bd5d429e4121747329b88523219ed11bf49",
     "desk/ui-kit/window/paper-files.ts": "c7c6f0acf3981325e3cd341441d40d117bdaf4ea560d67f312a368c55dbd450b",
     "desk/ui-kit/window/pending.ts": "c061eb5422d5d38106656e5ee8cf68d95b1700740be8240316ee0b21d6068697",
     "desk/ui-kit/window/relay-auth-card.ts": "61412fd8742b52d90692bc0d74fd22d6d18b6cab6c3211d759e6fca0b7c358f0",
@@ -210,9 +214,22 @@
     "desk/ui-kit/window/voice-preferences.ts": "c44e21ec498ff611934fb3e6659e6241b2c27ec58d55b6a21b79d879b21b5fd3",
     "desk/ui-kit/window/voice-session.ts": "5861964258289ad8ac886675ac5031d27e6d405481609575eecb31b5ba9f6baa",
     "desk/ui-kit/window/work-activity.ts": "74e619f70ee20cb0e678071a491d06dffc323f7ec13e71281324602a7d15da8a",
-    "README.md": "b7b88122325df9a1218f18d8797c55e0c641919b30a2978178185c146323f67b",
     "steps_argv.test.mjs": "cc59fbd5238801d6670dbd2af8ae12161e6bb9cde318cb2c576b991826090e1f",
-    "test-entry.ts": "3878e356592140fc60cc2460a94f41ee42a609538a1d7ce1d239c3ceeca24f7d",
-    "VALIDATION.md": "b766eb92fed41f89b80dc18b2e73a5685c2ea83933a2691f04f6d05bf0ed9288"
+    "test-entry.ts": "3878e356592140fc60cc2460a94f41ee42a609538a1d7ce1d239c3ceeca24f7d"
+  },
+  "validation": {
+    "backend_tests": 44,
+    "browser_groups": 12,
+    "argv_node_assertions": 10,
+    "live_https_groups": 6,
+    "widths": [
+      320,
+      390,
+      820
+    ],
+    "reopen": true,
+    "physical_phone": false,
+    "unexpected_tracebacks": 0,
+    "known_optional_modes_warning_preserved": true
   }
 }

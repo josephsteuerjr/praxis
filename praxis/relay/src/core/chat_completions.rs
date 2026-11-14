@@ -366,6 +366,7 @@ fn terminal_event_with_options(
         }],
         relay_terminal,
         relay_provider_observation: None,
+        relay_generation: None,
     }
 }
 
@@ -378,6 +379,40 @@ fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
 /// silently accepting a truncated 200 response is not a compatibility mode.
 fn stream_torn_event(model: &str, terminal: Terminal) -> ResponseEvent {
     terminal_event_with_options(model, terminal, true, false)
+}
+
+fn generation_event(model: &str, stats: &crate::core::generation_telemetry::Attempt) -> ResponseEvent {
+    ResponseEvent {
+        id: "relay-generation".to_string(), object: "chat.completion.chunk".to_string(),
+        created: chrono::Utc::now().timestamp(), model: model.to_string(), choices: vec![],
+        usage: None, relay_terminal: None, relay_provider_observation: None,
+        relay_generation: Some(stats.snapshot()),
+    }
+}
+
+// Progress is best-effort observation. A full downstream queue must never add
+// backpressure to an otherwise unchanged provider request.
+fn send_generation(tx: &tokio::sync::mpsc::Sender<Result<ResponseEvent>>, model: &str,
+                   stats: &crate::core::generation_telemetry::Attempt) -> bool {
+    !matches!(tx.try_send(Ok(generation_event(model, stats))),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)))
+}
+
+fn runaway_event(model: &str, stats: &mut crate::core::generation_telemetry::Attempt, reason: &str) -> ResponseEvent {
+    stats.cancel();
+    let mut event = stream_torn_event(model, Terminal::new("runaway_generation", format!("Generation ceiling exceeded: {reason}")));
+    event.relay_generation = Some(stats.snapshot());
+    event
+}
+
+async fn generation_deadline(started: std::time::Instant, limit_ms: u64) {
+    if limit_ms > 0 {
+        if let Some(deadline) = started.checked_add(std::time::Duration::from_millis(limit_ms)) {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+            return;
+        }
+    }
+    futures::future::pending::<()>().await;
 }
 
 /// Час открытия окна — ТОЛЬКО словами вендора. Ничего не досчитываем и не выдумываем:
@@ -622,9 +657,7 @@ fn map_tools_for_responses(tools: &[Tool]) -> Vec<Value> {
                     "type": "function",
                     "name": function.name,
                     "parameters": function.parameters,
-                    // Chat Completions tools are non-strict unless the caller
-                    // opts in. Preserve that contract when mapping to Responses.
-                    "strict": function.strict.unwrap_or(false),
+                    "strict": function.strict.unwrap_or(true),
                 });
                 if let Some(description) = &function.description {
                     mapped["description"] = json!(description);
@@ -905,13 +938,18 @@ pub async fn stream_chat_completions(
         let mut account_attempts: Vec<RelayTerminalAttempt> = Vec::new();
         let mut stream_retry_done = false;
         'upstream_attempt: loop {
+            let mut generation = crate::core::generation_telemetry::Attempt::new(
+                crate::core::generation_telemetry::Limits::from_env());
             // Receiver cancellation is authoritative: do not start/replay an
             // upstream request and, critically, do not mutate account routing
             // after the client has gone away.
             if tx.is_closed() {
                 return;
             }
-            let response = loop {
+            let (response, cache_dispatch) = loop {
+                // Praxis runs on its overseas server: no pre-generation availability probe.
+                let cache_dispatch = crate::core::cache_observation::record_dispatch(&payload, &account.account_id, &session_id, retried);
+                println!("{}", cache_dispatch);
                 let request_future = build_codex_request(
                     &client,
                     &account.access_token,
@@ -923,6 +961,10 @@ pub async fn stream_chat_completions(
                 let send_result = tokio::select! {
                     biased;
                     _ = tx.closed() => return,
+                    _ = generation_deadline(generation.started, generation.limits.attempt_ms) => {
+                        let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, "attempt_ms"))).await;
+                        return;
+                    },
                     result = request_future => result,
                 };
                 match send_result {
@@ -930,7 +972,7 @@ pub async fn stream_chat_completions(
                         println!("✅ Got response with status: {}", resp.status());
 
                         if resp.status().is_success() {
-                            break resp;
+                            break (resp, cache_dispatch);
                         }
                         // Keep the raw body in memory only long enough to derive a
                         // bounded client-safe summary. Never log or return the
@@ -939,6 +981,10 @@ pub async fn stream_chat_completions(
                         let response_body = tokio::select! {
                             biased;
                             _ = tx.closed() => return,
+                            _ = generation_deadline(generation.started, generation.limits.attempt_ms) => {
+                                let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, "attempt_ms"))).await;
+                                return;
+                            },
                             body = resp.text() => body,
                         }
                         .unwrap_or_else(|_| "Failed to read response body".to_string());
@@ -968,6 +1014,10 @@ pub async fn stream_chat_completions(
                             let switch_result = tokio::select! {
                                 biased;
                                 _ = tx.closed() => return,
+                                _ = generation_deadline(generation.started, generation.limits.attempt_ms) => {
+                                    let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, "attempt_ms"))).await;
+                                    return;
+                                },
                                 result = account_router
                                     .switch_after_quota_for_downstream(&account, &cancellation) => result,
                             };
@@ -998,6 +1048,10 @@ pub async fn stream_chat_completions(
                             let switch_result = tokio::select! {
                                 biased;
                                 _ = tx.closed() => return,
+                                _ = generation_deadline(generation.started, generation.limits.attempt_ms) => {
+                                    let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, "attempt_ms"))).await;
+                                    return;
+                                },
                                 result = account_router
                                     .switch_after_quota_for_downstream(&account, &cancellation) => result,
                             };
@@ -1118,6 +1172,9 @@ pub async fn stream_chat_completions(
                 }
             };
 
+            let cache_request_id = response.headers().get("x-request-id")
+                .and_then(|value| value.to_str().ok()).map(str::to_owned);
+
             // Handle streaming response with proper SSE buffering
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
@@ -1143,6 +1200,11 @@ pub async fn stream_chat_completions(
                 let next_chunk = tokio::select! {
                     biased;
                     _ = tx.closed() => return,
+                    _ = generation_deadline(generation.started, if saw_completed { 0 } else { generation.limits.attempt_ms }) => {
+                        drop(stream);
+                        let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, "attempt_ms"))).await;
+                        return;
+                    },
                     chunk = stream.next() => chunk,
                 };
                 let Some(chunk) = next_chunk else { break };
@@ -1198,7 +1260,6 @@ pub async fn stream_chat_completions(
 
                         match serde_json::from_str::<Value>(json_str) {
                             Ok(event_json) => {
-                                println!("📡 SSE event type: {}", safe_event_type(&event_json));
                                 events_seen += 1;
                                 last_event_type = safe_event_type(&event_json).to_string();
                                 let completed_this_event = last_event_type == "response.completed";
@@ -1206,12 +1267,31 @@ pub async fn stream_chat_completions(
                                 // has been parsed, later transport noise, [DONE], or a
                                 // vendor tail cannot revoke successful completion.
                                 if completed_this_event {
+                                    if !saw_completed {
+                                        if let Some(receipt) = crate::core::cache_observation::record_completed(&event_json, &cache_dispatch, cache_request_id.as_deref()) {
+                                            println!("{}", receipt);
+                                        }
+                                    }
                                     saw_completed = true;
                                 } else if saw_completed {
                                     warn!(slot = %account.slot,
                                       kind = %last_event_type,
                                       "ignoring upstream event after response.completed");
                                     break 'read_stream;
+                                }
+                                generation.observe(&event_json);
+                                if !completed_this_event {
+                                    if let Some(reason) = generation.exceeded() {
+                                        drop(stream);
+                                        let _ = tx.send(Ok(runaway_event(&request.model, &mut generation, reason))).await;
+                                        return;
+                                    }
+                                }
+                                let progress_due = if completed_this_event {
+                                    generation.has_arguments()
+                                } else { generation.progress_due() };
+                                if progress_due && !send_generation(&tx, &request.model, &generation) {
+                                    return;
                                 }
                                 let failed_event = matches!(
                                     event_json.get("type").and_then(Value::as_str),
@@ -1228,7 +1308,7 @@ pub async fn stream_chat_completions(
                                     break 'read_stream;
                                 }
                                 // Convert to our ResponseEvent format
-                                if let Some(mut response_event) =
+                                if let Some(response_event) =
                                     parse_sse_event(&event_json, tool_call_index)
                                 {
                                     if response_event
@@ -1242,7 +1322,7 @@ pub async fn stream_chat_completions(
                                     // Deduplication logic
                                     let mut should_send = true;
                                     // Try to extract content from the event
-                                    let mut content = response_event
+                                    let content = response_event
                                         .choices
                                         .first()
                                         .and_then(|choice| choice.delta.content.as_ref())
@@ -1256,15 +1336,6 @@ pub async fn stream_chat_completions(
                                                 should_send = false;
                                             }
                                         }
-                                    }
-                                    // Suppress repeated text, never the terminal choice that
-                                    // tells Chat clients the Responses stream completed.
-                                    if !should_send && response_event.choices.iter().any(|choice| choice.finish_reason.is_some()) {
-                                        for choice in &mut response_event.choices {
-                                            choice.delta.content = None;
-                                        }
-                                        content = None;
-                                        should_send = true;
                                     }
                                     if !should_send && (response_event.usage.is_some()
                                         || response_event.relay_provider_observation.is_some()) {
@@ -1440,6 +1511,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
             object: "chat.completion.chunk".to_string(), created: 0,
             model: String::new(), choices: vec![], usage: None, relay_terminal: None,
             relay_provider_observation: Some(receipt),
+            relay_generation: None,
         });
     }
 
@@ -1531,11 +1603,11 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                                 "function": { "name": name, "arguments": arguments }
                             }])),
                         },
-                        // An item can finish before the upstream response fails.
-                        finish_reason: None,
+                        finish_reason: Some("tool_calls".to_string()),
                     }],
                     relay_terminal: None,
                     relay_provider_observation: None,
+                    relay_generation: None,
                 });
             }
         }
@@ -1572,6 +1644,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                     }],
                     relay_terminal: None,
                     relay_provider_observation: None,
+                    relay_generation: None,
                 });
             }
         }
@@ -1591,22 +1664,11 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
         .unwrap_or("gpt-4")
         .to_string();
 
-    // response.completed may contain no output or usage: it still closes the
-    // single Chat choice. Tool items emitted earlier do not finish it themselves.
-    let finish_reason = if event_type == Some("response.completed") {
-        let has_tool_calls = tool_call_index > 0 || event
-            .pointer("/response/output")
-            .and_then(Value::as_array)
-            .is_some_and(|output| output.iter().any(|item| item["type"] == "function_call"));
-        Some(if has_tool_calls { "tool_calls" } else { "stop" }.to_string())
-    } else {
-        event.get("finish_reason").and_then(Value::as_str).map(str::to_string)
-    };
-
     // Create OpenAI-compatible response
     Some(ResponseEvent {
         relay_terminal: None,
         relay_provider_observation: provider_observation,
+        relay_generation: None,
         usage: extract_completed_usage(event),
         id: event
             .get("id")
@@ -1632,11 +1694,14 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                     content: Some(content),
                     tool_calls: None,
                 },
-                finish_reason: finish_reason.clone(),
+                finish_reason: event
+                    .get("finish_reason")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             }]
         } else {
             // Check if this is a finish event
-            if finish_reason.is_some() {
+            if event.get("finish_reason").is_some() {
                 vec![ResponseChoice {
                     index: 0,
                     delta: ResponseDelta {
@@ -1644,7 +1709,10 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                         content: None,
                         tool_calls: None,
                     },
-                    finish_reason,
+                    finish_reason: event
+                        .get("finish_reason")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 }]
             } else {
                 vec![]
@@ -2284,13 +2352,13 @@ mod tests {
         TextThenError,
         /// A valid response.completed without usage.
         CompletedWithoutUsage,
-        Sse(&'static str),
         /// First request closes cleanly before completed; second completes.
         CleanEofThenCompleted,
         /// First request leaves an unterminated SSE line; second completes.
         SseTailThenCompleted,
         /// First request leaves an incomplete UTF-8 sequence; second completes.
         Utf8TailThenCompleted,
+        ArgumentFixture { events: Vec<Value>, pending: bool, dropped: Arc<tokio::sync::Semaphore> },
     }
 
     async fn spawn_upstream(mode: Upstream) -> (String, Arc<AtomicUsize>) {
@@ -2335,6 +2403,20 @@ mod tests {
                         .unwrap()
                 };
                 match mode {
+                    Upstream::ArgumentFixture { events, pending, dropped } => {
+                        struct Dropped(Arc<tokio::sync::Semaphore>);
+                        impl Drop for Dropped { fn drop(&mut self) { self.0.add_permits(1); } }
+                        let chunks = async_stream::stream! {
+                            let _dropped = Dropped(dropped);
+                            for event in events {
+                                yield Ok::<_, std::io::Error>(bytes::Bytes::from(format!("data: {event}\n\n")));
+                                tokio::task::yield_now().await;
+                            }
+                            if pending { std::future::pending::<()>().await; }
+                        };
+                        Response::builder().status(200).header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
                     Upstream::Status(code, body) => Response::builder()
                         .status(code)
                         .header("content-type", "application/json")
@@ -2374,9 +2456,6 @@ mod tests {
                              \"error\":{\"message\":\"internal stream failure\"}}}\n\n",
                         ))
                         .unwrap(),
-                    Upstream::Sse(frames) => Response::builder()
-                        .status(200).header("content-type", "text/event-stream")
-                        .body(Body::from(frames)).unwrap(),
                     Upstream::CompletedWithoutUsage => completed(),
                     Upstream::CompletedThenHang => {
                         let chunks = async_stream::stream! {
@@ -2618,6 +2697,92 @@ mod tests {
 
     fn last(wire: &[(String, Value)]) -> &Value {
         &wire.last().expect("реле обязано сказать хоть что-то").1
+    }
+
+    struct GenerationLimits;
+    impl GenerationLimits {
+        fn set(bytes: u64, spaces: u64, ms: u64) -> Self {
+            std::env::set_var("RELAY_ARGUMENT_BYTES_LIMIT", bytes.to_string());
+            std::env::set_var("RELAY_ARGUMENT_WHITESPACE_RUN_LIMIT", spaces.to_string());
+            std::env::set_var("RELAY_MODEL_ATTEMPT_MS_LIMIT", ms.to_string());
+            Self
+        }
+    }
+    impl Drop for GenerationLimits {
+        fn drop(&mut self) {
+            for key in ["RELAY_ARGUMENT_BYTES_LIMIT", "RELAY_ARGUMENT_WHITESPACE_RUN_LIMIT", "RELAY_MODEL_ATTEMPT_MS_LIMIT"] {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    fn argument_delta(text: &str) -> Value {
+        json!({"type":"response.function_call_arguments.delta","item_id":"private-item","delta":text})
+    }
+
+    #[test]
+    fn progress_never_blocks_a_full_downstream_queue() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let stats = crate::core::generation_telemetry::Attempt::new(Default::default());
+        assert!(send_generation(&tx, "fixture", &stats));
+        assert!(send_generation(&tx, "fixture", &stats));
+        drop(rx);
+        assert!(!send_generation(&tx, "fixture", &stats));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn argument_progress_preserves_honest_large_tool_and_accounting() {
+        let _guard=lever_guard();let _limits=GenerationLimits::set(0,0,0);
+        let arguments=json!({"text":format!("π{}private-text", " ".repeat(300_000))}).to_string();
+        let events=vec![argument_delta(&arguments),
+            json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-a","name":"edit","arguments":arguments}}),
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16},"output":[]}})];
+        let (wire,hits)=run_turn_with_hits(Upstream::ArgumentFixture{events,pending:false,dropped:Arc::new(tokio::sync::Semaphore::new(0))},TerminalNaming::Off).await;
+        assert_eq!(hits,1);
+        let progress:Vec<_>=wire.iter().filter_map(|(_,v)|v.get("relay_generation")).collect();
+        assert_eq!(progress.len(),2);assert_eq!(progress[0]["outcome"],"streaming");
+        assert_eq!(progress[1]["outcome"],"completed");assert_eq!(progress[1]["usage"]["output_tokens"],4);
+        assert_eq!(progress[1]["outside_string_whitespace_chars"],0);
+        assert_eq!(progress[1]["argument_bytes"],arguments.len());
+        assert!(!serde_json::to_string(&progress).unwrap().contains("private"));
+        let calls:Vec<_>=wire.iter().filter_map(|(_,v)|v["choices"][0]["delta"]["tool_calls"].as_array()).collect();
+        assert_eq!(calls.len(),1);assert_eq!(calls[0][0]["function"]["arguments"],arguments);
+        assert!(wire.iter().filter(|(_,v)|v.get("relay_generation").is_none()).all(|(raw,_)|!raw.contains("relay_generation")));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn argument_ceilings_cancel_pending_upstream_without_tools_or_replay() {
+        let _guard=lever_guard();
+        for (bytes,spaces,ms,text,reason) in [(0,8,0,"{          ","whitespace_run"),(8,0,0,"123456789","argument_bytes"),(0,0,80,"{","attempt_ms")] {
+            let _limits=GenerationLimits::set(bytes,spaces,ms);
+            let dropped=Arc::new(tokio::sync::Semaphore::new(0));
+            let (wire,hits)=tokio::time::timeout(std::time::Duration::from_secs(3),run_turn_with_hits(
+                Upstream::ArgumentFixture{events:vec![argument_delta(text)],pending:true,dropped:dropped.clone()},TerminalNaming::Off)).await.unwrap();
+            assert_eq!(hits,1);let terminal=last(&wire);
+            assert_eq!(terminal["relay_terminal"]["code"],"runaway_generation");
+            assert!(terminal["relay_terminal"]["message"].as_str().unwrap().contains(reason));
+            assert_eq!(terminal["relay_generation"]["outcome"],"runaway_generation");
+            assert!(terminal["choices"][0]["delta"]["content"].is_null());
+            assert!(wire.iter().all(|(_,v)|v["choices"][0]["delta"]["tool_calls"].is_null()));
+            tokio::time::timeout(std::time::Duration::from_secs(2),dropped.acquire()).await.unwrap().unwrap().forget();
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn argument_telemetry_does_not_disable_safe_retry_on_torn_or_failed_stream() {
+        let _guard=lever_guard();let _limits=GenerationLimits::set(0,0,0);
+        for failed in [false,true] {
+            let mut events=vec![argument_delta("{     ")];
+            if failed {events.push(json!({"type":"response.failed","response":{"error":{"message":"fixture"}}}));}
+            let (wire,hits)=run_turn_with_hits(Upstream::ArgumentFixture{events,pending:false,dropped:Arc::new(tokio::sync::Semaphore::new(0))},TerminalNaming::Off).await;
+            assert_eq!(hits,2);assert_eq!(torn_events(&wire).len(),1);
+            assert!(wire.iter().all(|(_,v)|v["choices"][0]["delta"]["tool_calls"].is_null()));
+            let ids:Vec<_>=wire.iter().filter_map(|(_,v)|v["relay_generation"]["attempt_id"].as_str()).collect();
+            assert!(ids.len()>=2);assert_ne!(ids[0],ids[ids.len()-1]);
+        }
     }
 
     fn last_raw(wire: &[(String, Value)]) -> &str {
@@ -3410,45 +3575,6 @@ mod tests {
     }
 
     #[test]
-    fn responses_tool_strict_default_matches_chat_and_preserves_schema() {
-        // Ordinary Chat tools may have optional properties and open objects.
-        // Mapping them to Responses must not silently enable strict mode.
-        let parameters = json!({
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string"},
-                "options": {
-                    "type": "object",
-                    "properties": {"detail": {"type": "string"}},
-                    "required": []
-                }
-            },
-            "required": []
-        });
-        for (strict, expected) in [
-            (None, false), (Some(Value::Null), false),
-            (Some(json!(false)), false), (Some(json!(true)), true),
-        ] {
-            let mut function = json!({
-                "name": "analyze_screenshot",
-                "description": "Inspect a screenshot",
-                "parameters": parameters.clone()
-            });
-            if let Some(value) = strict {
-                function["strict"] = value;
-            }
-            let tool: Tool = serde_json::from_value(json!({
-                "type": "function", "function": function
-            })).unwrap();
-            let mapped = map_tools_for_responses(&[tool]);
-            assert_eq!(mapped[0]["strict"], json!(expected));
-            assert_eq!(mapped[0]["parameters"], parameters);
-            assert_eq!(mapped[0]["name"], "analyze_screenshot");
-            assert_eq!(mapped[0]["description"], "Inspect a screenshot");
-        }
-    }
-
-    #[test]
     fn maps_hosted_search_without_unsupported_max_tool_calls() {
         let request: ChatRequest = serde_json::from_value(json!({
             "model": "gpt-5.6-sol",
@@ -3570,69 +3696,6 @@ mod tests {
             conversation_affinity(&request),
             conversation_affinity(&longer)
         );
-    }
-
-    #[test]
-    fn completed_frames_close_choices_with_or_without_usage() {
-        for count in [0, 2] {
-            for response in [
-                json!({"model":"gpt-6.1-sol"}),
-                json!({"model":"gpt-6.1-sol","output":[],"usage":{"input_tokens":7,"output_tokens":1,"total_tokens":8}}),
-            ] {
-                let event = parse_sse_event(&json!({"type":"response.completed","response":response}), count).unwrap();
-                assert_eq!(event.choices.len(), 1, "successful Responses completion must finish the Chat choice");
-                assert_eq!(event.choices[0].finish_reason.as_deref(), Some(if count == 0 {"stop"} else {"tool_calls"}));
-                assert!(event.choices[0].delta.content.is_none());
-            }
-        }
-    }
-
-    #[test]
-    fn function_item_is_not_a_finished_response() {
-        let event = parse_sse_event(&json!({"type":"response.output_item.done","item":{
-            "type":"function_call","name":"echo","arguments":"{}","call_id":"call-a"}}),0).unwrap();
-        assert!(event.choices[0].delta.tool_calls.is_some());
-        assert_eq!(event.choices[0].finish_reason, None, "a later failure must still reject the turn");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn repeated_completed_text_keeps_finish_and_usage() {
-        let _guard = lever_guard();
-        for frames in [
-            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n",
-            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":7,\"output_tokens\":1,\"total_tokens\":8}}}\n\n",
-        ] {
-            let (wire,hits)=run_turn_with_hits(Upstream::Sse(frames),TerminalNaming::Field).await;
-            assert_eq!(hits,1);
-            assert!(torn_events(&wire).is_empty());
-            let text:Vec<_>=wire.iter().filter_map(|(_,e)| e["choices"][0]["delta"]["content"].as_str()).collect();
-            assert_eq!(text,["ok"]);
-            assert_eq!(last(&wire)["choices"][0]["finish_reason"],"stop");
-            if frames.contains("usage") { assert_eq!(last(&wire)["usage"]["total_tokens"],8); }
-        }
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn tool_items_only_finish_after_upstream_completion() {
-        let _guard = lever_guard();
-        let incomplete="data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-a\"}}\n\n";
-        let complete=concat!(
-            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-a\"}}\n\n",
-            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-b\"}}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n");
-        let (wire,hits)=run_turn_with_hits(Upstream::Sse(incomplete),TerminalNaming::Field).await;
-        assert_eq!(hits,1,"never replay a surfaced tool call");
-        assert_eq!(torn_events(&wire).len(),1);
-        assert!(wire.iter().all(|(_,e)| e["choices"][0]["finish_reason"] != "tool_calls"));
-        let (wire,hits)=run_turn_with_hits(Upstream::Sse(complete),TerminalNaming::Field).await;
-        assert_eq!(hits,1);
-        assert!(torn_events(&wire).is_empty());
-        assert_eq!(last(&wire)["choices"][0]["finish_reason"],"tool_calls");
-        let calls:Vec<_>=wire.iter().filter_map(|(_,e)| e["choices"][0]["delta"]["tool_calls"][0]["index"].as_u64()).collect();
-        assert_eq!(calls,[0,1]);
-        assert_eq!(wire.iter().filter(|(_,e)|e["choices"][0]["finish_reason"]=="tool_calls").count(),1);
     }
 
     #[test]

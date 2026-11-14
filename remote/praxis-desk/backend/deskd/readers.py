@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import difflib
+from functools import lru_cache
 import ipaddress
 import json
 import logging
@@ -492,7 +493,7 @@ def run_dir(run_id: str) -> Path | None:
 
 
 def list_runs(limit: int = 80, kind: str = "", before: str = "",
-              *, with_titles: bool = True) -> list[dict]:
+              *, with_titles: bool = True, audience: str = "all") -> list[dict]:
     """Свежие прогоны, новые первыми. Имя каталога сортирует по времени само.
 
     with_titles=False — для сторожа: ему нужно только имя свежего прогона, а
@@ -522,7 +523,9 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
             run_kind = str(context.get("kind") or "")
             if kind and run_kind != kind:
                 continue
-            goal = str(context.get("goal") or "").strip()
+            operator = _operator(context)
+            if (audience == "work" and operator) or (audience == "operator" and not operator):
+                continue
             terminal = manifest.get("terminal") or {}
             chat_id = context.get("delivery_chat_id") or context.get("origin_chat_id")
             out.append({
@@ -536,7 +539,8 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
                 "chat_title": _title_for(chat_id, titles),
                 "run_label": _turn_label(chat_id, _run_words(name), titles) if with_titles and run_kind == "chat_turn" else "",
                 "forge_task_id": context.get("forge_task_id") or "",
-                "goal_head": goal.splitlines()[0][:140] if goal else "",
+                "goal_head": _run_title(month / name, manifest) if with_titles else "",
+                "operator": operator,
                 "terminal_status": terminal.get("status") or "",
                 "model_profile": context.get("model_profile") or "",
             })
@@ -846,6 +850,56 @@ def frame_cuts(days: int = 7) -> dict:
     return _cuts.cuts(tree(), days=max(1, min(int(days or 7), 90)))
 
 
+def _operator(context: dict) -> bool:
+    return (context.get("kind") == "operator_control_probe"
+            or str(context.get("principal_id") or "").startswith("operator:"))
+
+
+def _plain_title(text: str) -> str:
+    """Small plain-text projection; never parse conversation prefixes as authors."""
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"<[^>]*>", "", text)
+    text = re.sub(r"[*_`#>~]+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _run_title(path: Path, manifest: dict) -> str:
+    context = manifest.get("context") or {}
+    principal = str(context.get("principal_id") or "")
+    kind = str(context.get("kind") or "")
+    if _operator(context):
+        name = _plain_title(principal.partition(":")[2]) or "оператор"
+        return f"Проверка оператора ({name})"
+    if kind != "chat_turn" or principal == "praxis:self":
+        return {"wake": "Пробуждение", "task_window": "Работа над задачей",
+                "chat_turn": "Собственное событие"}.get(kind, kind or "Событие агента")
+    origin = _run_origin(path, manifest)
+    if origin["source"] != "snapshot":
+        ids = context.get("origin_message_ids") or []
+        return ("Повод: сообщение " + ", ".join("#" + str(v) for v in ids) + " недоступно"
+                if ids else "Повод: сообщение не записано")
+    words = _run_words(path.name)
+    author = _plain_title(re.sub(r"\s*\(@[^)]*\)\s*$", "", words.get("who", "")))
+    if not author:
+        author = _plain_title(_room_titles().get(principal, "")) or ("Участник #" + principal if principal else "Автор")
+    text = _plain_title(origin["text"])
+    first = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+    return f"{author}: {first}"[:140]
+
+
+@lru_cache(maxsize=512)
+def _origin_authority(filename: str, stamp: tuple) -> dict:
+    with open(filename, encoding="utf-8") as fh:
+        head = fh.read(256_000)
+    match = re.match(r'\A# Immutable run context\r?\n(?:<!--[^\n]*-->\r?\n)?\s*## Authority and address\s*\n\s*```json\s*\n', head)
+    if not match:
+        return {}
+    authority, end = json.JSONDecoder().raw_decode(head[match.end():])
+    if not head[match.end() + end:].lstrip().startswith("```") or not isinstance(authority, dict):
+        return {}
+    return authority
+
+
 def _run_origin(path: Path, manifest: dict) -> dict:
     """Only the first authority block supplies the trigger, never conversation head.
 
@@ -855,14 +909,9 @@ def _run_origin(path: Path, manifest: dict) -> dict:
     """
     unknown = {"text": "", "source": "unknown"}
     try:
-        with (path / "context.md").open(encoding="utf-8") as fh:
-            head = fh.read(256_000)
-        match = re.match(r'\A# Immutable run context\r?\n(?:<!--[^\n]*-->\r?\n)?\s*## Authority and address\s*\n\s*```json\s*\n', head)
-        if not match:
-            return unknown
-        authority, end = json.JSONDecoder().raw_decode(head[match.end():])
-        if not head[match.end() + end:].lstrip().startswith("```") or not isinstance(authority, dict):
-            return unknown
+        filename = path / "context.md"
+        st = filename.stat()
+        authority = _origin_authority(str(filename), (st.st_mtime_ns, st.st_size, st.st_ino))
         context = manifest.get("context") or {}
         if authority.get("schema") not in ("praxis.run.authority.v1", "praxis.run.authority.v2"):
             return unknown
@@ -924,6 +973,28 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                        "call_id": row.get("call_id"), "tools": [], "text": "",
                        "status": "running"}
             iterations.append(current)
+        elif kind == "model_progress":
+            # Attach only to this model attempt. A tail can start after model_started;
+            # retain that evidence without attaching it to an unrelated iteration.
+            call_id = row.get("call_id")
+            if not call_id:
+                continue
+            target = next((it for it in reversed(iterations) if it.get("call_id") == call_id), None)
+            if target is None:
+                target = {"at": row.get("at"), "seq": row.get("seq"), "call_id": call_id,
+                          "tools": [], "text": "", "status": "running"}
+                iterations.append(target)
+                current = target
+            data = row.get("metrics")
+            if isinstance(data, dict) and data.get("schema") == "relay.generation.v1":
+                safe = {key: data[key] for key in ("argument_bytes", "argument_deltas", "attempt_ms",
+                    "longest_whitespace_run", "outside_string_whitespace_chars")
+                    if type(data.get(key)) is int and 0 <= data[key] <= 2**53-1}
+                if data.get("outcome") in ("streaming", "completed", "interrupted", "upstream_failed", "runaway_generation"):
+                    safe["outcome"] = data["outcome"]
+                if "argument_bytes" in safe:
+                    target["progress"] = safe
+                    target["progress_at"] = row.get("at")
         elif kind == "model_output":
             if current is not None:
                 ref = row.get("result") or {}
@@ -1044,8 +1115,8 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     context = manifest.get("context") or {}
     words = _run_words(run_id)
     origin = _run_origin(path, manifest)
-    if origin["source"] == "unknown" and words.get("in"):
-        origin = {"text": words["in"], "source": "turn_log"}
+    if context.get("kind") == "chat_turn" and origin["source"] == "unknown":
+        origin = {"text": _run_title(path, manifest), "source": "unavailable"}
     if context.get("kind") != "chat_turn" and origin["source"] == "unknown":
         origin = {"text": str(context.get("goal") or ""), "source": "task_goal"}
     return {
@@ -1058,6 +1129,7 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             "terminal": manifest.get("terminal") or {},
             "event_seq": manifest.get("event_seq"),
             "kind": context.get("kind"),
+            "operator": _operator(context),
             "goal": context.get("goal"),
             "model_profile": context.get("model_profile"),
             "chat_id": context.get("delivery_chat_id") or context.get("origin_chat_id"),

@@ -38,3 +38,5 @@ manifest identity. Backend regressions run from `backend/` as separate processes
 
 `SOURCE.json` records where this snapshot comes from and the digests that tie it to the
 deployed files.
+
+14 November2026: source44ff961 includes origin-message turn titles, separate operator-probe history and numeric model-generation progress. Both builds, backend44, browser12, argv10, six live HTTPS groups passed. Physical phone acceptance is separate. Old deployment assets were retained.

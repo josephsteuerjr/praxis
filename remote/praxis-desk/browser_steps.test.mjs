@@ -1,7 +1,8 @@
 import {createRequire} from 'node:module';import {createServer} from 'node:http';import fs from 'node:fs/promises';import assert from 'node:assert/strict';
-const {chromium}=createRequire('/work/browser/package.json')('playwright');
+const {chromium}=createRequire(process.env.PLAYWRIGHT_PACKAGE || '/work/browser/package.json')('playwright');
+const artifacts=process.env.ARTIFACTS || '/work/revision4';
 const server=createServer(async(req,res)=>{try{const name=req.url==='/test.js'?'test.js':req.url==='/test.css'?'test.css':null;
-  res.setHeader('Content-Type',(name?.endsWith('.js')?'text/javascript':name?'text/css':'text/html')+'; charset=utf-8');res.end(name?await fs.readFile('/work/revision4/test-dist/'+name):'<html><head><meta charset="utf-8"><link rel="stylesheet" href="/test.css"></head><body><main id="root"></main><script type="module" src="/test.js"></script></body></html>');}catch{res.writeHead(404);res.end()}});
+  res.setHeader('Content-Type',(name?.endsWith('.js')?'text/javascript':name?'text/css':'text/html')+'; charset=utf-8');res.end(name?await fs.readFile((process.env.TEST_DIST || artifacts+'/test-dist')+'/'+name):'<html><head><meta charset="utf-8"><link rel="stylesheet" href="/test.css"></head><body><main id="root"></main><script type="module" src="/test.js"></script></body></html>');}catch{res.writeHead(404);res.end()}});
 await new Promise(r=>server.listen(38945,'127.0.0.1',r));
 const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});const errors=[],checks=[];let page;
 try {
@@ -29,7 +30,7 @@ try {
  assert.equal(await page.getByRole('tab',{name:'Исполнение',exact:true}).getAttribute('aria-selected'),'true');assert.match(await page.getByRole('tabpanel').innerText(),/python/);
  await page.getByRole('tab',{name:'JSON-ответ',exact:true}).click();await page.getByRole('tabpanel').getByRole('button',{name:/Показать целиком/}).click();assert.match(await page.getByRole('tabpanel').innerText(),/FULL-JSON/);assert.doesNotMatch(await page.getByRole('tabpanel').innerText(),/MODEL-TEXT/);
  await page.getByRole('tab',{name:'JSON-ответ',exact:true}).focus();await page.keyboard.press('Home');assert.equal(await page.getByRole('tab',{name:'Аргументы',exact:true}).getAttribute('aria-selected'),'true');assert.equal(await page.locator('#root script').count(),0);checks.push('trace_tabs_refresh_keyboard_raw_payload_xss');
- await page.screenshot({path:'/work/revision4/fixture-steps-390.png'});
+ await page.screenshot({path:artifacts+'/fixture-steps-390.png'});
  await page.evaluate(()=>{
    document.querySelector('#root').replaceChildren();window.scope='one';window.runState={runner:{alive:false}};
    window.runRows=[{id:'live',status:'running',updated_at:new Date().toISOString(),created_at:new Date().toISOString(),goal_head:'Текущая задача'},{id:'done',status:'done',goal_head:'Предыдущая задача'}];
@@ -131,7 +132,7 @@ try {
  await page.getByRole('tab',{name:'JSON-ответ',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-trace-panel="response"]')?.textContent.includes('fixture failure'));
  assert.equal(await page.getByRole('tab',{name:'JSON-ответ',exact:true}).getAttribute('aria-selected'),'true');assert.match(await page.getByRole('tabpanel').innerText(),/fixture failure/);
  assert.match(await page.locator('.forge-action > summary').innerText(),/exit 1/);assert.equal(await page.locator('[data-command]').count(),0);checks.push('forge_grouping_commands_per_action_payloads');
- await page.screenshot({path:'/work/revision4/fixture-forge-390.png'});await page.evaluate(()=>window.forge.stop());
+ await page.screenshot({path:artifacts+'/fixture-forge-390.png'});await page.evaluate(()=>window.forge.stop());
 
  await page.evaluate(()=>{
    document.querySelector('#root').replaceChildren();window.finishedRows=[];
@@ -145,6 +146,48 @@ try {
    const events={};let requests=0;const tg={initData:'fixture',colorScheme:'light',viewportHeight:700,isFullscreen:true,safeAreaInset:{top:24},contentSafeAreaInset:{top:32},ready(){},expand(){},requestFullscreen(){requests++},isVersionAtLeast(){return true},onEvent(n,f){events[n]=f},BackButton:{show(){},hide(){},onClick(){}}};
    window.stepsTest.mountTelegramShell(tg);return {requests,fullscreen:document.documentElement.dataset.fullscreen,top:document.documentElement.style.getPropertyValue('--app-safe-top')};
  });assert.equal(shell.requests,1);assert.equal(shell.fullscreen,'active');assert.match(shell.top,/24px/);assert.match(shell.top,/32px/);checks.push('telegram_fullscreen_safe_area');
- assert.deepEqual(errors,[]);await fs.writeFile('/work/revision4/BROWSER-REGRESSIONS.json',JSON.stringify({ok:true,checks,errors},null,2));console.log(JSON.stringify({ok:true,checks}));
-} catch(e){if(page)await page.screenshot({path:'/work/revision4/regression-failure.png'}).catch(()=>{});await fs.writeFile('/work/revision4/BROWSER-REGRESSIONS.json',JSON.stringify({ok:false,checks,error:String(e),errors},null,2));throw e}
+ for(const width of [320,390,820]){
+  await page.setViewportSize({width,height:844});
+  await page.evaluate(()=>{
+   document.querySelector('#root').replaceChildren();window.scope='titles';window.operatorReads=0;
+   const ops=Array.from({length:43},(_,i)=>({id:'probe-'+String(100-i).padStart(4,'0'),operator:true,status:'done',goal_head:'Проверка оператора (codex)'}));
+   window.request=async path=>{
+    if(path.startsWith('/api/runs?audience=operator')){window.operatorReads++;const before=new URL(path,'http://fixture').searchParams.get('before');return ops.filter(r=>!before||r.id<before).slice(0,41)}
+    if(path.startsWith('/api/runs'))return [{id:'human',status:'done',goal_head:'Егор: Проверь код.'}];
+    if(path==='/api/state')return {runner:{alive:true,busy:false}};
+    return {};
+   };
+   window.phone=window.stepsTest.phoneActions(document.querySelector('#root'),window.request,()=>window.scope);window.phone.start();
+  });
+  await page.waitForFunction(()=>document.querySelectorAll('.phone-history .turn').length===1);
+  assert.equal(await page.evaluate(()=>window.operatorReads),0,'Operator inventory must be lazy');
+  await page.locator('.phone-history > summary').click();assert.equal(await page.locator('.phone-history .turn-title').innerText(),'Егор: Проверь код.');
+  await page.locator('.phone-operators > summary').click();await page.waitForFunction(()=>document.querySelectorAll('.phone-operators .turn').length===40);
+  assert.equal(await page.locator('.turns-n').innerText(),'1');assert.equal(await page.locator('.phone-history .turn').count(),1);
+  await page.locator('.phone-operators').getByRole('button',{name:'Ещё проверки',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.phone-operators .turn').length===43);
+  assert.equal(await page.locator('.phone-operators .actions:visible').count(),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  await page.screenshot({path:artifacts+`/operator-titles-${width}.png`});
+  await page.evaluate(()=>window.phone.stop());
+ }
+ checks.push('trigger_titles_and_separate_lazy_operator_paging_320_390_820');
+ for (const width of [320,390,820]) {
+  await page.setViewportSize({width,height:844});
+  await page.evaluate(()=>{
+   document.querySelector('#root').replaceChildren();window.paint=window.stepsTest.mountActionSteps(document.querySelector('#root'));
+   window.progressFixture={manifest:{status:'running'},iterations:[{call_id:'m',status:'running',progress_at:new Date().toISOString(),progress:{outcome:'streaming',argument_bytes:40960,attempt_ms:90000}}]};
+   window.paint(window.progressFixture);
+  });
+  assert.match(await page.locator('[data-model-progress]').innerText(),/Модель пишет аргументы: 40.0 КБ · 1.5 мин/);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  await page.screenshot({path:artifacts+`/model-progress-${width}.png`});
+  await page.evaluate(()=>{window.progressFixture.iterations[0].progress_at='2000-01-01T00:00:00Z';window.paint(window.progressFixture)});
+  assert.match(await page.locator('[data-model-progress]').innerText(),/Последний прогресс аргументов/);
+  await page.evaluate(()=>{window.progressFixture.iterations[0].status='completed';window.paint(window.progressFixture)});
+  assert.equal(await page.locator('[data-model-progress]').count(),0);
+ }
+ checks.push('numeric_model_progress_fresh_stale_completed_320_390_820');
+ assert.deepEqual(errors,[]);await fs.writeFile(artifacts+'/BROWSER-REGRESSIONS.json',JSON.stringify({ok:true,checks,errors},null,2));console.log(JSON.stringify({ok:true,checks}));
+} catch(e){if(page)await page.screenshot({path:artifacts+'/regression-failure.png'}).catch(()=>{});await fs.writeFile(artifacts+'/BROWSER-REGRESSIONS.json',JSON.stringify({ok:false,checks,error:String(e),errors},null,2));throw e}
 finally{await browser.close();server.close()}
