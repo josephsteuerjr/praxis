@@ -1,0 +1,88 @@
+{
+  "format": "helene-stock-languages.v1",
+  "files": {
+    "SOUL.md": {
+      "ru": "5247d99a4e6aa771600842273d00411b8ef0e4be6fa9526cf1c218a8978cbeaf",
+      "en": "f8272917e0ee7fb92d7d44b20b58484d711e6a1a90533578266567b6d9fe5e1e",
+      "fr": "f78dc5d36b5826bffcac2fb966082c29627e5bcb8cebbb6a9540bab8dda259e2",
+      "zh": "121538504a5ed7a0fcb1fbe83fba4bbd44958f3beb641e813991026845ce3c0b",
+      "identifiers": true
+    },
+    "self-day-zero.md": {
+      "ru": "195e55e2a929aceab7b1a68007da8320b1ccd99acbe3794a2e1aa524d7c0944b",
+      "en": "9325550f60d4c74654661daf78903e04c671e95908fa650d4d2c9d5a4a82eb95",
+      "fr": "36b3aea4e802126cdb59029af0816f8fd248872842db3742eabaeb8c893d75b0",
+      "zh": "56816a90d54beb25eead654693bfc51f44b7a1b392fedceb175f4b576d154963"
+    },
+    "soul/VOICE.md": {
+      "ru": "dc3352da02389497611864d35cfd5f98e44c999739a777a9577e031e58f87b5e",
+      "en": "1c9a34e901b7c93e5ac5ef5b4d09e48efa2fad859c5d95baea767995f23c3cd7",
+      "fr": "0c595b9a911e914668058e8638811eb438fdcec2d7eae230be75c3b6dac986f5",
+      "zh": "b2894ce6e7579b23008d5da3bc8a88e4e2176a080513c7900111a61a2ee12107"
+    },
+    "soul/self.md": {
+      "ru": "3e928e3e7f0006a791c3a1e13a1057a822868522b9d56a7a0f9c9ea3615389ca",
+      "en": "d7dc659115ea70bb2df8b5b555f67b9052f49fe267ff18f9234bbca04127e5ce",
+      "fr": "c82771edc812720c64e6a2619966b5001c5fe1ea11255cf658a2f0176d1b9ced",
+      "zh": "3f249bd807a3cee55f05070bdf9ef9a070954ea336b298ac489ff06c61d749ab"
+    },
+    "soul/skills/code-map.md": {
+      "ru": "07e7deb8960626fabab166a5cbaffca856aaa7e2524a6002958dd01a7894a422",
+      "en": "dfd061b4bb28d3d45c75c5acda9d081db831ea4c9d6993a9ff90f9bbd889346f",
+      "fr": "6b1cb277b2407dfb82525362160ceb2bc90b309809e941425e0e7ade5657e8f0",
+      "zh": "c6102cffc33565efbbf82ada4bce604b8301641fd59dbeb3dcbb810f2b12d2b3",
+      "identifiers": true
+    },
+    "soul/skills/fence-and-broker.md": {
+      "ru": "723e0734b8bc5b4cab2aca4fc742410c75d23c8fbd89a1dbbd01c43554a14dbd",
+      "en": "3d7bce1c5f013cdb29a4ee350fe06d04e227a95510872c10c70b244297087990",
+      "fr": "8e646ecc6c4b94520f0e8c7ac199b31cc1c5a46f29332839886f03d23707ccc6",
+      "zh": "06d8314acdf36fe73a3b4d00afb912cff457440a3808787524d1fe41b0ac29f9",
+      "identifiers": true
+    },
+    "soul/skills/home-map.md": {
+      "ru": "369408f69937fbc51edb056570688a35593f3fe3225a66c5fc28524c0a71bce6",
+      "en": "fe8b9090725794cdd6ef6fb3c7c00c80a7b02b39db24e07261cd22857e49ecd0",
+      "fr": "3f378a217644dda97c934063bedbe66cd78b51d159cf60839f54515b5b6364de",
+      "zh": "8381b35573ce5565c717e6cb2934e7aa0c612ee4d74104b97139782de3648bcf",
+      "identifiers": true
+    },
+    "soul/skills/living-prose.md": {
+      "ru": "766fcc3e2c5f6aea691e56d80f7c438d8f42d467c33631e843cde6fd9612e04f",
+      "en": "4ad41e8dae4c0dfbf85814fc834a5bd9f2081d9464fb3cd6f7f0c7af3b887c91",
+      "fr": "d34f06861c9ae8e549a4706bdf764df6e8f2a2cb41f1ead0f6714c6252945b08",
+      "zh": "cb00b1c0605c6892cbfcab542aa0e0c26ef639686041bacfa42ce47b2e0e14d0"
+    },
+    "soul/skills/living-prose/practice.md": {
+      "ru": "c5e47c5714c7b5325e11334ac01e50e69968bba5d10d6f94f06ff98953b070f7",
+      "en": "5f1930c02dcc15b732c5e9e2b33b5f84241ca082a259264a12438581ba1f645b",
+      "fr": "01af8e2418925d1ecbedddb1b36e2d69445c8241fc4c14d6bd00489791a83add",
+      "zh": "859f42a61e919a8e40a86be62650676310a504310605a8beb5562d8ec414daa5"
+    },
+    "soul/skills/living-prose/resident.md": {
+      "ru": "1d66d7ec20f08288ca7b84fa893cbfde305adfbed3c76b12879b2776102843bb",
+      "en": "2a54d67ad3160f296637eef81015b93ff00e1133d24e52eca2bc57378d20666a",
+      "fr": "e3ef6de1bd44880bd648508a9fe1f84a2a1da4906a2d55fa0dc546161459baa0",
+      "zh": "831f7fbcb3e3955ed18783a1cc2f674e2bbaf7c2ef12329f7f2d16833c339bf1"
+    },
+    "soul/skills/living-prose/sources.md": {
+      "ru": "4ba2b6546da3b18ffe67f8bf15f97d83fb7e4f63f5c6f4b2c5ff1908f7e413d7",
+      "en": "95c47981249448f84dc730e3c43ed641236d91ebcf3a76b8c73fd7ac52db5ae8",
+      "fr": "8537f4c9db2f64f969b5b570181e96edada9e019303235f06feaa7b7711186cd",
+      "zh": "40f57b09771566c787dfe2114aba52774fe1dd14a4ec18bc43debf3d47693201"
+    },
+    "soul/skills/living-prose/workshop.md": {
+      "ru": "24263ed6e8465cdb5bf353733dac764691211b0cc63972c20063f747df28894f",
+      "en": "f339beb827befc4dc7c415feff8b96fc93d1622acb7faba47b7feff81519e154",
+      "fr": "8dd744c775086e40b2985f2531ff8b2f0229efef8f9aaaee6b0353cb836f3b36",
+      "zh": "746413daae042365da9e8d81c66f5ec181e4bea273b8189b5173bda08fde1b79"
+    },
+    "soul/skills/my-own-code.md": {
+      "ru": "35545ec0b351efe4f45461321905114a031f02b0c068da6664a730dad5fe93c4",
+      "en": "f08ebb10d69e2acee41d882f30310063643e83a45e18765684f131ac6b629dad",
+      "fr": "e48ed9c13f419adc3afd821d8b26e92f37ab02385b257cbf7d3180f285ac0305",
+      "zh": "52b23edca8157cfc96a7c94f7e523e61292f69d7c0b865ac2cf69bc48d045ad8",
+      "identifiers": true
+    }
+  }
+}
