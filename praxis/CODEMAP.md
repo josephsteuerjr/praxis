@@ -76,6 +76,7 @@
 | `sleep.py` | Планировщик formation/identity/index care; normative изменения идут через claims, REM только журналирует кандидаты, rumination no-op. |
 | `people.py`, `social.py` | Портреты людей, salience/open loops и социальные роли/допуск. |
 | `graph.py` | Markdown-граф связей и bounded traversal/resolve. |
+| `resident_skills.py` | Постоянные части навыков: `soul/skills/<slug>/resident.md` стоит в персоне после VOICE, под общим потолком без обрезки; навык и материалы папки — по потребности. |
 | `self_model.py` | Fail-closed provenance-valid CURRENT, quarantined legacy/history, observations и explicit migrate/revise/rollback. |
 | `desires.py` | Append-only conation ledger и rebuildable `memory/desires/CURRENT.md`. |
 | `goals.py` | Однонаправленный compatibility/migration bridge удалённой moral-goals системы; живые свободные намерения принадлежат `desires.py`. |

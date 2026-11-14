@@ -417,7 +417,9 @@ on-demand SMTP/IMAP hands Praxis, но лишает их фонового mailbo
 - `memory/computer/events/*.jsonl` и inventory snapshots — наблюдения о машинах;
 - `memory/desires/events.jsonl` — проверяемая цепочка намерения
   `noticed -> wanted -> chosen -> acted -> observed -> changed`;
-- `soul/SOUL.md`, `soul/VOICE.md` и навыки — конституция и поведенческий слой;
+- `soul/SOUL.md`, `soul/VOICE.md` и навыки — конституция и поведенческий слой; постоянная часть
+  навыка (`soul/skills/<slug>/resident.md`) стоит в персоне каждого хода после VOICE, остальное
+  в навыке и его папке открывается по потребности (`resident_skills.py`);
 - `soul/self/CURRENT.md` — компактное актуальное self для prompt;
   `soul/self.md` остаётся legacy evidence, прежние bytes сохраняются в `soul/self/history/`, а
   основания изменений — в `memory/self/observations.jsonl`.
