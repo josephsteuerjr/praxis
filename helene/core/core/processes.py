@@ -12,6 +12,8 @@ pid, команда, run запустившего; строка «твои фо�
 """
 from __future__ import annotations
 
+import frame_language
+
 import json
 import os
 import re
@@ -147,6 +149,7 @@ def live(*, alive=_alive) -> list[dict]:
     return keep
 
 
+@frame_language.pinned
 def state_line(*, alive=_alive) -> str:
     rows = live(alive=alive)
     if not rows:
@@ -155,10 +158,10 @@ def state_line(*, alive=_alive) -> str:
     for row in rows[-8:]:
         when = time.strftime("%H:%M", time.localtime(float(row.get("ts") or 0)))
         launcher = str(row.get("run_id") or "")
-        by = (f"запустило {row.get('run_kind') or 'run'} {launcher[-12:]}" if launcher
-              else "запущен вне run")
+        by = (frame_language.text('owned.processes.d7d491081098', v0=row.get('run_kind') or 'run', v1=launcher[-12:]) if launcher
+              else frame_language.text('owned.processes.35afbba61005'))
         parts.append(f"{row.get('name')} (pid {row.get('pid')}, {by}, {when})")
     more = len(rows) - len(rows[-8:])
-    return ("твои фоновые процессы из shell: " + "; ".join(parts)
-            + (f"; …и ещё {more}" if more else "")
-            + ". Процесс без записи здесь — «не в моём реестре», а не «чужой клон».")
+    return (frame_language.text('owned.processes.84562dffd1ca') + "; ".join(parts)
+            + (frame_language.text('owned.processes.6d2a9484f355', v0=more) if more else "")
+            + frame_language.text('owned.processes.b97337a9e46e'))

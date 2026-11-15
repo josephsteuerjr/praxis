@@ -1445,6 +1445,7 @@ def _notices_block(*, mid_turn: bool = False) -> str:
         window=window)
 
 
+@frame_language.pinned
 def build_state_evidence_block(*, hide_identity_load: bool = False,
                                self_only: bool = False,
                                include_deployment_notice: bool = False) -> str:
@@ -1498,10 +1499,7 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         offers = memory_life.fold_offers() if hasattr(memory_life, "fold_offers") else {}
         if offers:
             add("fold_offers", {
-                "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
-                         "сама. memory_compact(prepare, place) даёт источники; прочитай их и "
-                         "в этом ходе напиши fold(selection,text). Жёсткий порог и ночь не "
-                         "меняют автора; несвёрнутые источники сохранены"),
+                "note": (frame_language.text('owned.agent.f2a5f19663d5')),
                 "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
                             "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
                             "hard": bool(v.get("hard")),

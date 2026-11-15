@@ -21,6 +21,8 @@ mtime — панель (другой контейнер, тот же том) и 
 
 from __future__ import annotations
 
+import frame_language
+
 import base64
 import io
 import datetime as _dt
@@ -3627,6 +3629,7 @@ def observed_models(role: str) -> tuple[dict, dict]:
         return {}, {}
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Одна строка для кадра: НАСТРОЕННЫЙ канал и то, что РЕАЛЬНО отвечало.
 
@@ -3643,20 +3646,20 @@ def state_line() -> str:
     parts = []
     for role in ROLES:
         s = snap[role]
-        mark = " ⚠ фолбэк" if s["on_fallback"] else ""
-        chunk = f"{_ROLE_RU[role]}: настроено={s['model']} ({s['framework']}){mark}"
+        mark = frame_language.text('owned.llm.69d1ddbb8fd6') if s["on_fallback"] else ""
+        chunk = frame_language.text('owned.llm.f014f299240b', v0=frame_language.text('state.role.'+role), v1=s['model'], v2=s['framework'], v3=mark)
         last, counts = observed_models(role)
         name = str(last.get("model") or "")
         if name:
             when = str(last.get("at") or "")
-            same = " — тот же" if name == s["model"] else " ⚠ ДРУГАЯ"
-            chunk += f"; последний ответ={name}{same}" + (f" ({when})" if when else "")
+            same = frame_language.text('owned.llm.3bc601f09812') if name == s["model"] else frame_language.text('owned.llm.a472992c1b7f')
+            chunk += frame_language.text('owned.llm.6a904edbbae2', v0=name, v1=same) + (f" ({when})" if when else "")
         else:
-            chunk += "; последний ответ=сегодня не наблюдался"
+            chunk += frame_language.text('owned.llm.41756b5edf71')
         if len(counts) > 1 or (counts and name and name not in counts):
             spread = " / ".join(f"{n} {c}" for n, c in
                                 sorted(counts.items(), key=lambda kv: -kv[1]))
-            chunk += f"; за сутки: {spread}"
+            chunk += frame_language.text('owned.llm.eae5dab10e48', v0=spread)
         parts.append(chunk)
     return " · ".join(parts)
 

@@ -23,6 +23,8 @@ memory/.state/appetite.json — учёт, пересобираемый; атом
 
 from __future__ import annotations
 
+import frame_language
+
 import datetime as _dt
 import praxis_time
 import json
@@ -387,6 +389,7 @@ def pledge(daily_cost: float | None = None, daily_tokens: int | None = None,
     return f"Обещание записано: {'; '.join(parts)}. Сверяюсь каждый день; превышение — разговор, не тихий срыв."
 
 
+@frame_language.pinned
 def promise_check() -> str | None:
     """Сверка обещания с фактом (для STATE/сна). None = обещания нет или всё в рамках.
     Возвращает строку-сигнал, если факт превысил или вплотную (>85%) подошёл к обещанию."""
@@ -397,33 +400,34 @@ def promise_check() -> str | None:
     if prom.get("daily_tokens"):
         used, cap = obs["tokens_today"], int(prom["daily_tokens"])
         if used >= cap:
-            msgs.append(f"токены: {_k(used)} — обещание {_k(cap)} ПРЕВЫШЕНО")
+            msgs.append(frame_language.text('owned.appetite.fff9364cd3dd', v0=_k(used), v1=_k(cap)))
         elif used >= cap * 0.85:
-            msgs.append(f"токены: {_k(used)} из {_k(cap)} (впритык)")
+            msgs.append(frame_language.text('owned.appetite.a10adc9ebadd', v0=_k(used), v1=_k(cap)))
     if prom.get("daily_cost") is not None and obs.get("estimated_cost_today") is not None:
         used_c, cap_c = float(obs["estimated_cost_today"]), float(prom["daily_cost"])
         if cap_c > 0:
             if used_c >= cap_c:
-                msgs.append(f"стоимость: ≈${used_c} — обещание ${cap_c} ПРЕВЫШЕНО")
+                msgs.append(frame_language.text('owned.appetite.6d2db7498b31', v0=used_c, v1=cap_c))
             elif used_c >= cap_c * 0.85:
-                msgs.append(f"стоимость: ≈${used_c} из ${cap_c} (впритык)")
+                msgs.append(frame_language.text('owned.appetite.67ee3dc75766', v0=used_c, v1=cap_c))
     return "; ".join(msgs) or None
 
 
 # ---------------------------------------------------------------- гейты фона (18.4)
 
+@frame_language.pinned
 def background_hold() -> str | None:
     """Причина не начинать НОВУЮ фоновую работу, или None.
     Два честных источника: моё принятое состояние (mode) и свежая нерастолкованная
     кнопка Егора «останови фон» (его явное решение — класс 2, действует до моего ответа)."""
     s = _load()
     if s.get("mode") == "background_paused":
-        return "фон остановлен: моё принятое состояние по просьбе Егора (manage_appetite)"
+        return frame_language.text('owned.appetite.5d2d6d6ecf23')
     req = s.get("owner_request") or {}
     interp = s.get("interpretation") or {}
     if (req.get("kind") == "pause_background"
             and float(req.get("ts", 0)) > float(interp.get("ts", 0) or 0)):
-        return "фон остановлен: кнопка Егора «останови фон» (жду моего толкования)"
+        return frame_language.text('owned.appetite.c390810f13a0')
     return None
 
 
@@ -442,6 +446,7 @@ def background_hold() -> str | None:
 # и виден в пульте — это наблюдаемая запись, а не вето.
 
 
+@frame_language.pinned
 def promise_line() -> str | None:
     """Строка сверки обещания для дневника/сна. None = обещания нет."""
     s = _load()
@@ -450,15 +455,15 @@ def promise_line() -> str | None:
         return None
     warn = promise_check()
     if warn:
-        return f"⚠ {warn} — это разговор с Егором, не тихий срыв"
+        return frame_language.text('owned.appetite.bdec3585288c', v0=warn)
     obs = observed_today()
     pieces = []
     if prom.get("daily_tokens") is not None:
-        pieces.append(f"{_k(obs['tokens_today'])} из {_k(prom['daily_tokens'])} ток")
+        pieces.append(frame_language.text('owned.appetite.0d7a03eed38e', v0=_k(obs['tokens_today']), v1=_k(prom['daily_tokens'])))
     if prom.get("daily_cost") is not None:
         cost = obs.get("estimated_cost_today")
-        pieces.append(f"≈${cost if cost is not None else '?'} из ${prom['daily_cost']}")
-    return "в рамках: " + ", ".join(pieces) if pieces else None
+        pieces.append(frame_language.text('owned.appetite.e7be3724e2e8', v0=cost if cost is not None else '?', v1=prom['daily_cost']))
+    return frame_language.text('owned.appetite.97c20f12c06f') + ", ".join(pieces) if pieces else None
 
 
 def sleep_depth() -> str:
@@ -473,36 +478,38 @@ def sleep_depth() -> str:
 
 # ---------------------------------------------------------------- выводы наружу
 
+@frame_language.pinned
 def _k(n) -> str:
     n = int(n or 0)
-    return f"{n / 1000:.1f}к" if n >= 1000 else str(n)
+    return frame_language.text('owned.appetite.11dc42d09b19', v0=n / 1000) if n >= 1000 else str(n)
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Строка в STATE (owner tier-0): режим, свежая просьба, обещание против факта."""
     try:
         s = _load()
         obs = observed_today()
-        bits = [f"режим {s['mode']}"]
+        bits = [frame_language.text('owned.appetite.23f6fd9a4c05', v0=s['mode'])]
         req = unacked_request()
         if req:
-            label = {"free": "не экономь", "considerate": "умерь аппетиты",
-                     "pause_background": "останови фон"}.get(req["kind"], req.get("raw", "")[:60] or "просьба")
-            bits.append(f"⚠ свежая просьба Егора не истолкована: «{label}» — ответь manage_appetite")
+            label = {"free": frame_language.text('owned.appetite.6a228264683f'), "considerate": frame_language.text('owned.appetite.d2d0a2c8e5e2'),
+                     "pause_background": frame_language.text('owned.appetite.c68681d89a7b')}.get(req["kind"], req.get("raw", "")[:60] or frame_language.text('owned.appetite.1b6ed7b767b6'))
+            bits.append(frame_language.text('owned.appetite.574544852246', v0=label))
         prom = s.get("promise") or {}
         if any(v is not None for v in prom.values()):
             pieces = []
             if prom.get("daily_tokens") is not None:
-                pieces.append(f"{_k(obs['tokens_today'])}/{_k(prom['daily_tokens'])} ток")
+                pieces.append(frame_language.text('owned.appetite.945841c641b8', v0=_k(obs['tokens_today']), v1=_k(prom['daily_tokens'])))
             if prom.get("daily_cost") is not None:
                 cost = obs.get("estimated_cost_today")
                 pieces.append(f"≈${cost if cost is not None else '?'}/${prom['daily_cost']}")
-            bits.append("обещание: " + ", ".join(pieces))
+            bits.append(frame_language.text('owned.appetite.8d0de9ea2cf9') + ", ".join(pieces))
             warn = promise_check()
             if warn:
                 bits.append(f"⚠ {warn}")
         if s.get("external_provider_boundary") != "absent":
-            bits.append(f"внешний лимит провайдера: {s['external_provider_boundary']} (граница Егора, не моя)")
+            bits.append(frame_language.text('owned.appetite.b43bfe0bdd49', v0=s['external_provider_boundary']))
         hold = background_hold()
         if hold:
             bits.append(hold)
@@ -512,13 +519,15 @@ def state_line() -> str:
         return ""
 
 
+@frame_language.pinned
 def short_line() -> str:
     """Короткая строка для rails-манифеста."""
     s = _load()
     hold = background_hold()
-    return f"режим {s['mode']}" + (f"; {hold}" if hold else "")
+    return frame_language.text('owned.appetite.23f6fd9a4c05', v0=s['mode']) + (f"; {hold}" if hold else "")
 
 
+@frame_language.pinned
 def usage_delta(before: dict | None = None) -> dict | str:
     """Снимок расхода за сегодня / дельта от снимка (для отчётов сна и окон).
     usage_delta() -> снимок; usage_delta(снимок) -> строка «≈N ток (M выз.)[, ≈$X]»."""
@@ -528,17 +537,17 @@ def usage_delta(before: dict | None = None) -> dict | str:
     d_tok = max(0, now["tokens_today"] - int(before.get("tokens_today", 0)))
     d_calls = max(0, now["calls_today"] - int(before.get("calls_today", 0)))
     tokens_unknown = d_calls > 0 and d_tok == 0
-    line = (f"токены не сообщены relay ({d_calls} выз.)" if tokens_unknown
-            else f"≈{_k(d_tok)} ток ({d_calls} выз.)")
+    line = (frame_language.text('owned.appetite.aed7d1ae428f', v0=d_calls) if tokens_unknown
+            else frame_language.text('owned.appetite.428f9b14ca22', v0=_k(d_tok), v1=d_calls))
     c0, c1 = before.get("estimated_cost_today"), now.get("estimated_cost_today")
     if not tokens_unknown and c0 is not None and c1 is not None:
         line += f", ≈${round(max(0.0, float(c1) - float(c0)), 4)}"
     windows = []
-    for key, label in (("primary_window", "5ч"), ("secondary_window", "неделя")):
+    for key, label in (("primary_window", frame_language.text('owned.appetite.3df9c1577715')), ("secondary_window", frame_language.text('owned.appetite.d543bab5dfac'))):
         old = _provider_remaining_value(before.get("provider_limits"), key)
         new = _provider_remaining_value(now.get("provider_limits"), key)
         if old is not None and new is not None:
-            windows.append(f"{label}: {old:.1f}→{new:.1f}% остатка")
+            windows.append(frame_language.text('owned.appetite.286b535f3ad0', v0=label, v1=old, v2=new))
     if windows:
         line += "; relay " + ", ".join(windows)
     return line

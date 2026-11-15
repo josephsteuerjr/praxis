@@ -14,6 +14,8 @@ Praxis — трекер неотвеченных ЛС (PASS 9.0, кейс Евг
 """
 from __future__ import annotations
 
+import frame_language
+
 import json
 import os
 import time
@@ -115,19 +117,21 @@ def entries(now: float | None = None) -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def _fmt_age(hours: float) -> str:
     if hours < 1:
-        return f"{max(1, int(hours * 60))}м"
+        return frame_language.text('owned.unanswered.e124b681d708', v0=max(1, int(hours * 60)))
     if hours < 48:
-        return f"{int(hours)}ч"
-    return f"{int(hours / 24)}д"
+        return frame_language.text('owned.unanswered.b3081fb824f9', v0=int(hours))
+    return frame_language.text('owned.unanswered.b93702eaf99b', v0=int(hours / 24))
 
 
+@frame_language.pinned
 def state_line(now: float | None = None, cap: int = 5) -> str:
     """Одна строка для STATE/контекстов: «Евгений (3ч), Аня (26ч)» или ''."""
     items = entries(now)
     if not items:
         return ""
     parts = [f"{e['name'] or e['chat_id']} ({_fmt_age(e['hours'])})" for e in items[:cap]]
-    more = f" и ещё {len(items) - cap}" if len(items) > cap else ""
+    more = frame_language.text('owned.unanswered.2e6a02762ff5', v0=len(items) - cap) if len(items) > cap else ""
     return ", ".join(parts) + more

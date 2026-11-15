@@ -32,6 +32,8 @@ model сохраняется как provenance-rich совет рядом с т�
 
 from __future__ import annotations
 
+import frame_language
+
 import datetime as _dt
 import praxis_time
 import hashlib
@@ -578,14 +580,15 @@ def stress(days: int = 14, half_life: float = HALF_LIFE_DAYS) -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def stress_line() -> str:
     """Строка для STATE: топ тем нагрузки, если они заметны."""
     threshold = max(0.0, float(os.getenv("PRAXIS_IDENTITY_STATE_MIN_LOAD", "0.1")))
     top = [a for a in stress() if a["score"] >= threshold][:2]
     if not top:
         return ""
-    parts = ", ".join(f"{a['theme']} {a['score']} ({a['count']} соб.)" for a in top)
-    return f"события нагрузки: {parts} (затухание {HALF_LIFE_DAYS:g}д; только контекст)"
+    parts = ", ".join(frame_language.text('owned.identity.3d0ef26cd2e6', v0=a['theme'], v1=a['score'], v2=a['count']) for a in top)
+    return frame_language.text('owned.identity.dd396044609e', v0=parts, v1=HALF_LIFE_DAYS)
 
 
 # --------------------------------------------------------------------------- #
@@ -881,6 +884,7 @@ def recent_shifts(n: int = 5) -> list[dict]:
         return []
 
 
+@frame_language.pinned
 def state_line(*, include_load: bool = True) -> str:
     """Строка для STATE. Пустая, если рассказывать нечего."""
     parts = []
@@ -888,7 +892,7 @@ def state_line(*, include_load: bool = True) -> str:
     if shifts:
         last = shifts[-1]
         ts = str(last.get("ts") or "")[:16].replace("T", " ")
-        parts.append(f"последняя ревизия души: {ts} — {str(last.get('text') or '')[:80]}")
+        parts.append(frame_language.text('owned.identity.c08c77c86ccc', v0=ts, v1=str(last.get('text') or '')[:80]))
     if include_load:
         sl = stress_line()
         if sl:
