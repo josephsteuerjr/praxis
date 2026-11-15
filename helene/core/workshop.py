@@ -40,6 +40,7 @@ import uuid
 from pathlib import Path
 
 import hands
+import frame_language
 import rails
 import tool_report
 import selfdev
@@ -132,25 +133,26 @@ def _resolve_read(path: str) -> Path | None:
     return cand
 
 
+@frame_language.pinned
 def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
     """Путь для записи. С proposal_id корень = worktree предложения (правка ядра);
     без него — только workspace/soul/memory. -> (Path|None, причина отказа)."""
     raw = str(path or "").strip()
     if not raw:
-        return None, "пустой путь"
+        return None, frame_language.text('workshop.file.0')
     if raw.startswith('kit://'):
-        return None, "Packaged kit is read-only; revise your own soul file or review its kit proposal."
+        return None, frame_language.text('workshop.file.1')
     if proposal_id:
         wt = selfdev.worktree_path(str(proposal_id).strip())
         if not wt.exists():
-            return None, f"нет worktree предложения {proposal_id} — открой proposal(action=start)"
+            return None, frame_language.text('workshop.file.2', v1=f'{proposal_id}')
         p = Path(raw)
         cand = p if p.is_absolute() else (wt / p)
         try:
             cand = cand.resolve()
             cand.relative_to(wt.resolve())
         except (OSError, ValueError):
-            return None, f"путь вне worktree предложения {proposal_id}"
+            return None, frame_language.text('workshop.file.3', v1=f'{proposal_id}')
         return cand, ""
     p = Path(raw)
     cand = p if p.is_absolute() else (BASE / p)
@@ -158,12 +160,10 @@ def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
         cand = cand.resolve()
         rel = cand.relative_to(BASE.resolve())
     except (OSError, ValueError):
-        return None, "путь вне дома"
+        return None, frame_language.text('workshop.file.4')
     first = rel.parts[0] if rel.parts else ""
     if first not in WRITE_ZONES:
-        return None, ("ядро — через предложение: proposal(action=start) → правки в его worktree "
-                      "(передай proposal_id) → proposal(action=submit). Без него пишу только в "
-                      "workspace/, soul/, memory/.")
+        return None, (frame_language.text('workshop.file.5'))
     return cand, ""
 
 
@@ -203,6 +203,7 @@ def _inbox_chat_directory(*, scope: str = "", chat_id: str | int | None = None,
     return INBOX / bucket / room[:96]
 
 
+@frame_language.pinned
 def inbox_accept(name: str, size_bytes: int, day: str | None = None, *,
                  scope: str = "", chat_id: str | int | None = None,
                  chat_kind: str = "", chat_label: str = "") -> tuple[Path | None, str]:
@@ -214,11 +215,10 @@ def inbox_accept(name: str, size_bytes: int, day: str | None = None, *,
     Физические дисковые капы широкие и настраиваемые env."""
     size_mb = max(0, int(size_bytes or 0)) / (1024 * 1024)
     if size_mb > INBOX_FILE_MB:
-        return None, f"файл {size_mb:.0f}МБ больше лимита {INBOX_FILE_MB}МБ — не качаю"
+        return None, frame_language.text('workshop.file.6', v1=f'{size_mb:.0f}', v3=f'{INBOX_FILE_MB}')
     used = _du_mb(INBOX) if INBOX.exists() else 0.0
     if used + size_mb > INBOX_TOTAL_MB:
-        return None, (f"квота inbox исчерпана ({used:.0f}МБ из {INBOX_TOTAL_MB}МБ) — "
-                      "не качаю, пора прибраться в workspace/inbox")
+        return None, (frame_language.text('workshop.file.7', v1=f'{used:.0f}', v3=f'{INBOX_TOTAL_MB}'))
     stamp = day or praxis_time.today().strftime("%Y%m%d")
     safe = inbox_safe_name(name)
     directory = _inbox_chat_directory(scope=scope, chat_id=chat_id,
@@ -268,6 +268,7 @@ def _resolve_inbox(path: str) -> Path | None:
     return _inside(p if p.is_absolute() else BASE / p)
 
 
+@frame_language.pinned
 def when(path: Path) -> str:
     """Когда файл менялся — ЕЁ часами, а не UTC и не «неизвестно».
 
@@ -287,43 +288,44 @@ def when(path: Path) -> str:
     today = praxis_time.today()
     day = moment.date()
     if day == today:
-        return f"сегодня {moment:%H:%M}"
+        return frame_language.text('workshop.file.8', v1=f'{moment:%H:%M}')
     if (today - day).days == 1:
-        return f"вчера {moment:%H:%M}"
+        return frame_language.text('workshop.file.9', v1=f'{moment:%H:%M}')
     if day.year == today.year:
         return f"{moment:%d.%m %H:%M}"
     return f"{moment:%d.%m.%Y}"
 
 
+@frame_language.pinned
 def inbox_list(path: str = "") -> str:
     """Read-only listing exposed in every Telegram channel."""
     p = _resolve_inbox(path)
     if p is None or not p.is_dir():
-        return "Нет такой папки внутри workspace/inbox."
+        return frame_language.text('workshop.file.10')
     rows = []
     for child in sorted(p.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold())):
         mark = "/" if child.is_dir() else ""
-        size = "" if child.is_dir() else f" · {child.stat().st_size}Б"
+        size = "" if child.is_dir() else frame_language.text('workshop.file.11', v1=f'{child.stat().st_size}')
         stamp = when(child)
         rows.append(f"{child.relative_to(BASE).as_posix()}{mark}{size}"
                     + (f" · {stamp}" if stamp else ""))
-    return "\n".join(rows[:250]) or "(пусто)"
+    return "\n".join(rows[:250]) or frame_language.text('workshop.file.12')
 
 
+@frame_language.pinned
 def inbox_read(path: str, start: int = 0, end: int = 0) -> str:
     """Read a text-like Telegram attachment without granting general filesystem hands."""
     p = _resolve_inbox(path)
     if p is None:
-        return "Не читаю: путь должен быть внутри workspace/inbox."
+        return frame_language.text('workshop.file.13')
     if not p.is_file():
-        return f"Нет файла {path}."
+        return frame_language.text('workshop.file.14', v1=f'{path}')
     try:
         sample = p.read_bytes()[:4096]
     except OSError as exc:
-        return f"Не прочитала файл: {type(exc).__name__}."
+        return frame_language.text('workshop.file.15', v1=f'{type(exc).__name__}')
     if b"\x00" in sample:
-        return (f"{p.relative_to(BASE).as_posix()}: бинарный файл, {p.stat().st_size}Б. "
-                "Текстовым просмотрщиком его не разбираю.")
+        return (frame_language.text('workshop.file.16', v0=f'{p.relative_to(BASE).as_posix()}', v2=f'{p.stat().st_size}'))
     return fs_read(p.relative_to(BASE).as_posix(), start=start, end=end)
 
 
@@ -338,11 +340,12 @@ def _du_mb(path: Path) -> float:
     return total / (1024 * 1024)
 
 
+@frame_language.pinned
 def _cap_output(out: str, cap: int = RUN_OUT_CAP) -> str:
     if len(out) <= cap:
         return out
     head, tail = out[: int(cap * 0.6)], out[-int(cap * 0.35):]
-    return f"{head}\n… (вырезано {len(out) - len(head) - len(tail)} символов) …\n{tail}"
+    return frame_language.text('workshop.file.17', v0=f'{head}', v2=f'{len(out) - len(head) - len(tail)}', v4=f'{tail}')
 
 
 # --------------------------------------------------------------------------- #
@@ -436,20 +439,21 @@ def fs_probe_image(path: str) -> tuple[str, str, int] | None:
         return None
 
 
+@frame_language.pinned
 def fs_read(path: str, start: int = 0, end: int = 0) -> str:
     p = _resolve_read(path)
     if p is None:
         rails.deny("hands_floor", "fs_read", f"вне дома: {str(path)[:120]}")
         tool_report.note(outcome="refused", target=str(path))
-        return "Не читаю: путь вне дома. Для хоста используй Forge scope='host'."
+        return frame_language.text('workshop.file.31')
     if not p.is_file():
         tool_report.note(outcome="refused", target=str(path))
-        return f"Нет файла {path}."
+        return frame_language.text('workshop.file.32', v1=f'{path}')
     raw = p.read_bytes()
     tool_report.note(outcome="ok", target=str(path))
     digest = hashlib.sha256(raw).hexdigest()
     if b"\0" in raw[:4096]:
-        return f"Бинарный файл {path}; bytes={len(raw)}; sha256={digest}."
+        return frame_language.text('workshop.file.33', v1=f'{path}', v3=f'{len(raw)}', v5=f'{digest}')
     try:
         text = raw.decode("utf-8")
         decoding = "utf-8 exact"
@@ -462,8 +466,8 @@ def fs_read(path: str, start: int = 0, end: int = 0) -> str:
     s = max(1, int(start) or 1)
     e = min(len(lines), int(end) or (s + READ_CAP_LINES - 1))
     body = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(s, e + 1))
-    tail = f"\n… (в файле {len(lines)} строк; дальше — fs_read(start={e + 1}))" if e < len(lines) else ""
-    return (body + tail if body else "(пустой файл)") + (
+    tail = frame_language.text('workshop.file.35', v1=f'{len(lines)}', v3=f'{e + 1}') if e < len(lines) else ""
+    return (body + tail if body else frame_language.text('workshop.file.36')) + (
         f"\n[fs_read whole-file sha256={digest}; bytes={len(raw)}; {decoding}]"
     )
 
@@ -471,6 +475,7 @@ def fs_read(path: str, start: int = 0, end: int = 0) -> str:
 SHRINK_GUARD_RATIO = 0.7    # PASS 16.5: новый текст < 70% старого = похоже на усечение
 
 
+@frame_language.pinned
 def _mutation_target(path: str, proposal_id: str, op: str) -> tuple[Path | None, str]:
     """Resolve and check the actual target, rejecting symlink components altogether.
 
@@ -486,17 +491,18 @@ def _mutation_target(path: str, proposal_id: str, op: str) -> tuple[Path | None,
                                            if proposal_id else BASE / raw)
     try:
         if any(part.is_symlink() for part in (raw, *raw.parents)):
-            return None, "символическая ссылка в пути записи"
+            return None, frame_language.text('workshop.file.38')
     except OSError:
-        return None, "не удалось проверить компоненты пути"
+        return None, frame_language.text('workshop.file.39')
     return p, ""
 
 
 
+@frame_language.pinned
 def _publish(p: Path, data: bytes, before: str | None, path: str, proposal_id: str, success: str) -> dict:
     def moved() -> str:
         again, err = _mutation_target(path, proposal_id, "edit")
-        return "" if again == p else (err or "путь изменился")
+        return "" if again == p else (err or frame_language.text('workshop.file.40'))
     result = hands.publish(p, data, before, recheck=moved)
     if result["status"] == "confirmed":
         log.info("%s (%d байт)%s", success, len(data), f" [proposal {proposal_id}]" if proposal_id else "")
@@ -504,6 +510,7 @@ def _publish(p: Path, data: bytes, before: str | None, path: str, proposal_id: s
     return result
 
 
+@frame_language.pinned
 def _fs_write_unlocked(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
                        force: bool = False, expected_sha256: str = "") -> dict:
     """Создать файл; overwrite=True — осознанно переписать существующий.
@@ -513,32 +520,30 @@ def _fs_write_unlocked(path: str, content: str, proposal_id: str = "", overwrite
     p, err = _mutation_target(path, proposal_id, "edit")
     if p is None:
         rails.deny("hands_floor", "fs_write", f"{err}: {str(path)[:100]}")
-        return hands.outcome("refused", f"Не пишу: {err}")
+        return hands.outcome("refused", frame_language.text('workshop.file.41', v1=f'{err}'))
     try:
         raw, before = hands.snapshot(p)
         data = content.encode("utf-8")
     except OSError as exc:
-        return hands.outcome("refused", f"Не пишу: {path} не читается ({type(exc).__name__}).")
+        return hands.outcome("refused", frame_language.text('workshop.file.42', v1=f'{path}', v3=f'{type(exc).__name__}'))
     except (AttributeError, UnicodeError):
-        return hands.outcome("refused", "Не пишу: content должен быть текстом, кодируемым в UTF-8.")
+        return hands.outcome("refused", frame_language.text('workshop.file.43'))
     conflict = hands.version_conflict(expected_sha256, before)
     if conflict:
         return hands.outcome("refused", conflict, before)
     if raw is not None:
         if not overwrite:
-            return hands.outcome("refused", (f"Файл {path} уже существует — правь точечно через edit (action=replace), "
-                                             "или передай overwrite=true, если правда хочешь переписать целиком."),
+            return hands.outcome("refused", (frame_language.text('workshop.file.44', v1=f'{path}')),
                                  before)
         old_len = len(raw.decode("utf-8", "replace"))
         if not force and old_len > 0 and len(content) < old_len * SHRINK_GUARD_RATIO:
             pct = round(len(content) / old_len * 100)
             rails.deny("hands_floor", "fs_write", f"shrink-guard {pct}%: {str(path)[:100]}")
-            return hands.outcome("refused", (f"Стоп: новый текст {path} — {pct}% от старого ({old_len} → {len(content)} симв.). "
-                                             "Похоже на случайное усечение. Точечно — edit с action=replace; если перезапись "
-                                             "осознанная — force=true."), before)
-    return _publish(p, data, before, path, proposal_id, f"Записала {path} ({len(content)} симв.).")
+            return hands.outcome("refused", (frame_language.text('workshop.file.45', v1=f'{path}', v3=f'{pct}', v5=f'{old_len}', v7=f'{len(content)}')), before)
+    return _publish(p, data, before, path, proposal_id, frame_language.text('workshop.file.46', v1=f'{path}', v3=f'{len(content)}'))
 
 
+@frame_language.pinned
 def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "", expected_sha256: str = "", *, all: bool = False) -> dict:
     """Точная правка: `old` должен встречаться РОВНО один раз. 0 или >1 — отказ с подсказкой.
 
@@ -547,13 +552,13 @@ def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "", expe
     p, err = _mutation_target(path, proposal_id, "edit")
     if p is None:
         rails.deny("hands_floor", "edit", f"{err}: {str(path)[:100]}")
-        return hands.outcome("refused", f"Не правлю: {err}")
+        return hands.outcome("refused", frame_language.text('workshop.file.47', v1=f'{err}'))
     try:
         raw, before = hands.snapshot(p)
     except OSError as exc:
-        return hands.outcome("refused", f"Не правлю: {path} не читается ({type(exc).__name__}).")
+        return hands.outcome("refused", frame_language.text('workshop.file.48', v1=f'{path}', v3=f'{type(exc).__name__}'))
     if raw is None:
-        return hands.outcome("refused", f"Нет файла {path} — новый файл создаётся edit(action=write).")
+        return hands.outcome("refused", frame_language.text('workshop.file.49', v1=f'{path}'))
     conflict = hands.version_conflict(expected_sha256, before)
     if conflict:
         return hands.outcome("refused", conflict, before)
@@ -561,8 +566,8 @@ def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "", expe
     if edited is None:
         return hands.outcome("refused", refusal, before)
     count = raw.decode("utf-8").count(old) if all else 1
-    count_text = "1 вхождение заменено" if count == 1 else f"{count} вхождений заменено"
-    result = _publish(p, edited, before, path, proposal_id, f"Поправила {path}: {count_text}.")
+    count_text = frame_language.text('workshop.file.50') if count == 1 else frame_language.text('workshop.file.51', v0=f'{count}')
+    result = _publish(p, edited, before, path, proposal_id, frame_language.text('workshop.file.52', v1=f'{path}', v3=f'{count_text}'))
     if result["status"] == "confirmed":
         result["replacements"] = count
     return result
@@ -1003,25 +1008,26 @@ def mutation_lock():
                     timeout=10.0)
 
 
+@frame_language.pinned
 def _serialized_write(path,proposal_id,operation) -> dict:
     import forge
     import forge_roots
     target,error=_mutation_target(path,proposal_id,"edit")
-    if target is None:return hands.outcome('refused','Не пишу: '+str(error))
+    if target is None:return hands.outcome('refused',frame_language.text('workshop.file.116')+str(error))
     result=None
     try:
         # Same order as Forge: physical root -> short workshop transaction.
         with forge_roots.transaction(target.parent,forge.STATE_DIR,10):
             reason=forge_roots.foreign_writer_reason(forge,'',root=target.parent)
-            if reason:return hands.outcome('refused','Write not admitted while Forge owns this root: '+reason)
+            if reason:return hands.outcome('refused',frame_language.text('workshop.file.117')+reason)
             with mutation_lock() as lock:
                 result=operation()
-            if lock.lost_to_takeover:return hands.outcome('in_doubt','Write outcome unknown: transaction ownership changed; inspect before retry.')
+            if lock.lost_to_takeover:return hands.outcome('in_doubt',frame_language.text('workshop.file.118'))
             return result
     except (TimeoutError,OSError) as exc:
         # Refusal means "nothing was done": only true while the operation has not run.
         if result is not None:return hands.after_release_failure(result,exc)
-        return hands.outcome('refused',f'Write not admitted: {type(exc).__name__}: {exc}')
+        return hands.outcome('refused',frame_language.text('workshop.file.119', v1=f'{type(exc).__name__}', v3=f'{exc}'))
 
 
 def _reported(op: str, path: str, result: dict) -> str:
@@ -1040,15 +1046,16 @@ def fs_write(path: str,content: str,proposal_id: str='',overwrite: bool=False,fo
     return _reported('write',path,fs_write_result(path,content,proposal_id,overwrite,force,expected_sha256))
 
 
+@frame_language.pinned
 def fs_edit_result(path: str='', old: str='', new: str='', proposal_id: str='', expected_sha256: str='',
                    files=None, mode: str='snapshot', *, all: bool=False) -> dict:
     if files is not None:
         if path or old or new or expected_sha256 or all:
             import edit_batch
-            return edit_batch.refused(files, 'Do not combine files with single-file arguments.')
+            return edit_batch.refused(files, frame_language.text('workshop.file.121'))
         return _serialized_batch(files, proposal_id, mode)
     if mode != 'snapshot':
-        return hands.outcome('refused', 'mode applies only to files batches.')
+        return hands.outcome('refused', frame_language.text('workshop.file.122'))
     return _serialized_write(path,proposal_id,lambda:_fs_edit_unlocked(path,old,new,proposal_id,expected_sha256,all=all))
 
 
@@ -1064,16 +1071,17 @@ def fs_edit(path: str='', old: str='', new: str='', proposal_id: str='', expecte
     return _reported('edit', path, value)
 
 
+@frame_language.pinned
 def _serialized_batch(files, proposal_id, mode):
     import edit_batch
     import forge
     import forge_roots
     if not isinstance(files, list) or not files:
-        return edit_batch.refused(files, 'files must be a nonempty list.')
+        return edit_batch.refused(files, frame_language.text('workshop.file.123'))
     targets = []
     for item in files:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not item['path']:
-            return edit_batch.refused(files, 'Each file needs a path.')
+            return edit_batch.refused(files, frame_language.text('workshop.file.124'))
         target, error = _mutation_target(item['path'], proposal_id, 'edit')
         if target is None:
             return edit_batch.refused(files, str(error))
@@ -1086,28 +1094,29 @@ def _serialized_batch(files, proposal_id, mode):
             for target in targets:
                 reason = forge_roots.foreign_writer_reason(forge, '', root=target.parent)
                 if reason:
-                    return edit_batch.refused(files, 'Write not admitted while Forge owns this root: '+reason)
+                    return edit_batch.refused(files, frame_language.text('workshop.file.125')+reason)
             with mutation_lock() as lock:
                 value = edit_batch.apply(files, lambda path: _mutation_target(path, proposal_id, "edit"), mode)
             if lock.lost_to_takeover:
-                return edit_batch.uncertain(value, 'Transaction ownership changed; inspect before retry.')
+                return edit_batch.uncertain(value, frame_language.text('workshop.file.126'))
             return value
     except (OSError, ValueError) as exc:
         if value is not None:
-            return edit_batch.uncertain(value, f'Lock release failed: {type(exc).__name__}.')
-        return edit_batch.refused(files, f'Write not admitted: {type(exc).__name__}.')
+            return edit_batch.uncertain(value, frame_language.text('workshop.file.127', v1=f'{type(exc).__name__}'))
+        return edit_batch.refused(files, frame_language.text('workshop.file.128', v1=f'{type(exc).__name__}'))
 
 
+@frame_language.pinned
 def fs_read_result(path: str) -> dict:
     """Точный текст и версия файла для скрипта: те же границы дома, что у fs_read."""
     p = _resolve_read(path)
     if p is None:
-        return {"status": "refused", "message": "Не читаю: путь вне дома."}
+        return {"status": "refused", "message": frame_language.text('workshop.file.129')}
     if not p.is_file():
-        return {"status": "refused", "message": f"Нет файла {path}."}
+        return {"status": "refused", "message": frame_language.text('workshop.file.130', v1=f'{path}')}
     raw = p.read_bytes()
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return {"status": "refused", "message": f"Файл {path} не в UTF-8."}
+        return {"status": "refused", "message": frame_language.text('workshop.file.131', v1=f'{path}')}
     return {"status": "ok", "text": text, "sha256": hashlib.sha256(raw).hexdigest()}

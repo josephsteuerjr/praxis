@@ -94,7 +94,7 @@ class TestWorkshopPython(Home, unittest.TestCase):
     # --- fs_write: перезапись и гард усечения (16.5) ------------------------ #
 
     def test_new_file_written(self):
-        self.assertIn("Записала", workshop.fs_write("workspace/a.py", "print(1)\n"))
+        self.assertIn(workshop.frame_language.text('workshop.file.46',v1='workspace/a.py',v3=9), workshop.fs_write("workspace/a.py", "print(1)\n"))
         self.assertEqual((self.tmp / "workspace" / "a.py").read_text(encoding="utf-8"), "print(1)\n")
 
     def test_existing_file_refused_without_overwrite(self):
@@ -106,7 +106,7 @@ class TestWorkshopPython(Home, unittest.TestCase):
     def test_overwrite_allowed_when_asked(self):
         workshop.fs_write("workspace/a.py", "x" * 100)
         out = workshop.fs_write("workspace/a.py", "y" * 100, overwrite=True)
-        self.assertIn("Записала", out)
+        self.assertIn(workshop.frame_language.text('workshop.file.46',v1='workspace/a.py',v3=100), out)
         self.assertEqual((self.tmp / "workspace" / "a.py").read_text(encoding="utf-8"), "y" * 100)
 
     def test_shrink_guard_blocks_truncation(self):
@@ -118,7 +118,7 @@ class TestWorkshopPython(Home, unittest.TestCase):
     def test_shrink_guard_lifted_by_force(self):
         workshop.fs_write("workspace/a.py", "x" * 100)
         out = workshop.fs_write("workspace/a.py", "y" * 50, overwrite=True, force=True)
-        self.assertIn("Записала", out)
+        self.assertIn(workshop.frame_language.text('workshop.file.46',v1='workspace/a.py',v3=50), out)
         self.assertEqual(len((self.tmp / "workspace" / "a.py").read_text(encoding="utf-8")), 50)
 
     # --- fs_edit: точность и подсказки строк (16.5) ------------------------- #
@@ -335,7 +335,7 @@ class TestVersionedEdits(Home, unittest.TestCase):
         lost = contextlib.nullcontext(types.SimpleNamespace(lost_to_takeover=True))
         with mock.patch.object(workshop, "mutation_lock", lambda: lost):
             out = workshop.fs_edit("workspace/a.py", "a = 1", "a = 2")
-        self.assertIn("outcome unknown", out)
+        self.assertEqual(workshop.frame_language.text('workshop.file.118'), out)
         self.assertNotIn("confirmed", out)
 
     def test_lock_release_failure_after_the_write_is_not_a_refusal(self):
@@ -374,7 +374,7 @@ class TestVersionedEdits(Home, unittest.TestCase):
 
         with mock.patch.object(workshop, "mutation_lock", busy):
             out = workshop.fs_write("workspace/a.py", "x = 1\n")
-        self.assertIn("not admitted", out)
+        self.assertEqual(workshop.frame_language.text('workshop.file.119',v1='TimeoutError',v3='занято'), out)
         self.assertFalse((self.tmp / "workspace/a.py").exists())
 
     def test_writers_under_the_shared_lock_have_real_compare_and_swap(self):
