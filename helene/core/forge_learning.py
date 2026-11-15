@@ -15,6 +15,8 @@ import uuid
 from pathlib import Path
 from typing import Iterable
 
+import frame_language
+
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -92,6 +94,16 @@ def contract_status(contract: dict | None) -> str:
     return "неизвестно"
 
 
+@frame_language.pinned
+def format_contract_status(status: str) -> str:
+    """Render known canonical verdicts; preserve foreign values as raw data."""
+    key = {"выполнен": "forge.learning.contract.met",
+           "не выполнен": "forge.learning.contract.unmet",
+           "неизвестно": "forge.learning.contract.unknown"}.get(status)
+    return frame_language.text(key) if key else str(status or "")
+
+
+@frame_language.pinned
 def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
            changed: list[str], verification: dict | None = None, lesson: str = "",
            regression: str = "", outcome: str = "",
@@ -116,16 +128,16 @@ def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
         if failures:
             names = ", ".join(str(row.get("id") or row.get("command") or "probe")[:100]
                               for row in failures[:4])
-            explicit = f"Ранний probe должен был поймать: {names}. Сохранять targeted-проверку до полного gate."
+            explicit = frame_language.text('forge.learning.4', v1=f'{names}')
         elif changed:
-            explicit = "Targeted probes и итоговый gate согласились; повторять тот же evidence-path для сходных изменений."
+            explicit = frame_language.text('forge.learning.5')
         else:
-            explicit = "Задача завершилась без файлового diff; сначала проверять, нужен ли кодовый change вообще."
+            explicit = frame_language.text('forge.learning.6')
     if contract and not str(lesson or "").strip():
         # 06.10: к автоматическому уроку дописывается вердикт контракта — иначе recall
         # (он ищет по тексту урока) не отличит закрытую-по-контракту задачу от прочих,
         # а verdict-поле contract останется невидимым для поиска похожих уроков.
-        explicit = (explicit + "\nконтракт " + contract_status(contract)).strip()
+        explicit = (explicit + frame_language.text('forge.learning.7') + format_contract_status(contract_status(contract))).strip()
     row = {
         "id": "lesson-" + uuid.uuid4().hex[:10], "at": _now(), "task_id": task.get("id"),
         "project": root.name, "root": str(root), "goal": task.get("goal", ""),
@@ -143,13 +155,13 @@ def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
     return row
 
 
+@frame_language.pinned
 def format_recall(rows: list[dict]) -> str:
     if not rows:
-        return "Для этой задачи похожих проверяемых уроков пока нет."
+        return frame_language.text('forge.learning.8')
     parts = []
     for row in rows:
         parts.append(
-            f"{row.get('id')} score={row.get('score', 1)} · {row.get('project')} · {row.get('goal')}\n"
-            f"урок: {row.get('lesson')}\nрегрессия: {row.get('regression') or 'не записана'}"
+            frame_language.text('forge.learning.9', v0=f"{row.get('id')}", v2=f"{row.get('score', 1)}", v4=f"{row.get('project')}", v6=f"{row.get('goal')}", v8=f"{row.get('lesson')}", v10=f"{row.get('regression') or frame_language.text('forge.learning.10')}")
         )
     return "\n\n".join(parts)

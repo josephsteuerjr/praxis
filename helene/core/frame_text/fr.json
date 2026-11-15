@@ -3330,5 +3330,15 @@
   "forge.workers.111": "identités d’unités ambiguës : {v1}",
   "forge.workers.112": "{v0}↔{v2} (liaison retrouvée)",
   "forge.workers.113": "déclaration indicative de prise en charge des fichiers",
-  "forge.workers.114": "La tâche n’a pas de plan swarm ; action=plan accepte JSON nodes[]."
+  "forge.workers.114": "La tâche n’a pas de plan swarm ; action=plan accepte JSON nodes[].",
+  "forge.learning.4": "Essais enregistrés en échec ou non confirmés : {v1}. Pour une tâche similaire, vérifie leurs commandes et résultats avant le passage complet.",
+  "forge.learning.5": "Les fichiers modifiés figurent dans la fiche. Pour des changements similaires, vérifie les commandes et résultats enregistrés ; un diff ne prouve pas à lui seul la réussite des contrôles.",
+  "forge.learning.6": "La liste des fichiers modifiés est vide dans cette fiche. Vérifie d’abord l’état du projet et si un changement de code est nécessaire.",
+  "forge.learning.7": "\ncontrat ",
+  "forge.learning.8": "Aucune leçon similaire étayée par des preuves pour cette tâche pour le moment.",
+  "forge.learning.9": "{v0} score={v2} · {v4} · {v6}\nleçon : {v8}\nrégression : {v10}",
+  "forge.learning.10": "non renseignée",
+  "forge.learning.contract.met": "respecté",
+  "forge.learning.contract.unmet": "non respecté",
+  "forge.learning.contract.unknown": "inconnu"
 }

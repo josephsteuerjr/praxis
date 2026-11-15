@@ -3330,5 +3330,15 @@
   "forge.workers.111": "执行单元身份不明确：{v1}",
   "forge.workers.112": "{v0}↔{v2}（已恢复对应关系）",
   "forge.workers.113": "建议性的文件归属声明",
-  "forge.workers.114": "任务没有 swarm 计划；action=plan 接受 JSON nodes[]。"
+  "forge.workers.114": "任务没有 swarm 计划；action=plan 接受 JSON nodes[]。",
+  "forge.learning.4": "记录中有未成功或尚未确认的检查：{v1}。处理类似任务时，先查看这些命令及其结果，再进行完整运行。",
+  "forge.learning.5": "记录中列出了更改的文件。处理类似更改时，请查看记录中的命令及结果；仅有 diff 不能证明检查已通过。",
+  "forge.learning.6": "此记录的已更改文件列表为空。请先确认项目状态，以及是否确实需要修改代码。",
+  "forge.learning.7": "\n约定 ",
+  "forge.learning.8": "此任务尚无类似且有证据支持的经验记录。",
+  "forge.learning.9": "{v0} score={v2} · {v4} · {v6}\n经验：{v8}\n回归检查：{v10}",
+  "forge.learning.10": "未记录",
+  "forge.learning.contract.met": "已满足",
+  "forge.learning.contract.unmet": "未满足",
+  "forge.learning.contract.unknown": "未知"
 }

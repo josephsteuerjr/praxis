@@ -5885,7 +5885,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         # Контракт — advisory-расписка: исход честно назван, finish не блокирован (закон 3).
         # Вердикт — из единого источника (forge_learning.contract_status), как в уроке.
         verify = contract.get("verify") or {}
-        contract_note = (frame_language.text('forge.finish.36', v1=f'{forge_learning.contract_status(contract)}', v3=f"{verify.get('met', 0)}", v5=f"{verify.get('unmet', 0)}", v7=f"{verify.get('unknown', 0)}"))
+        contract_note = (frame_language.text('forge.finish.36', v1=f'{forge_learning.format_contract_status(forge_learning.contract_status(contract))}', v3=f"{verify.get('met', 0)}", v5=f"{verify.get('unmet', 0)}", v7=f"{verify.get('unknown', 0)}"))
     return _cap("\n".join([
         f"{task_id}: {new_status}",
         frame_language.text('forge.finish.37', v1=f"{stat_before.strip() or frame_language.text('forge.finish.38')}"),

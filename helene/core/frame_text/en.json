@@ -3330,5 +3330,15 @@
   "forge.workers.111": "ambiguous unit identities: {v1}",
   "forge.workers.112": "{v0}↔{v2} (binding recovered)",
   "forge.workers.113": "advisory ownership claim",
-  "forge.workers.114": "Task has no swarm plan; action=plan accepts JSON nodes[]."
+  "forge.workers.114": "Task has no swarm plan; action=plan accepts JSON nodes[].",
+  "forge.learning.4": "Recorded unsuccessful or unconfirmed probes: {v1}. For a similar task, inspect their commands and outcomes before the full run.",
+  "forge.learning.5": "The record lists changed files. For similar changes, inspect the recorded commands and outcomes; a diff alone does not prove checks passed.",
+  "forge.learning.6": "This record has an empty changed-file list. First establish the project state and whether a code change is needed.",
+  "forge.learning.7": "\ncontract ",
+  "forge.learning.8": "No similar evidence-backed lessons for this task yet.",
+  "forge.learning.9": "{v0} score={v2} · {v4} · {v6}\nlesson: {v8}\nregression: {v10}",
+  "forge.learning.10": "not recorded",
+  "forge.learning.contract.met": "met",
+  "forge.learning.contract.unmet": "unmet",
+  "forge.learning.contract.unknown": "unknown"
 }
