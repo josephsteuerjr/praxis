@@ -32,6 +32,12 @@ def sources() -> dict:
     return json.loads(Path(__file__).with_name('tool_language_sources.json').read_text(encoding='utf-8'))
 
 
+@lru_cache(maxsize=1)
+def native_registry() -> dict:
+    """Installed harness tools, including distinct desktop/server shapes."""
+    return json.loads(Path(__file__).with_name('native_tool_language_registry.json').read_text(encoding='utf-8'))
+
+
 def fingerprint(tool: dict) -> str:
     value = json.dumps(tool,ensure_ascii=False,sort_keys=True,separators=(',',':'))
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
@@ -41,7 +47,7 @@ def _rules(name):
     with _runtime_lock:
         variants = tuple(_runtime.get(name, {}).values())
     static = registry().get(name)
-    return variants + ((static,) if static else ())
+    return variants + ((static,) if static else ()) + tuple(native_registry().get(name, ()))
 
 
 def _raw_rule(tool):
@@ -208,3 +214,11 @@ def coverage(tools: list, *, names=None) -> dict:
     stale = [name for name,rule in selected.items()
              if name in by_name and fingerprint(by_name[name]) != rule['sha256']]
     return {'reviewed':len(selected),'missing':missing,'stale':stale}
+
+
+def native_coverage(tools: list) -> dict:
+    """Qualification census includes every variant, even duplicate tool names."""
+    actual = {(tool.get('name'), fingerprint(tool)) for tool in tools if isinstance(tool, dict)}
+    variants = [(name, rule) for name, rules in native_registry().items() for rule in rules]
+    return {'reviewed': len(variants), 'missing': [rule['variant'] for name, rule in variants
+            if (name, rule['sha256']) not in actual]}

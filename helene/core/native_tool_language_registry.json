@@ -1,0 +1,408 @@
+{
+  "mount_request": [
+    {
+      "sha256": "83874b4f9b26455f4d2dab030afe4e52cedeb9738adeabf628216fb6ce5581e6",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.mount.0",
+          "source": "Попросить у владельца папку вне твоего дома. Ты работаешь в папке Hélène; наружу открыто только то, что владелец смонтировал сам. action=ask — попросить: path (полный путь к папке), why (зачем она тебе, одной строкой — это читает владелец), access = read | write. action=list — что уже открыто, о чём ты уже просил и на что получил отказ. Просьба не открывает папку: решает владелец, и открытой она станет без твоего участия. Повторять просьбу бесполезно — отказ записан, и на второй вопрос придёт он же.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "key": "native.schema.mount.1",
+          "source": "ask — попросить папку, list — посмотреть список",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "path",
+            "description"
+          ],
+          "key": "native.schema.mount.2",
+          "source": "полный путь к папке",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "why",
+            "description"
+          ],
+          "key": "native.schema.mount.3",
+          "source": "зачем она тебе, одной строкой",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "access",
+            "description"
+          ],
+          "key": "native.schema.mount.4",
+          "source": "read — только читать, write — читать и писать",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.mount.purpose",
+      "supplier": "desk/localharness/fence.py",
+      "symbol": "MOUNT_TOOL",
+      "variant": "mount"
+    }
+  ],
+  "self_review": [
+    {
+      "sha256": "af63fd5dce86e1bc0882a536821bd39251683d1a74f94a1a30a525010da7eef3",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.self_review.0",
+          "source": "Voluntary independent Forge review: choose your question, criteria, materials and depth when criticism helps. Ordinary work may finish without review or a skip ritual. Omit subject for legacy source-only review; otherwise freeze typed plan (text), change (matching base/candidate material refs, explicit absences), or task_result (assignment/exact answer/artifacts/effect and check claims). All refs require exact SHA and remain owner-only; no ambient memory or execution. For conflict updates use source_update and its strict full-battery panel, never ordinary disposition. Verdicts and author decisions stay separate; source/material clear is not installed proof. Owner dialogue only.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "critics",
+            "description"
+          ],
+          "key": "native.schema.self_review.1",
+          "source": "ordinary request: choose critic count on existing configured voice models; default follows policy/depth",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "text",
+            "description"
+          ],
+          "key": "native.schema.self_review.2",
+          "source": "plan: exact authored plan text",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "assignment",
+            "description"
+          ],
+          "key": "native.schema.self_review.3",
+          "source": "task_result: original assignment",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "answer",
+            "description"
+          ],
+          "key": "native.schema.self_review.4",
+          "source": "task_result: exact answer, not a summary substituted later",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "observed_effects",
+            "description"
+          ],
+          "key": "native.schema.self_review.5",
+          "source": "author claims, not host attestations",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "checks",
+            "description"
+          ],
+          "key": "native.schema.self_review.6",
+          "source": "author claims; attach exact evidence as materials",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "materials",
+            "items",
+            "properties",
+            "name",
+            "description"
+          ],
+          "key": "native.schema.self_review.7",
+          "source": "logical name, same on both change sides",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "materials",
+            "items",
+            "properties",
+            "path",
+            "description"
+          ],
+          "key": "native.schema.self_review.8",
+          "source": "explicit relative UTF-8 file; no memory/config/credentials or links",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "subject",
+            "properties",
+            "materials",
+            "items",
+            "properties",
+            "sha256",
+            "description"
+          ],
+          "key": "native.schema.self_review.9",
+          "source": "exact bytes; absent material omits SHA",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.self_review.purpose",
+      "supplier": "desk/localharness/self_review_integration.py",
+      "symbol": "TOOL",
+      "variant": "self_review"
+    }
+  ],
+  "review_kit": [
+    {
+      "sha256": "4f1f4a724c908190c8352b22b58c7f6271ef16bc44b4bea6391c7ecf008ffa38",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.kit.0",
+          "source": "Review a distribution proposal to my SOUL/VOICE/self/skill Markdown. list shows IDs, read returns complete proposed and previous text. reject records my refusal; accept ONLY acknowledges bytes I have already written using manage_identity/write_skill, or fs_write with CAS for INDEX. This tool never edits my soul.",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.kit.purpose",
+      "supplier": "desk/localharness/kit_proposals.py",
+      "symbol": "_TOOL",
+      "variant": "kit"
+    }
+  ],
+  "update_inspection": [
+    {
+      "sha256": "d3bc39c8f6771a25755b39c119fd39acde0250dd5ec6bdc0777a95f6daae85d8",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.inspection.0",
+          "source": "Осмотр установленного обновления. status показывает просьбу, цели выпуска и названные баги. report сохраняет твой фактический отчёт: по каждому пункту passed/problem/unverified и проверяемый след evidence; не проверял — unverified с причиной. После report расскажи владельцу итог рукой reply. Эта рука не принимает установку и не включает откат.",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.inspection.purpose",
+      "supplier": "desk/localharness/update_inspection.py",
+      "symbol": "TOOL",
+      "variant": "inspection"
+    }
+  ],
+  "source_update": [
+    {
+      "sha256": "01c2205595d214c79d23431d34b9a17bc3816a77950c937f0e0f4f120300867d",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.source_update.0",
+          "source": "Resolve ONE complete owner-requested update: status lists all selected_cores; core-0/path and core-1/path address each distinct core, app/path is the ONE common application. diff shows A->local and A->incoming changes; read returns one side with pagination. resolve supplies full UTF8 or a side; patch replaces one exact fragment using before/after. Repairs outside conflicts need reason and expected_candidate_sha256 from status. finish declares the semantic candidate complete. For new automatic jobs the durable updater then runs the composition-bound selected/full verification policy, independent review and the already-authorized mechanical switch after clear. Read status and repair real findings, then finish again. Do not poll/restart the same work or ask for new owner permission. Verify records exact selected/full scope; widen dynamic impact with full_tests or extra_tests and test_reason on finish/verify. Review requires exact evidence, not passing tests; apply requires clear review. Acceptance is delegated to you: inspect the panel evidence, repair findings, finish again, and verify installed behavior after the authorized update. Do not ask the owner to run review or confirm it again. status supplies candidate_state, review_evidence and next_action. Run the relevant user journey yourself, including headless UI checks when available. Check offered tool/input, actual harness execution and returned model observation separately; a request is not proof of execution, and source tests are not installed acceptance. Use this update panel, not ordinary self_review on the old live Forge. A clear panel binds exact source bytes; never manufacture approval or bypass Stop.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "full_tests",
+            "description"
+          ],
+          "key": "native.schema.source_update.1",
+          "source": "Widen to the full battery; requires test_reason.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "extra_tests",
+            "description"
+          ],
+          "key": "native.schema.source_update.2",
+          "source": "Additional exact test-module paths; requires test_reason.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "test_reason",
+            "description"
+          ],
+          "key": "native.schema.source_update.3",
+          "source": "Why dynamic or indirect impact needs these additional checks.",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.source_update.purpose",
+      "supplier": "desk/localharness/source_update.py",
+      "symbol": "TOOL",
+      "variant": "source_update"
+    }
+  ],
+  "update_request": [
+    {
+      "sha256": "0aeb70f94d9131d7503cd5c68cffa314e79f8df8d1a31347e8b5fe09a8d43859",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.update_server.0",
+          "source": "Обновить Hélène на этом сервере. Свой контейнер изнутри не заменить — там нет ни докера, ни путей хоста, и так задумано. Рядом живёт исполнитель обновлений: ты кладёшь ему план, он сверяет официальный выпуск (версия, архив, sha256) и по «да» владельца сам качает, собирает новую версию, откладывает копию, переносит твои правки в `tree/` и `app/` (что не ляжет — отдаст тебе в workspace/update-<версия>/), запускает её и проверяет. Ты на эти минуты остановишься; поднявшись, получишь известие о новой версии. Осмотри её и сообщи владельцу о найденных проблемах. Обновление не ждёт твоей приёмки.\nС владельцем говори просто: версии и что изменится — без sha256, контейнеров и путей, пока о них не спросят.\naction=status — есть ли исполнитель, какая версия стоит, какая есть новее, что с последним планом.\naction=plan — обновиться: version (номер 1.2.3 или latest), backup (full — копия кода и всей data/, code — без копии data/, если места мало), reason — зачем, одной-двумя фразами простыми словами. Если в этом ходе владелец сам просит обновиться (или говорит «да» на твоё предложение) — передай его слова дословно в owner_words: это и есть его «да», обновление начнётся сразу. Без owner_words план ждёт согласия владельца — кнопкой «Обновить» в окне или словами тебе.\naction=confirm — передать «да» владельца на план, который уже ждёт согласия. Только в ходе, который начал сам владелец своими словами, и только если он сказал «да» именно на этот план; owner_words — его слова дословно. Решать за него нельзя.\naction=decline — снять план, ждущий подтверждения; reason — почему.\nПосле обновления осмотри приложение и свои правки. Приёмки по сроку и отката по молчанию больше нет; проблемы сообщай владельцу обычным текстом.",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "key": "native.schema.update_server.1",
+          "source": "status | plan | confirm | decline",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "version",
+            "description"
+          ],
+          "key": "native.schema.update_server.2",
+          "source": "для plan: 1.2.3 или latest (по умолчанию)",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "backup",
+            "description"
+          ],
+          "key": "native.schema.update_server.3",
+          "source": "для plan: full (по умолчанию) или code",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "reason",
+            "description"
+          ],
+          "key": "native.schema.update_server.4",
+          "source": "для plan и decline: зачем/почему — это читает владелец",
+          "present": true
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "owner_words",
+            "description"
+          ],
+          "key": "native.schema.update_server.5",
+          "source": "для confirm: слова владельца дословно, его «да»",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.update_server.purpose",
+      "supplier": "desk/localharness/updates.py",
+      "symbol": "TOOL",
+      "variant": "update_server"
+    },
+    {
+      "sha256": "227886eb5ed84372dba9535937a55eb7a6df9821c84bcf070f199e1a6f98b437",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.update_desktop.0",
+          "source": "Обновление Hélène на этом компьютере. status — состояние; plan — предложить выпуск (version: latest или номер). Обычное Python-обновление по умолчанию сохраняет авторские правки кода и совмещает их с новым выпуском. Память, переписка, настройки и пауза сохраняются. Чистая замена кода — только при явном source_mode=clean. Передай точные owner_words из прямого поручения; уже разрешённое обновление не требует повторного согласия. confirm/decline — решение по предложению. При конфликте работай только с текущим изолированным кандидатом через source_update: статус, diff, patch, finish. Проверку точного кандидата и независимый review ведёт входящий исполнитель; наблюдай их реальные результаты и исправляй найденное. Не запускай обычный self_review вместо update review и не создавай личные напоминания. Установку, перезапуск и восстановление при сбое выполняет обновлятор. Проверь фактический результат после перезапуска; не заменяй программу другими инструментами в обход задания. ИМПЕРАТИВ: прямое поручение владельца обновиться — это задача на завершение, а не на предложение плана. Сам выясни текущую стадию, выполни доступный следующий шаг и продолжай после результатов воркеров. Не завершай работу одним обещанием, не жди нового нажатия Update или согласия на уже разрешённую приёмку. Используй проверенный выпуск и точный кандидат с сохранёнными правками; обновление не ждёт твоей приёмки и не откатывается по молчанию. Если путь сломан, установи конкретную причину и способ продолжения, сохрани все результаты и сообщи препятствие; не подменяй выполнение бесконечными будильниками. Наблюдай состояние текущего задания и выполняй доступные действия. Stop/Pause, отмена и границы инструментов остаются обязательны.",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.update_desktop.purpose",
+      "supplier": "desk/localharness/updates.py",
+      "symbol": "TOOL_DESK",
+      "variant": "update_desktop"
+    }
+  ],
+  "window_appearance": [
+    {
+      "sha256": "8a4a8176b666f440e0bb43ec2d3bc47dc3a317322ae3b7c4805c5180d8f1ba9e",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "key": "native.schema.appearance.0",
+          "source": "Read or change this desktop installation appearance. Read first; patch/reset require seen. Patch is an array of {key,value} entries: include only keys to change; value is a string (helene.look is JSON) or explicit null to delete. Look supports uiScale 0.7..1.5, style paper/clean/studio/glass/terminal, font hand/sans/serif/mono, shape default/round/square, backdrop plain/grid/glow, density comfortable/compact, dayColor/nightColor/accentColor hex. frame.theme system/light/dark; frame.rail/panel 0 shown/1 collapsed; widths 220..700. Never changes agent identity or config.",
+          "present": true
+        }
+      ],
+      "purpose": "native.schema.appearance.purpose",
+      "supplier": "desk/localharness/window_preferences.py",
+      "symbol": "install/schema",
+      "variant": "appearance"
+    }
+  ]
+}
