@@ -182,7 +182,7 @@ class DeliveryTruthTests(unittest.TestCase):
                 run_manager.RunConflict("run-x: receipt call-1/telegram-outbox-intent "
                                         "already has different content"),
             )
-        self.assertIn("ДОСТАВЛЕНО", out)
+        self.assertIn("ПРИНЯЛ", out)
         self.assertIn("1193", out)
         self.assertNotIn("не отправилось", out.lower())
 
@@ -191,7 +191,7 @@ class DeliveryTruthTests(unittest.TestCase):
             out = agent._direct_send_outcome(
                 "Сообщение", run_manager.RunConflict("run-x: ledger blew up"))
         self.assertIn("НЕ ЗНАЮ", out)
-        self.assertNotIn("ДОСТАВЛЕНО", out)
+        self.assertNotIn("ПРИНЯЛ", out)
 
     def test_dead_letter_is_reported_as_not_sent_with_its_reason(self):
         self._stage()
@@ -208,7 +208,7 @@ class DeliveryTruthTests(unittest.TestCase):
             out = agent._direct_send_outcome(
                 "Наррация", run_manager.RunConflict("ledger"))
         self.assertIn("очереди", out)
-        self.assertNotIn("ДОСТАВЛЕНО", out)
+        self.assertNotIn("ПРИНЯЛ", out)
         self.assertNotIn("НЕ ЗНАЮ", out)
 
     def test_transport_failure_without_receipt_still_says_it_did_not_go(self):
@@ -232,9 +232,9 @@ class DeliveryTruthTests(unittest.TestCase):
                 mock.patch.object(agent.stewardship, "outgoing_denial", return_value=""), \
                 self._execution():
             out = agent.tool_send_message("777", "её слово")
-        self.assertIn("ДОСТАВЛЕНО", out)
+        self.assertIn("ПРИНЯЛ", out)
         self.assertTrue(lines, "исход отправки обязан попасть в журнал")
-        self.assertIn("ДОСТАВЛЕНО", lines[0])
+        self.assertIn("ПРИНЯЛ", lines[0])
         self.assertNotIn("Не отправилось", lines[0])
 
     def test_direct_outbox_state_ignores_a_foreign_key(self):
@@ -248,7 +248,7 @@ class DeliveryTruthTests(unittest.TestCase):
         long_text = " ".join(["слово"] * 20)          # 5*20 + 19 = 119 символов
         clipped = agent._clip_reason(long_text, 40)
         self.assertIn("обрезано", clipped)
-        self.assertIn("кап 40", clipped)
+        self.assertIn("предел 40", clipped)
         head = clipped.split(" […")[0]
         self.assertLessEqual(len(head), 40)
         self.assertTrue(head.endswith("слово"), "рез обязан идти по границе слова")

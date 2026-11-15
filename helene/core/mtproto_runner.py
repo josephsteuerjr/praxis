@@ -8242,7 +8242,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     исполнителя вовсе — и выбиралась рука, которая умела адрес, но не умела картинку.
     """
 
-    execution = _direct_tool_execution("send_file")
+    execution = _direct_tool_execution(("send_file", "send_media"))
     key = _direct_tool_key(execution)
     current_chat = agent._active_chat()
 
@@ -8323,7 +8323,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         expected = {
             "run_id": str(execution["run_id"]),
             "call_id": str(execution["call_id"]),
-            "purpose": "tool:send_file",
+            "purpose": f"tool:{execution['tool']}",
             "peer_id": peer_id,
             "topic_id": route.topic_id,
             "reply_to": route.topic_id,
@@ -8353,7 +8353,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             caption=str(caption or "")[:900],
             run_id=str(execution["run_id"]),
             call_id=str(execution["call_id"]),
-            purpose="tool:send_file",
+            purpose=f"tool:{execution['tool']}",
         )
     label = (_ent_label(target) if hasattr(target, "id")
              else str(current_chat or to or OWNER_ID))

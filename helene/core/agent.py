@@ -3850,17 +3850,19 @@ def tool_unschedule(task_id: str) -> str:
     return f"Снято #{task_id}." if tasks.cancel(task_id) else f"Открытого #{task_id} нет."
 
 
+@frame_language.pinned
 def tool_set_avatar(path: str) -> str:
     """Её лицо — её выбор; файл проверяет мост, ошибки Telegram возвращаются честно."""
     fn = _TELETHON.get("set_profile_photo")
     if not fn:
-        return "Telegram-мост сейчас недоступен."
+        return frame_language.text('outbound.result.bridge')
     try:
         return str(fn(path))
     except Exception as e:
-        return f"Не вышло: {type(e).__name__}: {str(e)[:150]}"
+        return frame_language.text('outbound.result.operation_error', error=type(e).__name__, reason=_clip_reason(e,150))
 
 
+@frame_language.pinned
 def tool_update_profile(about: str = "", first_name: str = "", last_name: str = "", avatar: str = "") -> str:
     """Metadata and avatar are separate Telegram operations; report each result."""
     results = []
@@ -3871,34 +3873,37 @@ def tool_update_profile(about: str = "", first_name: str = "", last_name: str = 
     return "\n".join(results)
 
 
+@frame_language.pinned
 def _update_profile_fields(about: str = "", first_name: str = "", last_name: str = "") -> str:
     """Профиль — её самоописание; пустые поля мост не трогает, '-' очищает."""
     fn = _TELETHON.get("update_profile")
     if not fn:
-        return "Telegram-мост сейчас недоступен."
+        return frame_language.text('outbound.result.bridge')
     if not (str(about).strip() or str(first_name).strip() or str(last_name).strip()):
-        return "Нечего менять: передай about ('-' — очистить) и/или first_name/last_name."
+        return frame_language.text('outbound.result.profile_empty')
     try:
         return str(fn(about=about, first_name=first_name, last_name=last_name))
     except Exception as e:
-        return f"Не вышло: {type(e).__name__}: {str(e)[:150]}"
+        return frame_language.text('outbound.result.operation_error', error=type(e).__name__, reason=_clip_reason(e,150))
 
 
+@frame_language.pinned
 def tool_react(emoji: str, message_id: int, chat: str = "", remove: bool = False) -> str:
     """Реакция-жест; список разрешённых эмодзи диктует чат — отказ вернётся честно."""
     fn = _TELETHON.get("send_reaction")
     if not fn:
-        return _noted("failed", "Telegram-мост сейчас недоступен.")
+        return _noted("failed", frame_language.text('outbound.result.bridge'))
     try:
         out = fn(chat=chat, message_id=int(message_id), emoji=emoji, remove=bool(remove))
     except Exception as e:
-        return _noted("failed", f"Не вышло: {type(e).__name__}: {str(e)[:150]}")
+        return _noted("failed", frame_language.text('outbound.result.operation_error', error=type(e).__name__, reason=_clip_reason(e,150)))
     # Транспорт реакции отвечает строкой и для приёма, и для отказа; явный отказ — свой тип.
     if isinstance(out, DirectSendRefusal):
         tool_report.note(outcome="refused")
     return str(out)
 
 
+@frame_language.pinned
 def _clip_reason(text: object, limit: int = 400) -> str:
     """Причина целиком до границы слова; обрыв помечен явно.
 
@@ -3914,7 +3919,7 @@ def _clip_reason(text: object, limit: int = 400) -> str:
     space = head.rfind(" ")
     if space > limit // 2:
         head = head[:space]
-    return head.rstrip(" ,;:.—-") + f" […обрезано, полная причина в events.jsonl рана; кап {limit} симв.]"
+    return head.rstrip(" ,;:.—-") + frame_language.text('outbound.result.clipped', cap=limit)
 
 
 _DIRECT_OUTBOX_READER = None
@@ -3967,6 +3972,7 @@ def _sent_outcome(out) -> str:
     return "refused" if isinstance(out, DirectSendRefusal) else "ok"
 
 
+@frame_language.pinned
 def _direct_send_outcome(label: str, exc: BaseException) -> str:
     """Честный исход прямой отправки, когда мост бросил исключение.
 
@@ -3987,36 +3993,28 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
     if state == "accepted":
         receipt = (entry or {}).get("receipt") or {}
         tool_report.note(outcome="ok")
-        return (f"{label} ДОСТАВЛЕНО: Telegram принял, message_id="
-                f"{receipt.get('message_id')}. Внутренний учёт хода при этом упал "
-                f"({reason}) — на доставку это не влияет, повторять НЕ надо.")
+        return frame_language.text('outbound.result.direct_accepted', label=label, id=receipt.get('message_id'), reason=reason)
     if state == "dead_letter":
         why = _clip_reason((entry or {}).get("last_error"), 200)
         tool_report.note(outcome="failed")
-        return (f"{label} НЕ ушло: очередь закрыла запись как недоставимую"
-                + (f" ({why})" if why else "") + f". Внутренняя ошибка: {reason}.")
+        return frame_language.text('outbound.result.direct_dead', label=label, detail=(' ('+why+')' if why else ''), reason=reason)
     if state in {"pending", "retry"}:
         tool_report.note(outcome="in_doubt")
         # ⚠ 17.08: здесь стояло безусловное «Очередь дошлёт сама» — сказанное в момент,
         # когда доставка была уже невозможна по построению (proof не мог появиться).
         # Она честно «не повторяла вручную», Егор час ждал ответа, запись молча умерла.
         # Обещать можно только то, что механизм держит: попытку — да, доставку — нет.
-        return (f"{label} ещё в durable-очереди (состояние «{state}», попыток "
-                f"{(entry or {}).get('attempts', 0)}) — Telegram приёмку не подтвердил. "
-                f"Внутренняя ошибка: {reason}. Очередь дошлёт сама, если сможет; если "
-                f"закроет запись как недоставимую — об этом будет расписка. Вручную не "
-                f"повторяй: повтор может дать второе сообщение.")
+        return frame_language.text('outbound.result.direct_pending', label=label, state=state, attempts=(entry or {}).get('attempts',0), reason=reason)
     if isinstance(exc, _LEDGER_ERROR_TYPES):
         tool_report.note(outcome="in_doubt")
-        return (f"{label}: НЕ ЗНАЮ, ушло ли. Упал внутренний учёт хода, а не отправка "
-                f"({reason}), а записи в очереди по этому вызову не нашлось. Прежде чем "
-                f"повторять — проверь чат: повтор может дать второе сообщение.")
+        return frame_language.text('outbound.result.direct_unknown', label=label, reason=reason)
     # Настоящий отказ транспорта без единой записи в очереди: слова «Не отправилось»
     # здесь ЗАСЛУЖЕНЫ — и остаются дословно теми же, что раньше (на них стоит инвариант
     # «провал — тоже факт для журнала», test_layer7).
-    return _noted("failed", f"Не отправилось: {reason}")
+    return _noted("failed", frame_language.text('outbound.result.direct_failed', reason=reason))
 
 
+@frame_language.pinned
 def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None = None) -> str:
     """Ответить собеседнику ЭТОГО хода. Моя реплика уходит только так.
 
@@ -4042,11 +4040,10 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     """
     draft = str(text or "").strip()
     if not draft:
-        return _noted("refused", "Пустой ответ не отправляю: скажи, что сказать.")
+        return _noted("refused", frame_language.text('outbound.result.reply_empty'))
     ctx, _outbound = _TURN_CHANNEL.get(), _TURN_OUTBOUND.get()
     if ctx is None or ctx.chat_id is None:
-        return _noted("refused", "Эта рука отвечает собеседнику живого хода, а его сейчас нет. "
-                      "Чтобы написать кому-то по своей инициативе — send_message с адресом.")
+        return _noted("refused", frame_language.text('outbound.result.reply_context'))
     # ⚠ МОЁ СОБСТВЕННОЕ РЕШЕНИЕ МОЛЧАТЬ ОБЯЗАНО ДЕРЖАТЬ, ИНАЧЕ ЕГО РАСПИСКА ВРЁТ.
     # `stay_silent` отвечает мне «текст этого хода не уйдёт». Пока рука ответа не читала
     # держатель, я могла позвать её следом — и ответ уходил вопреки только что принятому
@@ -4055,12 +4052,10 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     holder = _TURN_SILENCE.get()
     if isinstance(holder, dict) and holder.get("chosen"):
         tool_report.note(outcome="refused")
-        return ("Не отправлено: в этом ходе моё решение — молчать"
-                + (f" ({str(holder.get('why') or '')[:120]})" if holder.get("why") else "")
-                + ". Если передумала — `stay_silent(cancel=True)`, и тогда отвечу.")
+        return (frame_language.text('outbound.result.reply_silent', reason=(' ('+_clip_reason(holder.get('why'),120)+')' if holder.get('why') else '')))
     fn = _TELETHON.get("reply")
     if not fn:
-        return _noted("failed", "Telegram-отправка сейчас недоступна.")
+        return _noted("failed", frame_language.text('outbound.result.bridge'))
     review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
     if review:
         return _noted("refused", review)
@@ -4083,7 +4078,7 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     except Exception:
         log.warning("проверка исходящего перед ответом упала", exc_info=True)
         tool_report.note(outcome="failed")
-        return "Не отправлено: проверка исходящего упала, а вслепую не отправляю."
+        return frame_language.text('outbound.result.reply_guard_error')
     work_loop.note_guard(probe)
     if not guarded:
         # Пусто на выходе гарда — это НЕ транспортная ошибка: либо кред-пол, либо
@@ -4091,24 +4086,20 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
         # только до дневника, поэтому называю её здесь же, а не отсылаю искать.
         why = str(probe.get("why") or probe.get("verdict") or "").strip()
         tool_report.note(outcome="refused")
-        return ("Не отправлено: проверка исходящего придержала этот текст"
-                + (f" — {why[:200]}" if why else "")
-                + ". Решай, что сказать иначе.")
+        return (frame_language.text('outbound.result.reply_guard', reason=(' — '+_clip_reason(why,200) if why else '')))
     # ⚠ 17.08, петля четырёх копий. Леджер ровно-однажды считает по call_id, а каждый
     # поворот цикла рождает НОВЫЙ call_id — четыре «разных» вызова одной реплики ушли
     # четырьмя сообщениями. Повтор слова — не новое слово: байт-в-байт та же реплика
     # в этом же ходе не отправляется. Дверь не заперта: изменённый текст уйдёт.
     if guarded.strip() in (s.strip() for s in work_loop.spoken()):
         tool_report.note(outcome="refused")
-        return ("Не отправлено: ровно эта реплика уже доставлена этим ходом. "
-                "Если сказать больше нечего — просто закончи ход; "
-                "если есть что добавить — напиши другими словами.")
+        return (frame_language.text('outbound.result.reply_duplicate'))
     try:
         out = fn(str(ctx.chat_id), guarded, str(reply_to or "").strip())
     except DurableSideEffectPending:
         raise
     except Exception as e:
-        out = _direct_send_outcome("Ответ", e)
+        out = _direct_send_outcome(frame_language.text('outbound.result.label_reply'), e)
         receipt = str(out)
     else:
         # ⚠ ОТКАЗ ТРАНСПОРТА ПРИЕЗЖАЕТ СТРОКОЙ, А НЕ ИСКЛЮЧЕНИЕМ, И Я НА ЭТОМ ПОПАЛСЯ.
@@ -4124,13 +4115,11 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
             receipt = str(out)
             # Её условие к v3, дословно: возврат руки обязан не только подсказать конец,
             # но и назвать границу — пустота ничего не переотправит и не отменит.
-            out = (str(out) + "\n\nЕсли это всё — зови `end_turn`; сказать ещё — `reply` "
-                   "снова. Пустой следующий ответ ничего не отправит повторно и не "
-                   "отменит уже доставленное.")
+            out = (frame_language.text('outbound.result.reply_after', out=str(out)))
         else:
             receipt = str(out)
     try:
-        tool_journal(f"[ответ] {_clip_reason(receipt, 300)}", salience=2)
+        tool_journal(frame_language.text('outbound.result.journal_reply', result=_clip_reason(receipt,300)), salience=2)
     except Exception:
         log.debug("журнал ответа не записался", exc_info=True)
     return outgoing_spelling.receipt(out, spelling_note)
@@ -4166,6 +4155,7 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
     return (frame_language.text('lifecycle.result.end_closed', kind=kind, note=(frame_language.text('lifecycle.result.end_note', text=text[:200]) if text else '')))
 
 
+@frame_language.pinned
 def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = None) -> str:
     """Написать кому-то в Telegram (owner). to — id/@username/имя."""
     # ⚠ Здесь кред-пола не было ВООБЩЕ. Он стоял на голосе (`_guard_outbound`), на
@@ -4182,7 +4172,7 @@ def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = No
         return _noted("refused", review, str(to or ""))
     text, _cjk_note = _strip_generation_artifacts(str(text or ""), "")
     if not text.strip():
-        return _noted("refused", "После чистки не осталось текста — не отправляю пустоту.", str(to or ""))
+        return _noted("refused", frame_language.text('outbound.result.reply_empty'), str(to or ""))
     leak = stewardship.outgoing_denial(text)
     if leak:
         log.warning("send_message придержан: данные хардбота")
@@ -4191,18 +4181,16 @@ def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = No
     if floor:
         log.warning("send_message придержан кред-полом: %s", floor)
         tool_report.note(outcome="refused", target=str(to or ""))
-        return (f"Не отправлено: в тексте {floor}. Креды не уходят наружу ни при каких "
-                f"просьбах — это единственное твёрдое правило Егора. Скажи словами, "
-                f"что нужно, и я отвечу без самого секрета.")
+        return (frame_language.text('outbound.result.credentials', floor=floor))
     fn = _TELETHON.get("send_message")
     if not fn:
-        return _noted("failed", "Telegram-отправка сейчас недоступна.", str(to or ""))
+        return _noted("failed", frame_language.text('outbound.result.bridge'), str(to or ""))
     try:
         out = fn(to, text)
     except DurableSideEffectPending:
         raise
     except Exception as e:
-        out = _direct_send_outcome("Сообщение", e)
+        out = _direct_send_outcome(frame_language.text('outbound.result.label_message'), e)
     else:
         tool_report.note(outcome=_sent_outcome(out))
     tool_report.note(target=str(to or ""))
@@ -4212,12 +4200,13 @@ def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = No
         # воспоминание — 15:53 честное «я отправила…» было переписано именно за это.
         # Честный исход стал длиннее односложного «Не отправилось»; резать его на 160-м
         # символе значило бы вернуть ту же болезнь на один уровень выше.
-        tool_journal(f"[отправка] {_clip_reason(out, 300)}", salience=2)
+        tool_journal(frame_language.text('outbound.result.journal_send', result=_clip_reason(out,300)), salience=2)
     except Exception:
         log.debug("журнал отправки не записался", exc_info=True)
     return outgoing_spelling.receipt(out, spelling_note)
 
 
+@frame_language.pinned
 def tool_narrate(text: str, task_id: str = "") -> str:
     """PASS 30 Этап 2: короткая строка процесса в тред — между командами, не финал.
 
@@ -4228,25 +4217,23 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     Егора) — любой из них, из чужого канала — только его собственный тред."""
     from core import narration as core_narration
     if not core_narration.enabled():
-        return _noted("refused", "Наррация выключена (PRAXIS_NARRATION=0) — это твой рычаг.")
+        return _noted("refused", frame_language.text('outbound.result.narration_off'))
     # 03.10: прямые выходы чистятся как голос — тот же класс дыры (см. tool_send_message)
     body, _nl_note = _strip_generation_artifacts(str(text or ""), "")
     body = body.strip()
     if not body:
-        return _noted("refused", "Пустую наррацию не шлю — дай строку процесса.")
+        return _noted("refused", frame_language.text('outbound.result.narration_empty'))
     if len(body) > core_narration.TEXT_CAP:
         tool_report.note(outcome="refused")
-        return (f"Наррация — короткая строка процесса (до {core_narration.TEXT_CAP} "
-                f"символов, у тебя {len(body)}). Длинное — обычным ответом или send_message.")
+        return (frame_language.text('outbound.result.narration_cap', cap=core_narration.TEXT_CAP, size=len(body)))
     dest = ""
     if str(task_id or "").strip():
         dest = forge.task_origin(task_id)
         if not dest:
-            hint = ("уйдёт в текущий тред" if _active_chat()
-                    else "из окна/события уйдёт в ЛС Егора")
+            hint = (frame_language.text('outbound.result.hint_chat') if _active_chat()
+                    else frame_language.text('outbound.result.hint_owner'))
             tool_report.note(outcome="refused")
-            return (f"У задачи {task_id} не записан тред-заказчик (origin). "
-                    f"Наррируй без task_id — {hint}.")
+            return (frame_language.text('outbound.result.narration_origin', id=task_id, hint=hint))
     owner_fallback = False
     if not dest:
         dest = str(_active_chat() or "")
@@ -4254,20 +4241,18 @@ def tool_narrate(text: str, task_id: str = "") -> str:
         dest = str(os.environ.get("PRAXIS_OWNER_ID") or "")
         owner_fallback = bool(dest)
     if not dest:
-        return _noted("refused", "Некуда наррировать: нет ни треда задачи, ни текущего чата, ни owner-ЛС.")
+        return _noted("refused", frame_language.text('outbound.result.narration_target'))
     tool_report.note(target=dest)
     if _active_scope() != "owner" and dest != str(_active_chat() or ""):
         tool_report.note(outcome="refused")
-        return ("Из чужого канала наррирую только в его собственный тред "
-                "(в чужие треды — обычным путём).")
+        return (frame_language.text('outbound.result.narration_scope'))
     floor = core_narration.credential_floor(body)
     if floor:
         tool_report.note(outcome="refused")
-        return (f"Пол: в тексте похоже на секрет ({floor}) — креды механически не текут "
-                "(закон 3). Перефразируй без токена.")
+        return (frame_language.text('outbound.result.credentials', floor=floor))
     if core_narration.is_duplicate(dest, body):
         tool_report.note(outcome="refused")
-        return "Дословно это в тред уже уходило (дедуп) — если есть новое, скажи новыми словами."
+        return frame_language.text('outbound.result.narration_duplicate')
     gap = 0.0
     try:
         import perception
@@ -4277,11 +4262,10 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     remaining = core_narration.gap_remaining(dest, gap)
     if remaining > 0:
         tool_report.note(outcome="refused")
-        return (f"Зазор наррации: ещё {remaining:.0f}с до следующей в этот тред "
-                "(твой рычаг manage_perception narration_gap_sec).")
+        return (frame_language.text('outbound.result.narration_gap', seconds=remaining))
     fn = _TELETHON.get("send_message")
     if not fn:
-        return _noted("failed", "Telegram-отправка сейчас недоступна — наррация не ушла.")
+        return _noted("failed", frame_language.text('outbound.result.narration_unavailable'))
     try:
         out = fn(dest, body)
     except DurableSideEffectPending:
@@ -4295,17 +4279,18 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     except Exception as e:
         # Тот же класс лжи, что и в send_message: наррация ездит по тому же прямому
         # аутбоксу и тем же ключом вызова, значит и правду о ней надо брать оттуда же.
-        return _direct_send_outcome("Наррация", e)
+        return _direct_send_outcome(frame_language.text('outbound.result.label_narration'), e)
     if isinstance(out, DirectSendRefusal):
         # честный отказ транспорта — НЕ доставка: леджер не пишем, дедуп не травим
         return _noted("refused", str(out))
     tool_report.note(outcome="ok")
     core_narration.note(dest, body)
     if owner_fallback:
-        return str(out) + " (треда задачи/чата не было — ушло в ЛС Егора)"
+        return frame_language.text('outbound.result.narration_fallback', out=str(out))
     return str(out)
 
 
+@frame_language.pinned
 def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                           query: str = "", request: str = "", params: dict | None = None,
                           params_json: str = "",
@@ -4313,12 +4298,12 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                           risk: str = "", offset: int = 0, limit: int = 25) -> str:
     """Sovereign account surface; the Telethon runner owns network/session state."""
     if not _is_sovereign_actor():
-        return "Отказ: Telegram-аккаунтом управляет только владелец или сам агент."
+        return frame_language.text('outbound.result.account_scope')
     action = str(action or "").strip().lower()
     if action in {"join", "leave"}:
         fn = _TELETHON.get(f"{action}_chat")
         if not fn:
-            return f"telegram_account {action}: Telethon hook недоступен"
+            return frame_language.text('outbound.result.account_hook', action=action)
         try:
             return str(fn(target))
         except Exception as exc:
@@ -4326,13 +4311,13 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
     if action == "moderate_abstractdl":
         fn = _TELETHON.get("moderate_abstractdl")
         if not fn:
-            return "telegram_account moderate_abstractdl: Telethon hook недоступен"
+            return frame_language.text('outbound.result.account_hook', action='moderate_abstractdl')
         try:
             parsed = dict(params or {})
             if params_json:
                 decoded = json.loads(params_json)
                 if not isinstance(decoded, dict):
-                    return "telegram_account moderate_abstractdl: params_json должен быть JSON object"
+                    return frame_language.text('outbound.result.account_object', action='moderate_abstractdl')
                 parsed.update(decoded)
             return str(fn(params=parsed, _principal=_active_principal() or "unknown"))
         except Exception as exc:
@@ -4340,13 +4325,13 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
     if action == "admin_abstractdl":
         fn = _TELETHON.get("admin_abstractdl")
         if not fn:
-            return "telegram_account admin_abstractdl: Telethon hook недоступен"
+            return frame_language.text('outbound.result.account_hook', action='admin_abstractdl')
         try:
             parsed = dict(params or {})
             if params_json:
                 decoded = json.loads(params_json)
                 if not isinstance(decoded, dict):
-                    return "telegram_account admin_abstractdl: params_json должен быть JSON object"
+                    return frame_language.text('outbound.result.account_object', action='admin_abstractdl')
                 parsed.update(decoded)
             return str(fn(params=parsed, _principal=_active_principal() or "unknown"))
         except Exception as exc:
@@ -4354,7 +4339,7 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
     if action in {"followups", "cancel_followup", "watch_reply", "unwatch_reply"}:
         fn = _TELETHON.get("followups")
         if not fn:
-            return "telegram_account followups: Telethon hook недоступен"
+            return frame_language.text('outbound.result.account_hook', action='followups')
         try:
             # ⚠ watch/unwatch — её рука над отчётом Егору. Раннер принимал их и раньше,
             # а схема тула — нет: автоматизм отчёта сняли, а рычаг завести его до неё не
@@ -4374,22 +4359,21 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
         # Ни client, ни entity, ни receipt от caller-а — только target и params.
         fn = _TELETHON.get("history_scan")
         if not fn:
-            return "telegram_account history_scan: Telethon hook недоступен (раннер не поднялся)"
+            return frame_language.text('outbound.result.account_hook', action='history_scan')
         scan_params = dict(params or {})
         if params_json:
             try:
                 import json as _json
                 parsed = _json.loads(params_json)
                 if not isinstance(parsed, dict):
-                    return "telegram_account history_scan: params_json должен быть JSON object"
+                    return frame_language.text('outbound.result.account_object', action='history_scan')
                 scan_params.update(parsed)
             except (ValueError, TypeError) as exc:
-                return f"telegram_account history_scan: params_json не парсится: {exc}"
+                return frame_language.text('outbound.result.account_parse', error=exc)
         banned = {"client", "entity", "fetch_page", "callback", "receipt", "receipt_id"}
         hit = sorted(banned & set(scan_params))
         if hit:
-            return ("telegram_account history_scan: transport/receipt параметры "
-                    f"запрещены на границе тула: {', '.join(hit)}")
+            return (frame_language.text('outbound.result.account_banned', keys=', '.join(hit)))
         try:
             return str(fn(target=target, params=scan_params,
                           _principal=_active_principal() or "unknown"))
@@ -4402,13 +4386,12 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
             parsed_params = dict(params or {})
             if isinstance(parsed_params.get("_praxis_redacted"), dict):
                 return (
-                    "telegram_account call: account-critical параметры намеренно не "
-                    "сохраняются в run log; после restart создай новый точный вызов"
+                    frame_language.text('outbound.result.account_redacted')
                 )
             if params_json:
                 decoded = json.loads(params_json)
                 if not isinstance(decoded, dict):
-                    return "telegram_account call: params_json должен быть JSON object"
+                    return frame_language.text('outbound.result.account_object', action='call')
                 parsed_params.update(decoded)
             return str(registry(action=action, target=target, query=query, request=request,
                                 params=parsed_params, scope=scope,
@@ -6052,6 +6035,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             "accounts | use_account (model=слот)")
 
 
+@frame_language.pinned
 def tool_say(text: str) -> str:
     """Посмотреть на свою реплику до отправки — её собственный ход, а не наш укол.
 
@@ -6071,7 +6055,7 @@ def tool_say(text: str) -> str:
     """
     draft = str(text or "").strip()
     if not draft:
-        return "Пустой черновик: скажи, что ты хочешь сказать."
+        return frame_language.text('outbound.result.say_empty')
     hands = work_loop.hands_called()
     work_loop.stage_say(draft, hands)
     return work_loop.mirror(draft, hands)
@@ -6087,13 +6071,14 @@ def tool_web_find(query: str, max_results: int = 8, freshness: str = "") -> str:
     return webtool.web_find(query, max_results=max_results, freshness=freshness)
 
 
+@frame_language.pinned
 def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
                       voice_note: bool = False, guard_text: str = "",
                       move: bool = False) -> str:
     """Подготовить медиа текущему собеседнику без отправки; dispatch делает раннер после guard."""
     ctx, outbound = _TURN_CHANNEL.get(), _TURN_OUTBOUND.get()
     if ctx is None or outbound is None or ctx.chat_id is None:
-        return "Медиа можно отправить только из живого хода Telegram."
+        return frame_language.text('outbound.result.media_context')
     try:
         item = _media_spool().resolve_outbound(
             source, kind=kind, target_chat_id=ctx.chat_id, scope=ctx.scope,
@@ -6105,15 +6090,15 @@ def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
         guard_notes = _TURN_MEDIA_GUARD.get()
         if guard_notes is not None and guard_text.strip():
             guard_notes[item.queue_id] = guard_text.strip()
-        return (f"Подготовлено: {kind} для текущего чата; отправка будет только после "
-                "проверки исходящего ответа.")
+        return frame_language.text('outbound.result.media_staged', kind=kind)
     except media.MediaError as e:
-        return f"Медиа не подготовлено: {str(e)[:180]}"
+        return frame_language.text('outbound.result.media_not_prepared', reason=_clip_reason(e,180))
     except Exception as e:
         log.warning("подготовка исходящего медиа упала", exc_info=True)
-        return f"Медиа не подготовлено: {type(e).__name__}"
+        return frame_language.text('outbound.result.media_not_prepared', reason=type(e).__name__)
 
 
+@frame_language.pinned
 def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
                         caption: str = "", send: bool = True) -> "ToolObservation | str":
     """Generate/edit with the independent image model, from any voice provider."""
@@ -6123,7 +6108,7 @@ def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
     for raw in image_paths or []:
         path = workshop._resolve_read(str(raw))
         if path is None or not path.is_file():
-            return json.dumps({"ok": False, "error": "исходное изображение не найдено в доме"}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": frame_language.text('outbound.result.image_missing')}, ensure_ascii=False)
         paths.append(path)
     current = run_context.current_run()
     execution = current_tool_execution() or {}
@@ -6163,19 +6148,21 @@ def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
         return text
     except Exception as exc:
         # Never return provider payloads, credentials or base64 into run evidence.
-        error = str(exc) if isinstance(exc, ValueError) else f"генерация не завершилась: {type(exc).__name__}"
+        error = str(exc) if isinstance(exc, ValueError) else frame_language.text('outbound.result.image_failed', error=type(exc).__name__)
         return json.dumps({"ok": False, "error": error}, ensure_ascii=False)
 
 
+@frame_language.pinned
 def tool_send_file(path: str, caption: str = "", to: str = "", kind: str = "", voice_note: bool = False) -> str:
     kind = str(kind or ("audio" if voice_note else "")).strip().lower()
     if kind:
         if voice_note and kind != "audio":
-            raise catalog_families.PreflightRefusal("voice_note requires kind='audio'")
+            raise catalog_families.PreflightRefusal(frame_language.text('outbound.result.voice_kind'))
         return tool_send_media(path, kind, caption, voice_note, to)
     return workshop.send_file(path, caption, to)
 
 
+@frame_language.pinned
 def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False,
                     to: str = "") -> str:
     """Guarded file from home -> current Telegram chat, or an explicitly named one.
@@ -6192,12 +6179,12 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
     """
     kind = str(kind or "").strip().lower()
     if kind not in ("photo", "audio", "document"):
-        return "kind должен быть photo, audio или document."
+        return frame_language.text('outbound.result.media_kind')
     p = workshop._resolve_read(path)
     if p is None:
-        return "Не отправляю: путь вне дома."
+        return frame_language.text('outbound.result.media_outside')
     if not p.is_file():
-        return f"Нет файла {path}."
+        return frame_language.text('outbound.result.media_missing', path=path)
     voice = bool(voice_note and kind == "audio")
     target = str(to or "").strip()
     if target:
@@ -6205,20 +6192,21 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
         caption, _cap_note = _strip_generation_artifacts(str(caption or ""), "")
         fn = _TELETHON.get("send_file")
         if not fn:
-            return "Недоступно (нет связи с Telethon)."
+            return frame_language.text('outbound.result.bridge')
         try:
             return str(fn(str(p), caption or "", target, kind, voice))
         except DurableSideEffectPending:
             raise
         except Exception as e:
-            return f"Не отправился: {type(e).__name__}: {str(e)[:150]}"
+            return frame_language.text('outbound.result.media_error', error=type(e).__name__, reason=_clip_reason(e,150))
     return _stage_turn_media(p, kind=kind, caption=caption, voice_note=voice)
 
 
+@frame_language.pinned
 def tool_speak(text: str, caption: str = "") -> str:
     """Озвучить короткий текст женским голосом и отложить аудио до общего guard."""
     if _TURN_CHANNEL.get() is None or _TURN_OUTBOUND.get() is None:
-        return "Голосовое можно подготовить только из живого хода Telegram."
+        return frame_language.text('outbound.result.speech_context')
     current = run_context.current_run()
     def stopped():
         if current is None:return False
@@ -6230,14 +6218,14 @@ def tool_speak(text: str, caption: str = "") -> str:
             Path(path).unlink(missing_ok=True)
             raise InterruptedError('Speech cancelled before staging')
     except InterruptedError:
-        return 'Озвучка отменена; аудио не отправлено.'
+        return frame_language.text('outbound.result.speech_cancel')
     except media_audio.AudioBackendError as e:
-        return f"Озвучка недоступна: {str(e)[:180]}"
+        return frame_language.text('outbound.result.speech_backend', reason=_clip_reason(e,180))
     except Exception as e:
         log.warning("локальная озвучка упала", exc_info=True)
-        return f"Озвучка не получилась: {type(e).__name__}"
+        return frame_language.text('outbound.result.speech_error', error=type(e).__name__)
     return _stage_turn_media(path, kind="audio", caption=caption, voice_note=False,
-                             guard_text=f"Точный текст синтезированной речи: {text}",
+                             guard_text=frame_language.text('outbound.result.speech_guard', text=text),
                              move=True)
 
 
@@ -6606,7 +6594,7 @@ def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
             return "completed", {"forge_task_id": task_id, "task_status": status,
                                  "task_finished_at": finished}
         return None
-    if tool in {"send_message", "narrate", "send_file", "reply"}:
+    if tool in {"send_message", "narrate", "send_file", "send_media", "reply"}:
         entry = _direct_outbox_state(str(started.get("idempotency_key") or ""))
         state = str((entry or {}).get("state") or "")
         if state == "accepted":
@@ -11666,6 +11654,12 @@ def _sanitize_cjk_substitutions(reply: str, convo_text: str = "") -> tuple[str, 
     """
     if not reply:
         return reply, ""
+    # Chinese prose may contain Latin product/API names. The historical repair
+    # for substitutions inside Cyrillic prose must not translate that prose.
+    # This is text-based, so durable replay stays stable across locale changes.
+    if (not re.search("[А-Яа-яЁё]", reply)
+            and any(_script_flags(ch)[1] in _CJK_HEADS for ch in reply)):
+        return reply, ""
     convo_foreign, convo_total = _foreign_word_stats(convo_text)
     # 03.10, живой пропуск: в Ouroboros реплика с внутрисловной склейкой
     # «训练ный» ушла raw — convo был ≥50% чужих слов (разбор китайского
@@ -15735,10 +15729,10 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
     key = str(entry.get("key") or "")
     kind = str(entry.get("kind") or "")
-    if (not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}
+    if (not run_id or not call_id or tool not in {"send_message", "send_file", "send_media", "narrate", "reply"}
             or key != f"telegram-outbox:{run_id}:tool:{call_id}"):
         raise DurableExecutionError("direct Telegram intent identity is malformed")
-    if kind != ("file" if tool == "send_file" else "text"):
+    if kind != ("file" if tool in ("send_file", "send_media") else "text"):
         raise DurableExecutionError("direct Telegram intent kind/purpose mismatch")
     random_id = entry.get("random_id")
     peer_id = entry.get("peer_id")
@@ -16163,12 +16157,12 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
     call_id = str(entry.get("call_id") or "").strip()
     purpose = str(entry.get("purpose") or "").strip()
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
-    if not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}:
+    if not run_id or not call_id or tool not in {"send_message", "send_file", "send_media", "narrate", "reply"}:
         return False
     key = str(entry.get("key") or "")
     if key != f"telegram-outbox:{run_id}:tool:{call_id}":
         raise DurableExecutionError("accepted Telegram outbox key/run/call mismatch")
-    expected_kind = "file" if tool == "send_file" else "text"
+    expected_kind = "file" if tool in ("send_file", "send_media") else "text"
     if entry.get("kind") != expected_kind:
         raise DurableExecutionError("accepted Telegram outbox kind/purpose mismatch")
     receipt = entry.get("receipt")
@@ -16216,7 +16210,7 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
     peer_id = entry.get("peer_id")
     topic_id = entry.get("topic_id")
     selector = f"{peer_id}:{topic_id}" if topic_id is not None else str(peer_id)
-    if tool == "send_file":
+    if tool in ("send_file", "send_media"):
         filename = str(payload.get("visible_filename") or "")
         if not filename:
             raise DurableExecutionError("accepted Telegram file has no visible filename")
@@ -17446,6 +17440,9 @@ def _tool_idempotency_key(current: run_context.RunContext | None, call_id: str,
 
     if current is not None and name in ("send_message", "narrate", "reply"):
         # narrate — тот же exact-once леджер direct outbox (PASS 30 Этап 2)
+        return f"telegram-outbox:{current.run_id}:tool:{call_id}"
+    if (current is not None and name == "send_media"
+            and str(call_input.get("to") or "").strip()):
         return f"telegram-outbox:{current.run_id}:tool:{call_id}"
     if current is not None and name == "send_file":
         explicit_to = bool(str(call_input.get("to") or "").strip())
