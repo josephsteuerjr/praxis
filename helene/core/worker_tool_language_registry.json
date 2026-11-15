@@ -1,0 +1,1314 @@
+{
+  "inspect": [
+    {
+      "sha256": "674a3168de4aa1eb84384169dd252d2c22c15d5bbef194df95d14a8af9d4715c",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "See the exact task place. Besides read/search/diff, model/symbols/references/diagnostics/impact/checks expose normalized semantic and test facts; definition/callers/callees use the shared code_query evidence engine, coverage and snapshot cursor; mailbox shows worker signals. Large read replies are exact UTF-8 JSON pages (<=8000 chars): continue with start=next_start, start_char=next_char, expected_sha256=sha256; a changed file refuses the old hash. Small reads retain the legacy numbered-line display.",
+          "key": "worker.schema.inspect_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": true,
+          "source": "What to inspect in this task.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "path",
+            "description"
+          ],
+          "present": true,
+          "source": "File or directory relative to the task root.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.path"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "query",
+            "description"
+          ],
+          "present": true,
+          "source": "Text or symbol to find.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.query"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "glob",
+            "description"
+          ],
+          "present": true,
+          "source": "File mask narrowing the search.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.glob"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "start",
+            "description"
+          ],
+          "present": true,
+          "source": "First line, one-based.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.start"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "end",
+            "description"
+          ],
+          "present": true,
+          "source": "Last line, inclusive.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.end"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "start_char",
+            "description"
+          ],
+          "present": true,
+          "source": "Unicode character offset within start line, for paged reads.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.start_char"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "expected_sha256",
+            "description"
+          ],
+          "present": true,
+          "source": "Full 64-hex source hash from a read page; pins continuation to those bytes.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.expected_sha256"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "module",
+            "description"
+          ],
+          "present": true,
+          "source": "Target defining module for semantic evidence.",
+          "key": "schema.tool.2e289ca2c77cfe24"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "limit",
+            "description"
+          ],
+          "present": true,
+          "source": "Semantic rows per page: default40, maximum200.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.limit"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "cursor",
+            "description"
+          ],
+          "present": true,
+          "source": "Semantic snapshot:offset; changed files refuse continuation.",
+          "key": "worker.schema.inspect_tool.input_schema.properties.cursor"
+        }
+      ],
+      "variant": "INSPECT_TOOL"
+    },
+    {
+      "sha256": "5eb8a4b260b4045ec36dc77676d2bb4bd8469535498f67cbdc62b232f615522d",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Read exact frozen source or typed plan/change/task_result materials. status describes the subject; list pages the manifest. diff(path,left,right) compares one A/L/B/M file for source updates; otherwise diff reads the explicit changes.diff. read/diff paginate with start/end and start_char; search paginates literal occurrences with offset/limit and returns matching excerpts. To read around a search hit, use its path, start=end=line, and start_char (character offsets, including in single-line JSON).",
+          "key": "worker.schema.snapshot.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "path",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.path"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "query",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.query"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "start",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.start"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "end",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.end"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "start_char",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.start_char"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "offset",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.offset"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "limit",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.limit"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "left",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.left"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "right",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.snapshot.input_schema.properties.right"
+        }
+      ],
+      "variant": "snapshot"
+    }
+  ],
+  "verify": [
+    {
+      "sha256": "6f8d2bf8cf8b388c01de55ac52b66d3b9c43d3ce9921812dc1ac5fdedf2a6a43",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Plan or supervise a durable verification matrix. plan derives targeted checks from the actual diff/impact map; start runs checks outside this model turn; poll gathers exact logs.",
+          "key": "worker.schema.verify_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": true,
+          "source": "plan derives checks; start launches them; poll reads results; stop requests cancellation; list shows runs.",
+          "key": "worker.schema.verify_tool.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "verification_id",
+            "description"
+          ],
+          "present": true,
+          "source": "Verification run to poll or stop.",
+          "key": "worker.schema.verify_tool.input_schema.properties.verification_id"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "commands",
+            "description"
+          ],
+          "present": true,
+          "source": "Explicit commands overriding the derived plan.",
+          "key": "worker.schema.verify_tool.input_schema.properties.commands"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "full",
+            "description"
+          ],
+          "present": true,
+          "source": "Run the authoritative project gate.",
+          "key": "worker.schema.verify_tool.input_schema.properties.full"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "max_parallel",
+            "description"
+          ],
+          "present": true,
+          "source": "Maximum concurrent check commands.",
+          "key": "worker.schema.verify_tool.input_schema.properties.max_parallel"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "timeout",
+            "description"
+          ],
+          "present": true,
+          "source": "Seconds per command; 0 means unbounded.",
+          "key": "worker.schema.verify_tool.input_schema.properties.timeout"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "tail",
+            "description"
+          ],
+          "present": true,
+          "source": "Trailing log lines to return.",
+          "key": "worker.schema.verify_tool.input_schema.properties.tail"
+        }
+      ],
+      "variant": "VERIFY_TOOL"
+    }
+  ],
+  "signal": [
+    {
+      "sha256": "61776ffbb349cdee29caf0fd44664ff8359b08a160f7c9d1098526f480b8fae7",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Send a structured finding/question/blocker/contract/result to the shared swarm mailbox, or claim/release files as advisory ownership. Claims surface conflicts; they never veto edits.",
+          "key": "worker.schema.signal_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "kind",
+            "description"
+          ],
+          "present": true,
+          "source": "finding, question, blocker, contract, result, advisory claim or release.",
+          "key": "worker.schema.signal_tool.input_schema.properties.kind"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "message",
+            "description"
+          ],
+          "present": true,
+          "source": "Finding, question or coordination message.",
+          "key": "worker.schema.signal_tool.input_schema.properties.message"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "description"
+          ],
+          "present": true,
+          "source": "Task-relative paths this signal concerns.",
+          "key": "worker.schema.signal_tool.input_schema.properties.files"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.signal_tool.input_schema.properties.files.items"
+        }
+      ],
+      "variant": "SIGNAL_TOOL"
+    }
+  ],
+  "edit": [
+    {
+      "sha256": "9c7cb35ae1b263581d9f20814fc3407a2368536f7c25b31d81896806ae135933",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Change files inside your task root. For one or a few changes call this hand directly. For many mechanical changes a Python script is welcome: import praxis_hands as h and call h.edit, the same editor and shared write lock. Bare open().write or str.replace followed by writing bypasses both. Read first with inspect(action=read) and pass its sha256 as expected_sha256. replace: old must occur exactly once; all=true replaces every non-overlapping occurrence and reports the count. Overlapping matches still refuse; widen old. A confirmed after_sha256 is valid for the next edit. batch: files=[{path, expected_sha256, edits:[{old,new}]}]; every file is checked before any write. mode=snapshot (default) matches the original text; mode=sequential applies replacements in order. A batch stops at its first write failure; later files are untouched. No automatic rollback: reread and revert explicitly with fresh versions. write: new file or full rewrite. patch: unified diff, checked with git apply --check first. Reply is edit: JSON with status. confirmed: written and read back. refused: nothing written. in_doubt: writing may have happened; reread, never retry blind. partial (batch): some files written, some refused; inspect files. ok (patch or remote edit): backend reports success, no local readback promise. Host and Windows tasks refuse batch before sending it; use replace per file.",
+          "key": "worker.schema.edit_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": true,
+          "source": "Editing operation.",
+          "key": "schema.tool.2e6e4b9d7457c022"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "path",
+            "description"
+          ],
+          "present": true,
+          "source": "Path relative to the home or task root.",
+          "key": "schema.tool.537ac035977907a4"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "content",
+            "description"
+          ],
+          "present": true,
+          "source": "write: full UTF-8 content.",
+          "key": "schema.tool.fdeacc2ab4d35538"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "old",
+            "description"
+          ],
+          "present": true,
+          "source": "replace: nonempty exact text; unique unless all=true.",
+          "key": "schema.tool.24b2d95976ff229b"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "all",
+            "description"
+          ],
+          "present": true,
+          "source": "replace: replace every occurrence; overlapping matches still refuse. Reply includes replacements count.",
+          "key": "schema.tool.d44b3e9807b766b6"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "new",
+            "description"
+          ],
+          "present": true,
+          "source": "replace: replacement text, empty deletes.",
+          "key": "schema.tool.1566749aee889020"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "patch",
+            "description"
+          ],
+          "present": true,
+          "source": "patch: unified diff; requires a Forge task.",
+          "key": "schema.tool.e79a60fe9cf0e0d7"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "expected_sha256",
+            "description"
+          ],
+          "present": true,
+          "source": "Read version for replace/write; batch carries each file version.",
+          "key": "schema.tool.7b12705f23cfd8ed"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "description"
+          ],
+          "present": true,
+          "source": "Versioned files; do not mix with single-file arguments.",
+          "key": "schema.tool.a18b9427f0de13d7"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.edit_tool.input_schema.properties.files.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "path",
+            "description"
+          ],
+          "present": true,
+          "source": "Existing UTF-8 file.",
+          "key": "schema.tool.26b1e8b2ccadeda3"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "expected_sha256",
+            "description"
+          ],
+          "present": true,
+          "source": "Read version: 64 or 16 hex.",
+          "key": "schema.tool.260fefeff3e27496"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "edits",
+            "description"
+          ],
+          "present": true,
+          "source": "Unique replacements.",
+          "key": "schema.tool.d89a98a298ee8919"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "edits",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.edit_tool.input_schema.properties.files.items.properties.edits.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "edits",
+            "items",
+            "properties",
+            "old",
+            "description"
+          ],
+          "present": true,
+          "source": "Unique exact text.",
+          "key": "schema.tool.06de7244e583d2b0"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "edits",
+            "items",
+            "properties",
+            "new",
+            "description"
+          ],
+          "present": true,
+          "source": "Replacement; empty deletes.",
+          "key": "schema.tool.3ac13f1f3535e032"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "files",
+            "items",
+            "properties",
+            "edits",
+            "items",
+            "properties",
+            "all",
+            "description"
+          ],
+          "present": true,
+          "source": "Replace all occurrences; overlapping matches still refuse.",
+          "key": "schema.tool.23d2763c9f79877f"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "mode",
+            "description"
+          ],
+          "present": true,
+          "source": "snapshot (default): original text, no overlap. sequential: chained replacements.",
+          "key": "schema.tool.5339cf734b9839b0"
+        }
+      ],
+      "variant": "EDIT_TOOL"
+    }
+  ],
+  "run": [
+    {
+      "sha256": "99d38cb118a58588f33ff39dbf8409f32a1a33a5020ec6ee16263961b698616f",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Run an arbitrary foreground shell command in the task. Full output is kept as evidence; the reply is capped. timeout=0 means no timeout. Use this to test, build, lint and probe. Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same editor and shared mutation lock; the current Linux local foreground Forge command context is inherited; refusals raise. Edit files that way, not with str.replace.",
+          "key": "worker.schema.run_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "command",
+            "description"
+          ],
+          "present": true,
+          "source": "Foreground shell command to execute.",
+          "key": "worker.schema.run_tool.input_schema.properties.command"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "cwd",
+            "description"
+          ],
+          "present": true,
+          "source": "Working directory inside the task root; omitted uses the root.",
+          "key": "worker.schema.run_tool.input_schema.properties.cwd"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "timeout",
+            "description"
+          ],
+          "present": true,
+          "source": "Seconds; 0 means unbounded.",
+          "key": "worker.schema.run_tool.input_schema.properties.timeout"
+        }
+      ],
+      "variant": "RUN_TOOL"
+    }
+  ],
+  "run_command": [
+    {
+      "sha256": "b7cc123f9d601aed2f1ca53841b31c15cba67bb6bd6d03fa02f0948847a8e75d",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Run one program in the task with exact argv and no shell: argv[0] is the program (PATH name or a path relative to cwd), each other item is one argument byte for byte. Quotes, spaces, ;, $(), *, backslashes and newlines are plain data. Use it for ordinary program calls; use run when you want shell grammar (pipes, redirects, globs, &&). It never falls back to shell. Same admission, custody, Stop and full log as run; stdout and stderr are combined. A missing program or cwd is refused before launch. The reply ends with a [run_command {...}] facts line and [exit N]; [exit unobserved] after a timeout is not success. Host and Windows tasks refuse it before sending anything.",
+          "key": "worker.schema.run_command_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "argv",
+            "description"
+          ],
+          "present": true,
+          "source": "Program then its arguments, one array item per argument.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.argv"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "argv",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.run_command_tool.input_schema.properties.argv.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "cwd",
+            "description"
+          ],
+          "present": true,
+          "source": "Working directory inside the task root; omitted uses the root.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.cwd"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "timeout",
+            "description"
+          ],
+          "present": true,
+          "source": "Seconds; 0 means unbounded.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.timeout"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "stdin_text",
+            "description"
+          ],
+          "present": true,
+          "source": "Optional exact standard input text; omitted means closed stdin.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.stdin_text"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "env",
+            "description"
+          ],
+          "present": true,
+          "source": "Optional extra environment for this one program: [{name, value}]. The facts line and task receipts name variables only; like any tool argument, the values stay in this run's call record. PRAXIS_* is runtime-owned and refused. Nothing is read from settings.",
+          "key": "schema.tool.cb0d869ee246b759"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "env",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.run_command_tool.input_schema.properties.env.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "env",
+            "items",
+            "properties",
+            "name",
+            "description"
+          ],
+          "present": true,
+          "source": "Variable name.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.env.items.properties.name"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "env",
+            "items",
+            "properties",
+            "value",
+            "description"
+          ],
+          "present": true,
+          "source": "Exact value.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.env.items.properties.value"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "outputs",
+            "description"
+          ],
+          "present": true,
+          "source": "Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.outputs"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "outputs",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.run_command_tool.input_schema.properties.outputs.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "scratch",
+            "description"
+          ],
+          "present": true,
+          "source": "Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven.",
+          "key": "worker.schema.run_command_tool.input_schema.properties.scratch"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "scratch",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.run_command_tool.input_schema.properties.scratch.items"
+        }
+      ],
+      "variant": "RUN_COMMAND_TOOL"
+    }
+  ],
+  "process": [
+    {
+      "sha256": "16eba1e54df1d49032a0608bed05b55b6805bc7f14d82bbeef76063402767164",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Start/poll/stop/list a long-running command without blocking this agent. start returns an id immediately and keeps the complete log. timeout=0 is unbounded. start takes either command (a shell string) or argv (one exact program and arguments, no shell), never both.",
+          "key": "worker.schema.process_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": true,
+          "source": "start launches a durable command; poll reads it; stop requests cancellation; list shows commands.",
+          "key": "worker.schema.process_tool.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "process_id",
+            "description"
+          ],
+          "present": true,
+          "source": "Process to poll or stop.",
+          "key": "worker.schema.process_tool.input_schema.properties.process_id"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "command",
+            "description"
+          ],
+          "present": true,
+          "source": "Shell command string to start.",
+          "key": "worker.schema.process_tool.input_schema.properties.command"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "argv",
+            "description"
+          ],
+          "present": true,
+          "source": "Exact program then arguments to start without a shell; instead of command.",
+          "key": "worker.schema.process_tool.input_schema.properties.argv"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "argv",
+            "items",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.process_tool.input_schema.properties.argv.items"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "cwd",
+            "description"
+          ],
+          "present": true,
+          "source": "Working directory inside the task root.",
+          "key": "worker.schema.process_tool.input_schema.properties.cwd"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "name",
+            "description"
+          ],
+          "present": true,
+          "source": "Human-readable command name.",
+          "key": "worker.schema.process_tool.input_schema.properties.name"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "timeout",
+            "description"
+          ],
+          "present": true,
+          "source": "Seconds; 0 means unbounded.",
+          "key": "worker.schema.process_tool.input_schema.properties.timeout"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "tail",
+            "description"
+          ],
+          "present": true,
+          "source": "Trailing log lines to return.",
+          "key": "worker.schema.process_tool.input_schema.properties.tail"
+        }
+      ],
+      "variant": "PROCESS_TOOL"
+    }
+  ],
+  "delegate": [
+    {
+      "sha256": "b648763085c0c1aac02fd42bc74ae81c740cc19187d3ceb187328e51b1a891fd",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Spawn a child fresh-context worker, poll/stop agent descendants, or disposition their exact terminal result. The parent identity comes from your worker request, never from model arguments. Detached process/verification jobs are task-scoped, separately stopped. disposition requires the full result_sha256 returned by poll. To execute a queued editing child, wait explicitly yields your shared-root writer slot, blocks all your other work, and returns its full terminal result before you regain ownership. First settle detached jobs.",
+          "key": "worker.schema.delegate_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": true,
+          "source": "spawn a child, list descendants, poll/stop one, disposition its exact result, or wait while yielding the writer slot.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "agent_id",
+            "description"
+          ],
+          "present": true,
+          "source": "Child or descendant agent selected for this action.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.agent_id"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "result_sha256",
+            "description"
+          ],
+          "present": true,
+          "source": "Full result hash from poll; required for disposition.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.result_sha256"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "disposition",
+            "description"
+          ],
+          "present": true,
+          "source": "integrated, irrelevant or deferred: how the exact child result was handled.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.disposition"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "brief",
+            "description"
+          ],
+          "present": true,
+          "source": "Concrete assignment for the child.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.brief"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "role",
+            "description"
+          ],
+          "present": true,
+          "source": "scout and reviewer inspect; worker may edit and execute.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.role"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "model",
+            "description"
+          ],
+          "present": true,
+          "source": "Optional per-agent model; omitted keeps the voice-role default.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.model"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "max_iters",
+            "description"
+          ],
+          "present": true,
+          "source": "Model-turn ceiling for the child; omitted uses the runtime default.",
+          "key": "worker.schema.delegate_tool.input_schema.properties.max_iters"
+        }
+      ],
+      "variant": "DELEGATE_TOOL"
+    }
+  ],
+  "checkpoint": [
+    {
+      "sha256": "da0ac2391876f63b4382cd9e4eee50e2862aa667f98b5cb0d96bcd52f1f2197e",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Commit the current task working tree as a recoverable checkpoint.",
+          "key": "worker.schema.checkpoint_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "message",
+            "description"
+          ],
+          "present": true,
+          "source": "What this recoverable task commit contains.",
+          "key": "worker.schema.checkpoint_tool.input_schema.properties.message"
+        }
+      ],
+      "variant": "CHECKPOINT_TOOL"
+    }
+  ],
+  "transcript": [
+    {
+      "sha256": "d1b18ce37c9f150f5fcda25de8e0b51b59467fb18fcdd721e49aeb131b8c7b38",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Read an immutable full output from this execution by exact SHA; offset and limit page Unicode characters. Other task/private directories are inaccessible.",
+          "key": "worker.schema.transcript_tool.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "sha256",
+            "description"
+          ],
+          "present": true,
+          "source": "Exact full output SHA from this execution.",
+          "key": "worker.schema.transcript_tool.input_schema.properties.sha256"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "offset",
+            "description"
+          ],
+          "present": true,
+          "source": "Zero-based Unicode character offset.",
+          "key": "worker.schema.transcript_tool.input_schema.properties.offset"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "limit",
+            "description"
+          ],
+          "present": true,
+          "source": "Maximum Unicode characters in this page.",
+          "key": "worker.schema.transcript_tool.input_schema.properties.limit"
+        }
+      ],
+      "variant": "TRANSCRIPT_TOOL"
+    }
+  ],
+  "merge_source": [
+    {
+      "sha256": "9c35b0fbfbe21337e0606317e525b2a1b9be4940daf59303b0507ae555423766",
+      "descriptions": [
+        {
+          "path": [
+            "description"
+          ],
+          "present": true,
+          "source": "Inspect frozen A/base, L/local, B/incoming and M/result. Resolve conflicts and repair integration in any declared source input, preserving both intents. status lists selected_cores; address core-0/path or core-1/path for each core in the ONE transition. Explicit surface core/app uses root-relative paths; omitted surface retains app/ application shorthand. All app writes require a reason and expected_composition_sha256 from status. Nonconflict core repairs require reason and expected_candidate_sha256. Finish validates the isolated candidate; this never applies or approves the update.",
+          "key": "worker.schema.merger.tool"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "action",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.action"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "path",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.path"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "content",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.content"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "surface",
+            "description"
+          ],
+          "present": true,
+          "source": "Explicit surface uses paths relative to that root; core paths may begin app/.",
+          "key": "worker.schema.merger.input_schema.properties.surface"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "delete",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.delete"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "side",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.side"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "offset",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.offset"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "reason",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.reason"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "expected_candidate_sha256",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.expected_candidate_sha256"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "expected_composition_sha256",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.expected_composition_sha256"
+        },
+        {
+          "path": [
+            "input_schema",
+            "properties",
+            "expected_input_sha256",
+            "description"
+          ],
+          "present": false,
+          "source": null,
+          "key": "worker.schema.merger.input_schema.properties.expected_input_sha256"
+        }
+      ],
+      "variant": "merger"
+    }
+  ]
+}

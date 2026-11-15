@@ -25,6 +25,8 @@ import tool_report
 import llm
 import run_context
 import forge_runtime
+import frame_language
+import tool_language
 
 
 def _now() -> str:
@@ -269,41 +271,13 @@ CHECKPOINT_TOOL = {
 
 
 def _system(request: dict) -> str:
-    role = request["role"]
-    # prompt_cache_key must stay stable across the turns of ONE fresh context, but two
-    # concurrent scouts/reviewers must not share affinity merely because their role matches.
-    identity = f"{request.get('task_id') or ''}:{request.get('id') or ''}"
-    cache_scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-    stance = {
-        "scout": "You are a reconnaissance agent. Inspect broadly and return concrete evidence and file/line references; ask a worker for process probes.",
-        "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, identify real defects or explicitly clear it; ask a worker for executable checks.",
-        "worker": "You are an implementation agent. Orient, edit the real isolated working tree, run checks, and leave it materially closer to done. Do not stop at recommendations when you can act.",
-    }[role]
-    orientation = forge.inspect(request["task_id"], "orientation")
-    return f"""audience_key=forge_{role}
-cache_scope={cache_scope}
-You are a fresh-context coding subagent created by Praxis, not a conversational assistant.
-
-Overall goal: {request.get('goal')}
-Your brief: {request.get('brief')}
-Your role: {role}
-{stance}
-
-FACTUAL ORIENTATION
-{orientation}
-
-Operating contract:
-- The task root is your exact address. Inspect current files and git state; never invent project facts.
-- Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
-- For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
-- Change files with `edit` (replace, batch, write, patch) after inspect(action=read). When a script suits the job, write Python and use import praxis_hands as h (h.read, h.edit): the same version check and write lock. Bare file writes, including str.replace followed by open().write, bypass both.
-- A worker may use `run_command` for exact program arguments, `run` for shell commands and build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Detached process/verification jobs are task-scoped; stopping your agent subtree does NOT stop them. Stop those jobs explicitly.
-- Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
-- Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
-- Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
-- Independent reviewers are voluntary help for ordinary tasks, not permission to finish. Retain their exact findings; an author's decision does not rename BLOCKED/findings to clear. Conflicting source updates have a separate mandatory battery/panel protocol.
-- End with a compact but complete result: what you learned/changed, exact verification, remaining risks, and the next useful integration step. Do not merely narrate intentions.
-"""
+    role=request['role']
+    identity=f"{request.get('task_id') or ''}:{request.get('id') or ''}"
+    return frame_language.text('worker.system',role=role,
+        cache_scope=hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16],
+        goal=request.get('goal'),brief=request.get('brief'),
+        stance=frame_language.text('worker.stance.'+role),
+        orientation=forge.inspect(request['task_id'],'orientation'))
 
 
 def _dispatch(request: dict, name: str, args: dict) -> str:
@@ -465,13 +439,19 @@ def _loop(journal, request_path, request, adapter):
         summarizing = boundary == "summary_ready"
         if not summarizing:
             state["iteration"] += 1
-        system = adapter.system(request) if adapter is not None else _system(request)
+        if adapter is not None:
+            # Trusted adapters validate frozen inputs and source-update admission
+            # here on EVERY model turn. Freeze prose, never those live checks.
+            proposed_system=adapter.system(request)
+            system=state.get('system') or proposed_system
+        else:
+            system=state.get('system') or _system(request)
         journal.save("summary_in_flight" if summarizing else "model_in_flight", "model",
                      system=system)
         journal.event("model_start", summary=summarizing, model_requested=request.get("model", ""))
         response = _chat_with_transport_retry(
             request, request_path=request_path, system=system, messages=state["messages"],
-            tools=None if summarizing else state["tools"],
+            tools=None if summarizing else state.get("model_tools",state["tools"]),
             logical_iteration=state["iteration"] + int(summarizing),
             call_options=state["call_options"], journal=journal,
         )
@@ -519,6 +499,7 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
     journal = None
     bindings = contextlib.ExitStack()
     try:
+        bindings.enter_context(frame_language.pin())
         # Journal/control admission can fail before captured context is parsed.
         # None of those failures may borrow the caller's ambient identity.
         bindings.enter_context(run_context.bind_run(None))
@@ -548,9 +529,17 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
             "next_boundary": "model_ready", "iteration": 0,
             "max_iters": max(0, int(request.get("max_iters") or 0)),
             "messages": [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}],
-            "tools": tools, "call_options": call_options, "adapter_id": adapter_id,
+            # Raw schemas remain the continuation authority check. Presentation
+            # is frozen separately, so changing language or catalogues cannot
+            # rewrite an existing execution or invalidate its raw tool identity.
+            "tools": tools, "model_tools": tool_language.apply(tools),
+            "frame_language": frame_language.language(),
+            "call_options": call_options, "adapter_id": adapter_id,
             "trace": [], "pending": {}, "reply": "", "model": "", "stopped_himself": False,
         })
+        # Old journals predate language selection and used English worker prose.
+        # They retain their recorded raw schemas/system and are never migrated.
+        bindings.enter_context(frame_language.use(state.get("frame_language","en")))
         _loop(journal, request_path, request, adapter)
         _control(request_path)
         trace = journal.trace()

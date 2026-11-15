@@ -42,6 +42,12 @@ def native_registry() -> dict:
     return json.loads(Path(__file__).with_name('native_tool_language_registry.json').read_text(encoding='utf-8'))
 
 
+@lru_cache(maxsize=1)
+def worker_registry() -> dict:
+    """Private Forge and frozen review/merge shapes, separate from main tools."""
+    return json.loads(Path(__file__).with_name('worker_tool_language_registry.json').read_text(encoding='utf-8'))
+
+
 def fingerprint(tool: dict) -> str:
     value = json.dumps(tool,ensure_ascii=False,sort_keys=True,separators=(',',':'))
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
@@ -51,7 +57,8 @@ def _rules(name):
     with _runtime_lock:
         variants = tuple(_runtime.get(name, {}).values())
     static = registry().get(name)
-    return variants + ((static,) if static else ()) + tuple(native_registry().get(name, ()))
+    return (variants + ((static,) if static else ()) + tuple(native_registry().get(name, ()))
+            + tuple(worker_registry().get(name, ())))
 
 
 def _raw_rule(tool):
