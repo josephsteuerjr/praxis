@@ -14,6 +14,7 @@ continue instead of blocking on them.
 """
 
 from __future__ import annotations
+import frame_language
 
 import datetime as _dt
 import hashlib
@@ -1331,6 +1332,7 @@ def active_proposal_ids() -> frozenset[str]:
     return frozenset(live)
 
 
+@frame_language.pinned
 def live_tasks_brief() -> list[str]:
     """Незакрытые coding-задачи одной строкой каждая: id, статус, агенты, цель.
 
@@ -1357,7 +1359,7 @@ def live_tasks_brief() -> list[str]:
             path.parent / "agents").is_dir() else 0
         goal = str(task.get("goal") or "").strip().replace("\n", " ")[:70]
         rows.append((str(task.get("created") or ""),
-                     f"{task_id} [{status}] агентов {done}/{agents} · {goal}"))
+                     frame_language.text('runs.coding.row',id=task_id,status=status,done=done,agents=agents,goal=goal)))
     return [line for _, line in sorted(rows)]
 
 

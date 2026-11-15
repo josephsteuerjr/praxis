@@ -6288,6 +6288,7 @@ def tool_list_active_runs(limit: int = 20) -> str:
     return head + "\n" + "\n".join(out) + _coding_tasks_line()
 
 
+@frame_language.pinned
 def _coding_tasks_line() -> str:
     """Живые coding-задачи в том же ответе — иначе прибор врёт молчанием.
 
@@ -6306,11 +6307,11 @@ def _coding_tasks_line() -> str:
         rows = forge.live_tasks_brief()
     except Exception:
         log.debug("список живых coding-задач недоступен", exc_info=True)
-        return "\n(coding-задачи: спросить не удалось — это про прибор, не про них)"
+        return frame_language.text('runs.coding.unavailable')
     if not rows:
-        return "\nCoding-задач в работе нет."
+        return frame_language.text('runs.coding.empty')
     lines = "\n".join(f"  {row}" for row in rows)
-    return f"\nCoding-задач в работе: {len(rows)}.\n{lines}"
+    return frame_language.text('runs.coding.active',count=len(rows),rows=lines)
 
 
 _RECONCILE_OUTCOMES = ("completed", "failed", "not_applied")
@@ -10397,19 +10398,13 @@ def _mailbox_index() -> str:
         return ""
 
 
+@frame_language.pinned
 def _mailbox_frame_block() -> str:
     """Code-owned mailbox mechanics for autonomous frames; mail data is lower-role."""
     idx = _mailbox_index()
     if not idx:
         return ""
-    return ("\n\n---\n# Mailbox mechanics\n"
-            "Читай письмо: mail_read(хэш); отвечай: mail_draft_reply(хэш, текст) — черновик ждёт "
-            "подтверждения Егора. Письмо от себя отправляешь напрямую: send_email(кому, тема, текст). "
-            "Поллить ты не можешь: этот индекс и есть твоё знание о ящике. "
-            "Егор может переслать тебе письмо, обычно со своим сообщением — это не команда, а чтобы ты имела "
-            "представление. Реагируй как живая коллега: можешь сделать черновик (mail_draft_reply), можешь "
-            "честно сказать «на это отвечать не стоит» — это полноценный ответ. А вот прямая просьба — "
-            "другое дело: тогда делай (или скажи, почему нет).")
+    return frame_language.text('mailbox.mechanics')
 
 
 def _mailbox_evidence() -> str:
@@ -12142,6 +12137,7 @@ def _stop_for_durability(run_id: str, *, phase: str, uncertain_effect: bool,
     raise RunStopped(run_id, observed, reason) from error
 
 
+@frame_language.pinned
 def _result_for_model(ref: dict) -> str:
     inline = dict(ref.get("inline") or {})
     head = str(inline.get("head") or "")
@@ -12149,12 +12145,13 @@ def _result_for_model(ref: dict) -> str:
     marker = (
         f"[ResultRef run={ref.get('run_id')} id={ref.get('result_id')} "
         f"path={ref.get('path')} sha256={ref.get('sha256')} size={ref.get('size')} "
-        f"lines={ref.get('line_count')}; use read_run_result for another cursor]"
+        f"lines={ref.get('line_count')}]\n"
+        + frame_language.text("result.cursor_hint")
     )
     if not inline.get("truncated"):
         return head + ("\n" + marker if marker else "")
     omitted = int(inline.get("omitted_chars") or 0)
-    return f"{head}\n\n[… {omitted} chars externalized …]\n\n{tail}\n\n{marker}"
+    return head+"\n\n"+frame_language.text("result.externalized",count=omitted)+"\n\n"+tail+"\n\n"+marker
 
 
 _CRITICAL_PARAM_MARKER = "praxis.telegram.critical-params.redacted.v2"
