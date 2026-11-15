@@ -4126,5 +4126,12 @@
   "native.bootstrap.unconfirmed": "L’ouverture de la fenêtre n’est pas encore confirmée (processus {pid}). Détails : {path}",
   "native.bootstrap.windows_error": "Impossible de démarrer Hélène. Conserver helene.exe, app et runtime dans le même dossier.\n\n{detail}",
   "native.bootstrap.python_error": "L’application Python n’a pas démarré : {detail}",
-  "native.bootstrap.migration_error": "La migration n’a pas démarré : {detail}"
+  "native.bootstrap.migration_error": "La migration n’a pas démarré : {detail}",
+  "native.components.intro": "Installez ici le relais Hélène fourni sous licence MIT. La voix et les autres composants facultatifs se configurent après le choix d’un agent. Aucun outil de compilation n’est nécessaire pour lancer l’application.",
+  "native.components.start": "Démarrer Hélène",
+  "native.components.installed": "Installé",
+  "native.components.available": "Disponible à l’installation",
+  "native.components.unavailable": "Installation indisponible",
+  "native.components.install": "Installer {name}",
+  "native.components.installing": "Installation de {name}…"
 }

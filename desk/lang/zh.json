@@ -4126,5 +4126,12 @@
   "native.bootstrap.unconfirmed": "尚未确认窗口已启动（进程 {pid}）。详情：{path}",
   "native.bootstrap.windows_error": "无法启动 Hélène。请将 helene.exe、app 和 runtime 放在同一文件夹中。\n\n{detail}",
   "native.bootstrap.python_error": "Python 应用程序未能启动：{detail}",
-  "native.bootstrap.migration_error": "迁移未能启动：{detail}"
+  "native.bootstrap.migration_error": "迁移未能启动：{detail}",
+  "native.components.intro": "可在此安装随 Hélène 提供的 MIT 许可中继。选择代理后，再配置语音和其他可选组件。运行应用无需编译工具。",
+  "native.components.start": "启动 Hélène",
+  "native.components.installed": "已安装",
+  "native.components.available": "可安装",
+  "native.components.unavailable": "无法安装",
+  "native.components.install": "安装 {name}",
+  "native.components.installing": "正在安装 {name}…"
 }

@@ -63,7 +63,9 @@ class PythonApplicationTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as temporary:
             with patch('localharness.owner_stop.stopped', return_value=True):
-                with patch.object(python_app, 'Application') as application, patch('first_start_window.main',side_effect=AssertionError('Automatic stop must precede first-start UI')):
+                # Import the real subclass before replacing its base in this
+                # unit fixture; otherwise later HTTP tests inherit a Mock.
+                with patch('first_start_window.main',side_effect=AssertionError('Automatic stop must precede first-start UI')), patch.object(python_app, 'Application') as application:
                     self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
             application.assert_not_called()
 

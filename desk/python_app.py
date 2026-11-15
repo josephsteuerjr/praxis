@@ -460,22 +460,8 @@ window.addEventListener('helene:ui-ready',async()=>{
                     content = '<!doctype html><html><head><meta charset="utf-8"></head><body><script>' + app.bridge() + "\nwindow.__HELENE__.invoke('window_retire_ack',{retireId:" + json.dumps(retire_id) + "}).catch(console.error);</script></body></html>"
                     return self.reply(200, content.encode(), "text/html; charset=utf-8")
                 if path == "/" and app.host is None:
-                    content = '''<!doctype html><html><head><meta charset="utf-8"><title>Hélène</title></head>
-<body style="background:#1d1914;color:#e5d7b8;font:18px system-ui;max-width:760px;margin:10vh auto;padding:24px">
-<h1>Hélène · Python</h1><p>Дополнительные голосовые компоненты и praxis-relay можно установить здесь.
-Реле — отдельный продукт под лицензией MIT. Для запуска инструменты сборки не нужны.</p>
-<div id="components"></div><button id="start">Запустить Hélène</button><pre id="status"></pre>
-<script>
-async function paint(){const rows=await window.__HELENE__.invoke('components_status');
-const box=document.getElementById('components');box.replaceChildren();
-for(const row of rows){const p=document.createElement('p');p.textContent=row.id+' · '+(row.installed?'installed':row.error||'ready to install');
-const b=document.createElement('button');b.textContent='Install '+row.id;b.disabled=!row.ready;
-b.onclick=async()=>{try{await window.__HELENE__.invoke('component_install',{name:row.id});await paint()}
-catch(e){document.getElementById('status').textContent=String(e)}};p.append(' ',b);box.append(p)}}
-document.getElementById('start').onclick=async()=>{try{await window.__HELENE__.invoke('components_start');location.reload()}
-catch(e){document.getElementById('status').textContent=String(e)}};paint().catch(e=>document.getElementById('status').textContent=String(e));
-</script></body></html>'''
-                    content = content.replace('<head>', '<head><script>' + app.bridge().replace('</', '<\\/') + '</script>', 1)
+                    from localharness.components_page import page
+                    content = page(app.root, app.bridge())
                     return self.reply(200, content.encode(), "text/html; charset=utf-8")
                 if path == "/__python__/events":
                     if not self.authorized():

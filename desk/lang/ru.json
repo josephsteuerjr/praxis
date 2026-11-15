@@ -4126,5 +4126,12 @@
   "native.bootstrap.unconfirmed": "Открытие окна пока не подтверждено (процесс {pid}). Подробности: {path}",
   "native.bootstrap.windows_error": "Не удалось запустить Hélène. Файл helene.exe и папки app и runtime должны лежать вместе.\n\n{detail}",
   "native.bootstrap.python_error": "Приложение Python не запустилось: {detail}",
-  "native.bootstrap.migration_error": "Перенос не запустился: {detail}"
+  "native.bootstrap.migration_error": "Перенос не запустился: {detail}",
+  "native.components.intro": "Здесь можно установить встроенное реле Hélène под лицензией MIT. Голос и другие дополнительные компоненты настраиваются после выбора агента. Инструменты сборки для запуска не нужны.",
+  "native.components.start": "Запустить Hélène",
+  "native.components.installed": "Установлено",
+  "native.components.available": "Доступно для установки",
+  "native.components.unavailable": "Установка недоступна",
+  "native.components.install": "Установить {name}",
+  "native.components.installing": "Установка {name}…"
 }
