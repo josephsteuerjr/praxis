@@ -90,7 +90,10 @@ class ThePointerSpeaksEnglish(unittest.TestCase):
         # назначения в указателе не печатаются вовсе.
         text = pointer(ON)
         self.assertIn("an honest snapshot", text)          # my_capabilities
-        self.assertIn(tool_text_en.POINTER_PURPOSE['proposal'], text)
+        rule=agent.tool_language.registry().get('proposal')
+        expected=(agent.frame_language.catalog('en')[rule['purpose']].format() if rule
+                  else tool_text_en.POINTER_PURPOSE['proposal'])
+        self.assertIn(expected, text)
 
     def test_the_english_lever_gives_her_own_words_back(self):
         text = pointer(OFF_EN)

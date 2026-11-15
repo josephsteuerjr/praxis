@@ -2208,5 +2208,535 @@
       }
     ],
     "purpose": "schema.tool.purpose.reread_this_chat"
+  },
+  "python": {
+    "sha256": "b2999362f6dfaf47a9f50ffd41a73f7c710bf875f21e85159cda931766908a3c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.7a311a1aca572342",
+        "present": true,
+        "source": "Run Python directly, without shell quoting. h is already praxis_hands: h.read, h.edit, h.write, h.search use the same editor, version checks and receipts. h.hand('name', **args) calls any hand in this turn's authorized catalogue through the live parent dispatcher, with its rights, durable receipts and Stop. r['outcome'] is the hand's own outcome (confirmed/refused/in_doubt/partial/ok/failed, unknown if it reports none); print r['content'] for its reply; r also has result_ref, call_id and image_count. h.describe('name')['content'] gives the full schema. InDoubt means check the receipt, never repeat the effect blindly. The bridge expires when this outer call returns or reaches its ceiling; a nested hand already started when the script stops waiting still finishes and its receipt follows [exit N]. Standalone workers/background survivors have no live bridge. Print results you need. cwd defaults to your local home, or the local Forge task root with task_id. Local task execution inherits custody and Stop; remote tasks are refused before execution. At home timeout=0 uses the configured shell default (normally 30s), capped at 600s; in a task 0 means unlimited. The output ends with [exit N]; a timeout closes the ordinary process group. Background descendants survive normal completion. Prefer h.edit to whole-file string replacement. To run one program with exact arguments, call run_command instead of subprocess glue."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "code",
+          "description"
+        ],
+        "key": "schema.tool.12c56aba2a3f2ec6",
+        "present": true,
+        "source": "Python source, exact line numbers preserved; h is preloaded"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.88a9be0c56896484",
+        "present": true,
+        "source": "Working directory; task paths are relative to the task root"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.tool.d40ae21d428bb4b1",
+        "present": true,
+        "source": "Seconds; 0 uses home default or no task deadline"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.aa00ba579506588b",
+        "present": true,
+        "source": "Optional local Forge task; omitted means home"
+      }
+    ],
+    "purpose": "schema.tool.purpose.python"
+  },
+  "run_command": {
+    "sha256": "83813501768501588f53fbfe847fcf863764a030b933505c71d6ada8c58cb683",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0054ff5a6a0abdb3",
+        "present": true,
+        "source": "Run one program with exact arguments and no shell: argv[0] is the program (PATH name or a path relative to cwd), every other item reaches it as one argument, byte for byte. Quotes, spaces, ;, $(), *, ~, backslashes and newlines are plain data, never expanded. Choose it for an ordinary program call (git show 'HEAD:a b.py', pytest -k x, ffmpeg ...); python for computation, loops or h; shell only when you want shell grammar (pipes, redirects, globs, &&, background &). It never falls back to shell. Routes: home (the Linux container, cwd defaults to /app, same rights and autocommit as shell) or, with task_id, a local Forge task (task root, admission, custody, Stop and its full log). Host and Windows tasks are refused before anything is sent: their backends take only shell strings; use coding_run there, or computer for the Windows laptop. At home timeout=0 uses the configured default (normally 30s), capped at 600s; in a task 0 means no deadline. stdin_text is sent exactly as UTF-8 then EOF; omitted means closed stdin. stdout and stderr arrive combined in one stream; the full output is kept. The reply ends with a [run_command {...}] facts line (executor, cwd, argv, resolved program, exit_code or signal, timed_out and tree_stop), [changes] and [exit N]. [exit unobserved] means no exit status was seen (timeout): never read it as success. refused: nothing was launched (bad argv, missing program or cwd). in_doubt: it may have run; check before repeating. A non-zero exit does not mean nothing changed. Optional env, outputs and scratch: see their fields; the facts line reports them."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "argv",
+          "description"
+        ],
+        "key": "schema.tool.3d6b3d07702e36ff",
+        "present": true,
+        "source": "Program then its arguments, one array item per argument"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.69ed0f87ef1a25d2",
+        "present": true,
+        "source": "Working directory; home default /app, task paths are relative to the task root"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.tool.796d0129fb14b02a",
+        "present": true,
+        "source": "Seconds; 0 uses the home default or no task deadline"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.aa00ba579506588b",
+        "present": true,
+        "source": "Optional local Forge task; omitted means home"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "stdin_text",
+          "description"
+        ],
+        "key": "schema.tool.f2fc9aa2ce9de3be",
+        "present": true,
+        "source": "Optional exact standard input text; omitted means closed stdin"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "env",
+          "description"
+        ],
+        "key": "schema.tool.cb0d869ee246b759",
+        "present": true,
+        "source": "Optional extra environment for this one program: [{name, value}]. The facts line and task receipts name variables only; like any tool argument, the values stay in this run's call record. PRAXIS_* is runtime-owned and refused. Nothing is read from settings."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "env",
+          "items",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.0b64682bead3a63a",
+        "present": true,
+        "source": "Variable name"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "env",
+          "items",
+          "properties",
+          "value",
+          "description"
+        ],
+        "key": "schema.tool.26b06da816ade495",
+        "present": true,
+        "source": "Exact value"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "outputs",
+          "description"
+        ],
+        "key": "schema.tool.bd37a6da013e6ed8",
+        "present": true,
+        "source": "Optional files this program should produce; after the run each is reported as created/modified/unchanged/deleted/missing with sha256 and size"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "scratch",
+          "description"
+        ],
+        "key": "schema.tool.828f20a13bea75f2",
+        "present": true,
+        "source": "Optional throwaway paths inside cwd (untracked by Git): removed after the program exits and left out of [changes]; kept if nothing ran or the stop was not proven"
+      }
+    ],
+    "purpose": "schema.tool.purpose.run_command"
+  },
+  "code_query": {
+    "sha256": "3a40a5aca1981b3de1f2c7ae826646fa923450c34787fcf40fed9c0c4a9a67f3",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.46637750b119f7c9",
+        "present": true,
+        "source": "Read-only code evidence in home, a local Forge task, or an absolute external tree; never creates a task/project or a write right. Python AST definitions, calls, references and import bindings; unknown receivers and shadowing stay ambiguous, never proven edges. JS/TS use disclosed regex symbols and text mentions; no LSP/type or re-export resolution. Returns snapshot, rows, total, next_cursor, coverage and methods. Empty incomplete scans do not prove absence. line is 1-based, char Unicode code points, byte UTF-8 column; end exclusive, CRLF excluded. Page limit is independent of the named Forge scan budget (normally 12000 files/90 seconds). Cursor binds query and file hashes: changed files refuse with paths; restart expires parent-held cursors. Structural cache is disposable and stores no snippets/source/literals; external roots use process RAM only. Heavy work uses the run-owned search process and stops with run reset. Remote host/Windows tasks are explicitly unsupported. impact is heuristic; its verification_plan(full=True) remains the full gate, overview is factual inventory."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "op",
+          "description"
+        ],
+        "key": "schema.tool.eafa92c050c9e3fc",
+        "present": true,
+        "source": "Evidence operation"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "root",
+          "description"
+        ],
+        "key": "schema.tool.c2d4306328ff4c5f",
+        "present": true,
+        "source": "home (default), task:<id>, or an absolute local read-only tree"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.9aceb6e548e3b03a",
+        "present": true,
+        "source": "Optional relative file/directory narrowing the scan; impact treats it as changed path"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.33283454a26d23d5",
+        "present": true,
+        "source": "Symbol name, dotted allowed; required for definition/references/callers/callees"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "module",
+          "description"
+        ],
+        "key": "schema.tool.e74a8be26e3881aa",
+        "present": true,
+        "source": "Defining module when known; distinguishes import bindings and same-name targets"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.1df3b04d8d2a3f2e",
+        "present": true,
+        "source": "Rows shown per page: default40, maximum200, independent of scan budget"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cursor",
+          "description"
+        ],
+        "key": "schema.tool.4dd9bbde9749bce5",
+        "present": true,
+        "source": "Exact next_cursor snapshot:offset; keep root/path/op/name/module unchanged"
+      }
+    ],
+    "purpose": "schema.tool.purpose.code_query"
+  },
+  "proposal": {
+    "sha256": "b47a409342944c2da39b970259ea859ef00226ccbe57f514e71a4ed684e3f530",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.7731f8dfffa7caa0",
+        "present": true,
+        "source": "Work on your own core through a separate proposal worktree: start, inspect diff, test the current open proposal, submit with evidence/reviewer or explicit override, list. risk manages advisory low-risk patterns; it does not grant authority or replace review."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.0f044feb6ca7d676",
+        "present": true,
+        "source": "Operation"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "id",
+          "description"
+        ],
+        "key": "schema.tool.e01468d7585bd013",
+        "present": true,
+        "source": "Proposal id for diff or submit; test uses the current open proposal"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.f012836e7f33b81f",
+        "present": true,
+        "source": "Why to open a new proposal"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "title",
+          "description"
+        ],
+        "key": "schema.tool.71942eed1889a097",
+        "present": true,
+        "source": "Submit: concise change title"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "why",
+          "description"
+        ],
+        "key": "schema.tool.9742b4e2fd00c998",
+        "present": true,
+        "source": "Submit: purpose and expected behavior"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "review",
+          "description"
+        ],
+        "key": "schema.tool.43348fe57f383a14",
+        "present": true,
+        "source": "Submit: review evidence"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "checked",
+          "description"
+        ],
+        "key": "schema.tool.2a47b4f7fdd391e7",
+        "present": true,
+        "source": "Submit: actual verification evidence"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "override_reason",
+          "description"
+        ],
+        "key": "schema.tool.76f8f79ecdd0f529",
+        "present": true,
+        "source": "Submit: explicit reason to override an advisory result"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reviewer",
+          "description"
+        ],
+        "key": "schema.tool.58498a387663f3ef",
+        "present": true,
+        "source": "Submit: independent reviewer verdict and provenance"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "risk_action",
+          "description"
+        ],
+        "key": "schema.tool.508590db7a13fff5",
+        "present": true,
+        "source": "risk: list (default), add or remove a pattern"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "pattern",
+          "description"
+        ],
+        "key": "schema.tool.a56496b0ae632f8c",
+        "present": true,
+        "source": "risk add/remove: exact path pattern"
+      }
+    ],
+    "purpose": "schema.tool.purpose.proposal"
+  },
+  "project": {
+    "sha256": "2f47941b814df151a810b55725c0c6ab2caf3ff6fdfb5b36ba57f51a25dd64d4",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.353c1db41da7175e",
+        "present": true,
+        "source": "Create/list/inspect workshop projects; run their tests or install pip dependencies into their venv. Use python or shell with cwd for execution; proposal(action='test') tests core."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.0f044feb6ca7d676",
+        "present": true,
+        "source": "Operation"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.8be82f8fff5bcd00",
+        "present": true,
+        "source": "Project name, required except for list"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "brief",
+          "description"
+        ],
+        "key": "schema.tool.8c11c38e5ebf0de9",
+        "present": true,
+        "source": "create: project purpose"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "packages",
+          "description"
+        ],
+        "key": "schema.tool.ff1355d981fb6b70",
+        "present": true,
+        "source": "pip: package requirements, space separated"
+      }
+    ],
+    "purpose": "schema.tool.purpose.project"
+  },
+  "memory_graph": {
+    "sha256": "f54c606222bb813a4e4d55f54b6715c589b940ea2bc96b88c84037e1d6cc6c8d",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.9cf7530eaaf2d205",
+        "present": true,
+        "source": "Inspect memory neighbors (look) or shortest path between two nodes (path); record an alias (name -> canonical to), or forget their edge and the related dossier entry. Uses the same memory scope and provenance as the original graph operations."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.0f044feb6ca7d676",
+        "present": true,
+        "source": "Operation"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.7fb631940efeaaeb",
+        "present": true,
+        "source": "Person/topic node; alias uses the alternate spelling"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "to",
+          "description"
+        ],
+        "key": "schema.tool.a1e51b5bea651c60",
+        "present": true,
+        "source": "Second node for path/forget; canonical spelling for alias"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "depth",
+          "description"
+        ],
+        "key": "schema.tool.2ae887384721aa10",
+        "present": true,
+        "source": "look: neighbor depth, default 1"
+      }
+    ],
+    "purpose": "schema.tool.purpose.memory_graph"
   }
 }

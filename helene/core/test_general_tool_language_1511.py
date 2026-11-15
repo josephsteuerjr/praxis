@@ -14,7 +14,8 @@ from test_tool_language_1511 import RAW, structural
 REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','manage_identity',
             'manage_perception','reply','end_turn','preview_reply','switch_brain','stay_silent',
             'focus','rest','my_capabilities','read_run_result','list_active_runs','reconcile_run',
-            'group_context','speak','search_chats','search_private_messages','read_other_chat','reread_this_chat')
+            'group_context','speak','search_chats','search_private_messages','read_other_chat','reread_this_chat',
+            'python','run_command','code_query','proposal','project','memory_graph')
 
 
 def stock():
