@@ -222,6 +222,7 @@ def my_sends_today_digest(max_rows: int = 8, gist: int = 200, budget: int = 1400
     return "\n".join(lines)[:budget]
 
 
+@frame_language.pinned
 def other_rooms_digest(exclude_chat_id=None, max_rooms=6, per_room_lines=3, budget=3000):
     """Owner-only живой срез её ДРУГИХ комнат: что где происходит прямо сейчас.
 
@@ -296,15 +297,15 @@ def other_rooms_digest(exclude_chat_id=None, max_rooms=6, per_room_lines=3, budg
     out, used = [], 0
     for ts, key, m, note in items[:max_rooms]:
         is_dm = bool(m.get("is_dm")) if "is_dm" in m else not str(key).startswith("-")
-        label = (str(m.get("name") or "").strip() or f"чат {key}")
-        kind = "ЛС" if is_dm else "группа"
+        label = (str(m.get("name") or "").strip() or frame_language.text('helper.agent.other_rooms_digest.299', p0=f'{key}'))
+        kind = frame_language.text('helper.agent.other_rooms_digest.300') if is_dm else frame_language.text('helper.agent.other_rooms_digest.300.2')
         try:
             mode = rooms.effective_mode(key)
         except Exception:
             mode = "normal"
         tag = "" if mode == "normal" else f", {mode}"
         age_h = max(0.0, (now - ts) / 3600.0)
-        when = f"{int(age_h * 60)}м назад" if age_h < 1 else f"{age_h:.0f}ч назад"
+        when = frame_language.text('helper.agent.other_rooms_digest.307', p0=f'{int(age_h * 60)}') if age_h < 1 else frame_language.text('helper.agent.other_rooms_digest.307.2', p0=f'{age_h:.0f}')
         block = f"**{label}** ({kind}{tag}; {when}):\n{note}\n"
         if used + len(block) > budget:
             break
@@ -2568,6 +2569,7 @@ def tool_run_command(argv: list, cwd: str = "", timeout: int = 0, task_id: str =
                          stdin_text=stdin_text, env=env_map, outputs=outputs, scratch=scratch)
 
 
+@frame_language.pinned
 def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
                   python_code: str | None = None, program_argv: list[str] | None = None,
                   stdin_text: str | None = None, env: dict | None = None,
@@ -2604,13 +2606,12 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
     if program_argv is not None:
         # Known refusals happen before the safety point, workspace scan or any spawn.
         place, _ = _shell_place(cwd)
-        reason = "" if place is not None else f"no such directory: {cwd}"
+        reason = "" if place is not None else frame_language.text('helper.agent._home_command.2607', p0=f'{cwd}')
         if place is not None:
             child_env = command_execution.child_env(None, env or {})
             program = command_execution.resolve_program(program_argv[0], place, child_env)
             if program is None:
-                reason = (f"program not found: {program_argv[0]!r} (searched PATH; a name with "
-                          "a slash is relative to cwd and must be an executable file)")
+                reason = (frame_language.text('helper.agent._home_command.2612', p0=f'{program_argv[0]!r}'))
             else:
                 try:
                     output_paths = command_execution.declared_paths(outputs, place, label="outputs")
@@ -2620,7 +2621,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
                     reason = str(exc)
         if reason:
             tool_report.note(outcome="refused", target=str(cwd))
-            return ("run_command refused before launch: " + reason + command_execution.argv_facts(
+            return (frame_language.text('helper.agent._home_command.2623') + reason + command_execution.argv_facts(
                 executor="home", cwd=place or cwd, argv=program_argv, program=None,
                 stdin_text=stdin_text, started=False))
     log.info("%s $ %s", "SHELL" if program_argv is None else "RUN_COMMAND", command)
@@ -2675,7 +2676,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
             tool_report.note(outcome="in_doubt" if unknown else "failed" if program_argv is None else "refused")
             _tool_trace_event("tool_execution", receipt={"kind":"process", "requested_argv":argv,
                 "cwd":str(workdir), "status":process_status, "error":result.get("msg", "")})
-            out = "[ошибка запуска] " + str(result.get("msg") or "unknown")
+            out = frame_language.text('helper.agent._home_command.2678') + str(result.get("msg") or "unknown")
         else:
             started = True
             code = int(result["code"])
@@ -2685,7 +2686,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
                 **result.get('execution', {}), "status":"timed_out" if result["killed"] else "returned", "exit_code":code})
             out = _decode_shell_output(result["out"]) or ""
             if result["killed"] and program_argv is None:
-                out += f"\n[прервано по таймауту {seconds}s]"
+                out += frame_language.text('helper.agent._home_command.2688', p0=f'{seconds}')
             exit_note = f"\n[exit {code}]"
             if program_argv is not None and timed_out and not (stop or {}).get("confirmed"):
                 # A timeout whose tree exit was not proven may still be running.
@@ -2696,7 +2697,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
         tool_report.note(outcome="in_doubt")
         _tool_trace_event("tool_execution", receipt={"kind":"process", "requested_argv":argv,
             "cwd":str(workdir), "status":"outcome_unknown", "error":type(exc).__name__})
-        out = f"[исход запуска неизвестен] {exc}"
+        out = frame_language.text('helper.agent._home_command.2699', p0=f'{exc}')
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
     if background:
@@ -2735,7 +2736,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
                      if output_paths else None),
             scratch=scratch_rows)
             + command_execution.tail(shown, process_status, changes))
-    return (body if body else "(пустой вывод)") + command_execution.tail(code, process_status, changes)
+    return (body if body else frame_language.text('helper.agent._home_command.2738')) + command_execution.tail(code, process_status, changes)
 
 
 @frame_language.pinned
@@ -9967,6 +9968,7 @@ def _scheduled_target_moderation_block(ctx: "ChannelContext") -> str:
     )
 
 
+@frame_language.pinned
 def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str:
     """ВСЕ её досье на людей, целиком. Отбора нет — и это решение, а не упрощение.
 
@@ -10104,9 +10106,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         if lifted_path is not None and path.resolve() == lifted_path.resolve():
             # Тело уже в эпохе E этого же кадра — второй раз не везём (КЕАТ: одно тело,
             # один адрес). Указатель называет и место, и руку.
-            rows.append(f"— {path.stem} · memory/people/{path.name} — тело поднято в "
-                        f"эпоху E этого кадра («поднято в эпоху»), здесь не повторяется; "
-                        f"целиком — рукой чтения файла")
+            rows.append(frame_language.text('helper.agent._participant_memory_block.10107', p0=f'{path.stem}', p1=f'{path.name}'))
             lifted += 1
             continue
         try:
@@ -10117,7 +10117,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         if not body:
             # Названная пустота вместо молчаливого пропуска: пустое досье — это факт о
             # человеке (я его завела и ничего не записала), а не отсутствие человека.
-            rows.append(f"— {path.stem} · memory/people/{path.name} — пусто")
+            rows.append(frame_language.text('helper.agent._participant_memory_block.10120', p0=f'{path.stem}', p1=f'{path.name}'))
             continue
         if cap > 0:
             # Под эпохой потолок один для всех: тело в замороженном документе не может
@@ -10134,7 +10134,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         if path.stem in live_only:
             continue
         if frame_dossiers.collect(f'memory/people/{path.name}', card):
-            rows.append(f'— {title} · memory/people/{path.name} — admitted snapshot follows as context evidence')
+            rows.append(frame_language.text('helper.agent._participant_memory_block.10137', p0=f'{title}', p1=f'{path.name}'))
         else:
             rows.append(card)
         total += len(body)
@@ -10167,19 +10167,15 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     principal_id = dossier_principal
     bound = people.slug_for_principal(principal_id) if principal_id else ""
     if scheduled_target and bound:
-        who = (f"цель scheduled-намерения: {bound} (адресная привязка по tg "
-               f"{principal_id}, не по имени). Это адресат намерения, НЕ текущий "
-               f"говорящий и НЕ принципал этого хода")
+        who = (frame_language.text('helper.agent._participant_memory_block.10170', p0=f'{bound}', p1=f'{principal_id}'))
     elif scheduled_target and principal_id:
-        who = (f"цель scheduled-намерения: tg {principal_id}; привязки к досье нет. "
-               f"Это адресат намерения, НЕ текущий говорящий и НЕ принципал этого хода")
+        who = (frame_language.text('helper.agent._participant_memory_block.10174', p0=f'{principal_id}'))
     elif bound:
-        who = f"передо мной: {bound} (привязка по tg {principal_id}, не по имени)"
+        who = frame_language.text('helper.agent._participant_memory_block.10177', p0=f'{bound}', p1=f'{principal_id}')
     elif principal_id:
-        who = (f"кто передо мной — кадру НЕ НАЗВАН: у tg {principal_id} нет привязки к "
-               f"досье. Имя в сообщении личности не назначает")
+        who = (frame_language.text('helper.agent._participant_memory_block.10179', p0=f'{principal_id}'))
     else:
-        who = "кто передо мной — кадру не назван: подтверждённого принципала в этом ходе нет"
+        who = frame_language.text('helper.agent._participant_memory_block.10182')
     if owner_audience and (not stable or not hidden):
         veil = ""
     elif owner_audience:
@@ -10187,12 +10183,9 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         # новая строка искусственно увеличивала публичный остаток логически единого досье.
         veil = ""
     elif in_room and dossier_private_in_rooms():
-        veil = (" Здесь не owner-контур; записи с пометкой [private] оставлены в кадре как"
-                " моё внутреннее знание (решение владельца, 25.09) — вслух в этой комнате"
-                " их не произношу без права их субъекта.")
+        veil = (frame_language.text('helper.agent._participant_memory_block.10190'))
     else:
-        veil = (f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
-                f" они есть в первоисточнике и открываются рукой.")
+        veil = (frame_language.text('helper.agent._participant_memory_block.10194', p0=f'{hidden}'))
     if epoch:
         # Под эпохой всё, что зависит от говорящего, уезжает в живой хвост через снимок
         # (frame_layout.stash), а тела остаются здесь — замороженному документу нельзя
@@ -10205,9 +10198,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     else:
         who_line = "\n" + who + "."
     if not contract:
-        head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
-                f"отбора и без сжатия; путь у каждого назван, первоисточник открывается рукой."
-                f"{veil}{who_line}")
+        head = (frame_language.text('helper.agent._participant_memory_block.10208', p0=f'{len(rows)}', p1=f'{total}', p2=f'{veil}', p3=f'{who_line}'))
         return head + "\n\n" + "\n\n".join(rows)
     # ⚑ Указатели печатаются ОТДЕЛЬНО от тел и названы указателями. Смешать их с досье
     # значило бы соврать о том, что она видит: тело едет, указатель — нет.
@@ -10216,20 +10207,14 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     if pointers:
         named = "; ".join(
             f"{str(people.read(s)[0] or s)} · memory/people/{s}.md" for s in pointers[:12])
-        tail = ("\n\nУПОМЯНУТЫ В ОКНЕ ПОСЛЕДНИХ 100 СООБЩЕНИЙ — досье НЕ загружено, "
-                f"открывается рукой: {named}."
-                + (f" И ещё {len(pointers) - 12}." if len(pointers) > 12 else ""))
+        tail = (frame_language.text('helper.agent._participant_memory_block.10219', p0=f'{named}')
+                + (frame_language.text('helper.agent._participant_memory_block.10221', p0=f'{len(pointers) - 12}') if len(pointers) > 12 else ""))
     frame_note = ""
     if capped:
-        frame_note = (f" Досье под потолок кадра ({cap} знаков говорящему, {max(1, cap // 2)} "
-                      f"остальным): обрезано {capped}, у каждого назван файл целиком.")
+        frame_note = (frame_language.text('helper.agent._participant_memory_block.10224', p0=f'{cap}', p1=f'{max(1, cap // 2)}', p2=f'{capped}'))
     if lifted:
-        frame_note += (f" {lifted} тело(а) уже подняты в эпоху E этого кадра и здесь не "
-                       f"повторяются.")
-    head = (f"досье здесь: {len(rows)} из {total_all}, знаков {total}. Едут целиком те, "
-            f"кого транспорт назвал присутствующими; остальные доступны рукой по "
-            f"memory/people/ и карте памяти — они не удалены, они не в кадре."
-            f"{frame_note}{veil}{who_line}")
+        frame_note += (frame_language.text('helper.agent._participant_memory_block.10227', p0=f'{lifted}'))
+    head = (frame_language.text('helper.agent._participant_memory_block.10229', p0=f'{len(rows)}', p1=f'{total_all}', p2=f'{total}', p3=f'{frame_note}', p4=f'{veil}', p5=f'{who_line}'))
     body = ("\n\n" + "\n\n".join(rows)) if rows else ""
     return head + body + tail
 
@@ -10790,8 +10775,7 @@ def _build_prompt_parts(
     # «СЕЙЧАС» («~1 014 человек», frame_layout._place) и менялось между соседними кадрами.
     members_fact = "" if room_stable or local_stable else f"; members={members}"
     tail.append(frame_trace.mark("state.channel_facts", "dynamic", "text",
-        f"\nChannel facts: kind={ctx.kind}; audience_scope={scope_fact}; "
-        f"room_id={room_id}{members_fact}{key_fact}.\n"
+        frame_language.text('helper.agent._build_prompt_parts.10793', p0=f'{ctx.kind}', p1=f'{scope_fact}', p2=f'{room_id}', p3=f'{members_fact}', p4=f'{key_fact}')
     ))
     tail_text = "".join(tail)
 
@@ -11990,12 +11974,13 @@ _TRACE_BUDGET = 3500        # бюджет следа рук в guard-input кв
                             # (судьи, которому он шёл, нет с 10.11); не main-loop budget
 
 
+@frame_language.pinned
 def _tool_trace_line(name: str, call_input: dict, out) -> str:
     """Строка сводки одного тул-колла ТЕКУЩЕГО хода — что голос реально вызвала и увидела.
     Она нужна для точной причинности и outbound data-authority; основной контекст хода не режет."""
     safe_input = _durable_tool_input(name, call_input)
     args = ", ".join(f"{k}={str(v)[:40]}" for k, v in safe_input.items())[:120]
-    res = _durable_tool_output(name, call_input, out)[:_TRACE_RESULT_CHARS].strip() or "(пусто)"
+    res = _durable_tool_output(name, call_input, out)[:_TRACE_RESULT_CHARS].strip() or frame_language.text('helper.agent._tool_trace_line.11998')
     return f"{name}({args}) → {res}"
 
 
@@ -12897,13 +12882,12 @@ def _archive_run_media(run_id: str, items, *, prefix: str,
     return archived
 
 
+@frame_language.pinned
 def _result_ref_line(row: dict, *, label: str | None = None) -> str:
     ref = row.get("result") or {}
     name = label or str(row.get("name") or "result")
     return (
-        f"- `{name}` → `{ref.get('result_id')}` "
-        f"(`{ref.get('path')}`, sha256 `{str(ref.get('sha256') or '')[:16]}…`, "
-        f"{ref.get('size') or 0} bytes)"
+        frame_language.text('helper.agent._result_ref_line.12904', p0=f'{name}', p1=f"{ref.get('result_id')}", p2=f"{ref.get('path')}", p3=f"{str(ref.get('sha256') or '')[:16]}", p4=f"{ref.get('size') or 0}")
     )
 
 
@@ -17730,6 +17714,7 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
     return True
 
 
+@frame_language.pinned
 def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                         max_iters: int | None = None,
                         tool_trace: list[str] | None = None,
@@ -17846,11 +17831,11 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     dispatched = True
                 else:
                     raise DurableExecutionError(
-                        f"model requested unoffered tool {b.get('name')!r}")
+                        frame_language.text('helper.agent._terminal_tool_loop.17849', p0=f"{b.get('name')!r}"))
             impl = TOOL_IMPL.get(b["name"])
             if not callable(impl):
                 raise DurableExecutionError(
-                    f"model requested unavailable tool {b['name']!r}")
+                    frame_language.text('helper.agent._terminal_tool_loop.17853', p0=f"{b['name']!r}"))
             # Битый JSON аргументов — не пустой вызов, а НЕПРОЧИТАННОЕ намерение.
             # Раньше парсер подменял его на `{}`, и рука со всеми опциональными
             # параметрами исполнялась с дефолтами: другое действие вместо задуманного,
@@ -17860,7 +17845,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
                                      "content": MALFORMED_JSON_REPAIR.format(name=b["name"])})
                 if tool_trace is not None:
-                    tool_trace.append(f"{b['name']}(?) → аргументы не распарсились как JSON")
+                    tool_trace.append(frame_language.text('helper.agent._terminal_tool_loop.17863', p0=f"{b['name']}"))
                 continue
             # OpenAI strict mode emits explicit null for optional fields.  Tool functions own
             # their defaults, so nulls are removed on every provider path.
@@ -18008,9 +17993,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             n = repeats[signature]
             if n in {3, 5, 10, 25, 50} or (n >= 100 and n % 100 == 0):
                 loop_notes.append(
-                    f"Loop observation: identical `{b['name']}` arguments and result repeated {n} times. "
-                    "This does not stop the run; decide whether to change approach, continue for a named "
-                    "reason, pause, or finish."
+                    frame_language.text('helper.agent._terminal_tool_loop.18011', p0=f"{b['name']}", p1=f'{n}')
                 )
         if loop_notes:
             tool_results.append({"type": "text", "text": "\n".join(loop_notes)})
@@ -18793,6 +18776,7 @@ def _historical_inbound_ids(ctx: "ChannelContext") -> set[str]:
             and int(mid) < int(proved[last_out][0])} if last_out >= 0 else set()
 
 
+@frame_language.pinned
 def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                   ctx: "ChannelContext",
                   model_text: str | None = None,
@@ -18822,8 +18806,7 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
             if str(ref.message_id or "") not in historical_ids:
                 raise
             additions.append(
-                f"[Вложение #{index + 1} ({ref.kind}) недоступно: локальный файл "
-                "отсутствует; содержимое не просмотрено и не восстановлено.]")
+                frame_language.text('helper.agent._media_prompt.18825', p0=f'{index + 1}', p1=f'{ref.kind}'))
             if unavailable_refs is not None:
                 unavailable_refs.append(ref)
             continue
@@ -18832,7 +18815,7 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
         if ref.kind == "photo":
             photo_n += 1
             if ref.mime not in _MODEL_IMAGE_MIME:
-                additions.append(f"[Изображение #{photo_n}: формат {ref.mime} пока не читается моделью]")
+                additions.append(frame_language.text('helper.agent._media_prompt.18835', p0=f'{photo_n}', p1=f'{ref.mime}'))
                 continue
             photos.append({"type": "image", "path": str(ref.path), "mime": ref.mime,
                            # На GPT-5.6 auto сохраняет исходный размер; старшие 5.x тоже принимают auto.
@@ -18848,8 +18831,8 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                 log.warning("неожиданный сбой STT #%d [%s]", audio_n, ctx.chat_id, exc_info=True)
                 transcript = ""
             additions.append(
-                f"[Аудио #{audio_n}, расшифровка]: {transcript}"
-                if transcript else f"[Аудио #{audio_n}: речь не распознана]")
+                frame_language.text('helper.agent._media_prompt.18851', p0=f'{audio_n}', p1=f'{transcript}')
+                if transcript else frame_language.text('helper.agent._media_prompt.18852', p0=f'{audio_n}'))
     def _with_additions(text: str) -> str:
         exact_source = (frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
                         or frame_continuation.source_bound())

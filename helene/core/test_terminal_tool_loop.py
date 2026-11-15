@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 import agent
+import frame_language
 
 
 class TerminalToolLoopTests(unittest.TestCase):
@@ -66,7 +67,7 @@ class TerminalToolLoopTests(unittest.TestCase):
                 )
             return types.SimpleNamespace(stop_reason="end_turn", text="done", blocks=[])
 
-        with mock.patch.object(agent.llm, "chat", side_effect=fake_chat), \
+        with frame_language.use('en'), mock.patch.object(agent.llm, "chat", side_effect=fake_chat), \
                 mock.patch.dict(agent.TOOL_IMPL, {"probe": lambda value: "same-result"}):
             out = agent._terminal_tool_loop(
                 system="test", messages=[{"role": "user", "content": "go"}],

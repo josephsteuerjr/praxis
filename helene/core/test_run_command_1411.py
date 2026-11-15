@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import agent
+import frame_language
 import catalog_families
 import command_execution
 import forge
@@ -99,12 +100,12 @@ class Home(HomeFixture, unittest.TestCase):
     def test_missing_program_and_missing_cwd_are_refused_before_spawn(self):
         with patch('hands.execute_argv') as launcher, patch.object(agent.selfgit, 'safety_point') as point:
             out, report = self.call(argv=['definitely-not-a-program-1411', 'x'])
-            self.assertIn('program not found', out); self.assertEqual(report['outcome'], 'refused')
+            self.assertIn(frame_language.text('helper.agent._home_command.2612',p0=repr('definitely-not-a-program-1411')), out); self.assertEqual(report['outcome'], 'refused')
             self.assertFalse(facts(out)['started'])
             out, report = self.call(argv=['./missing-script'])
-            self.assertIn('program not found', out)
+            self.assertIn(frame_language.text('helper.agent._home_command.2612',p0=repr('./missing-script')), out)
             out, report = self.call(argv=['true'], cwd=str(self.root / 'nowhere'))
-            self.assertIn('no such directory', out); self.assertEqual(report['outcome'], 'refused')
+            self.assertIn(frame_language.text('helper.agent._home_command.2607',p0=str(self.root/'nowhere')), out); self.assertEqual(report['outcome'], 'refused')
         launcher.assert_not_called(); point.assert_not_called()
 
     def test_nonzero_exit_and_signal_are_observed_not_success(self):
@@ -384,7 +385,7 @@ class Declared(HomeFixture, unittest.TestCase):
                                  (['.'], self.root)):
                 with self.subTest(scratch=scratch):
                     out, report = self.call(argv=['true'], scratch=scratch, cwd=str(cwd))
-                    self.assertIn('refused before launch', out)
+                    self.assertIn(frame_language.text('helper.agent._home_command.2623'), out)
                     self.assertEqual(report['outcome'], 'refused')
         launcher.assert_not_called()
         self.assertTrue((self.root / 'tracked.txt').exists())
