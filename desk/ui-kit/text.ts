@@ -63,6 +63,24 @@ export function runControlNote(value: unknown): string {
   return key ? uiText(key) : "";
 }
 
+const NOTICE_FIELDS: Record<string, readonly string[]> = {
+  speech_failed:[], speech_unknown:[], turn_incomplete:[], files_pending:["count","run"],
+  paused:["run"], turn_failed:["run"], silence:["agent"], silence_reason:["agent","reason"],
+  closed:[], closed_file:[], tree_busy:["agent","pid"], birth_silent:["agent"], birth_failed:["tries"],
+  resume_refused:["reason"], note_gave_up:["name","tries","path"], note_rejected:["name","reason"],
+};
+
+/** New producer-owned notices follow this client's UI; legacy history stays literal. */
+export function systemNoticeText(value: unknown): string {
+  const message=titleRecord(value),r=titleRecord(message?.display_notice),values=titleRecord(r?.values);
+  if(message?.system!==true||!r||Object.keys(r).sort().join(",")!=="kind,schema,values"
+    ||r.schema!=="helene.product-notice.v1"||typeof r.kind!=="string"||!Object.hasOwn(NOTICE_FIELDS,r.kind)||!values)return "";
+  const fields=NOTICE_FIELDS[r.kind];
+  if(Object.keys(values).length!==fields.length||fields.some(key=>!Object.hasOwn(values,key))
+    ||Object.values(values).some(v=>typeof v!=="string"&&(typeof v!=="number"||!Number.isFinite(v))))return "";
+  return uiText("notice."+r.kind,values as Record<string,string|number>);
+}
+
 export function fmtTime(iso?: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);

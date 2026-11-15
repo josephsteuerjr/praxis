@@ -4133,5 +4133,21 @@
   "native.components.available": "可安装",
   "native.components.unavailable": "无法安装",
   "native.components.install": "安装 {name}",
-  "native.components.installing": "正在安装 {name}…"
+  "native.components.installing": "正在安装 {name}…",
+  "notice.speech_failed": "语音在发送前失败。请检查语音设置和错误详情。",
+  "notice.speech_unknown": "音频是否被接受尚未确认，可能已经送达。请先核对回执，再决定是否重发。",
+  "notice.turn_incomplete": "⚠ 本轮未完成。详情见引擎日志。",
+  "notice.files_pending": "⏳ 尚未确认送达的附件：{count}（运行 {run}）。请查看队列和本轮记录中的结果。",
+  "notice.paused": "⏸ 本轮在检查点暂停，等待确认（运行 {run}）。",
+  "notice.turn_failed": "⚠ 本轮因故障结束（运行 {run}）。详情见本轮记录。",
+  "notice.silence": "⋯ {agent} 选择沉默。这是自主选择，并非故障。",
+  "notice.silence_reason": "⋯ {agent} 选择沉默：{reason}",
+  "notice.closed": "⋯ 本轮已结束，没有发送给窗口的回复。",
+  "notice.closed_file": "⋯ 本轮已结束，没有给窗口的文字回复；附件已送达。",
+  "notice.tree_busy": "⚠ {agent} 的第二个实例未启动：另一个进程（{pid}）占用这些数据。停止或重启前，请核实活动实例及其所有者。",
+  "notice.birth_silent": "⋯ {agent}：首次交互已结束，没有回复。你可以发起对话。",
+  "notice.birth_failed": "⚠ 尝试 {tries} 次后，代理的首次交互仍未完成。请检查模型设置和引擎日志。诞生记录及现有数据均已保留。",
+  "notice.resume_refused": "⚠ /resume 尚未确认：{reason}。有效的根级停止须由所有者通过原生 Resume 命令解除。",
+  "notice.note_gave_up": "⚠ 便笺 {name} 在 {tries} 次失败交互后仍未处理完成。源文件保留在 {path}。重试前请核对本轮记录和日志，避免重复已执行的操作。",
+  "notice.note_rejected": "便笺“{name}”未被接纳为所有者发起的交互：无法确认经由通道进入（{reason}）。"
 }

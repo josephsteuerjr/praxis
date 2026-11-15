@@ -207,7 +207,8 @@ class WindowTurn(unittest.TestCase):
         last = rows[-1]
         self.assertTrue(last.get("system"))
         self.assertEqual(last.get("kind"), "silence")
-        self.assertIn("молчание по решению Мира", last["text"])
+        self.assertEqual(last['display_notice'],{'schema':'helene.product-notice.v1',
+            'kind':'silence_reason','values':{'agent':'Мира','reason':'владелец просил не отвечать'}})
         self.assertIn("владелец просил не отвечать", last["text"])
         self.assertIn(("completed", True, "agent chose silence"), agent.receipts)
         # Плашка — не её слово: в ленту модели не идёт.

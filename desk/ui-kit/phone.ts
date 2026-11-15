@@ -12,7 +12,7 @@ import { t as uiText } from "../lang/lang";
 // отдаёт (КОНТРАКТ-B→A §4); на 403 честно говорит «телефону не отдаётся».
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
-import { esc, fmtDay, fmtTime, isToday, md, runTitle } from "./text";
+import { esc, fmtDay, fmtTime, isToday, md, runTitle, systemNoticeText } from "./text";
 import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 import { RecentMap } from "./recent-map";
@@ -46,6 +46,7 @@ export interface Msg {
   text?: string;
   sender_name?: string;
   system?: boolean;
+  display_notice?: unknown;
   kind?: string;
   topic_id?: number | string;
   topic_title?: string;
@@ -753,7 +754,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
       const mediaError = m.media_error ? `<p class="media-error">${esc(m.media_error)}</p>` : "";
       const text = artifactCaption(m.text || "", m.media_path);
-      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(text)}${media}${mediaError}</div></div>`);
+      const notice=systemNoticeText(m),body=notice?esc(notice).replace(/\n/g,"<br>"):md(text);
+      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${body}${media}${mediaError}</div></div>`);
     }
     const next = html.join("");
     if (next === lastFeed && feedReady) return false;

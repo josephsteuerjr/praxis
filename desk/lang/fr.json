@@ -4133,5 +4133,21 @@
   "native.components.available": "Disponible à l’installation",
   "native.components.unavailable": "Installation indisponible",
   "native.components.install": "Installer {name}",
-  "native.components.installing": "Installation de {name}…"
+  "native.components.installing": "Installation de {name}…",
+  "notice.speech_failed": "La synthèse vocale a échoué avant l’envoi. Consultez les réglages vocaux et les détails de l’erreur.",
+  "notice.speech_unknown": "La réception de l’audio n’est pas confirmée : il peut avoir été livré. Vérifiez la preuve avant de le renvoyer.",
+  "notice.turn_incomplete": "⚠ Le tour ne s’est pas terminé. Consultez le journal du moteur.",
+  "notice.files_pending": "⏳ Pièces jointes sans livraison confirmée : {count} (exécution {run}). Consultez la file et le résultat dans la fiche du tour.",
+  "notice.paused": "⏸ Le tour attend une confirmation à un point de contrôle (exécution {run}).",
+  "notice.turn_failed": "⚠ Le tour s’est terminé avec une erreur (exécution {run}). Consultez sa fiche.",
+  "notice.silence": "⋯ {agent} choisit le silence. C’est un choix, pas une erreur.",
+  "notice.silence_reason": "⋯ Silence choisi par {agent} : {reason}",
+  "notice.closed": "⋯ Le tour est clos sans réponse destinée à la fenêtre.",
+  "notice.closed_file": "⋯ Le tour est clos sans réponse écrite pour la fenêtre ; une pièce jointe a été livrée.",
+  "notice.tree_busy": "⚠ Une seconde instance de {agent} n’a pas démarré : un autre processus ({pid}) détient les données. Vérifiez l’instance active et son propriétaire avant de l’arrêter ou de la relancer.",
+  "notice.birth_silent": "⋯ {agent} : le premier tour est clos sans réponse. Vous pouvez commencer la conversation.",
+  "notice.birth_failed": "⚠ Le premier tour de l’agent ne s’est pas terminé après {tries} tentatives. Consultez les réglages du modèle et le journal du moteur. La trace de naissance et les données existantes sont conservées.",
+  "notice.resume_refused": "⚠ /resume n’est pas confirmé : {reason}. Un arrêt racine actif se lève par le propriétaire via la commande native Resume.",
+  "notice.note_gave_up": "⚠ Le traitement de la note {name} reste inachevé après {tries} tours en échec. Source conservée : {path}. Consultez le tour et le journal avant de réessayer pour ne pas répéter des actions déjà effectuées.",
+  "notice.note_rejected": "La note « {name} » n’a pas été admise comme tour du propriétaire : son entrée par le canal n’est pas confirmée ({reason})."
 }

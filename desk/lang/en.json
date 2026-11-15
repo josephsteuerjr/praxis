@@ -4133,5 +4133,21 @@
   "native.components.available": "Available to install",
   "native.components.unavailable": "Installation unavailable",
   "native.components.install": "Install {name}",
-  "native.components.installing": "Installing {name}…"
+  "native.components.installing": "Installing {name}…",
+  "notice.speech_failed": "Speech failed before sending. Check voice settings and error details.",
+  "notice.speech_unknown": "Audio acceptance is unconfirmed: it may have been delivered. Check the receipt before sending again.",
+  "notice.turn_incomplete": "⚠ The turn did not finish. See the engine log for details.",
+  "notice.files_pending": "⏳ Attachments without confirmed delivery: {count} (run {run}). Check the queue and outcome in the turn record.",
+  "notice.paused": "⏸ The turn is paused at a checkpoint awaiting confirmation (run {run}).",
+  "notice.turn_failed": "⚠ The turn ended with a failure (run {run}). See the turn record for details.",
+  "notice.silence": "⋯ {agent} chooses silence. This is a choice, not a failure.",
+  "notice.silence_reason": "⋯ Silence chosen by {agent}: {reason}",
+  "notice.closed": "⋯ The turn closed without a reply for the window.",
+  "notice.closed_file": "⋯ The turn closed without a text reply for the window; an attachment was delivered.",
+  "notice.tree_busy": "⚠ A second instance of {agent} did not start: another process ({pid}) holds the data. Check the active instance and its owner before stopping or restarting it.",
+  "notice.birth_silent": "⋯ {agent}: the first turn closed without a reply. You can start a conversation.",
+  "notice.birth_failed": "⚠ The agent’s first turn did not finish after {tries} attempts. Check model settings and the engine log. The birth record and existing data are retained.",
+  "notice.resume_refused": "⚠ /resume is unconfirmed: {reason}. An active seed stop is cleared by the owner through the native Resume command.",
+  "notice.note_gave_up": "⚠ Note {name} did not finish processing after {tries} failed turns. Source retained at {path}. Check the turn and log before retrying to avoid repeating completed effects.",
+  "notice.note_rejected": "Note “{name}” was not admitted as an owner turn: channel ingress is unconfirmed ({reason})."
 }

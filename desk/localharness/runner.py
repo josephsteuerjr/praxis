@@ -40,6 +40,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from localharness import product_notices
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import body
@@ -958,8 +959,7 @@ def speech_failed(job, status):
     """A product notice, never an instruction asking the agent to inspect audio."""
     log.warning('Speech request %s ended as %s', job['id'], status)
     if transport.is_room(job['chat_id']):
-        _room(job['chat_id']).deliver('Озвучка не доставлена. Проверь настройки голоса и доступность сервиса.',
-            system=True, kind='speech', source_id='speech-error:' + job['id'])
+        product_notices.deliver(_room(job['chat_id']), ('speech_unknown' if status=='unknown' else 'speech_failed') ,kind='speech', source_id='speech-error:' + job['id'])
 
 
 def _media_receipt_message_id(receipt: str) -> str:
@@ -1241,8 +1241,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         except (OSError, ValueError):
             log.exception("повод пробуждения не записался [%s]", source_id)
     if envelope is None:
-        desk.deliver("⚠ ход не дошёл до конца — подробности в логе движка.",
-                     source_id=source_id, system=True)
+        product_notices.deliver(desk, 'turn_incomplete' ,source_id=source_id)
         return "failed"
     import control_watch
     with control_watch.delivery(lambda: _agent._runs(), str(getattr(envelope, "run_id", "") or "")) as permitted:
@@ -1258,10 +1257,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
             # ⚑ 10.10: сбой канала больше не молчит. Файл не потерян — он в durable
             # очереди, и владелец видит это, а не пустоту после «отправлено». Слово
             # «повтор» не обещается: «повтор или отказ» — два честных исхода очереди.
-            desk.deliver(f"⏳ файлов не доставлено сейчас: {_pending_media} "
-                         f"(запуск {run_id}) — не потеряны: повтор или отказ, "
-                         "статус в карточке хода.",
-                         source_id=source_id, system=True)
+            product_notices.deliver(desk, 'files_pending', count=_pending_media, run=run_id ,source_id=source_id)
         ending, word = ("", "")
         if not spoken and not text:
             # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
@@ -1282,11 +1278,9 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         if getattr(envelope, "deferred", False):
             # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
             # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
-            desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
-                         f"(запуск {run_id}).", source_id=source_id, system=True)
+            product_notices.deliver(desk, 'paused', run=run_id ,source_id=source_id)
         elif getattr(envelope, "failed", False):
-            desk.deliver(f"⚠ ход не состоялся (запуск {run_id or 'без id'}) — "
-                         "подробности в карточке хода.", source_id=source_id, system=True)
+            product_notices.deliver(desk, 'turn_failed', run=run_id ,source_id=source_id)
         elif not spoken and text:
             # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
             # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
@@ -1303,17 +1297,13 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
             if ending == SILENCE:
                 log.info("ход %s: молчание по её решению%s", run_id,
                          f" ({word})" if word else "")
-                desk.deliver(f"⋯ молчание по решению {_agent_name}"
-                             + (f": {word}" if word else " (это выбор, не сбой)"),
-                             source_id=source_id, system=True, kind="silence")
+                product_notices.deliver(desk, ('silence_reason' if word else 'silence'), **({'agent':_agent_name,'reason':word} if word else {'agent':_agent_name}) ,source_id=source_id, kind='silence')
             elif not birth and not (getattr(_agent, '_application_speech', None)
                     and _agent._application_speech.accepted_for_run(run_id)):
                 # При рождении плашку кладёт _maybe_birth — со своими словами.
                 log.info("ход %s: закрыт без слова для окна%s", run_id,
                          " (только файл)" if media_count else "")
-                desk.deliver("⋯ ход закрыт без реплики: слова для окна в нём не было"
-                             + (", только файл" if media_count else ""),
-                             source_id=source_id, system=True, kind="silence")
+                product_notices.deliver(desk, ('closed_file' if media_count else 'closed') ,source_id=source_id, kind='silence')
         _close_run(envelope, room,
                    delivered_text=(text if not spoken else ""),
                    spoken_by_hand=len(spoken), media_count=media_count)
@@ -1799,12 +1789,7 @@ def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
         desk = transport.Desk(tree, STREAM, boot.owner_name(cfg),
                              str((cfg.get("owner") or {}).get("room") or "Hélène"),
                              agent_name=boot.agent_name(cfg))
-        desk.deliver(
-            f"⚠ Вторая копия {boot.agent_name(cfg)} не запустилась: этой памятью уже "
-            f"занят другой запущенный экземпляр (процесс {pid}). Так бывает, когда "
-            "программа открыта дважды или агента держит служба Windows. Работай в том "
-            "окне, которое уже открыто; если оно закрыто — сними службу на экране "
-            "«Система» или заверши процесс и запусти снова.", system=True)
+        product_notices.deliver(desk, 'tree_busy', agent=boot.agent_name(cfg), pid=str(pid if pid is not None else ''))
         _write_json(said, {"pid": pid, "at": time.time()})
     except Exception:
         log.exception("не сказал владельцу, что дерево занято")
@@ -2613,9 +2598,7 @@ def _maybe_birth(tree: Path) -> None:
             # Молчание по решению (`stay_silent`) плашку уже получило в
             # _turn_in_window; здесь — только ход без слова.
             if not _desk.rows(1) or not _desk.rows(1)[-1].get("system"):
-                _desk.deliver(f"⋯ {_agent_name}: первый ход закрыт без слова — это "
-                              "решение, а не сбой. Напиши первым.", system=True,
-                              kind="silence")
+                product_notices.deliver(_desk, 'birth_silent', agent=_agent_name ,kind='silence')
         return
     if tries >= _BIRTH_TRIES:
         try:
@@ -2626,12 +2609,7 @@ def _maybe_birth(tree: Path) -> None:
             log.exception("отметка «рождение не состоялось» не записалась")
         log.error("рождение не состоялось за %d попыток — больше не пробую", tries)
         try:
-            _desk.deliver(
-                f"⚠ Первый ход агента не состоялся {tries} раз подряд — обычно это "
-                "значит, что мозг недоступен: проверь ключ и адрес модели в "
-                "Настройках. Подробности — в data/runner.log. Чтобы попробовать "
-                "знакомство заново, удали файл data/memory/.state/born.json.",
-                system=True)
+            product_notices.deliver(_desk, 'birth_failed', tries=tries)
         except Exception:
             log.exception("не сказала владельцу о несостоявшемся рождении")
         return
@@ -3169,8 +3147,7 @@ def _reject_note(path: Path, why: str) -> None:
     log.warning("записка %s не принята: %s", path.name, why)
     try:
         if _desk is not None:
-            _desk.archive(f"В приёмную окна легла записка «{path.name}» не через канал — ходом "
-                          f"владельца она не стала ({why}).", outgoing=False, sender="Hélène")
+            _desk.archive(product_notices.legacy(product_notices.recipe('note_rejected',name=path.name,reason=str(why))),outgoing=False,sender='Hélène',system=True,display_notice=product_notices.recipe('note_rejected',name=path.name,reason=str(why)))
     except Exception:
         log.debug("строка об отвергнутой записке в окно не легла", exc_info=True)
 
@@ -3205,10 +3182,7 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
         except RuntimeError as exc:
             log.error("записка /resume не прошла: %s", exc)
             try:
-                _room(STREAM).deliver(
-                    f"⚠ /resume не прошёл: {exc}. Семенной стоп снимает только владелец "
-                    f"нативной командой Resume — передай ему это, записка здесь бессильна.",
-                    system=True)
+                product_notices.deliver(_room(STREAM), 'resume_refused', reason=str(exc))
             except Exception:
                 log.exception("записка-ошибка о непринятом /resume не легла в окно")
             _mark_done(processed, path.name, "resume refused: seed stop wants native Resume")
@@ -3293,10 +3267,7 @@ def _note_gave_up(path: Path, tries: int) -> None:
     room = target if transport.is_room(target) else STREAM
     stamp = path.stem.split("__", 1)[0]
     try:
-        _room(room).deliver(
-            f"⚠ Записка {stamp} так и не дошла до агента: {tries} попыток хода упали. "
-            f"Текст сохранён в {path}; причина — в логе движка. Напиши ещё раз, когда "
-            f"причина уйдёт.", source_id=f"note-gave-up:{path.stem}", system=True)
+        product_notices.deliver(_room(room), 'note_gave_up', name=stamp, tries=tries, path=str(path) ,source_id=f'note-gave-up:{path.stem}')
     except Exception:
         log.exception("плашка о сдавшейся записке не легла [%s]", path.name)
 

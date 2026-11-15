@@ -18,7 +18,7 @@ import { deliveryWords, type FoldState } from "../../memory-fold";
 import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
-import { isToday } from "../../text";
+import { isToday, systemNoticeText } from "../../text";
 import * as panel from "../panel";
 import { confirmedByFeed } from "../pending";
 import { sameRoom } from "../session";
@@ -38,6 +38,7 @@ interface Msg {
   system?: boolean;
   /** У служебной плашки: "silence" — молчание по решению / ход без реплики. */
   kind?: string;
+  display_notice?: unknown;
   sender_id?: string | number;
   topic_title?: string;
   reply_to_message_id?: number;
@@ -284,7 +285,8 @@ function buildRows(rows: Msg[], peer: string): Row[] {
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
     const visibleText = artifactCaption(m.text || "", m.media_path);
-    const body = birth
+    const notice = systemNoticeText(m);
+    const body = notice ? esc(notice).replace(/\n/g,"<br>") : birth
       ? uiText("ui.ui.kit.window.views.talk.d94296c171", {p0: String(md(m.text || ""))})
       : md(visibleText);
     const base = `${m.timestamp || ""}|${m.outgoing ? "a" : system ? "s" : "o"}|${m.sender_id ?? ""}`;

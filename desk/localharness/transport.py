@@ -242,7 +242,8 @@ class Desk:
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
                 sender: str = "", system: bool = False, kind: str = "",
-                media_path: str = "", media_kind: str = "", source_id: str = "") -> None:
+                media_path: str = "", media_kind: str = "", source_id: str = "",
+                display_notice: dict | None = None) -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
         Окно читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
@@ -258,6 +259,10 @@ class Desk:
         сказанной новым именем — и в окне, и в ленте, которую читает модель.
         """
         stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
+        if display_notice is not None:
+            from localharness.product_notices import validate
+            if not system:raise ValueError('Product notice requires a system row')
+            display_notice=validate(display_notice)
         row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text),
                "sender_name": (self.agent_name if outgoing else (sender or self.speaker)),
                'source_audience': {'chat': self.stream, 'is_dm': True, 'owner': True}}
@@ -277,6 +282,8 @@ class Desk:
             # плашки для окна: "silence" (молчание/ход без слова, серым),
             # пусто — тревога (⚠/⏸), как раньше.
             row["system"] = True
+            if display_notice is not None:
+                row['display_notice']=display_notice
             if kind:
                 row["kind"] = str(kind)
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
@@ -455,7 +462,8 @@ class Desk:
         return str(message_id)
 
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
-                system: bool = False, kind: str = "", media_path: str = "", media_kind: str = "") -> str:
+                system: bool = False, kind: str = "", media_path: str = "", media_kind: str = "",
+                display_notice: dict | None = None) -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
 
         Расписка — не косметика: рука `reply` дописывает к ней подсказку про `end_turn`,
@@ -470,12 +478,14 @@ class Desk:
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
+        if display_notice is not None and not system:
+            raise ValueError('Product notice requires a system row')
         if not system and not media_path:
             message_id = self.deliver_once(body, key=source_id or ('window:' + uuid.uuid4().hex))
             self.sent.append(body)
             return f'Отправлено → {label or self.title} (окно Frame, id {message_id})'
         self.archive(body, outgoing=True, now=now, system=system, kind=kind,
-                     media_path=media_path, media_kind=media_kind)
+                     media_path=media_path, media_kind=media_kind,display_notice=display_notice)
         if system:
             return f"Показано в окне → {label or self.title} (плашка продукта)"
         self.life(body, direction="out", actor=self.agent_name,
