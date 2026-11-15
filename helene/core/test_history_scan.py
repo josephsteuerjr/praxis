@@ -611,7 +611,8 @@ class TestRuntimeFreezeCeiling(unittest.TestCase):
         with mock.patch.object(history_scan, "freeze_attested_corpus") as freeze:
             result = self._invoke(
                 {"freeze": True, "ceiling_id": "latest", "eligible_limit": 1}, EmptyClient())
-        self.assertEqual(result, "history_scan: newest ceiling lookup found no messages")
+        import frame_language
+        self.assertEqual(result, "history_scan: " + frame_language.text('helper.mtproto_runner._run.6811'))
         freeze.assert_not_called()
 
 

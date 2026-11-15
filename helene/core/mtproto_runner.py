@@ -6388,38 +6388,39 @@ async def _resolve_entity(ref):
 _TG_INVITE_RE = re.compile(r"^[A-Za-z0-9_-]{8,}$")
 
 
+@frame_language.pinned
 def _membership_target(raw: str) -> tuple[str, str]:
     """Normalize Telegram membership refs to (invite|public|entity, value)."""
     from urllib.parse import parse_qs, unquote, urlparse
 
     value = str(raw or "").strip()
     if not value:
-        raise ValueError("нужна invite/public ссылка, @username или chat_id")
+        raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6397'))
     parsed = urlparse(value)
     if parsed.scheme.casefold() == "tg" and parsed.netloc.casefold() == "join":
         invite = (parse_qs(parsed.query).get("invite") or [""])[0].strip()
         if not _TG_INVITE_RE.fullmatch(invite):
-            raise ValueError("не распознала invite hash в tg://join")
+            raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6402'))
         return "invite", invite
     if parsed.scheme.casefold() in ("http", "https"):
         host = (parsed.netloc or "").casefold().split(":", 1)[0]
         if host not in ("t.me", "telegram.me", "www.t.me", "www.telegram.me"):
-            raise ValueError("это не ссылка t.me/telegram.me")
+            raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6407'))
         parts = [unquote(x).strip() for x in parsed.path.split("/") if x.strip()]
         if not parts:
-            raise ValueError("в Telegram-ссылке нет группы или invite hash")
+            raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6410'))
         if parts[0] == "joinchat" and len(parts) >= 2:
             invite = parts[1]
             if not _TG_INVITE_RE.fullmatch(invite):
-                raise ValueError("не распознала invite hash")
+                raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6414'))
             return "invite", invite
         if parts[0].startswith("+"):
             invite = parts[0][1:]
             if not _TG_INVITE_RE.fullmatch(invite):
-                raise ValueError("не распознала invite hash")
+                raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6419'))
             return "invite", invite
         if parts[0] in ("c", "s") or len(parts) > 1:
-            raise ValueError("нужна ссылка на саму группу/канал, не на сообщение")
+            raise ValueError(frame_language.text('helper.mtproto_runner._membership_target.6422'))
         return "public", "@" + parts[0].lstrip("@")
     if value.startswith("+") and _TG_INVITE_RE.fullmatch(value[1:]):
         return "invite", value[1:]
@@ -6503,10 +6504,11 @@ def _marked_peer_id(ent) -> int:
         return ident
 
 
+@frame_language.pinned
 def _telegram_account_gate() -> str | None:
     """The owner and Praxis herself may act; trusted humans cannot delegate account power."""
     if not agent._is_sovereign_actor():
-        return "Отказ: Telegram-аккаунтом управляет только владелец или сама Praxis."
+        return frame_language.text('helper.mtproto_runner._telegram_account_gate.6509')
     return None
 
 
@@ -6528,6 +6530,7 @@ def _telegram_account_principal(value: object = None) -> str | None:
     return agent.PRAXIS_SELF_PRINCIPAL if agent._is_praxis_self() else None
 
 
+@frame_language.pinned
 def _begin_membership_transaction(action: str, target: str) -> dict:
     """Capture live human authority and fsync intent before scheduling MTProto."""
     denied = _telegram_account_gate()
@@ -6537,7 +6540,7 @@ def _begin_membership_transaction(action: str, target: str) -> dict:
     _membership_target(target)  # reject malformed/message links without creating intent noise
     principal = _telegram_account_principal()
     if principal is None:
-        raise PermissionError("Telegram membership доступен только владельцу или самой Praxis")
+        raise PermissionError(frame_language.text('helper.mtproto_runner._begin_membership_transaction.6540'))
     return _membership_ledger().begin(action, target, principal)
 
 
@@ -6588,6 +6591,7 @@ def _install_telegram_dispatcher() -> telegram_registry.TelegramAccountDispatche
     return _TELEGRAM_DISPATCHER
 
 
+@frame_language.pinned
 async def _telegram_account_async(*, action: str, target: str = "", query: str = "",
                                   request: str = "", params: dict | None = None,
                                   scope: str = "",
@@ -6599,9 +6603,9 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
     """Compact list/search/describe/call adapter over the live dispatcher."""
     dispatcher = _TELEGRAM_DISPATCHER
     if dispatcher is None:
-        raise RuntimeError("Telethon registry dispatcher ещё не инициализирован")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._telegram_account_async.6602'))
     if not OWNER_ID or str(_principal) not in {str(OWNER_ID), agent.PRAXIS_SELF_PRINCIPAL}:
-        raise PermissionError("raw MTProto dispatcher доступен только владельцу или самой Praxis")
+        raise PermissionError(frame_language.text('helper.mtproto_runner._telegram_account_async.6604'))
     action = str(action or "").strip().lower()
 
     mapped = {
@@ -6614,7 +6618,7 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
     }.get(action)
     if mapped is None:
         raise ValueError(
-            "registry action должен быть list | search | describe | call"
+            frame_language.text('helper.mtproto_runner._telegram_account_async.6617')
         )
 
     arguments: dict = {}
@@ -6655,6 +6659,7 @@ async def _telegram_account_async(*, action: str, target: str = "", query: str =
     )
 
 
+@frame_language.pinned
 async def _resolve_membership_entity(target: str):
     kind, value = _membership_target(target)
     if kind == "invite":
@@ -6663,11 +6668,11 @@ async def _resolve_membership_entity(target: str):
         checked = await client(CheckChatInviteRequest(value))
         ent = getattr(checked, "chat", None)
         if ent is None:
-            raise ValueError("по invite-ссылке я ещё не состою; сначала нужен join")
+            raise ValueError(frame_language.text('helper.mtproto_runner._resolve_membership_entity.6666'))
         return ent
     ent = await _resolve_entity(value)
     if ent is None:
-        raise ValueError(f"не найдена Telegram-группа: {target}")
+        raise ValueError(frame_language.text('helper.mtproto_runner._resolve_membership_entity.6670', p0=f'{target}'))
     return ent
 
 
@@ -6682,6 +6687,7 @@ def _membership_entity_facts(ent) -> dict:
     }
 
 
+@frame_language.pinned
 async def _apply_membership_acceptance(
     action: str, result: dict, ent=None, *, principal_id: object
 ) -> bool:
@@ -6694,7 +6700,7 @@ async def _apply_membership_acceptance(
             return False  # keep polling: approval has not established membership yet
         chat_id = str(result.get("chat_id") or "")
         if not chat_id:
-            raise ValueError("accepted join has no root chat_id")
+            raise ValueError(frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6697'))
         if ent is not None:
             await _initialize_joined_room(
                 chat_id, ent, title=str(result.get("title") or chat_id), allow=True,
@@ -6707,23 +6713,24 @@ async def _apply_membership_acceptance(
             rooms.add_room(chat_id)
             profile = rooms.profile_read(chat_id)
             if not profile.get("exists") or not profile.get("structured"):
-                rooms.set_mode(chat_id, "observer", reason="восстановила подтверждённый вход",
+                rooms.set_mode(chat_id, "observer", reason=frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6710'),
                                set_by=set_by)
             elif profile.get("mode") == "dead":
-                rooms.set_mode(chat_id, "observer", reason="восстановила подтверждённый вход",
+                rooms.set_mode(chat_id, "observer", reason=frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6713'),
                                set_by=set_by)
-            rooms.owner_card(chat_id, "join", "восстановила подтверждённый Telegram-вход")
+            rooms.owner_card(chat_id, "join", frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6715'))
         return True
 
     chat_id = str(result.get("chat_id") or "")
     if not chat_id:
-        raise ValueError("accepted leave has no root chat_id")
+        raise ValueError(frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6720'))
     rooms.remove_room(chat_id)
-    rooms.set_mode(chat_id, "dead", reason="вышла из Telegram", set_by=set_by)
+    rooms.set_mode(chat_id, "dead", reason=frame_language.text('helper.mtproto_runner._apply_membership_acceptance.6722'), set_by=set_by)
     _entity_cache.pop(chat_id, None)
     return True
 
 
+@frame_language.pinned
 def _sync_history_scan(target: str = "", params: dict | None = None,
                        _principal: str | int = "unknown") -> str:
     """Runtime-owned forum-history scan: единая дверь (TRANSPORT-GATE 25.08).
@@ -6733,9 +6740,9 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
     evidence только внутри этого же вызова после complete-прохода.
     """
     if not OWNER_ID or str(_principal) not in {str(OWNER_ID), agent.PRAXIS_SELF_PRINCIPAL}:
-        return "Отказ: history_scan — суверенная дверь владельца и самой Praxis."
+        return frame_language.text('helper.mtproto_runner._sync_history_scan.6736')
     if client is None:
-        return "history_scan: Telethon-клиент не подключён"
+        return frame_language.text('helper.mtproto_runner._sync_history_scan.6738')
     cfg = dict(params or {})
     freeze_flag = bool(cfg.get("freeze", False))
     raw_ceiling = cfg.get("ceiling_id")
@@ -6749,23 +6756,23 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
         try:
             ceiling_id = int(raw_ceiling)
         except (TypeError, ValueError):
-            suffix = " или 'latest' при freeze=true" if freeze_flag else ""
-            return f"history_scan: ceiling_id обязателен и целый{suffix}"
+            suffix = frame_language.text('helper.mtproto_runner._sync_history_scan.6752') if freeze_flag else ""
+            return frame_language.text('helper.mtproto_runner._sync_history_scan.6753', p0=f'{suffix}')
     if freeze_flag:
         floor_id = None
     else:
         try:
             floor_id = int(cfg.get("floor_id"))
         except (TypeError, ValueError):
-            return "history_scan: floor_id обязателен и целый"
+            return frame_language.text('helper.mtproto_runner._sync_history_scan.6760')
     apply_flag = bool(cfg.get("apply", False))
     if apply_flag and freeze_flag:
-        return "history_scan: freeze=true несовместим с apply=true"
+        return frame_language.text('helper.mtproto_runner._sync_history_scan.6763')
     page_size = int(cfg.get("page_size", 100))
     max_pages = int(cfg.get("max_pages", 200))
     eligible_limit = int(cfg.get("eligible_limit", 500))
     if freeze_flag and "floor_id" in cfg:
-        return "history_scan: freeze=true discovers its own floor; floor_id не передаётся"
+        return frame_language.text('helper.mtproto_runner._sync_history_scan.6768')
     if not freeze_flag:
         try:
             scan_range = history_scan.ScanRange(floor_id=floor_id, ceiling_id=ceiling_id)
@@ -6774,15 +6781,15 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
     async def _run() -> dict:
         entity = await _resolve_entity(target)
         if entity is None:
-            return {"error": f"target не резолвится: {target}"}
+            return {"error": frame_language.text('helper.mtproto_runner._run.6777', p0=f'{target}')}
         raw_id = getattr(entity, "id", None)
         if raw_id is None:
-            return {"error": f"entity без id: {target}"}
+            return {"error": frame_language.text('helper.mtproto_runner._run.6780', p0=f'{target}')}
         resolved = int(raw_id)
         # A numeric ref carries an independently checkable peer claim. A
         # title/@username is authoritative only through the resolution above.
         if not history_scan.resolved_peer_matches_target(target, resolved):
-            return {"error": f"entity mismatch: target={target} resolved={resolved}"}
+            return {"error": frame_language.text('helper.mtproto_runner._run.6785', p0=f'{target}', p1=f'{resolved}')}
 
         def _page(offset_id: int, size: int):
             return client.iter_messages(entity, limit=size, offset_id=offset_id)
@@ -6802,20 +6809,20 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
                         newest_id = getattr(newest, "id", None)
                         if (isinstance(newest_id, bool)
                                 or not isinstance(newest_id, int) or newest_id < 1):
-                            return {"error": "newest ceiling lookup returned invalid message id"}
+                            return {"error": frame_language.text('helper.mtproto_runner._run.6805')}
                         effective_ceiling = newest_id
                         break
                 except Exception as exc:
-                    return {"error": f"newest ceiling lookup failed:{type(exc).__name__}"}
+                    return {"error": frame_language.text('helper.mtproto_runner._run.6809', p0=f'{type(exc).__name__}')}
                 if effective_ceiling is None:
-                    return {"error": "newest ceiling lookup found no messages"}
+                    return {"error": frame_language.text('helper.mtproto_runner._run.6811')}
             discovery = await history_scan.acquire_eligible_corpus(
                 peer_id, effective_ceiling, fetch_page, eligible_limit=eligible_limit,
                 page_size=page_size, max_pages=max_pages)
             if not discovery.complete or discovery.corpus is None:
-                return {"error": f"acquisition incomplete:{discovery.reason}"}
+                return {"error": frame_language.text('helper.mtproto_runner._run.6816', p0=f'{discovery.reason}')}
             if not discovery.corpus:
-                return {"error": "acquisition found no eligible text rows"}
+                return {"error": frame_language.text('helper.mtproto_runner._run.6818')}
             attestation = await history_scan.run_history_scan(
                 peer_id, discovery.range, fetch_page,
                 page_size=page_size, max_pages=max_pages)
@@ -6830,7 +6837,7 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
     try:
         outcome = asyncio.run_coroutine_threadsafe(_run(), _LOOP).result(timeout=900)
     except TimeoutError:
-        return "history_scan: transport timeout (900s), ничего не записано"
+        return frame_language.text('helper.mtproto_runner._sync_history_scan.6833')
     if isinstance(outcome, dict) and outcome.get("error"):
         return f"history_scan: {outcome['error']}"
     return json.dumps(outcome, ensure_ascii=False, default=str)
@@ -6933,29 +6940,30 @@ async def _moderate_abstractdl(peer_id: int, message_id: int, sender_id: int,
         })
 
 
+@frame_language.pinned
 def _sync_moderate_abstractdl(params: dict | None = None,
                                _principal: object = None, **_ignored) -> str:
     denied = _telegram_account_gate()
     if denied:
         return denied
     if _LOOP is None or not client.is_connected():
-        return "moderation: Telethon-клиент не подключён"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6942')
     data = dict(params or {})
     allowed = {"peer_id", "message_id", "sender_id", "decision"}
     extras = sorted(set(data) - allowed)
     if extras:
-        return f"moderation: only exact fields are accepted; unexpected: {', '.join(extras)}"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6947', p0=f"{', '.join(extras)}")
     if set(data) != allowed:
         missing = sorted(allowed - set(data))
-        return f"moderation: missing exact fields: {', '.join(missing)}"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6950', p0=f"{', '.join(missing)}")
     values = (data["peer_id"], data["message_id"], data["sender_id"])
     if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
-        return "moderation: peer_id/message_id/sender_id must be exact JSON integers"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6953')
     if not isinstance(data["decision"], str):
-        return "moderation: decision must be an exact string"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6955')
     principal = _telegram_account_principal(_principal)
     if principal is None:
-        return "moderation: sovereign principal unavailable"
+        return frame_language.text('helper.mtproto_runner._sync_moderate_abstractdl.6958')
     try:
         result = asyncio.run_coroutine_threadsafe(
             _moderate_abstractdl(data["peer_id"], data["message_id"],
@@ -7136,26 +7144,27 @@ async def _admin_abstractdl(peer_id: int, action: str, params: dict,
             "error": ""})
 
 
+@frame_language.pinned
 def _sync_admin_abstractdl(params: dict | None = None,
                            _principal: object = None, **_ignored) -> str:
     denied = _telegram_account_gate()
     if denied:
         return denied
     if _LOOP is None or not client.is_connected():
-        return "admin: Telethon-клиент не подключён"
+        return frame_language.text('helper.mtproto_runner._sync_admin_abstractdl.7145')
     data = dict(params or {})
     if data.pop("history", None):
         return json.dumps(telegram_admin.history(20), ensure_ascii=False, default=str)
     allowed = {"peer_id", "action", "params"}
     extras = sorted(set(data) - allowed)
     if extras:
-        return f"admin: only exact fields are accepted; unexpected: {', '.join(extras)}"
+        return frame_language.text('helper.mtproto_runner._sync_admin_abstractdl.7152', p0=f"{', '.join(extras)}")
     missing = sorted(allowed - set(data))
     if missing:
-        return f"admin: missing exact fields: {', '.join(missing)}"
+        return frame_language.text('helper.mtproto_runner._sync_admin_abstractdl.7155', p0=f"{', '.join(missing)}")
     principal = _telegram_account_principal(_principal)
     if principal is None:
-        return "admin: sovereign principal unavailable"
+        return frame_language.text('helper.mtproto_runner._sync_admin_abstractdl.7158')
     try:
         result = asyncio.run_coroutine_threadsafe(
             _admin_abstractdl(data["peer_id"], data["action"],
@@ -7177,24 +7186,26 @@ def _canonical_peer_id(entity) -> str | None:
     return None
 
 
+@frame_language.pinned
 def _membership_transaction(action: str, target: str, principal_id: object,
                             transaction_id: str | None) -> dict:
     if transaction_id is None:
-        raise PermissionError("membership requires a durable sovereign intent")
+        raise PermissionError(frame_language.text('helper.mtproto_runner._membership_transaction.7183'))
     ledger = _membership_ledger()
     state = ledger.get(transaction_id)
     if state is None:
-        raise KeyError(f"unknown membership transaction {transaction_id}")
+        raise KeyError(frame_language.text('helper.mtproto_runner._membership_transaction.7187', p0=f'{transaction_id}'))
     principal = _telegram_account_principal(state.get("principal_id"))
     supplied = _telegram_account_principal(principal_id)
     if principal is None or supplied != principal:
-        raise PermissionError("membership transaction actor is no longer valid")
+        raise PermissionError(frame_language.text('helper.mtproto_runner._membership_transaction.7191'))
     if (state.get("action"), state.get("target"), state.get("principal_id")) != (
             action, target, principal):
-        raise PermissionError("membership transaction provenance mismatch")
+        raise PermissionError(frame_language.text('helper.mtproto_runner._membership_transaction.7194'))
     return state
 
 
+@frame_language.pinned
 async def _join_chat_async(target: str, *, principal_id: object = None,
                            transaction_id: str | None = None, recovery: bool = False) -> dict:
     from telethon.errors import InviteRequestSentError, UserAlreadyParticipantError
@@ -7248,7 +7259,7 @@ async def _join_chat_async(target: str, *, principal_id: object = None,
                     result = {
                         "status": "request_sent", "chat_id": None,
                         "title": getattr(checked, "title", None) or "?",
-                        "detail": "заявка на вступление отправлена администраторам",
+                        "detail": frame_language.text('helper.mtproto_runner._join_chat_async.7251'),
                     }
                     ledger.accepted(tx_id, result)
                     return result
@@ -7256,13 +7267,13 @@ async def _join_chat_async(target: str, *, principal_id: object = None,
                     chats = list(getattr(updates, "chats", None) or ())
                     ent = chats[0] if chats else None
             if ent is None:
-                raise RuntimeError("Telegram подтвердил invite, но не вернул chat entity")
+                raise RuntimeError(frame_language.text('helper.mtproto_runner._join_chat_async.7259'))
         else:
             ent = await _resolve_entity(value)
             if ent is None:
-                raise ValueError(f"не найдена Telegram-группа: {target}")
+                raise ValueError(frame_language.text('helper.mtproto_runner._join_chat_async.7263', p0=f'{target}'))
             if _entity_kind(ent) not in ("channel", "chat"):
-                raise ValueError("это Telegram-пользователь, а не группа/канал")
+                raise ValueError(frame_language.text('helper.mtproto_runner._join_chat_async.7265'))
             ledger.prepared(tx_id, _membership_entity_facts(ent))
             mutation_started = True
             try:
@@ -7273,7 +7284,7 @@ async def _join_chat_async(target: str, *, principal_id: object = None,
             except UserAlreadyParticipantError:
                 already = True
         if _entity_kind(ent) not in ("channel", "chat"):
-            raise ValueError("invite ведёт не в группу/канал")
+            raise ValueError(frame_language.text('helper.mtproto_runner._join_chat_async.7276'))
         facts = _membership_entity_facts(ent)
         ledger.prepared(tx_id, facts)
         result = dict(facts)
@@ -7302,6 +7313,7 @@ async def _join_chat_async(target: str, *, principal_id: object = None,
     return result
 
 
+@frame_language.pinned
 async def _leave_chat_async(target: str, *, principal_id: object = None,
                             transaction_id: str | None = None, recovery: bool = False) -> dict:
     from telethon.errors import UserNotParticipantError
@@ -7346,7 +7358,7 @@ async def _leave_chat_async(target: str, *, principal_id: object = None,
             facts = _membership_entity_facts(ent)
             kind = facts["entity_kind"]
             if kind not in {"channel", "chat"}:
-                raise ValueError("это Telegram-пользователь, а не группа/канал")
+                raise ValueError(frame_language.text('helper.mtproto_runner._leave_chat_async.7349'))
             ledger.prepared(tx_id, facts)
             mutation_started = True
             try:
@@ -7429,16 +7441,17 @@ def _sync_leave_chat(target: str) -> str:
     return _membership_receipt("leave", result)
 
 
+@frame_language.pinned
 def _sync_telegram_account(**arguments) -> str:
     """Sovereign synchronous bridge from model tool thread to the live Telethon loop."""
     denied = _telegram_account_gate()
     if denied:
         return denied
     if not OWNER_ID:
-        return "Отказ: PRAXIS_OWNER_ID не настроен; raw MTProto dispatcher закрыт."
+        return frame_language.text('helper.mtproto_runner._sync_telegram_account.7438')
     principal = _telegram_account_principal()
     if principal is None:
-        return "Отказ: raw MTProto dispatcher доступен только владельцу или самой Praxis."
+        return frame_language.text('helper.mtproto_runner._sync_telegram_account.7441')
     call_arguments = dict(arguments)
     call_arguments["_principal"] = principal
     # Capture both contextvars before crossing into the Telethon event-loop thread.
@@ -9604,6 +9617,7 @@ async def _social_pulse_once() -> None:
     _SOCIAL_PULSE_TASK = asyncio.create_task(_run_social_pulse(pulse_id))
 
 
+@frame_language.pinned
 async def _membership_reconcile_once() -> None:
     """Finish owner-authorized membership transactions after restart/transport loss."""
     ledger = _membership_ledger()
@@ -9614,7 +9628,7 @@ async def _membership_reconcile_once() -> None:
         if principal is None:
             # Human authority never transfers with a stale ledger when PRAXIS_OWNER_ID changes.
             await asyncio.to_thread(
-                ledger.failed, tx_id, "configured owner changed; stale intent not executed",
+                ledger.failed, tx_id, frame_language.text('helper.mtproto_runner._membership_reconcile_once.9617'),
             )
             log.warning("membership stale owner intent закрыт [%s]", tx_id)
             continue
