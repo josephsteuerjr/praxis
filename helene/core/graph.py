@@ -17,6 +17,7 @@ stdlib; каждый вызов перечитывает файлы, правд�
 """
 
 from __future__ import annotations
+import frame_language
 
 import datetime as _dt
 import praxis_time
@@ -173,6 +174,7 @@ def _touch_edge_date(e: dict) -> bool:
 #  Запись рёбер (в маркдаун — источник правды)
 # --------------------------------------------------------------------------- #
 
+@frame_language.pinned
 def add_edge(a_ref: str, b_ref: str, label: str = "", source: str = "") -> str:
     """Связать два узла. Ребро пишется человеку в ## Связи (если один из концов —
     человек с файлом), иначе — строкой в memory/graph.md. Дедуп по паре + БЛИЗКОЙ
@@ -180,16 +182,16 @@ def add_edge(a_ref: str, b_ref: str, label: str = "", source: str = "") -> str:
     source — метка происхождения («сон» у извлечённых консолидацией)."""
     a, b = resolve(a_ref), resolve(b_ref)
     if not a or not b:
-        return "Не поняла, что связывать — нужны оба узла."
+        return frame_language.text('helper.graph.add_edge.183')
     if a == b:
-        return "Узел сам с собой не связываю."
+        return frame_language.text('helper.graph.add_edge.185')
     label = (label or "").strip()
     if (source or "").strip():
         label = f"{label} ({source.strip()})" if label else f"({source.strip()})"
     exist = _find_edge(a, b, label)
     if exist is not None:
         _touch_edge_date(exist)
-        return f"Связь {display(a)} — {display(b)} уже есть (обновила дату)."
+        return frame_language.text('helper.graph.add_edge.192', p0=f'{display(a)}', p1=f'{display(b)}')
     # конец-человек предпочтительнее: ребро видно прямо в его файле
     if people.path_for(a).exists():
         people.add_link(a, str(a_ref), b, label)
@@ -199,19 +201,20 @@ def add_edge(a_ref: str, b_ref: str, label: str = "", source: str = "") -> str:
         MEM_DIR.mkdir(parents=True, exist_ok=True)
         text = _read(GRAPH_MD)
         if not text.strip():
-            text = _GRAPH_HEADER
+            text = frame_language.text('helper.graph.module.37')
         line = f"- [[{a}]] ↔ [[{b}]]" + (f" — {label}" if label else "") + f" _({_today()})_"
         GRAPH_MD.write_text(text.rstrip() + "\n" + line + "\n", encoding="utf-8")
     lab = f" ({label})" if label else ""
-    return f"Связала: {display(a)} — {display(b)}{lab}."
+    return frame_language.text('helper.graph.add_edge.206', p0=f'{display(a)}', p1=f'{display(b)}', p2=f'{lab}')
 
 
+@frame_language.pinned
 def forget_connection(a_ref: str, b_ref: str) -> str:
     """Забыть связь A—B (PASS 8.6, owner): удаляет строки ребра и из `## Связи`
     обоих людей, и из memory/graph.md. -> честный отчёт."""
     a, b = resolve(a_ref), resolve(b_ref)
     if not a or not b or a == b:
-        return "Нужны два разных узла."
+        return frame_language.text('helper.graph.forget_connection.214')
     removed = 0
     for slug, other in ((a, b), (b, a)):
         p = people.path_for(slug)
@@ -231,8 +234,8 @@ def forget_connection(a_ref: str, b_ref: str) -> str:
             removed += len(lines) - len(keep)
             GRAPH_MD.write_text("\n".join(keep).rstrip() + "\n", encoding="utf-8")
     if not removed:
-        return f"Связи {display(a)} — {display(b)} и так нет."
-    return f"Забыла связь {display(a)} — {display(b)} (строк удалено: {removed})."
+        return frame_language.text('helper.graph.forget_connection.234', p0=f'{display(a)}', p1=f'{display(b)}')
+    return frame_language.text('helper.graph.forget_connection.235', p0=f'{display(a)}', p1=f'{display(b)}', p2=f'{removed}')
 
 
 # --------------------------------------------------------------------------- #
@@ -257,7 +260,7 @@ def _bfs(start: str, depth: int) -> dict[str, tuple[str | None, int]]:
 
 def _label_between(adj: dict, a: str, b: str) -> str:
     labels = adj.get(a, {}).get(b) or []
-    return labels[0] if labels else "связаны"
+    return labels[0] if labels else frame_language.text('helper.graph._label_between.260')
 
 
 def _chain_text(chain: list[str], adj: dict) -> str:
@@ -268,13 +271,14 @@ def _chain_text(chain: list[str], adj: dict) -> str:
     return " ".join(parts)
 
 
+@frame_language.pinned
 def neighbors_text(ref: str, depth: int = 1) -> str:
     """Взгляд на узел: с кем связан (1 шаг — рёбра; глубже — цепочки). Для тула/промпта."""
     start = resolve(ref)
     depth = max(1, min(int(depth or 1), MAX_DEPTH))
     adj = adjacency()
     if start not in adj:
-        return f"У «{display(start)}» пока нет записанных связей."
+        return frame_language.text('helper.graph.neighbors_text.277', p0=f'{display(start)}')
     seen = _bfs(start, depth)
     by_dist: dict[int, list[str]] = {}
     for node, (_, d) in seen.items():
@@ -285,7 +289,7 @@ def neighbors_text(ref: str, depth: int = 1) -> str:
     for d in sorted(by_dist):
         for node in sorted(by_dist[d]):
             if shown >= MAX_NODES_OUT:
-                lines.append("  … (дальше не разворачиваю — спроси точечно)")
+                lines.append(frame_language.text('helper.graph.neighbors_text.288'))
                 return "\n".join(lines)
             chain = [node]
             while chain[-1] != start:
@@ -295,20 +299,22 @@ def neighbors_text(ref: str, depth: int = 1) -> str:
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def path_text(a_ref: str, b_ref: str) -> str:
     """Как связаны A и B: кратчайшая цепочка или честное «не вижу связи»."""
     a, b = resolve(a_ref), resolve(b_ref)
     if a == b:
-        return f"{display(a)} — это один и тот же узел."
+        return frame_language.text('helper.graph.path_text.302', p0=f'{display(a)}')
     seen = _bfs(a, MAX_DEPTH)
     if b not in seen:
-        return f"Связи между {display(a)} и {display(b)} не вижу (в пределах {MAX_DEPTH} шагов)."
+        return frame_language.text('helper.graph.path_text.305', p0=f'{display(a)}', p1=f'{display(b)}', p2=f'{MAX_DEPTH}')
     chain = [b]
     while chain[-1] != a:
         chain.append(seen[chain[-1]][0])
     return _chain_text(list(reversed(chain)), adjacency())
 
 
+@frame_language.pinned
 def related_lines(slugs: list[str], cap: int = 4) -> list[str]:
     """Рёбра первого шага вокруг данных узлов — короткие строки для recall-обогащения."""
     adj = adjacency()
@@ -343,4 +349,4 @@ if __name__ == "__main__":
     elif cmd == "path" and len(sys.argv) > 3:
         print(path_text(sys.argv[2], sys.argv[3]))
     else:
-        print("usage: python graph.py [edges | around <узел> [глубина] | path <a> <b>]")
+        print(frame_language.text('helper.graph.module.346'))

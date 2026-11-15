@@ -16,6 +16,7 @@ from facts rather than an imagined result.
 """
 
 from __future__ import annotations
+import frame_language
 
 import datetime as _dt
 import json
@@ -61,15 +62,15 @@ def _new_id(prefix: str) -> str:
 def _clean_text(value: Any, *, limit: int, required: str = "") -> str:
     text = str(value or "").strip()
     if required and not text:
-        raise ValueError(f"{required} is required")
+        raise ValueError(frame_language.text('helper.desires._clean_text.64', p0=f'{required}'))
     return text[:limit]
 
 
 def _desire_id(value: Any, *, generated: bool = False) -> str:
     text = _clean_text(value, limit=100, required="desire_id")
     if not _DESIRE_ID_RE.fullmatch(text):
-        hint = " (generated ids already satisfy this)" if generated else ""
-        raise ValueError("desire_id must match desire-[A-Za-z0-9._:-]+" + hint)
+        hint = frame_language.text('helper.desires._desire_id.71') if generated else ""
+        raise ValueError(frame_language.text('helper.desires._desire_id.72') + hint)
     return text
 
 
@@ -133,10 +134,11 @@ class DesireLedger:
     def get(self, desire_id: str) -> dict[str, Any] | None:
         return self.states().get(_desire_id(desire_id))
 
+    @frame_language.pinned
     def list(self, *, statuses: Iterable[str] | None = None) -> list[dict[str, Any]]:
         selected = set(statuses or ())
         if selected - set(STATUSES):
-            raise ValueError("unknown desire status: " + ", ".join(sorted(selected - set(STATUSES))))
+            raise ValueError(frame_language.text('helper.desires.list.139') + ", ".join(sorted(selected - set(STATUSES))))
         values = list(self.states().values())
         if selected:
             values = [state for state in values if state.get("status") in selected]
@@ -186,7 +188,7 @@ class DesireLedger:
             "cycle": int(cycle if cycle is not None else old.get("cycle") or 1),
         }
         if result["status"] not in STATUSES:
-            raise ValueError(f"unknown desire status: {result['status']}")
+            raise ValueError(frame_language.text('helper.desires._snapshot.189', p0=f"{result['status']}"))
         return result
 
     def _append_locked(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -252,6 +254,7 @@ class DesireLedger:
                 return event
         return None
 
+    @frame_language.pinned
     def _write_projection_locked(self) -> Path:
         events = self.events()
         states = self._states_from(events)
@@ -275,15 +278,14 @@ class DesireLedger:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ) + " -->",
-            "# Желания Praxis",
+            frame_language.text('helper.desires._write_projection_locked.278'),
             "",
-            "_Проекция append-only ledger. Канон: `memory/desires/events.jsonl`; этот файл можно пересобрать._",
+            frame_language.text('helper.desires._write_projection_locked.280'),
             "",
-            f"_Показано желаний: {len(ordered)} из {total_desires}; "
-            f"до {MAX_PROJECTION_TIMELINE} последних событий на желание._",
+            frame_language.text('helper.desires._write_projection_locked.282', p0=f'{len(ordered)}', p1=f'{total_desires}', p2=f'{MAX_PROJECTION_TIMELINE}'),
         ]
         if not ordered:
-            lines += ["", "Активных или архивных желаний пока нет."]
+            lines += ["", frame_language.text('helper.desires._write_projection_locked.286')]
         for state in ordered:
             lines += [
                 "",
@@ -300,13 +302,13 @@ class DesireLedger:
                 "evidence_refs: " + json.dumps(state.get("evidence_refs") or [], ensure_ascii=False),
                 "run_ids: " + json.dumps(state.get("run_ids") or [], ensure_ascii=False),
                 "",
-                "### Причинная цепочка",
+                frame_language.text('helper.desires._write_projection_locked.303'),
             ]
             timeline = list(state.get("timeline") or [])
             omitted_timeline = max(0, len(timeline) - MAX_PROJECTION_TIMELINE)
             if omitted_timeline:
                 lines.append(
-                    f"- … ещё {omitted_timeline} ранних событий; канон остаётся в events.jsonl"
+                    frame_language.text('helper.desires._write_projection_locked.309', p0=f'{omitted_timeline}')
                 )
             for item in timeline[-MAX_PROJECTION_TIMELINE:]:
                 refs = ", ".join(
@@ -323,6 +325,7 @@ class DesireLedger:
         atomic_write(self.projection_path, ("\n".join(lines).rstrip() + "\n").encode("utf-8"))
         return self.projection_path
 
+    @frame_language.pinned
     def rebuild_projection(self) -> dict[str, Any]:
         with _LOCAL_LOCK, FileLock(self.lock_path):
             path = self._write_projection_locked()
@@ -343,6 +346,7 @@ class DesireLedger:
             event["projection_error"] = type(exc).__name__
         return event
 
+    @frame_language.pinned
     def notice(
         self,
         statement: str,
@@ -363,7 +367,7 @@ class DesireLedger:
                 return {**duplicate, "deduplicated": True}
             did = _desire_id(desire_id) if str(desire_id or "").strip() else _new_id("desire")
             if self.get(did):
-                raise ValueError(f"desire already exists: {did}")
+                raise ValueError(frame_language.text('helper.desires.notice.366', p0=f'{did}'))
             now = utc_now()
             refs = clean_refs(evidence_refs)
             memory_provenance.require_normative_provenance(source=source, refs=refs)
@@ -386,7 +390,7 @@ class DesireLedger:
                 event_type="transition",
                 stage="noticed",
                 state=state,
-                note="candidate noticed",
+                note=frame_language.text('helper.desires.notice.389'),
                 actor=actor,
                 evidence_refs=refs,
                 run_id=run_id,
@@ -395,6 +399,7 @@ class DesireLedger:
             )
             return self._append_and_project(event)
 
+    @frame_language.pinned
     def advance(
         self,
         desire_id: str,
@@ -413,8 +418,8 @@ class DesireLedger:
         """Move one causal step, rejecting skipped or out-of-order evidence."""
         desired_stage = _clean_text(stage, limit=30, required="stage")
         if desired_stage not in STAGES:
-            raise ValueError(f"unknown desire stage: {desired_stage}")
-        explanation = _clean_text(note, limit=4_000, required="transition note")
+            raise ValueError(frame_language.text('helper.desires.advance.416', p0=f'{desired_stage}'))
+        explanation = _clean_text(note, limit=4_000, required=frame_language.text('helper.desires.advance.417'))
         desire_id = _desire_id(desire_id)
         with _LOCAL_LOCK, FileLock(self.lock_path):
             duplicate = self._find_dedupe(dedupe_key)
@@ -422,25 +427,24 @@ class DesireLedger:
                 return {**duplicate, "deduplicated": True}
             current = self.get(desire_id)
             if not current:
-                raise KeyError(f"unknown desire: {desire_id}")
+                raise KeyError(frame_language.text('helper.desires.advance.425', p0=f'{desire_id}'))
             if not memory_provenance.desire_state_normative_eligible(current):
                 raise ValueError(
-                    "historical desire is rooted in untrusted journal evidence; "
-                    "create a new independently verified desire instead"
+                    frame_language.text('helper.desires.advance.428')
                 )
             expected = _NEXT_STAGE[current["stage"]]
             if desired_stage != expected:
                 raise ValueError(
-                    f"causal stage must follow {current['stage']} -> {expected}; got {desired_stage}"
+                    frame_language.text('helper.desires.advance.434', p0=f"{current['stage']}", p1=f'{expected}', p2=f'{desired_stage}')
                 )
             if current.get("status") in TERMINAL_STATUSES and current["stage"] == "changed":
-                raise ValueError(f"{current['status']} desire requires explicit reopen")
+                raise ValueError(frame_language.text('helper.desires.advance.437', p0=f"{current['status']}"))
             if desired_stage == "changed" and not status:
-                raise ValueError("changed stage requires an explicit status")
+                raise ValueError(frame_language.text('helper.desires.advance.439'))
             if status and status not in STATUSES:
-                raise ValueError(f"unknown desire status: {status}")
+                raise ValueError(frame_language.text('helper.desires.advance.441', p0=f'{status}'))
             if desired_stage != "changed" and status in TERMINAL_STATUSES:
-                raise ValueError("satisfied/released status requires observed -> changed evidence")
+                raise ValueError(frame_language.text('helper.desires.advance.443'))
             resolved_status = status or ("active" if desired_stage in {"wanted", "chosen", "acted", "observed"}
                                          else current.get("status") or "latent")
             cycle = int(current.get("cycle") or 1) + (1 if current["stage"] == "changed" else 0)
@@ -489,6 +493,7 @@ class DesireLedger:
     def change(self, desire_id: str, *, note: str, status: str, **kwargs: Any) -> dict[str, Any]:
         return self.advance(desire_id, "changed", note=note, status=status, **kwargs)
 
+    @frame_language.pinned
     def link_run(
         self,
         desire_id: str,
@@ -510,11 +515,10 @@ class DesireLedger:
                 return {**duplicate, "deduplicated": True}
             current = self.get(desire_id)
             if not current:
-                raise KeyError(f"unknown desire: {desire_id}")
+                raise KeyError(frame_language.text('helper.desires.link_run.513', p0=f'{desire_id}'))
             if not memory_provenance.desire_state_normative_eligible(current):
                 raise ValueError(
-                    "historical desire is rooted in untrusted journal evidence; "
-                    "create a new independently verified desire instead"
+                    frame_language.text('helper.desires.link_run.516')
                 )
             now = utc_now()
             refs = clean_refs(evidence_refs)
@@ -541,6 +545,7 @@ class DesireLedger:
             )
             return self._append_and_project(event)
 
+    @frame_language.pinned
     def update_from_run(
         self,
         desire_id: str,
@@ -560,7 +565,7 @@ class DesireLedger:
         writes two separately auditable events; a retry can use ``dedupe_key``.
         """
         if status not in STATUSES:
-            raise ValueError(f"unknown desire status: {status}")
+            raise ValueError(frame_language.text('helper.desires.update_from_run.563', p0=f'{status}'))
         if dedupe_key:
             duplicate = self._find_dedupe(f"{dedupe_key}:changed")
             if duplicate:
@@ -574,8 +579,7 @@ class DesireLedger:
             current = self.get(desire_id)
             if not current or current.get("stage") != "observed":
                 raise ValueError(
-                    "observed receipt exists but desire is no longer at observed; "
-                    "manual reconciliation is required"
+                    frame_language.text('helper.desires.update_from_run.577')
                 )
             observed = {**observed, "deduplicated": True}
         else:
@@ -599,6 +603,7 @@ class DesireLedger:
         )
         return {"ok": True, "observed": observed, "changed": changed}
 
+    @frame_language.pinned
     def reopen(
         self,
         desire_id: str,
@@ -618,14 +623,13 @@ class DesireLedger:
                 return {**duplicate, "deduplicated": True}
             current = self.get(desire_id)
             if not current:
-                raise KeyError(f"unknown desire: {desire_id}")
+                raise KeyError(frame_language.text('helper.desires.reopen.621', p0=f'{desire_id}'))
             if not memory_provenance.desire_state_normative_eligible(current):
                 raise ValueError(
-                    "historical desire is rooted in untrusted journal evidence; "
-                    "create a new independently verified desire instead"
+                    frame_language.text('helper.desires.reopen.624')
                 )
             if current.get("stage") != "changed" or current.get("status") not in TERMINAL_STATUSES:
-                raise ValueError("reopen is only for satisfied/released desires at changed stage")
+                raise ValueError(frame_language.text('helper.desires.reopen.628'))
             now = utc_now()
             refs = clean_refs(evidence_refs)
             memory_provenance.require_normative_provenance(refs=refs)
@@ -659,6 +663,7 @@ def _ledger(base: str | Path | None = None) -> DesireLedger:
     return DesireLedger(base)
 
 
+@frame_language.pinned
 def notice(statement: str, *, base: str | Path | None = None, **kwargs: Any) -> dict[str, Any]:
     return _ledger(base).notice(statement, **kwargs)
 
@@ -671,6 +676,7 @@ def active(*, base: str | Path | None = None) -> list[dict[str, Any]]:
     return _ledger(base).list(statuses={"latent", "active", "blocked"})
 
 
+@frame_language.pinned
 def advance(desire_id: str, stage: str, *, base: str | Path | None = None,
             **kwargs: Any) -> dict[str, Any]:
     return _ledger(base).advance(desire_id, stage, **kwargs)
@@ -696,19 +702,23 @@ def change(desire_id: str, *, base: str | Path | None = None, **kwargs: Any) -> 
     return _ledger(base).change(desire_id, **kwargs)
 
 
+@frame_language.pinned
 def link_run(desire_id: str, run_id: str, *, base: str | Path | None = None,
              **kwargs: Any) -> dict[str, Any]:
     return _ledger(base).link_run(desire_id, run_id, **kwargs)
 
 
+@frame_language.pinned
 def update_from_run(desire_id: str, run_id: str, *, base: str | Path | None = None,
                     **kwargs: Any) -> dict[str, Any]:
     return _ledger(base).update_from_run(desire_id, run_id, **kwargs)
 
 
+@frame_language.pinned
 def reopen(desire_id: str, *, base: str | Path | None = None, **kwargs: Any) -> dict[str, Any]:
     return _ledger(base).reopen(desire_id, **kwargs)
 
 
+@frame_language.pinned
 def rebuild_projection(*, base: str | Path | None = None) -> dict[str, Any]:
     return _ledger(base).rebuild_projection()

@@ -38,6 +38,7 @@ Praxis исполняются в `contextvars.copy_context()` в ОТДЕЛЬН�
 одинаково виден и в потоке руки, и у вызывающего, и служит общим ключом.
 """
 from __future__ import annotations
+import frame_language
 
 import datetime as _dt
 import os
@@ -240,6 +241,7 @@ def spend() -> int:
         return slot["used"]
 
 
+@frame_language.pinned
 def claim(action: str, **fields) -> dict:
     """Её слово о конце хода. Возвращает то, что записано, дословно.
 
@@ -248,7 +250,7 @@ def claim(action: str, **fields) -> dict:
     """
     name = str(action or "").strip().lower()
     if name not in CLOSING_ACTIONS:
-        raise ValueError("action must be one of %s" % (", ".join(CLOSING_ACTIONS),))
+        raise ValueError(frame_language.text('helper.work_loop.claim.251') % (", ".join(CLOSING_ACTIONS),))
     record = {"action": name}
     for key, value in fields.items():
         text = str(value or "").strip()
@@ -295,6 +297,7 @@ def iso_utc(moment: float) -> str:
             .strftime("%Y-%m-%dT%H:%M:%S.") + f"{int(moment % 1 * 1000):03d}Z")
 
 
+@frame_language.pinned
 def closing(control: dict | None, *, now: float | None = None) -> tuple[str, str, dict]:
     """Её слово → (статус прогона, причина словами, машинная запись для события).
 
@@ -306,11 +309,11 @@ def closing(control: dict | None, *, now: float | None = None) -> tuple[str, str
     человека; решение о жизни работы на неё больше не опирается.
     """
     if not isinstance(control, dict) or control.get("action") not in CLOSING_ACTIONS:
-        return "done", "long work run completed", {}
+        return "done", frame_language.text('helper.work_loop.closing.309'), {}
     action = str(control["action"])
     said = next((str(control[key]) for key in ("evidence", "blocker", "wake_on", "summary")
                  if control.get(key)), "")
-    reason = "закрыт её словом «%s»%s" % (action, (": " + said) if said else "")
+    reason = frame_language.text('helper.work_loop.closing.313') % (action, (": " + said) if said else "")
     details: dict = {"task_control": dict(control)}
     if action == "wait":
         floor = wait_floor_sec()
@@ -323,50 +326,37 @@ def closing(control: dict | None, *, now: float | None = None) -> tuple[str, str
         }
         # Пол назван вслух там же, где стоит: причина паузы читается человеком, и молчаливо
         # отложенная на час работа выглядела бы как забытая.
-        reason += " · не будить раньше %s (пол %d с)" % (details["wake"]["not_before"], floor)
+        reason += frame_language.text('helper.work_loop.closing.326') % (details["wake"]["not_before"], floor)
     return status_for(action), reason, details
 
 
+@frame_language.pinned
 def announce(kind: object) -> str:
     """Строка в её кадр: предел назван ДО того, как в него упрёшься."""
     if not active_for(kind):
         return ""
     total = budget()
     return (
-        "\n\n## Рабочий ход\n"
-        "Этот ход закрываешь ты, а не молчание инструментов. Текст без вызова инструмента "
-        "я записываю в ход заметкой и зову тебя снова.\n"
-        "Чтобы закончить — `task_control`: `done` (и чем это подтверждается), `blocked` "
-        "(и что именно мешает), `wait` (и чего ждёшь).\n"
-        f"`wait` не хоронит работу: ход паркуется вместе со всем сделанным и поднимается "
-        f"не раньше чем через {wait_floor_sec()} с — той же работой, с той же ленты. "
-        "`blocked` автомат не поднимает: препятствие не проходит само.\n"
-        f"Продолжений в этом ходе: {total}. Когда они кончатся, ход закроется сам, и в нём "
-        "будет написано, что закрыт по бюджету, а не по сделанному."
+        frame_language.text('helper.work_loop.announce.336', p0=f'{wait_floor_sec()}', p1=f'{total}')
     )
 
 
+@frame_language.pinned
 def nudge(spent: int, total: int) -> str:
     """Укол продолжения. Ровно та роль, что у system-reminder в моём собственном харнессе."""
     left = max(0, total - spent)
     tail = (
-        f"Продолжений израсходовано {spent} из {total}, осталось {left}."
+        frame_language.text('helper.work_loop.nudge.353', p0=f'{spent}', p1=f'{total}', p2=f'{left}')
         if left else
-        f"Это было последнее из {total} продолжений."
+        frame_language.text('helper.work_loop.nudge.355', p0=f'{total}')
     )
     return (
-        "[рабочий ход] Текст написан, но не сказано, что работа закончена, — поэтому ход "
-        "не закрыт и я зову тебя снова.\n"
-        "Если сделано — `task_control(action=\"done\", summary=…, evidence=…)`, где evidence "
-        "это наблюдаемый след: что изменилось, где это видно.\n"
-        "Если есть препятствие — `task_control(action=\"blocked\", blocker=…)` с точным препятствием.\n"
-        "Если ждёшь события — `task_control(action=\"wait\", wake_on=…)` с условием пробуждения.\n"
-        "Иначе просто продолжай работать инструментами: объявленное намерение — это ещё не "
-        "сделанное дело.\n"
+        frame_language.text('helper.work_loop.nudge.358')
         + tail
     )
 
 
+@frame_language.pinned
 def woken_note(state: object) -> str:
     """Первое, что она видит, вернувшись: почему она снова здесь.
 
@@ -381,13 +371,9 @@ def woken_note(state: object) -> str:
     wake_on = str(woken.get("wake_on") or "").strip()
     parked_at = str(woken.get("parked_at") or "").strip()
     return (
-        "[рабочий ход] Этот ход припаркован твоим словом «жду»%s%s — и он поднят по сроку.\n"
-        "Это ТА ЖЕ работа, а не новая: лента, точка продолжения и всё сделанное — твои. "
-        "Бюджет продолжений начат заново.\n"
-        "Если условие ещё не наступило — скажи `task_control(action=\"wait\", wake_on=…)` "
-        "снова, и я снова отложу, не считая это неудачей." % (
+        frame_language.text('helper.work_loop.woken_note.384') % (
             (" (" + parked_at + ")") if parked_at else "",
-            (", ожидание: " + wake_on) if wake_on else "",
+            (frame_language.text('helper.work_loop.woken_note.390') + wake_on) if wake_on else "",
         )
     )
 
@@ -604,6 +590,7 @@ def said(run_id: str = "") -> dict | None:
     return dict(record) if isinstance(record, dict) else None
 
 
+@frame_language.pinned
 def mirror(draft: str, hands: object = ()) -> str:
     """Её черновик — ЕЁ ЖЕ ГОЛОСОМ. Два механических факта о ходе, без вердикта.
 
@@ -623,16 +610,17 @@ def mirror(draft: str, hands: object = ()) -> str:
     об этом и есть весь механизм.
     """
     called = [h for h in (hands or ()) if str(h).strip()]
-    touched = ("Вызвано: " + ", ".join(called) + ".") if called else \
-              "Руки не вызывались — это по памяти."
+    touched = (frame_language.text('helper.work_loop.mirror.626') + ", ".join(called) + ".") if called else \
+              frame_language.text('helper.work_loop.mirror.627')
     # ⚠ БЕЗ ВОПРОСА И БЕЗ ПОВЕЛИТЕЛЬНОГО. Первая редакция кончалась на «Отправить?» — и
     # 13.08 в 22:54 она ответила ЗЕРКАЛУ: «Да, отправляй.» Вопрос внутри её кадра читается
     # как реплика собеседника, и она на него отвечает — то есть начинает разговаривать с
     # прибором, а её ответ ему уходит человеку. Зеркало обязано быть УТВЕРЖДЕНИЕМ о
     # положении дел: вот черновик, вот чем он подкреплён, — и молчать дальше.
-    return f"Черновик, ещё не отправлен:\n\n{str(draft or '').strip()}\n\n{touched}"
+    return frame_language.text('helper.work_loop.mirror.633', p0=f"{str(draft or '').strip()}", p1=f'{touched}')
 
 
+@frame_language.pinned
 def reread_note(draft: str, spent: int, total: int, hands: object = ()) -> str:
     """Тот же взгляд, но когда она не позвала его сама. Голос тот же — её.
 
@@ -640,24 +628,19 @@ def reread_note(draft: str, spent: int, total: int, hands: object = ()) -> str:
     ход (`note_mirrored`), значит счётчик продолжений к нему не относится, а лишняя строка
     про «осталось N» звала её отчитываться о собственной речи.
     """
-    return (mirror(draft, hands) + "\n"
-            "Дальше уйдёт мой следующий текст. Оставлю как есть, поправлю или сначала "
-            "посмотрю в живой источник.")
+    return (mirror(draft, hands) + frame_language.text('helper.work_loop.reread_note.643'))
 
 
+@frame_language.pinned
 def chat_nudge(gist: str, spent: int, total: int) -> str:
     """Тоже её голосом: в её доме на «ты» к ней обращаться некому."""
     left = max(0, total - spent)
     return (
-        "Напечатано «%s» — и не сделано: руки в этом ходе не вызывались. Объявленное "
-        "намерение это ещё не сделанное дело, а собеседник увидит только обещание.\n"
-        "Могу сделать прямо сейчас, этим же ходом: прочитать файл, отправить сообщение, "
-        "проверить факт — и ответить уже по нему. Или сказать прямо, что не буду, — "
-        "тоже честный ход.\n"
-        "Продолжений у меня осталось %d." % (gist[:160], left)
+        frame_language.text('helper.work_loop.chat_nudge.652') % (gist[:160], left)
     )
 
 
+@frame_language.pinned
 def chat_decide(reply: str, *, kind: object, hands: int,
                 spent: int | None = None, called: object = ()) -> tuple[bool, str]:
     """Продолжать ли ЧАТ-ход. (продолжать, текст укола) — или (False, причина/пусто).
@@ -712,7 +695,7 @@ def chat_decide(reply: str, *, kind: object, hands: int,
     total = chat_budget()
     already = used() if spent is None else int(spent)
     if already >= total:
-        return False, "chat_loop:продолжения кончились (%d) — сказано как есть" % total
+        return False, frame_language.text('helper.work_loop.chat_decide.715') % total
     try:
         import promises
         gist = promises.detect(reply)
@@ -747,11 +730,12 @@ def chat_decide(reply: str, *, kind: object, hands: int,
     if not str(reply or "").strip():
         return False, ""
     if mirrored():
-        return False, "chat_loop:на свой текст я уже посмотрела в этом ходе"
+        return False, frame_language.text('helper.work_loop.chat_decide.750')
     note_mirrored()
     return True, reread_note(reply, already + 1, total, called)
 
 
+@frame_language.pinned
 def decide(*, kind: object, control: dict | None = None,
            spent: int | None = None) -> tuple[bool, str]:
     """(продолжать ли, текст).
@@ -761,11 +745,11 @@ def decide(*, kind: object, control: dict | None = None,
     if not active_for(kind):
         return False, ""
     if isinstance(control, dict) and control.get("action") in CLOSING_ACTIONS:
-        return False, "work_loop:закрыт её словом «%s»" % control["action"]
+        return False, frame_language.text('helper.work_loop.decide.764') % control["action"]
     total = budget()
     already = used() if spent is None else int(spent)
     if already >= total:
         return False, (
-            "work_loop:закрыт по бюджету продолжений (%d из %d) — не по сделанному" % (already, total)
+            frame_language.text('helper.work_loop.decide.769') % (already, total)
         )
     return True, nudge(already + 1, total)

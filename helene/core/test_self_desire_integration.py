@@ -55,7 +55,7 @@ class SelfDesireIntegrationTests(unittest.TestCase):
         legacy = self.store.legacy_path.read_bytes()
         current = self.store.current_path.read_bytes()
         result = agent.tool_update_self("В двух проверенных runs я сначала смотрела результат.")
-        self.assertIn("CURRENT не изменён", result)
+        self.assertIn("CURRENT и legacy self.md не изменены", result)
         self.assertEqual(self.store.legacy_path.read_bytes(), legacy)
         self.assertEqual(self.store.current_path.read_bytes(), current)
         events = [json.loads(line) for line in self.store.observations_path.read_text(

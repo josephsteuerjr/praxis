@@ -16,6 +16,7 @@ Markdown остаётся источником правды, человекоч�
 """
 
 from __future__ import annotations
+import frame_language
 
 import praxis_time
 import os
@@ -306,6 +307,7 @@ def _tail_lines(text: str, limit: int) -> str:
     return out
 
 
+@frame_language.pinned
 def frame_view(text: str, *, limit: int, speaker: bool = False,
                path_name: str = "") -> tuple[str, dict]:
     """Досье под потолок кадра — КЕАТ 17.08: «тело по требованию, в кадре указатель».
@@ -336,10 +338,7 @@ def frame_view(text: str, *, limit: int, speaker: bool = False,
         view[LOOPS] = _tail_lines(loops, loops_share)
     rendered = render(name, view).rstrip()
     where = f"memory/people/{path_name}" if path_name else "memory/people/"
-    note = (f"\n\n[досье обрезано под потолок кадра: показано {len(rendered)} из {total} "
-            f"знаков; «Факты» — хвост (свежее); «Открытые нити» "
-            f"{'хвостом' if speaker else 'не показаны'}; «Связи» не показаны; "
-            f"целиком: {where} — рукой чтения файла или recall]")
+    note = (frame_language.text('helper.people.frame_view.339', p0=f'{len(rendered)}', p1=f'{total}', p2=frame_language.text('helper.people.frame_view.341') if speaker else frame_language.text('helper.people.frame_view.341.2'), p3=f'{where}'))
     return rendered + note, {"shown": len(rendered), "total": total, "cut": True}
 
 
@@ -417,6 +416,7 @@ def telegram_id(slug: str) -> str:
     return match.group(1) if match else ""
 
 
+@frame_language.pinned
 def set_telegram_id(slug: str, name: str, principal_id: str | int | None) -> None:
     """Set/remove an explicit dossier-to-Telegram binding through parse/render.
 
@@ -427,7 +427,7 @@ def set_telegram_id(slug: str, name: str, principal_id: str | int | None) -> Non
     raw = "" if principal_id is None else str(principal_id).strip()
     canonical = _normalise_telegram_id(raw)
     if raw and not canonical:
-        raise ValueError("principal_id must be a positive Telegram user id")
+        raise ValueError(frame_language.text('helper.people.set_telegram_id.430'))
     if canonical and PEOPLE_DIR.exists():
         owners = [
             path.stem for path in sorted(PEOPLE_DIR.glob("*.md"))
@@ -436,7 +436,7 @@ def set_telegram_id(slug: str, name: str, principal_id: str | int | None) -> Non
         ]
         if owners:
             raise ValueError(
-                f"telegram principal {canonical} is already bound to {', '.join(owners)}"
+                frame_language.text('helper.people.set_telegram_id.439', p0=f'{canonical}', p1=f"{', '.join(owners)}")
             )
     nm, body = read(slug)
     if canonical:
@@ -860,6 +860,7 @@ def _trusted_claim_facts(slug: str, include_private: bool = True) -> list[dict]:
     return rows
 
 
+@frame_language.pinned
 def portrait_and_loops(slug: str, include_private: bool = True, *,
                        trusted_only: bool = False) -> tuple[str, str]:
     """(портрет без нитей, текст открытых нитей) — для раздельного бюджета в промпте.
@@ -875,7 +876,7 @@ def portrait_and_loops(slug: str, include_private: bool = True, *,
         if name:
             rendered.append(f"# {name}")
         if facts:
-            rendered.append("## Canonical claim projections")
+            rendered.append(frame_language.text('helper.people.portrait_and_loops.878'))
             for row in facts:
                 label = memory_provenance.claim_prompt_label(row["source_type"])
                 rendered.append(
@@ -892,11 +893,12 @@ def portrait_and_loops(slug: str, include_private: bool = True, *,
                           if not re.match(r"^\s*[-*]\s*\[private\]", l, re.I)).strip()
             if not b:
                 continue
-        prose.append(f"## {t}\n{b}")
+        prose.append(f"## {frame_language.text({WHO: 'helper.people.section.who', CHARACTER: 'helper.people.section.character', NOW: 'helper.people.section.now', FACTS: 'helper.people.section.facts'}[t])}\n{b}")
     loops_lines = [l for l in (body.get(LOOPS, "")).splitlines() if l.strip().startswith(("- [ ]", "* [ ]"))]
     return "\n\n".join(prose), "\n".join(loops_lines).strip()
 
 
+@frame_language.pinned
 def compact_profile(slug: str, *, include_private: bool = True,
                     max_facts: int = 4, max_chars: int = 700,
                     trusted_only: bool = False) -> str:
@@ -929,7 +931,7 @@ def compact_profile(slug: str, *, include_private: bool = True,
             return ""
         out = " | ".join(rows)
         return out if len(out) <= max_chars else out[: max_chars - 1].rstrip() + "…"
-    for title, label in ((WHO, "кто"), (NOW, "сейчас"), (CHARACTER, "характер")):
+    for title, label in ((WHO, frame_language.text('helper.people.compact_profile.932')), (NOW, frame_language.text('helper.people.compact_profile.932.2')), (CHARACTER, frame_language.text('helper.people.compact_profile.932.3'))):
         value = clip(body.get(title, ""))
         if value:
             rows.append(f"{label} [legacy-unverified]: {value}")
@@ -954,10 +956,10 @@ def compact_profile(slug: str, *, include_private: bool = True,
     # Salience first; among equal facts the newest (later Markdown line) wins.
     facts.sort(key=lambda item: (item[0], item[1]), reverse=True)
     if facts:
-        rows.append("факты: " + "; ".join(item[2] for item in facts[:max(1, int(max_facts))]))
+        rows.append(frame_language.text('helper.people.compact_profile.957') + "; ".join(item[2] for item in facts[:max(1, int(max_facts))]))
 
     loops = open_loops(slug)
     if loops:
-        rows.append("нить [legacy-unverified]: " + clip(loops[-1], 180))
+        rows.append(frame_language.text('helper.people.compact_profile.961') + clip(loops[-1], 180))
     out = " | ".join(rows)
     return out if len(out) <= max_chars else out[: max_chars - 1].rstrip() + "…"
