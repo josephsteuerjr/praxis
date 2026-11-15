@@ -148,7 +148,7 @@ class TestRunAndQuota(Base):
 
     def test_pip_rejects_suspicious_args(self):
         slug = self._proj()
-        self.assertIn("не ставлю", workshop.pip_install(slug, "--index-url http://evil requests"))
+        self.assertEqual(workshop.frame_language.text('workshop.execute.98',v1='--index-url, http://evil'), workshop.pip_install(slug, "--index-url http://evil requests"))
 
 
 class TestDeliveryAndMap(Base):

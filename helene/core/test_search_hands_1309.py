@@ -129,7 +129,7 @@ class TestFloorSearchHome(Base):
         self.assertIn("soul/HOME.md:1: иголка в душе", out)
         self.assertIn("workspace", out.split("…")[-1], "усечённая часть названа")
         self.assertIn("5000", out)
-        self.assertIn("memory/runs не искала", out)
+        self.assertIn("memory/runs не проверено", out)
         for call in floor.calls:
             self.assertEqual(call["base"], self.tmp)
             self.assertEqual(call["scope_root"], self.tmp.resolve())
@@ -147,7 +147,7 @@ class TestFloorSearchHome(Base):
             default={"ok": True, "files_seen": 1, "capped": False, "hits": []})
         with mock.patch.object(workshop.hands, "search", floor):
             out = workshop.fs_search("Кадр как документ", glob="**/*.md")
-        self.assertTrue(out.startswith("Ничего не нашла"), out)
+        self.assertTrue(out.startswith("Ничего не найдено"), out)
         self.assertIn("workspace", out)
         self.assertIn("сузь маску или дай root", out)
 
@@ -156,7 +156,7 @@ class TestFloorSearchHome(Base):
         with mock.patch.object(workshop.hands, "search", floor), \
              mock.patch.object(Path, "read_text", side_effect=AssertionError("основной процесс читает файлы поиска")):
             out = workshop.fs_search("иголка", glob="**/*.md").replace("\\", "/")
-        self.assertTrue(out.startswith("Не знаю"), out)
+        self.assertTrue(out.startswith("Результат неизвестен"), out)
         self.assertIn("поиск не ответил на workspace", out)
         self.assertEqual(len(floor.calls), 1, "молчащая часть останавливает обход")
 
@@ -168,7 +168,7 @@ class TestFloorSearchHome(Base):
             out = workshop.fs_search("иголка", glob="**/*.md").replace("\\", "/")
         self.assertIn("workspace/a.md:1", out)
         self.assertIn("поиск не ответил на ", out)
-        self.assertNotIn("Не знаю", out)
+        self.assertNotIn("Результат неизвестен", out)
 
     def test_explicit_root_reports_floor_budget(self):
         floor = _FakeFloor(
@@ -191,7 +191,7 @@ class TestFloorSearchHome(Base):
         with mock.patch.object(workshop.hands, "search", floor):
             out = workshop.fs_search("иголка", glob="**/*.md")
         self.assertIn("soul/HOME.md:1", out)
-        self.assertIn("пропустила docs: путь вне дома", out)
+        self.assertIn("пропущено docs: путь вне дома", out)
         self.assertIn("memory/dossiers", [c["root"] for c in floor.calls], "обход продолжился")
 
     def test_cap_stops_the_walk(self):
@@ -297,10 +297,10 @@ class TestPythonWalk(Base):
     def test_runs_are_searched_only_with_explicit_root(self):
         out = workshop.fs_search("иголка", glob="**/*.md").replace("\\", "/")
         self.assertNotIn("run-1", out)
-        self.assertIn("memory/runs не искала — укажи root=memory/runs", out)
+        self.assertIn("memory/runs не проверено — укажи root=memory/runs", out)
         out = workshop.fs_search("иголка", glob="**/*.md", root="memory/runs").replace("\\", "/")
         self.assertIn("run-1/manifest.md:1", out)
-        self.assertNotIn("не искала", out)
+        self.assertNotIn("не проверено", out)
 
     def test_regex_path_finds_the_note(self):
         out = workshop.fs_search("Кадр как докум.нт", glob="**/*.md").replace("\\", "/")

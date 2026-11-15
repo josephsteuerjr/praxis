@@ -626,23 +626,24 @@ def _search_roots(base: Path) -> list[str]:
     return list(dict.fromkeys(order))
 
 
+@frame_language.pinned
 def _floor_limits(r: dict, where: str) -> list[str]:
     """Что поиск не досмотрел и сам об этом сказал: иначе «ничего не нашла» было бы ложью."""
     notes: list[str] = []
     if r.get("out_of_time"):
-        notes.append(f"в {where} не успела за {hands.SEARCH_SECONDS:.0f}с — сузь маску или root")
+        notes.append(frame_language.text('workshop.execute.59', v1=f'{where}', v3=f'{hands.SEARCH_SECONDS:.0f}'))
     if r.get("too_large"):
-        notes.append(f"в {where} пропустила файлов крупнее "
-                     f"{hands.SEARCH_MAX_FILE_BYTES // (1024 * 1024)} МБ: {r['too_large']}")
+        notes.append(frame_language.text('workshop.execute.60', v1=f'{where}', v3=f'{hands.SEARCH_MAX_FILE_BYTES // (1024 * 1024)}', v5=f"{r['too_large']}"))
     return notes
 
 
+@frame_language.pinned
 def _search_silent(where: str) -> str:
     """Поиск не дал ответа. Читать файлы здесь нельзя: ради этого он и отдельный процесс."""
-    return (f"Не знаю: поиск по {where} не ответил в срок или упал, что там есть, неизвестно. "
-            "Сузь маску или root, упрости выражение.")
+    return (frame_language.text('workshop.execute.61', v1=f'{where}'))
 
 
+@frame_language.pinned
 def _floor_search_home(pattern: str, glob: str) -> str:
     """Поиск по дому целиком, по частям. Часть без ответа останавливает обход и называется."""
     found: list[str] = []
@@ -667,7 +668,7 @@ def _floor_search_home(pattern: str, glob: str) -> str:
             break
         if not r.get("ok"):
             # отказ пола по одной части (симлинк наружу, права) не роняет весь обход
-            skipped.append(f"{rel}: {r.get('msg') or 'пол отказал'}")
+            skipped.append(f"{rel}: {r.get('msg') or frame_language.text('workshop.execute.62')}")
             continue
         seen = int(r.get("files_seen") or 0)
         files_seen += seen
@@ -679,22 +680,21 @@ def _floor_search_home(pattern: str, glob: str) -> str:
             break
     notes: list[str] = []
     if truncated:
-        notes.append(f"в {', '.join(truncated)} пол обошёл только первые {FLOOR_FILE_BUDGET} "
-                     f"файлов — там сузь маску или дай root")
+        notes.append(frame_language.text('workshop.execute.63', v1=f"{', '.join(truncated)}", v3=f'{FLOOR_FILE_BUDGET}'))
     notes += limits
     if skipped:
-        notes.append("пропустила " + "; ".join(skipped))
+        notes.append(frame_language.text('workshop.execute.64') + "; ".join(skipped))
     if recursive and (BASE / _SEARCH_RUNS_REL).is_dir():
-        notes.append(f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}")
+        notes.append(frame_language.text('workshop.execute.65', v0=f'{_SEARCH_RUNS_REL}', v2=f'{_SEARCH_RUNS_REL}'))
     if len(found) >= SEARCH_CAP:
-        notes.insert(0, f"потолок {SEARCH_CAP} совпадений — сузь паттерн")
+        notes.insert(0, frame_language.text('workshop.execute.66', v1=f'{SEARCH_CAP}'))
     if silent:
-        notes.insert(0, f"поиск не ответил на {silent}: эта часть и следующие не просмотрены")
+        notes.insert(0, frame_language.text('workshop.execute.67', v1=f'{silent}'))
     tail = f"\n… ({'; '.join(notes)})" if notes else ""
     if not found:
         if silent:
-            return f"Не знаю, просмотрела не всё ({files_seen} файлов по {glob}).{tail}"
-        return f"Ничего не нашла ({files_seen} файлов по {glob}).{tail}"
+            return frame_language.text('workshop.execute.68', v1=f'{files_seen}', v3=f'{glob}', v5=f'{tail}')
+        return frame_language.text('workshop.execute.69', v1=f'{files_seen}', v3=f'{glob}', v5=f'{tail}')
     return "\n".join(found[:SEARCH_CAP]) + tail
 
 
@@ -706,15 +706,16 @@ def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
     return out
 
 
+@frame_language.pinned
 def _fs_search(pattern: str, glob: str, root: str) -> tuple[str, str]:
     try:
         re.compile(pattern)
     except re.error as e:
-        return f"Плохой regex: {e}", "refused"
+        return frame_language.text('workshop.execute.70', v1=f'{e}'), "refused"
     # All routes select the same resolved BASE/REPO root before dispatch.
     selected = _resolve_read(root) if root else BASE.resolve()
     if selected is None or not selected.is_dir():
-        return "Не ищу: плохой корень поиска.", "refused"
+        return frame_language.text('workshop.execute.71'), "refused"
     # Чистый литерал (без regex-метасимволов) ищет отдельный процесс с бюджетом файлов.
     # Его диалект маски: `**/имя` или просто `имя`; поддиректорию в маске оставляем обходу ниже.
     mask = glob.replace("**/", "", 1)
@@ -731,16 +732,15 @@ def _fs_search(pattern: str, glob: str, root: str) -> tuple[str, str]:
         if r.get("ok"):
             hits = r.get("hits") or []
             seen = int(r.get("files_seen") or 0)
-            cut = (f"\n… (пол обошёл только первые {FLOOR_FILE_BUDGET} файлов под {root} — "
-                   f"сузь маску или root)" if seen >= FLOOR_FILE_BUDGET else "")
+            cut = (frame_language.text('workshop.execute.72', v1=f'{FLOOR_FILE_BUDGET}', v3=f'{root}') if seen >= FLOOR_FILE_BUDGET else "")
             cut += "".join(f"\n… ({note})" for note in _floor_limits(r, root))
             if not hits:
-                return f"Ничего не нашла ({seen} файлов по {glob}).{cut}", "ok"
-            return "\n".join(hits) + (f"\n… (потолок {SEARCH_CAP} — сузь паттерн)"
+                return frame_language.text('workshop.execute.73', v1=f'{seen}', v3=f'{glob}', v5=f'{cut}'), "ok"
+            return "\n".join(hits) + (frame_language.text('workshop.execute.74', v1=f'{SEARCH_CAP}')
                                       if r.get("capped") else "") + cut, "ok"
     base = selected
     if base is None or not base.is_dir():
-        return "Не ищу: плохой корень поиска.", "refused"
+        return frame_language.text('workshop.execute.75'), "refused"
     # Регулярка и составная маска — тот же отдельный процесс: тяжёлое выражение держало бы GIL
     # основного процесса, и прервать его изнутри нечем. Обход там ЛЕНИВЫЙ и ограниченный:
     # 04.08 `sorted(base.glob(glob))` материализовал всё дерево до первого чтения, и поиск
@@ -748,43 +748,43 @@ def _fs_search(pattern: str, glob: str, root: str) -> tuple[str, str]:
     r = hands.walk(pattern, glob, base, cap=SEARCH_CAP, scan_cap=SEARCH_SCAN_CAP,
                    seconds=SEARCH_SECONDS, skip_runs=not root, base=BASE)
     if r is None:
-        return _search_silent(root or "дому"), "failed"
+        return _search_silent(root or frame_language.text('workshop.execute.76')), "failed"
     if not r.get("ok"):
-        return f"Не ищу: {r.get('msg')}.", "refused"
+        return frame_language.text('workshop.execute.77', v1=f"{r.get('msg')}"), "refused"
     found = sorted(r["rows"], key=lambda row: (row[0], row[1]))
     files_seen, scanned = r["files_seen"], r["scanned"]
     hits = [f"{rel}:{i}: {text}" for rel, i, text in found[:SEARCH_CAP]]
-    stop = {"scan": f"обошла {SEARCH_SCAN_CAP} путей и остановилась",
-            "time": f"искала {SEARCH_SECONDS:.0f}с и остановилась",
-            "cap": f"потолок {SEARCH_CAP} совпадений"}.get(r["stop"], "")
-    for limit in _floor_limits(r, root or "доме"):
+    stop = {"scan": frame_language.text('workshop.execute.78', v1=f'{SEARCH_SCAN_CAP}'),
+            "time": frame_language.text('workshop.execute.79', v1=f'{SEARCH_SECONDS:.0f}'),
+            "cap": frame_language.text('workshop.execute.80', v1=f'{SEARCH_CAP}')}.get(r["stop"], "")
+    for limit in _floor_limits(r, root or frame_language.text('workshop.execute.81')):
         stop = (stop + "; " if stop else "") + limit
     if not root and (base / _SEARCH_RUNS_REL).is_dir():
-        stop = (stop + "; " if stop else "") + f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}"
+        stop = (stop + "; " if stop else "") + frame_language.text('workshop.execute.82', v0=f'{_SEARCH_RUNS_REL}', v2=f'{_SEARCH_RUNS_REL}')
     if not hits:
         tail = f" — {stop}" if stop else ""
-        return f"Ничего не нашла ({files_seen} файлов по {glob}, путей обошла {scanned}{tail}).", "ok"
+        return frame_language.text('workshop.execute.83', v1=f'{files_seen}', v3=f'{glob}', v5=f'{scanned}', v6=f'{tail}'), "ok"
     # Усечение НАЗЫВАЕТСЯ. Молчаливое «ничего не нашла» после обрыва обхода — это ложь:
     # она бы решила, что искомого нет, а мы просто не дошли.
-    return "\n".join(hits) + (f"\n… ({stop}; путей обошла {scanned}, файлов прочла "
-                              f"{files_seen} — сузь маску или корень)" if stop else ""), "ok"
+    return "\n".join(hits) + (frame_language.text('workshop.execute.84', v1=f'{stop}', v3=f'{scanned}', v5=f'{files_seen}') if stop else ""), "ok"
 
 
+@frame_language.pinned
 def fs_ls(path: str = "") -> str:
     p = _resolve_read(path or str(BASE))
     if p is None or not p.is_dir():
         tool_report.note(outcome="refused", target=str(path))
-        return "Нет такой директории (или вне дома)."
+        return frame_language.text('workshop.execute.85')
     tool_report.note(outcome="ok", target=str(p))
     out = []
     for c in sorted(p.iterdir()):
         if _is_secret(c):
             continue
         mark = "/" if c.is_dir() else ""
-        size = "" if c.is_dir() else f" · {c.stat().st_size}Б"
+        size = "" if c.is_dir() else frame_language.text('workshop.execute.86', v1=f'{c.stat().st_size}')
         stamp = when(c)
         out.append(f"{c.name}{mark}{size}" + (f" · {stamp}" if stamp else ""))
-    return "\n".join(out[:200]) or "(пусто)"
+    return "\n".join(out[:200]) or frame_language.text('workshop.execute.87')
 
 
 # --------------------------------------------------------------------------- #
@@ -798,11 +798,12 @@ def _venv_python(d: Path) -> Path | None:
     return None
 
 
+@frame_language.pinned
 def run(command: str, project: str, timeout: int = RUN_TIMEOUT) -> str:
     """Запуск в проекте мастерской: тайм-аут, джейл cwd, потолок вывода и расписка в hands."""
     d = _project_dir(project)
     if d is None:
-        return f"Нет проекта {_slug(project)} — для проекта используй shell/python с cwd его каталога."
+        return frame_language.text('workshop.execute.88', v1=f'{_slug(project)}')
     timeout = max(1, min(int(timeout or RUN_TIMEOUT), 600))
     log.info("workshop run [%s] $ %s", d.name, command[:120])
     tool_report.note(target=d.name)
@@ -811,28 +812,28 @@ def run(command: str, project: str, timeout: int = RUN_TIMEOUT) -> str:
     if "out" not in r:
         tool_report.execution({**receipt, "status": "launch_failed", "error": str(r.get("msg"))[:200]})
         tool_report.note(outcome="failed")
-        return f"[ошибка запуска] {r.get('msg')}"
+        return frame_language.text('workshop.execute.89', v1=f"{r.get('msg')}")
     tool_report.execution({**receipt, "status": "timed_out" if r.get("killed") else "returned",
                            "exit_code": int(r.get("code", 0))})
     tool_report.note(outcome="ok" if int(r.get("code", 0)) == 0 and not r.get("killed") else "failed")
-    out = (r.get("out") or "").strip() or "(пустой вывод)"
+    out = (r.get("out") or "").strip() or frame_language.text('workshop.execute.90')
     code = int(r.get("code", 0))
     return out + (f"\n[exit {code}]" if code != 0 and not r.get("killed") else "")
 
 
+@frame_language.pinned
 def run_tests(project: str = "self") -> str:
     """self → selfdev.run_tests в АКТУАЛЬНОМ worktree предложения; проект → pytest||unittest."""
     if (project or "self").strip().lower() == "self":
         open_props = [t for t in selfdev.all_items(50) if t.get("status") == "building"]
         if not open_props:
-            return ("Нет открытого предложения: тесты ядра гоняются в его worktree "
-                    "(proposal(action=start) → правки → proposal(action=test) → proposal(action=submit)).")
+            return (frame_language.text('workshop.execute.91'))
         pid = open_props[-1]["id"]
         res = selfdev.run_tests(pid)
-        return f"[предложение {pid}] {res['summary']}"
+        return frame_language.text('workshop.execute.92', v1=f'{pid}', v3=f"{res['summary']}")
     d = _project_dir(project)
     if d is None:
-        return f"Нет проекта {_slug(project)}."
+        return frame_language.text('workshop.execute.93', v1=f'{_slug(project)}')
     py = _venv_python(d) or Path(sys.executable)
     try:
         r = subprocess.run([str(py), "-m", "pytest", "-q"], cwd=str(d), capture_output=True,
@@ -844,50 +845,50 @@ def run_tests(project: str = "self") -> str:
             out = (r.stdout or "") + (r.stderr or "")
         return _cap_output(out.strip()) + ("" if r.returncode == 0 else f"\n[exit {r.returncode}]")
     except subprocess.TimeoutExpired:
-        return f"[тесты не уложились в {RUN_TIMEOUT}s]"
+        return frame_language.text('workshop.execute.95', v1=f'{RUN_TIMEOUT}')
 
 
 _PKG_RE = re.compile(r"^[A-Za-z0-9_.\[\]=<>!,~-]+$")
 
 
+@frame_language.pinned
 def pip_install(project: str, packages: str) -> str:
     d = _project_dir(project)
     if d is None:
-        return f"Нет проекта {_slug(project)} — сначала project(action=create)."
+        return frame_language.text('workshop.execute.96', v1=f'{_slug(project)}')
     pkgs = [p for p in str(packages or "").split() if p]
     if not pkgs:
-        return "Скажи, что ставить: pip_install(project, \"requests rich\")."
+        return frame_language.text('workshop.execute.97')
     bad = [p for p in pkgs if not _PKG_RE.match(p) or p.startswith("-")]
     if bad:
-        return f"Подозрительные аргументы (не пакеты): {', '.join(bad)} — не ставлю."
+        return frame_language.text('workshop.execute.98', v1=f"{', '.join(bad)}")
     size = _du_mb(d)
     if size > QUOTA_MB:
-        return (f"Квота проекта превышена ({size:.0f}/{QUOTA_MB} МБ) — сначала почисти "
-                "(.venv пересоздать, артефакты удалить), потом ставь.")
+        return (frame_language.text('workshop.execute.99', v1=f'{size:.0f}', v3=f'{QUOTA_MB}'))
     py = _venv_python(d)
     if py is None:
         try:
             r = subprocess.run([sys.executable, "-m", "venv", str(d / ".venv")],
                                capture_output=True, text=True, timeout=PIP_TIMEOUT)
             if r.returncode != 0:
-                return f"venv не создался: {_cap_output((r.stderr or r.stdout or '').strip(), 500)}"
+                return frame_language.text('workshop.execute.100', v1=f"{_cap_output((r.stderr or r.stdout or '').strip(), 500)}")
         except subprocess.TimeoutExpired:
-            return "venv не создался (таймаут)."
+            return frame_language.text('workshop.execute.101')
         py = _venv_python(d)
         if py is None:
-            return "venv не создался (python не нашёлся внутри)."
+            return frame_language.text('workshop.execute.102')
     try:
         r = subprocess.run([str(py), "-m", "pip", "install", "-q", *pkgs], cwd=str(d),
                            capture_output=True, text=True, timeout=PIP_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return f"[pip не уложился в {PIP_TIMEOUT}s]"
+        return frame_language.text('workshop.execute.103', v1=f'{PIP_TIMEOUT}')
     out = _cap_output(((r.stdout or "") + (r.stderr or "")).strip(), 1500)
     size = _du_mb(d)
-    over = f"\n⚠ Квота: {size:.0f}/{QUOTA_MB} МБ — превышена, почисти проект!" if size > QUOTA_MB \
-        else f"\nДиск проекта: {size:.0f}/{QUOTA_MB} МБ."
+    over = frame_language.text('workshop.execute.104', v1=f'{size:.0f}', v3=f'{QUOTA_MB}') if size > QUOTA_MB \
+        else frame_language.text('workshop.execute.105', v1=f'{size:.0f}', v3=f'{QUOTA_MB}')
     if r.returncode != 0:
-        return f"pip упал:\n{out}{over}"
-    return f"Поставила: {' '.join(pkgs)} (в .venv проекта).{over}"
+        return frame_language.text('workshop.execute.106', v1=f'{out}', v2=f'{over}')
+    return frame_language.text('workshop.execute.107', v1=f"{' '.join(pkgs)}", v3=f'{over}')
 
 
 # --------------------------------------------------------------------------- #

@@ -847,13 +847,13 @@ class TestSearch(Home, unittest.TestCase):
         (self.tmp / "workspace/big.txt").write_text("needle\n" * 100, encoding="utf-8")
         with mock.patch.object(hands, "SEARCH_MAX_FILE_BYTES", 10):
             out = workshop.fs_search("needle", glob="**/*.txt", root="workspace")
-        self.assertIn("пропустила файлов крупнее", out)
+        self.assertIn("пропущено файлов крупнее", out)
 
     def test_running_out_of_time_is_named(self):
         (self.tmp / "workspace/a.txt").write_text("needle\n", encoding="utf-8")
         with mock.patch.object(hands, "SEARCH_SECONDS", 1e-9):
             out = workshop.fs_search("needle", glob="**/*.txt", root="workspace")
-        self.assertIn("не успела", out)
+        self.assertIn("поиск не завершился", out)
 
     def test_bad_root_is_a_refusal(self):
         self.assertFalse(hands.search("x", root="../..", base=self.tmp)["ok"])
@@ -871,7 +871,7 @@ class TestSearch(Home, unittest.TestCase):
         for out in answers:
             self.assertIn("не ответил", out)
             self.assertNotIn("a.py:1", out)
-            self.assertNotIn("Ничего не нашла", out, "молчание поиска — не отсутствие совпадений")
+            self.assertNotIn("Ничего не найдено", out, "молчание поиска — не отсутствие совпадений")
 
     def test_regex_runs_outside_this_process(self):
         (self.tmp / "workspace/a.txt").write_text("needle\n", encoding="utf-8")
@@ -894,7 +894,7 @@ class TestSearch(Home, unittest.TestCase):
         (self.tmp / "workspace/big.txt").write_text("needle\n" * 100, encoding="utf-8")
         with mock.patch.object(hands, "SEARCH_MAX_FILE_BYTES", 10):
             out = workshop.fs_search(r"need.e", glob="**/*.txt", root="workspace")
-        self.assertIn("пропустила файлов крупнее", out)
+        self.assertIn("пропущено файлов крупнее", out)
         self.assertNotIn("big.txt:1", out)
 
     def test_regex_path_refuses_a_bad_mask(self):

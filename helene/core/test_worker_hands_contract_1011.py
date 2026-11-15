@@ -35,7 +35,7 @@ class WorkerHandsContract(unittest.TestCase):
     def test_operating_contract_invites_python_with_the_same_editor(self):
         with patch.object(forge, 'inspect', return_value='orientation'):
             text = worker._system({'role':'worker', 'task_id':'t', 'id':'w'})
-        for term in ('`edit`', 'inspect(action=read)', 'praxis_hands', 'h.edit'):
+        for term in ('edit (replace, batch, write, patch)', 'inspect(action=read)', 'praxis_hands', 'h.edit'):
             self.assertIn(term, text)
 
     def test_replies_name_existing_project_hands(self):
