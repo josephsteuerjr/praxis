@@ -301,6 +301,8 @@ class Desk:
         """
         if self._life is None:
             return
+        if direction == "out" and text == "":
+            return
         moment = now or dt.datetime.now(dt.timezone.utc)
         try:
             self._life.record_message(

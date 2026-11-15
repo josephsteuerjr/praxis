@@ -2672,6 +2672,20 @@ def rebuild_state(chat_id: str | int) -> dict:
         return _rebuild_state_locked(place)
 
 
+def _empty_window_delivery(row: dict) -> bool:
+    """Recognize a zero-payload window delivery receipt, preserving its canon.
+
+    Only its derived conversational projection is absent. Whitespace chunks,
+    media markers, native deletions and nonempty/unproved messages retain the
+    ordinary evidence rules; the event and its dedupe identity remain intact.
+    """
+    source_id = row.get("source_id")
+    return (row.get("kind") == "conversation_message" and row.get("source") == "window"
+            and row.get("direction") == "out" and row.get("text") == ""
+            and isinstance(source_id, str)
+            and bool(re.fullmatch(r"(?:deliver-[0-9]+|speech:[a-f0-9]{32})", source_id)))
+
+
 def _foldable_hot_rows(messages, current_event_ids, covered_events
                        ) -> tuple[list[dict], list[dict]]:
     """Горячие строки, которые ДОКАЗУЕМЫ, и отдельно те, которые нет.
@@ -2686,6 +2700,8 @@ def _foldable_hot_rows(messages, current_event_ids, covered_events
     for row in messages:
         event_id = str(row.get("id"))
         if event_id not in current_event_ids or event_id in covered_events:
+            continue
+        if _empty_window_delivery(row):
             continue
         if memory_provenance.event_row_indexable(row):
             foldable.append(row)
@@ -2763,6 +2779,9 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
         if identity not in canonical and identity not in residuals:
             state["hot"].append(dict(item, unprovable=True, state_residual=True))
             residuals.add(identity)
+    # Empty delivery receipts remain auditable, without inventing recap coverage.
+    state["empty_delivery_receipts"] = [str(row["id"]) for row in messages
+                                         if _empty_window_delivery(row)]
     state["frontier"] = [m for m in shown_metas
                          if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages
