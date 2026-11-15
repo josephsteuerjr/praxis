@@ -5092,6 +5092,7 @@ def _home_fs_read(path: str, start: int = 0, end: int = 0) -> "ToolObservation |
     return workshop.fs_read(path, start, end)
 
 
+@frame_language.pinned
 def tool_computer(action: str, path: str = "", caption: str = "", command: str = "",
                   cwd: str = "", operation_id: str = "", execution: str = "interactive",
                   hwnd: str = "", events: list[dict] | None = None, text: str = "",
@@ -5132,20 +5133,20 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                 "type_text | hotkey | key | move | click | scroll | screenshot | observe | "
                 "clipboard_read | clipboard_write | processes")
     if not _computer_allowed(required):
-        return f"Нет выданного владельцем права `{required}` для этого Telegram id."
+        return frame_language.text('computer.result.permission', required=required)
     if execution == "system" and not _is_sovereign_actor():
-        return "SYSTEM-контекст доступен только владельцу или самого агента, не доверенным людям."
+        return frame_language.text('computer.result.sovereign_system')
     if action in {"write", "replace"} and not _is_sovereign_actor():
         # Этап 3 не расширяет чужие гранты: computer.files у доверенных людей — это
         # чтение/пересылка, запись на диск остаётся суверенной (владелец или сама Praxis).
-        return "Запись файлов на компьютере — только владелец или сам агент; грант computer.files её не включает."
+        return frame_language.text('computer.result.sovereign_write')
     if execution != "interactive" and action in {
         "desktop_status", "windows", "read_window", "find_elements", "act_element",
         "activate", "input", "type_text",
         "hotkey", "key", "move", "click", "scroll", "screenshot", "observe",
         "clipboard_read", "clipboard_write",
     }:
-        return f"{action}: нужен execution=interactive (desktop недоступен из Session 0)"
+        return frame_language.text('computer.result.interactive', action=action)
     if action == "status":
         return body_client.state_line()
     if action == "inventory":
@@ -5157,17 +5158,17 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     # --- PASS 30 Этап 3: прямые файловые глаголы (кодинг без wcode-скважины) --- #
     if action == "hash":
         if not path:
-            return "hash: нужен абсолютный Windows-путь"
+            return frame_language.text('computer.result.path', action='hash')
         return json.dumps(body_client.call("fs.hash", {"path": path}, execution=execution),
                           ensure_ascii=False, indent=2)
     if action == "read":
         if not path:
-            return "read: нужен абсолютный Windows-путь"
+            return frame_language.text('computer.result.path', action='read')
         try:  # аргументы модели не обязаны быть целыми — не давать raise парковать ход
             first = max(1, int(start or 1))
             last_arg = int(end or 0)
         except (TypeError, ValueError):
-            return "read: start и end должны быть целыми номерами строк"
+            return frame_language.text('computer.result.lines_integer')
         raw = body_client.call("fs.read", {"path": path, "offset": 0, "limit": 8_000_000},
                                execution=execution, timeout=120)
         if not raw.get("ok"):
@@ -5178,20 +5179,17 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         numbered = "\n".join(f"{no}: {line}"
                              for no, line in enumerate(lines[first - 1:last], first))
         if len(numbered) > 24_000:
-            numbered = (numbered[:24_000]
-                        + f"\n… вырезано {len(numbered) - 24_000} символов — сузь start/end …")
+            numbered = (numbered[:24_000] + frame_language.text('computer.result.truncated', omitted=len(numbered)-24_000))
         digest = body_client.call("fs.hash", {"path": path}, execution=execution)
-        footer = (f"[{path}: строки {first}-{last} из {len(lines)}; "
-                  f"size={raw.get('size')}; sha256={digest.get('sha256') or 'н/д'}]")
+        footer = (frame_language.text('computer.result.footer', path=path, first=first, last=last, total=len(lines), size=raw.get('size'), sha=digest.get('sha256') or '—'))
         if raw.get("eof") is False:
-            footer += (f"\n[⚠ файл прочитан не до конца (кап 8МБ): "
-                       f"next_offset={raw.get('next_offset')}]")
+            footer += (frame_language.text('computer.result.partial_read', next_offset=raw.get('next_offset')))
         if raw.get("lossy"):
-            footer += "\n[⚠ не-UTF8 байты заменены (lossy)]"
+            footer += frame_language.text('computer.result.lossy')
         return (numbered + "\n" + footer) if numbered else footer
     if action in {"write", "replace"}:
         if not path:
-            return f"{action}: нужен абсолютный Windows-путь"
+            return frame_language.text('computer.result.path', action=action)
         if action == "write":
             body = "" if content is None else str(content)
             if (str(path).lower().endswith((".ps1", ".psm1", ".psd1")) and body
@@ -5202,14 +5200,12 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                 # поэтому BOM ставится здесь, символом.
                 body = "\ufeff" + body
             if len(body.encode("utf-8")) > _COMPUTER_WRITE_CAP:
-                return (f"write: content больше {_COMPUTER_WRITE_CAP} байт — мост /invoke "
-                        "его не пропустит; большой файл гони artifact-маршрутом "
-                        "(wcode-скважина: upload_artifact + fs.import)")
+                return (frame_language.text('computer.result.write_cap', cap=_COMPUTER_WRITE_CAP))
             payload: dict = {"path": path, "content": body}
             capability = "fs.write_atomic"
         else:
             if not old:
-                return "replace: нужен old — точное существующее вхождение (ровно одно в файле)"
+                return frame_language.text('computer.result.old_required')
             payload = {"path": path, "old": str(old), "new": ("" if new is None else str(new))}
             capability = "fs.replace"
         if expected_sha256:
@@ -5220,11 +5216,11 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         if result.get("ok") and str(result.get("type") or "") != "result":
             # accepted/progress — расписка без result-фрейма: эффект не подтверждён.
             result = {**result, "confirmed": False,
-                      "note": "расписка без result-фрейма — запись не подтверждена; сверь fs.hash"}
+                      "note": frame_language.text('computer.result.write_unconfirmed')}
         return json.dumps(result, ensure_ascii=False, indent=2)
     if action == "run":
         if process_timeout_ms is not None and (type(process_timeout_ms) is not int or process_timeout_ms < 0):
-            return "run: timeout_ms должен быть целым числом >= 0; 0 или отсутствие — без срока. Команда не запускалась."
+            return frame_language.text('computer.result.run_timeout')
         seconds = ((process_timeout_ms or 0) + 999) // 1000
         result = body_client.process_start(command=command, shell="power_shell", cwd=cwd,
                                            execution=execution, timeout=seconds)
@@ -5278,8 +5274,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # элементом окна» — промах по устройству. Двое подошедших — тоже ответ тела
         # («ambiguous» со списком кандидатов), а не наш выбор первого попавшегося.
         if not str(element_action or "").strip():
-            return ("act_element: скажи element_action — invoke, set_value, toggle, expand, "
-                    "collapse, select, scroll_into_view или focus")
+            return (frame_language.text('computer.result.element_action'))
         # ⚠ Повтор обязан адресовать ТУ ЖЕ запись в журнале, а не выпустить второй
         # щелчок. Ход рвётся сверху (EmptyResponseError, обрыв реле) — и модель
         # переиздаёт тот же вызов; без общего ключа мост принимает его как новое
@@ -5287,11 +5282,10 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # «это тот же самый удар» именно она, а не транспорт.
         client_key = str(idempotency_key or "").strip()
         if not client_key or len(client_key) > 200:
-            return ("act_element: нужен собственный idempotency_key (1..200 символов); "
-                    "повтор того же намерения — тот же ключ")
+            return (frame_language.text('computer.result.element_key'))
         actor = _computer_actor()
         if not actor:
-            return "act_element: не опознан principal для ключа действия"
+            return frame_language.text('computer.result.principal')
         # Ключ привязан к тому, КТО действует: одинаковый ключ у двух людей — два
         # разных действия, а не общая запись.
         digest = hashlib.sha256(
@@ -5312,14 +5306,14 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         return body_client.format_element_act(result)
     elif action == "activate":
         if not hwnd:
-            return "activate: нужен hwnd из action=windows"
+            return frame_language.text('computer.result.activate')
         result = body_client.desktop_window_activate(
             hwnd, expected_pid=(expected_pid or None), restore=restore,
             timeout_ms=timeout_ms, execution=execution,
         )
     elif action == "input":
         if not events:
-            return "input: нужен непустой массив events"
+            return frame_language.text('computer.result.events')
         result = body_client.desktop_input_perform(
             events, expected_foreground=(expected_foreground or None),
             expected_pid=(expected_pid or None),
@@ -5331,23 +5325,23 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # to erase all of its nested fields and made wheel literally inexpressible.
         if action == "type_text":
             if not text:
-                return "type_text: нужен непустой text"
+                return frame_language.text('computer.result.text')
             event = {"type": "text", "text": text}
         elif action == "hotkey":
             if not keys:
-                return "hotkey: нужен непустой массив keys"
+                return frame_language.text('computer.result.keys')
             event = {"type": "hotkey", "keys": list(keys)}
         elif action == "key":
             if not key:
-                return "key: нужен key"
+                return frame_language.text('computer.result.key')
             event = {"type": "key", "key": key, "action": key_action}
         elif action == "move":
             if x is None or y is None:
-                return "move: нужны x и y"
+                return frame_language.text('computer.result.move')
             event = {"type": "mouse", "x": x, "y": y, "relative": relative}
         elif action == "click":
             if (x is None) != (y is None):
-                return "click: x и y передаются только вместе"
+                return frame_language.text('computer.result.click_coords')
             event = {"type": "click", "button": button, "count": count}
             if x is not None:
                 event.update({"x": x, "y": y})
@@ -5357,23 +5351,23 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                 return "scroll: direction = up | down | left | right"
             if steps:
                 if abs(steps) > 100:
-                    return "scroll: abs(steps) должен быть не больше 100"
+                    return frame_language.text('computer.result.steps')
                 wheel_delta = int(steps) * 120
             elif delta:
                 if int(delta) % 120:
-                    return "scroll: raw delta должен быть кратен 120; обычно используй steps"
+                    return frame_language.text('computer.result.delta')
                 wheel_delta = int(delta)
             elif direction:
                 wheel_delta = 120
             else:
-                return "scroll: нужны steps, direction или ненулевой raw delta"
+                return frame_language.text('computer.result.scroll_amount')
             if direction in {"down", "left"}:
                 wheel_delta = -abs(wheel_delta)
             elif direction in {"up", "right"}:
                 wheel_delta = abs(wheel_delta)
             horizontal = bool(horizontal or direction in {"left", "right"})
             if (x is None) != (y is None):
-                return "scroll: x и y передаются только вместе"
+                return frame_language.text('computer.result.scroll_coords')
             # Wheel dispatch follows the pointer, not merely the foreground HWND.  If the
             # caller supplied a focus guard but no point, target the guarded window centre.
             if x is None and expected_foreground:
@@ -5391,8 +5385,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                         y = int(rect["top"]) + int(rect["height"]) // 2
                     break
             if x is None:
-                return ("scroll: нужны x/y внутри целевого окна либо expected_foreground, "
-                        "по которому координаты будут выбраны автоматически")
+                return (frame_language.text('computer.result.scroll_target'))
             event = {"type": "wheel", "delta": wheel_delta, "horizontal": horizontal}
             if x is not None:
                 event.update({"x": x, "y": y})
@@ -5420,14 +5413,13 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                                         execution=execution, timeout=600)
             file_artifact = exported.get("artifact") if exported.get("ok") else None
             if not isinstance(file_artifact, dict):
-                return f"observe: файл не получен с компьютера: {exported.get('error') or exported}"
+                return frame_language.text('computer.result.export', detail=exported.get('error') or exported)
             try:
                 file_size = int(file_artifact.get("size") or 0)
             except (TypeError, ValueError):
                 file_size = 0
             if file_size > _OBSERVE_FILE_CAP:
-                return (f"observe: файл {file_size} байт — больше капа {_OBSERVE_FILE_CAP}; "
-                        "это глаза для картинок, видео сначала разбери на кадры")
+                return (frame_language.text('computer.result.observe_cap', size=file_size, cap=_OBSERVE_FILE_CAP))
             return _observe_computer_artifact(file_artifact)
         captured = body_client.desktop_screen_capture(
             target=target, hwnd=(hwnd or None), x=x, y=y, width=width, height=height,
