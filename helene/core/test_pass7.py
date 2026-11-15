@@ -43,13 +43,13 @@ class RememberWritesEdge(unittest.TestCase):
 
     def test_remember_with_relates_to(self):
         out = agent.tool_remember("Вика", "работает юристом", relates_to="Егор", relation="коллега")
-        self.assertIn("Запомнила", out)
+        self.assertIn("Запись", out)
         self.assertIn("Связала", out)
         self.assertTrue(graph.edges())
 
     def test_remember_without_relates_is_unchanged(self):
         out = agent.tool_remember("Вика", "работает юристом")
-        self.assertIn("Запомнила", out)
+        self.assertIn("Запись", out)
         self.assertEqual(graph.edges(), [])
 
 

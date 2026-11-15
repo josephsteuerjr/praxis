@@ -2117,5 +2117,12 @@
   "run.result.card_goal": "未命名工作",
   "run.result.card_reason": "代理决定：{action}",
   "run.result.card": "\n[工作] 工作卡 `{id}` → {status} · `memory/work/BOARD.md`",
-  "run.result.card_error": "\n[工作] ⚠ 未记录工作卡：{error}"
+  "run.result.card_error": "\n[工作] ⚠ 未记录工作卡：{error}",
+  "agent.receipt.remember": "已保存关于 {person} 的记录（{visibility}）。{linked}",
+  "agent.receipt.cancelled": "任务 #{id} 已取消。",
+  "agent.receipt.cancel_missing": "找不到未关闭的任务 #{id}。",
+  "agent.receipt.choice": "由我自主选择",
+  "agent.receipt.reason_missing": "未说明原因",
+  "agent.receipt.panic": "已请求停止。",
+  "agent.receipt.stop": "停止"
 }

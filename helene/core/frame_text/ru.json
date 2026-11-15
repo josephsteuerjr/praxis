@@ -2117,5 +2117,12 @@
   "run.result.card_goal": "работа без названия",
   "run.result.card_reason": "решение агента: {action}",
   "run.result.card": "\n[работа] карточка `{id}` → {status} · `memory/work/BOARD.md`",
-  "run.result.card_error": "\n[работа] ⚠ карточка не записалась: {error}"
+  "run.result.card_error": "\n[работа] ⚠ карточка не записалась: {error}",
+  "agent.receipt.remember": "Запись о {person} сохранена ({visibility}).{linked}",
+  "agent.receipt.cancelled": "Снята задача #{id}.",
+  "agent.receipt.cancel_missing": "Открытая задача #{id} не найдена.",
+  "agent.receipt.choice": "по собственной инициативе",
+  "agent.receipt.reason_missing": "причина не названа",
+  "agent.receipt.panic": "Остановка запрошена.",
+  "agent.receipt.stop": "остановка"
 }

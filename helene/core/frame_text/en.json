@@ -2117,5 +2117,12 @@
   "run.result.card_goal": "untitled work",
   "run.result.card_reason": "agent decision: {action}",
   "run.result.card": "\n[work] card `{id}` → {status} · `memory/work/BOARD.md`",
-  "run.result.card_error": "\n[work] ⚠ card was not recorded: {error}"
+  "run.result.card_error": "\n[work] ⚠ card was not recorded: {error}",
+  "agent.receipt.remember": "Record about {person} saved ({visibility}).{linked}",
+  "agent.receipt.cancelled": "Task #{id} cancelled.",
+  "agent.receipt.cancel_missing": "Open task #{id} not found.",
+  "agent.receipt.choice": "by my own choice",
+  "agent.receipt.reason_missing": "reason not stated",
+  "agent.receipt.panic": "Stop requested.",
+  "agent.receipt.stop": "stop"
 }

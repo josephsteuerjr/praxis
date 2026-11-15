@@ -1802,6 +1802,7 @@ def _active_memory_source_ref() -> str:
     return ""
 
 
+@frame_language.pinned
 def tool_remember(person: str, fact: str, visibility: str = "public",
                   salience: int = 2, open_loop: bool = False,
                   relates_to: str = "", relation: str = "") -> str:
@@ -1839,7 +1840,7 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
             )
         except Exception:
             log.debug("remember: ребро не легло", exc_info=True)
-    return _noted("ok", f"Запомнила про {person} ({vis}).{linked}", str(person or ""))
+    return _noted("ok", frame_language.text('agent.receipt.remember', person=person, visibility=vis, linked=linked), str(person or ""))
 
 
 @frame_language.pinned
@@ -2961,17 +2962,18 @@ def tool_restart_mailbot(reason: str = "") -> str:
 PANIC_SENTINEL = MEM_DIR / ".panic"
 
 
+@frame_language.pinned
 def panic(reason: str = "") -> str:
     """Стоп-кран: записать sentinel (bootguard оставит в простое) и выйти. Рук НЕ даёт."""
     try:
         PANIC_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
         PANIC_SENTINEL.write_text(f"{_today()} {reason}".strip(), encoding="utf-8")
-        tool_journal(f"[panic] {reason or 'стоп'}", salience=3)
+        tool_journal(f"[panic] {reason or frame_language.text('agent.receipt.stop')}", salience=3)
     except Exception:
         log.warning("panic sentinel не записался", exc_info=True)
     log.warning("PANIC: %s", reason)
     _schedule_exit()
-    return "Останавливаюсь."
+    return frame_language.text('agent.receipt.panic')
 
 
 @frame_language.pinned
@@ -3107,9 +3109,10 @@ def tool_freeze_contact(reason: str = "") -> str:
     return mode
 
 
+@frame_language.pinned
 def tool_panic(reason: str = "") -> str:
     """Остановить себя (стоп-кран). Только владельцу."""
-    return panic(reason or "по своей воле")
+    return panic(reason or frame_language.text('agent.receipt.choice'))
 
 
 @frame_language.pinned
@@ -3853,9 +3856,10 @@ def tool_my_agenda() -> str:
                      f"{t['goal']} — {t['recur'] or t['when'] or 'asap'}{_who(t)}" for t in items)
 
 
+@frame_language.pinned
 def tool_unschedule(task_id: str) -> str:
     """Снять намеченное по id."""
-    return f"Снято #{task_id}." if tasks.cancel(task_id) else f"Открытого #{task_id} нет."
+    return frame_language.text('agent.receipt.cancelled', id=task_id) if tasks.cancel(task_id) else frame_language.text('agent.receipt.cancel_missing', id=task_id)
 
 
 @frame_language.pinned
@@ -4468,7 +4472,7 @@ def tool_manage_loop(action: str, person: str = "", match: str = "", until: str 
         if slept >= 2 and not force:
             return (frame_language.text('control.result.loop_repeated', count=slept))
         if slept >= 2 and force:
-            why = (reason or "").strip() or "причина не названа"
+            why = (reason or "").strip() or frame_language.text('agent.receipt.reason_missing')
             tool_journal(f"[нить] парковка ×{slept + 1} поверх храповика ({person}): {why[:160]}")
             log.info("manage_loop park force %s (спала ×%s): %s", slug, slept, why[:80])
         # ⚠ Срок парковки считается ЕЁ сутками: в окне 00:00–04:00 «через неделю»
@@ -6732,7 +6736,6 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
             return frame_language.text('run.result.mark_error', path=file.relative_to(BASE).as_posix())
     if not cleared:
         return frame_language.text('run.result.mark_empty')
-    plural = "файлов" if cleared % 10 in (0, 5, 6, 7, 8, 9) or 11 <= cleared % 100 <= 14 else "файла" if cleared % 10 in (2, 3, 4) else "файл"
     return frame_language.text('run.result.mark_cleared', count=cleared)
 
 

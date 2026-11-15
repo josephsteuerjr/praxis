@@ -2117,5 +2117,12 @@
   "run.result.card_goal": "travail sans titre",
   "run.result.card_reason": "décision de l’agent : {action}",
   "run.result.card": "\n[travail] fiche `{id}` → {status} · `memory/work/BOARD.md`",
-  "run.result.card_error": "\n[travail] ⚠ fiche non enregistrée : {error}"
+  "run.result.card_error": "\n[travail] ⚠ fiche non enregistrée : {error}",
+  "agent.receipt.remember": "Entrée sur {person} enregistrée ({visibility}).{linked}",
+  "agent.receipt.cancelled": "Tâche #{id} annulée.",
+  "agent.receipt.cancel_missing": "Tâche ouverte #{id} introuvable.",
+  "agent.receipt.choice": "de ma propre initiative",
+  "agent.receipt.reason_missing": "raison non indiquée",
+  "agent.receipt.panic": "Arrêt demandé.",
+  "agent.receipt.stop": "arrêt"
 }
