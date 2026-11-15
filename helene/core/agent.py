@@ -5489,11 +5489,15 @@ def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str 
                       role: str = "worker", max_iters: int = 0, tail: int = 10000,
                       model: str = "", result_sha256: str = "",
                       disposition: str = "", phase: str = "",
-                      success_criteria: list[str] | None = None) -> str:
+                      success_criteria: list[str] | None = None,
+                      payload_sha256: str = '', kind: str = 'payload', offset: int = 0,
+                      limit: int = 8000, after_seq: int = 0) -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
                        model=model, max_iters=max_iters, tail=tail,
                        result_sha256=result_sha256, disposition=disposition,
-                       phase=phase, success_criteria=success_criteria)
+                       phase=phase, success_criteria=success_criteria,
+                       payload_sha256=payload_sha256, kind=kind, offset=offset,
+                       limit=limit, after_seq=after_seq)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -6317,6 +6321,7 @@ def tool_read_run_result(result: str, run_id: str = "", byte_offset: int = 0,
         return f"read_run_result: {type(exc).__name__}: {exc}"
 
 
+@frame_language.pinned
 def tool_list_active_runs(limit: int = 20) -> str:
     """Показать её живые (не терминальные) durable-прогоны: id, статус, вид, возраст.
 
@@ -6324,12 +6329,13 @@ def tool_list_active_runs(limit: int = 20) -> str:
     «что сейчас во мне бежит», чтобы «всё тихо» не расходилось с реальностью и «останови всё»
     видело настоящую картину, а не пустой планировщик."""
     try:
-        rows = _runs().list_runs(statuses=tuple(run_manager.NONTERMINAL_STATUSES),
-                                 limit=max(1, min(int(limit or 20), 100)))
+        # Orientation reads manifests, not historical tool ledgers. Never hide
+        # live or unproven rows behind the legacy advisory limit argument.
+        rows = _runs().live_run_summaries()
     except Exception as exc:
         return f"list_active_runs: {type(exc).__name__}: {exc}"
     if not rows:
-        return "Живых durable-прогонов нет — планировщик и run-слой оба чисты."
+        return frame_language.text('runs.active.empty') + _coding_tasks_line()
     now = time.time()
     out = []
     for r in rows:
@@ -6339,7 +6345,8 @@ def tool_list_active_runs(limit: int = 20) -> str:
         try:
             ts = _dt.datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
             mins = max(0, int((now - ts) / 60))
-            age = f" · {mins}м" if mins < 90 else f" · {mins // 60}ч"
+            age = (frame_language.text('runs.active.age_minutes',count=mins) if mins < 90
+                   else frame_language.text('runs.active.age_hours',count=mins // 60))
         except Exception:
             pass
         # ⚠ Отсроченный ран обязан выглядеть иначе, чем тот, который часы поднимают каждые
@@ -6350,16 +6357,18 @@ def tool_list_active_runs(limit: int = 20) -> str:
             # `blocked` remains visible as unfinished work, but it is not scheduled.
             # Showing a backoff countdown here would contradict the scanner and her
             # explicit task_control contract even if historical idle rows remain.
-            if str(r.get("status") or "") != "blocked":
+            if str(r.get("status") or "") != "blocked" and not r.get('observation_error'):
                 wait = resume_wait_seconds(_runs(), run_id)
                 if wait > 0:
-                    pause = (f" · следующая попытка через ~{int(wait // 60)}м"
-                             if wait >= 60 else " · следующая попытка вот-вот")
+                    pause = (frame_language.text('runs.active.retry_minutes',count=int(wait // 60))
+                             if wait >= 60 else frame_language.text('runs.active.retry_soon'))
         except Exception:
             pass
+        observation = (frame_language.text('runs.active.observation',error=r['observation_error'])
+                       if r.get('observation_error') else '')
         out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
-                   f"{r.get('kind') or '—'}{age}{pause}")
-    head = f"Живых прогонов: {len(rows)} (не терминальных)."
+                   f"{r.get('kind') or '—'}{age}{pause}{observation}")
+    head = frame_language.text('runs.active.head',count=len(rows))
     return head + "\n" + "\n".join(out) + _coding_tasks_line()
 
 

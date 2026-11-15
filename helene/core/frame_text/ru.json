@@ -1363,5 +1363,13 @@
   "schema.tool.7090e60fbff2fb5a": "Generation из последнего progress участника; устаревший control отклоняется.",
   "schema.tool.d50eb41e4b351052": "Только prepare_recovery: явное независимое подтверждение, что старая работа выполнялась на ЭТОМ локальном Windows-компьютере. Не выводи это из отсутствия PID или скопированного каталога задачи.",
   "schema.tool.1be81526fcc1c47a": "Конкретная причина восстановления старого владения; обязательна для prepare_recovery.",
-  "schema.tool.purpose.coding_control": "pause/stop/resume либо восстановление только доказанного владения"
+  "schema.tool.purpose.coding_control": "pause/stop/resume либо восстановление только доказанного владения",
+  "runs.active.empty": "Живых durable-прогонов нет.",
+  "runs.active.head": "Живых прогонов: {count} (не терминальных или с неподтверждённым состоянием).",
+  "runs.active.age_minutes": " · {count}м",
+  "runs.active.age_hours": " · {count}ч",
+  "runs.active.retry_minutes": " · следующая попытка через ~{count}м",
+  "runs.active.retry_soon": " · следующая попытка вот-вот",
+  "runs.active.observation": " · наблюдение недоступно: {error}",
+  "runs.active.limit_hint": "Совместимый рекомендательный параметр; все живые и неподтверждённые записи сохраняются независимо от лимита."
 }

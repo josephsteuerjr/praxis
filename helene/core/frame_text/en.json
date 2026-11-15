@@ -1363,5 +1363,13 @@
   "schema.tool.7090e60fbff2fb5a": "Generation observed in the latest participant progress; stale control is refused.",
   "schema.tool.d50eb41e4b351052": "For prepare_recovery only: explicit independent confirmation that the legacy work ran on this exact local Windows computer. Never infer this from absent PIDs or a copied task directory.",
   "schema.tool.1be81526fcc1c47a": "Concrete reason for legacy custody recovery; required for prepare_recovery.",
-  "schema.tool.purpose.coding_control": "pause/stop/resume or recover only proven custody"
+  "schema.tool.purpose.coding_control": "pause/stop/resume or recover only proven custody",
+  "runs.active.empty": "No live durable runs found.",
+  "runs.active.head": "Live runs: {count} (non-terminal or unproven state).",
+  "runs.active.age_minutes": " · {count}m",
+  "runs.active.age_hours": " · {count}h",
+  "runs.active.retry_minutes": " · retry in ~{count}m",
+  "runs.active.retry_soon": " · retry due soon",
+  "runs.active.observation": " · observation unavailable: {error}",
+  "runs.active.limit_hint": "Compatibility advisory hint; all live and unproven rows remain visible regardless of this limit."
 }

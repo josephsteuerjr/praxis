@@ -1363,5 +1363,13 @@
   "schema.tool.7090e60fbff2fb5a": "参与者最新 progress 中的 generation；拒绝过期控制。",
   "schema.tool.d50eb41e4b351052": "仅用于 prepare_recovery：明确独立确认旧任务确实在此本地 Windows 计算机上执行。绝不能从 PID 不存在或复制的任务目录推断。",
   "schema.tool.1be81526fcc1c47a": "恢复旧托管的具体原因；prepare_recovery 必填。",
-  "schema.tool.purpose.coding_control": "pause/stop/resume，或仅凭证明恢复托管"
+  "schema.tool.purpose.coding_control": "pause/stop/resume，或仅凭证明恢复托管",
+  "runs.active.empty": "未发现存活的持久运行。",
+  "runs.active.head": "存活运行：{count}（未结束或状态未经证明）。",
+  "runs.active.age_minutes": " · {count} 分钟",
+  "runs.active.age_hours": " · {count} 小时",
+  "runs.active.retry_minutes": " · 约 {count} 分钟后重试",
+  "runs.active.retry_soon": " · 即将重试",
+  "runs.active.observation": " · 无法观察：{error}",
+  "runs.active.limit_hint": "兼容性的建议参数；无论此限制如何，所有存活或未经证明的条目均保持可见。"
 }

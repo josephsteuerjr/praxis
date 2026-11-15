@@ -106,6 +106,24 @@ def read_progress(directory) -> dict:
     return value
 
 
+def read_record(directory, sha256, kind='payload', offset=0, limit=8000):
+    if not isinstance(sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', sha256):
+        raise ValueError('payload_sha256 must contain the exact 64-character SHA-256; use the hash from poll')
+    if kind == 'payload':
+        return read_payload(directory, sha256, offset, limit)
+    if kind not in {'result', 'request'}:
+        raise ValueError('unsupported worker record kind')
+    raw = (Path(directory) / (kind + '.json')).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != sha256:
+        raise ValueError('worker record changed; refresh exact SHA')
+    text = raw.decode('utf-8'); offset = int(offset); limit = max(1, min(8000, int(limit)))
+    if offset < 0 or offset > len(text):
+        raise ValueError('record offset outside content')
+    end = min(len(text), offset + limit)
+    return {'sha256':sha256, 'size_bytes':len(raw), 'total_chars':len(text),
+            'offset':offset, 'text':text[offset:end], 'next_offset':end if end<len(text) else None}
+
+
 def read_events(directory, after_seq: int = 0, limit: int = 100) -> dict:
     after_seq, limit = max(0, int(after_seq)), max(1, min(500, int(limit)))
     rows, prior, more = [], 0, False

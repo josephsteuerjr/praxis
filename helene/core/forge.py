@@ -650,7 +650,7 @@ def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
 
 def _control_root(task_id: str, action: str) -> tuple[dict | None, Path | None, str]:
     task, root, error = _task_root(task_id)
-    if error and task and str(action or "").strip().lower() == "stop":
+    if error and task and str(action or "").strip().lower() in {'stop','poll','list','payload','events'}:
         return task, Path(str(task.get("root") or ".")), ""
     return task, root, error
 
@@ -5062,7 +5062,9 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
           node_id: str = "", owns: list[str] | None = None,
           spawned_by: str = "", model: str = "", result_sha256: str = "",
           disposition: str = "", _parent_request_path: str = "", phase: str = "",
-          success_criteria: list[str] | None = None, previous_unit_id: str = "") -> str:
+          success_criteria: list[str] | None = None, previous_unit_id: str = "",
+          payload_sha256: str = '', kind: str = 'payload', offset: int = 0,
+          limit: int = 8000, after_seq: int = 0) -> str:
     task, root, err = _control_root(task_id, action)
     if err:
         return err
@@ -5202,6 +5204,19 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         return f"Нет субагента {agent_id}."
     if parent_id and (agent_id == parent_id or not _in_subtree(task_id, parent_id, agent_id)):
         return "Worker cannot inspect or control itself, an ancestor, or a sibling."
+    if action in {'payload','events'}:
+        import forge_runtime
+        if (action == 'payload' and kind == 'result' and payload_sha256 and result_sha256
+                and payload_sha256 != result_sha256):
+            return json.dumps({'ok':False,'error':'Conflicting payload_sha256 and result_sha256; use one exact result hash.'})
+        digest = payload_sha256 or (result_sha256 if kind == 'result' else '')
+        try:
+            value=(forge_runtime.read_record(d,digest,kind,offset,limit) if action=='payload'
+                   else forge_runtime.read_events(d,after_seq,limit))
+        except (ValueError, OSError) as exc:
+            return json.dumps({'ok':False,'error':str(exc),'action':action,
+                               'next_action':'Poll the selected worker, then read with payload_sha256 and the returned page cursor.'},ensure_ascii=False)
+        return json.dumps(value,ensure_ascii=False)
     state = _unit_state(d)
     if action in {"pause", "resume"}:
         if parent_id:
@@ -5280,7 +5295,10 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
 
     if action == "checkpoint":
         try:
-            value = json.loads(plan or "{}")
+            value = json.loads(plan or message or "{}")
+            if plan and message and message.lstrip().startswith('{'):
+                if json.loads(message) != value:
+                    raise ValueError("conflicting checkpoint objects in plan and message")
             if not isinstance(value, dict) or not str(value.get("next_action") or "").strip():
                 raise ValueError("coordinator checkpoint needs an object with next_action")
             with _mutation_lock(task_id):

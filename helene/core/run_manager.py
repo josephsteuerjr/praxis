@@ -889,6 +889,32 @@ class RunManager:
             )
             return self._status_locked(manifest, ledger)
 
+    def live_run_summaries(self) -> list[dict]:
+        """Orient without historical locks or full tool-ledger reconstruction.
+
+        Retain unproven runs, including WAL-only reopen. Busy/unreadable live
+        manifests remain visible as unknown. Control still uses status().
+        """
+        rows = []
+        identifiers = self.live_run_ids()
+        deadline = time.monotonic() + 2.0
+        for run_id in identifiers:
+            try:
+                run_dir = self._find(run_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("live manifest observation budget exhausted")
+                with self._locked(run_dir, timeout=min(.2, remaining)):
+                    manifest = self._manifest_locked(run_dir)
+                row = self._manifest_listing_row(run_id, manifest)
+                if row['status'] in TERMINAL_STATUSES:
+                    continue
+            except (OSError, RunError, ValueError, TypeError, TimeoutError) as exc:
+                row = {'run_id':run_id, 'status':'unknown', 'kind':'',
+                       'created_at':'', 'observation_error':str(exc)}
+            rows.append(row)
+        return sorted(rows, key=lambda row:(row.get('created_at',''),row['run_id']), reverse=True)
+
     def list_runs(self, *, statuses: set[str] | tuple[str, ...] | list[str] | None = None,
                   kind: str = "", limit: int | None = None) -> list[dict]:
         """List compact run statuses newest-first without exposing private paths.
