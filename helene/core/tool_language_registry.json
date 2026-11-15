@@ -2738,5 +2738,501 @@
       }
     ],
     "purpose": "schema.tool.purpose.memory_graph"
+  },
+  "write_skill": {
+    "sha256": "28de5522874297b9939e987e8db44a06e417ac151e89396e8d16eaa707494225",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.211ee0e8c5281bc3",
+        "present": true,
+        "source": "Записать себе новый навык в soul/skills/<name>.md (твоя процедурная память). content — markdown тела навыка. Обновит индекс навыков и переиндексирует. from_note — id заметки, из которой вырос навык (если кристаллизуешь урок): текст навыка он не меняет, но по нему потом открывается цепочка manage_notes(chain)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.8dcd767f1fe9205d",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "content",
+          "description"
+        ],
+        "key": "schema.tool.f480148134a46aeb",
+        "present": true,
+        "source": "markdown тела навыка"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "from_note",
+          "description"
+        ],
+        "key": "schema.tool.4b9fa42f00729afe",
+        "present": true,
+        "source": "id заметки-источника урока, необязательно"
+      }
+    ],
+    "purpose": "schema.tool.purpose.write_skill"
+  },
+  "restart_self": {
+    "sha256": "c66eae2a1489fecef658f252429c9fc1bb42e8d2565b1b3598f6fb4dfad56749",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.254237877cc7907a",
+        "present": true,
+        "source": "Перезапустить себя (например, после правки своего кода). Память на диске сохранится; контейнер поднимет тебя заново на новом коде. Укажи reason — он уйдёт в дневник."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.67cbc4cb23703e89",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.restart_self"
+  },
+  "freeze_chat": {
+    "sha256": "10e030b4dde3b74d500d31874c67d70c0fedc0c3580486a30911b8e60e1d51c0",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.b2d429c8cfef0367",
+        "present": true,
+        "source": "freeze/unfreeze changes the selected chat (default current) as owner or Praxis, with provenance; frozen messages no longer reach you. boundary freezes only the current non-owner chat by your own decision, journals reason and never freezes the owner DM."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.0f044feb6ca7d676",
+        "present": true,
+        "source": "Operation"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "chat_id",
+          "description"
+        ],
+        "key": "schema.tool.feba9bbd984764ca",
+        "present": true,
+        "source": "Chat to freeze/unfreeze; boundary uses only current chat"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.8609d45baec19818",
+        "present": true,
+        "source": "Reason for freeze or your boundary"
+      }
+    ],
+    "purpose": "schema.tool.purpose.freeze_chat"
+  },
+  "panic": {
+    "sha256": "6e450cf20d1322b10dd1512f4474e9d8b58588d5f9016e0f47702f829448760f",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.8450655bac951d89",
+        "present": true,
+        "source": "Стоп-кран: остановить себя (я встану и не буду перезапускаться, пока Егор не снимет)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.1f79204816bc0b90",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.panic"
+  },
+  "find_telegram_id": {
+    "sha256": "68d9542d8b7bc316a257d760fe690f79237228b5e1285a7ea3376ff4a7c6f617",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.d6c7988a5dc58786",
+        "present": true,
+        "source": "Resolve a person/chat name or @username to a Telegram id. Available to Praxis in every audience; a resolved address does not grant trust or authorize disclosure."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name_or_username",
+          "description"
+        ],
+        "key": "schema.tool.217b2c1bc92b1c58",
+        "present": true,
+        "source": "name or @username to resolve"
+      }
+    ],
+    "purpose": "schema.tool.purpose.find_telegram_id"
+  },
+  "my_agenda": {
+    "sha256": "d82973769c3ac60f0df0a358ff6500a847089c062702c19658162d28031dd72d",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.219f6f9e9dd1179d",
+        "present": true,
+        "source": "Что я себе наметила к сроку — мои намерения, не беклог."
+      }
+    ],
+    "purpose": "schema.tool.purpose.my_agenda"
+  },
+  "unschedule": {
+    "sha256": "55050a2b5e7a7c207d07579ea15fcb17512e028a7416e7bf870cb361793bd84d",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.2c3c08dd8dbb3fbb",
+        "present": true,
+        "source": "Снять намеченное по id."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.7c93f14a2a1cf164",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.unschedule"
+  },
+  "send_message": {
+    "sha256": "a2f6aaef36dc4927ec44d483d3f7fe1c6d25609fb1a5e13e25386d242810a1f1",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.3c1d45b5369326d6",
+        "present": true,
+        "source": "Send a Telegram message on your own initiative or an owner request. to: id / @username / name; text: the message."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "to",
+          "description"
+        ],
+        "key": "schema.tool.ef041c4969949c17",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.c9946a075fd077dd",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "spelling_confirm_text",
+          "description"
+        ],
+        "key": "schema.tool.3e293589c47e05d4",
+        "present": true,
+        "source": "Explicitly keep authored text: an exact copy of the text argument, not a flag."
+      }
+    ],
+    "purpose": "schema.tool.purpose.send_message"
+  },
+  "narrate": {
+    "sha256": "b2ea87c46824d5aa865a147eda4a421cbdd689724cddc7f57f29992c460478c0",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.710c613f5c84f436",
+        "present": true,
+        "source": "Рассказать по ходу работы — короткая строка процесса в тред, МЕЖДУ командами, не финальный ответ. Это приглашение, не обязанность: хочешь — рассказывай, как идёт (что сделано, что дальше, где затык). Уходит сразу, мимо оценщиков (только кред-пол); дедуп дословных повторов; зазор — твой рычаг manage_perception(narration_gap_sec), выключатель PRAXIS_NARRATION. task_id — наррировать в тред-заказчик этой coding-задачи; без него — в текущий тред, а из окна/события (текущего треда нет) — в ЛС Егора (квитанция скажет, куда ушло)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.f7a43c39ea4ba3d6",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.490b7448032ae782",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.narrate"
+  },
+  "home_note": {
+    "sha256": "211999fdf0d7e2ab54e826651e0bf4ccbefcc2575745bb1670d15ecd3468af7b",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.f9e7075ee9900f40",
+        "present": true,
+        "source": "Append a line to the shared HOME layer (memory/home.md) — household matters, plans, family threads. Visible to Yegor AND family; never put anyone's private confessions here."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.250a470791d9332c",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.home_note"
+  },
+  "git": {
+    "sha256": "18ee1c6094bdf30bc2b3a9125543c8097d696e01a56561ee5f9bdc1b94d2ac8c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.9d22c6dcd2039d4d",
+        "present": true,
+        "source": "Твой git обеими руками. repo=self — дерево, в котором ты живёшь; repo=public — публичное зеркало на GitHub, то, что видят люди. Смотреть: status, log, diff, fetch. Публиковать: pull, add, commit, push. push сам начинает с fetch и, если удалёнка ушла вперёд, скажет об этом словами вместо отбитой отправки: ссылка origin устаревает молча, и status об этом молчит. Что именно не публикуется — в твоей инструкции по репозиторию."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "repo",
+          "description"
+        ],
+        "key": "schema.tool.2a1663816ba10dda",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.434542f69ddac420",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "message",
+          "description"
+        ],
+        "key": "schema.tool.d57e8a1224929295",
+        "present": true,
+        "source": "сообщение коммита — причина, а не ярлык"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "paths",
+          "description"
+        ],
+        "key": "schema.tool.0c51a9a63ce98610",
+        "present": true,
+        "source": "diff/add: пути, по одному на элемент, точно как есть; пусто = всё"
+      }
+    ],
+    "purpose": "schema.tool.purpose.git"
+  },
+  "code_outline": {
+    "sha256": "8f811abbf14a1307d72524e34843628088ff97e1f8b733d29cec72bbd6a9a28b",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.29e266651adac2b8",
+        "present": true,
+        "source": "Read the class/function outline of a Python file with line numbers, or a recursive module/class/function map for a directory. scope=self or a workshop project name maps that root; choose scope OR path."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.c37cb8dad9da8f32",
+        "present": true,
+        "source": "Home path to a Python file or directory"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "scope",
+          "description"
+        ],
+        "key": "schema.tool.bd22dec85a86e5fb",
+        "present": true,
+        "source": "self or workshop project name; mutually exclusive with path"
+      }
+    ],
+    "purpose": "schema.tool.purpose.code_outline"
+  },
+  "second_look": {
+    "sha256": "ce4cfbdbdaf6b981d38651372c361365a72938550bc9a0f3e4bda4c0f174db36",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.1eb95f5cedaf5b16",
+        "present": true,
+        "source": "Fresh-eyes scout: one bounded READ-ONLY pass over your home (code, memory, journal, logs) WITHOUT your persona or history — it sees what you can't from inside (loops, drift, blind spots) and reports back to you. It changes nothing. brief — what to examine and why."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "brief",
+          "description"
+        ],
+        "key": "schema.tool.b987ec1184bd0c66",
+        "present": true,
+        "source": "what to examine (topic, files, question)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.second_look"
+  },
+  "describe": {
+    "sha256": "6292ebbd4f3552f8c071b35b434fee8f5418f1ddd993a7a7de8fe9a9d0f50962",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.52d785fc79bf213d",
+        "present": true,
+        "source": "Показать схему руки из моего указателя (имя, назначение, аргументы), чтобы позвать её через `call`. Несколько имён — через запятую. Результат падает в накопитель хода; второй раз ту же схему просить не нужно."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.addbb3abf2801f78",
+        "present": true,
+        "source": "имя руки из указателя; несколько — через запятую"
+      }
+    ],
+    "purpose": "schema.tool.purpose.describe"
+  },
+  "call": {
+    "sha256": "f10ae0557f115f1cbf4c9ee888a9e49c99781472055e6b796cf049890f446605",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.46eb5eed63f95d86",
+        "present": true,
+        "source": "Позвать руку из моего указателя по имени — СРАЗУ, по сигнатуре из указателя, без describe: например name=\"fs_read\", args_json='{\"path\": \"soul/SOUL.md\"}' или name=\"coding_agent\", args_json='{\"task_id\": \"…\", \"action\": \"spawn\", …}'. args_json — JSON-объект по её аргументам (пустой = без аргументов). Рука исполняется как родная: те же права, расписки, пределы и тот же результат. `describe` — только если сигнатуры мало (перечисления, вложенные объекты), один раз на ход."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.1af46da018610308",
+        "present": true,
+        "source": "имя руки из указателя"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "args_json",
+          "description"
+        ],
+        "key": "schema.tool.29fe8de75374fe76",
+        "present": true,
+        "source": "аргументы руки JSON-объектом, например {\"path\": \"soul/SOUL.md\"}"
+      }
+    ],
+    "purpose": "schema.tool.purpose.call"
   }
 }

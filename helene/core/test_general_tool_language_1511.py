@@ -15,7 +15,9 @@ REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','
             'manage_perception','reply','end_turn','preview_reply','switch_brain','stay_silent',
             'focus','rest','my_capabilities','read_run_result','list_active_runs','reconcile_run',
             'group_context','speak','search_chats','search_private_messages','read_other_chat','reread_this_chat',
-            'python','run_command','code_query','proposal','project','memory_graph')
+            'python','run_command','code_query','proposal','project','memory_graph',
+            'write_skill','restart_self','freeze_chat','panic','find_telegram_id','my_agenda',
+            'unschedule','send_message','narrate','home_note','git','code_outline','second_look','describe','call')
 
 
 def stock():
@@ -60,7 +62,11 @@ class GeneralToolLanguages(unittest.TestCase):
                         self.assertEqual(agent._hand_purpose(tool),frame_language.text(rule['purpose']))
                         self.assertEqual(agent._hand_purpose(raw[tool['name']]),frame_language.text(rule['purpose']))
                     by_name={tool['name']:tool for tool in translated}
-                    for name,arguments in (('reply',{'text':RAW}),('remember',{'person':RAW,'fact':RAW})):
+                    for name,arguments in (('reply',{'text':RAW}),('remember',{'person':RAW,'fact':RAW}),
+                        ('run_command',{'argv':['program',RAW,'; $() * ~ \\\\ literal\\nline']}),
+                        ('git',{'repo':'self','action':'diff','paths':[RAW,'path with spaces.py']}),
+                        ('call',{'name':'fs_read','args_json':'{\"path\":\"literal {key} $&\"}'}),
+                        ('write_skill',{'name':'authored','content':RAW,'from_note':''})):
                         original=copy.deepcopy(arguments)
                         windows_mcp_tools.validate(arguments,by_name[name]['input_schema'])
                         self.assertEqual(arguments,original)
