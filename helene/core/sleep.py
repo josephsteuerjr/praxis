@@ -10,6 +10,8 @@ all.  REM output is written only as labelled episodic candidate material.
 
 from __future__ import annotations
 
+import frame_language
+
 import datetime as _dt
 import praxis_time
 import difflib
@@ -58,6 +60,14 @@ DISARMED: dict[str, str] = {
     "пробуждение нитей досье": "состояние людей меняет явный инструмент, не часы",
     "цели-события": "PASS 24: желания продвигает сам агент; часы не ставят ему целей",
 }
+@frame_language.pinned
+def _disarmed_labels() -> tuple[str, ...]:
+    keys = dict(zip(("подрезка рёбер графа", "жвачка", "пробуждение нитей досье", "цели-события"),
+                    ("graph_pruning", "rumination", "thread_wake", "event_goals")))
+    return tuple(frame_language.text("sleep.disarmed."+keys[name]) if name in keys else name
+                 for name in DISARMED)
+
+
 PAIR_MIN_SCORE = 0.75    # порог «кандидат в дубли»
 MERGE_MIN_SCORE = 0.95   # threshold for the explicit repeat-merge compatibility helper
 
@@ -348,16 +358,7 @@ def prune_duplicate_edges() -> int:
 #  РЕМ: свободные ассоциации → гипотезы в graph.md
 # --------------------------------------------------------------------------- #
 
-REM_SYS = (
-    "Night association pass over your memory graph — you are half-asleep, free-associating. "
-    "You see a handful of graph nodes and their 1-hop neighbors. Raw journal text is deliberately "
-    "absent because it is untrusted episodic material, not association authority. "
-    "Offer AT MOST 3 new possible connections or patterns — hypotheses, not claims; returning "
-    "none is a fine answer. STRICT JSON, no explanations: "
-    '{"links":[{"a":"<node>","b":"<node>","why":"2-6 words"}],'
-    '"self":"one line IF a pattern is about YOU (omit otherwise)"} '
-    "Values in RUSSIAN."
-)
+
 
 
 def _rem_nodes(adj: dict, journal_tail: str, rng: random.Random | None = None) -> list[str]:
@@ -393,6 +394,7 @@ def add_hypothesis(a_ref: str, b_ref: str, why: str = "") -> bool:
     return True
 
 
+@frame_language.pinned
 def rem_pass(rng: random.Random | None = None, *, apply: bool = True) -> tuple[int, bool]:
     """Graph-only REM; the raw diary never enters this model call.
 
@@ -416,9 +418,9 @@ def rem_pass(rng: random.Random | None = None, *, apply: bool = True) -> tuple[i
         lines.append(f"- {graph.display(n)} [{n}]: {nb or '—'}")
     # бюджет фазы: токены ~ символы/3; вход режем под бюджет, выход — короткий JSON
     budget_chars = max(1000, REM_MAX_TOKENS * 3)
-    user = (f"Nodes and their neighbors:\n" + "\n".join(lines))[:budget_chars]
+    user = (frame_language.text('owned.sleep.0d5ae19d754f') + "\n".join(lines))[:budget_chars]
     try:
-        resp = llm.chat("voice", system=REM_SYS, max_tokens=min(500, REM_MAX_TOKENS),
+        resp = llm.chat("voice", system=frame_language.text("sleep.rem_system"), max_tokens=min(500, REM_MAX_TOKENS),
                         messages=[{"role": "user", "content": user}], reasoning_effort="low")
     except Exception:
         log.warning("сон/РЕМ: вызов упал", exc_info=True)
@@ -439,8 +441,7 @@ def rem_pass(rng: random.Random | None = None, *, apply: bool = True) -> tuple[i
                 accepted = bool(a and b and a != b and graph._find_edge(a, b, label) is None)
                 if accepted:
                     _journal(
-                        f"гипотеза о связи (episodic candidate, не claim): "
-                        f"{graph.display(a)} ↔ {graph.display(b)} — {why.strip() or 'без подписи'}",
+                        frame_language.text('owned.sleep.c4a791c8ca62', v0=graph.display(a), v1=graph.display(b), v2=why.strip() or frame_language.text('owned.sleep.0e3598ed30ea')),
                         salience=2,
                     )
             if accepted:
@@ -450,7 +451,7 @@ def rem_pass(rng: random.Random | None = None, *, apply: bool = True) -> tuple[i
     self_line = str(data.get("self") or "").strip()
     if self_line:
         # кандидат в дневник, НЕ в self.md — self она правит сама
-        _journal(f"гипотеза о себе (сырьё, не факт): {self_line}", salience=2)
+        _journal(frame_language.text('owned.sleep.caa71dbddef4', v0=self_line), salience=2)
     return added, bool(self_line)
 
 
@@ -465,11 +466,7 @@ RUMINATION_JACCARD = 0.5
 
 _JOURNAL_LINE = re.compile(r"^- (\d{2}:\d{2}) \(s([123])\) (.+)$")
 
-RUMINATION_SYS = (
-    "Ты во сне. Ниже несколько твоих дневниковых записей об одном и том же — "
-    "жвачка, пережёванная в разные дни. Сведи их в ОДНУ строку-вывод по-русски: "
-    "суть + итог/решение, если оно видно. Без вступлений и кавычек — просто строка."
-)
+
 
 
 def _journal_entries(days: int) -> list[dict]:
@@ -601,6 +598,7 @@ def sweep_inbox(days: int = INBOX_SWEEP_DAYS, now: float | None = None) -> int:
     return n
 
 
+@frame_language.pinned
 def run(depth: str | None = None) -> str:
     """Night cycle: episodic upkeep → formation claims → identity from claims → report.
 
@@ -638,7 +636,7 @@ def run(depth: str | None = None) -> str:
             prev = day_steps.get(name)
             if prev in ("ok", "failed"):
                 night_memory.receipt(run_id, day, name, "skipped",
-                                     reason=f"шаг уже {prev} в прогоне этого дня")
+                                     reason=frame_language.text('owned.sleep.02d686ef366b', v0=prev))
                 return None
             day_steps[name] = "in_progress"
             steps[day] = day_steps
@@ -681,35 +679,35 @@ def run(depth: str | None = None) -> str:
             _step("runs_nightly", _runs)
             if runs_out.get("summary", {}).get("tasks"):
                 night_lines.append(
-                    "прогоны: " + json.dumps(runs_out["summary"], ensure_ascii=False))
+                    frame_language.text('owned.sleep.c18ad50f6136') + json.dumps(runs_out["summary"], ensure_ascii=False))
         except Exception:
             log.exception("сон: шаг прогоны→память упал")
-            night_lines.append("прогоны→память: сбой шага (сырьё сохранено)")
+            night_lines.append(frame_language.text('owned.sleep.fce2d3418690'))
         deferred = [f"{r['step']}: {r['reason']}" for r in night_memory.receipts(day)
                     if r.get("run_id") == run_id and r.get("status") in ("skipped", "failed")]
         if fold_out is not None or verify_out is not None:
             _journal(night_memory.night_report(
                 day, fold_out or {}, gnome_out, verify_out or {}, deferred), salience=2)
         else:
-            night_lines.append("ночь этого дня уже прошла — шаги пропущены")
+            night_lines.append(frame_language.text('owned.sleep.6770178cb359'))
     except Exception:
         log.exception("сон: блок ночного цикла честности упал целиком")
-        night_lines.append("ночной цикл честности: сбой блока (сырьё сохранено)")
+        night_lines.append(frame_language.text('owned.sleep.f6acb0b3f3d7'))
     # --- конец шагов C1 ---------------------------------------------------- #
     svs = consolidate.run()
     try:  # PASS 19: после forward harvest — итеративное копание по fresh compact frontier
-        formed = formation.run("light" if depth == "light" else "full", reason="сон")
-        formation_line = formed.get("summary") or ("нет нового" if formed.get("noop") else "сбой")
+        formed = formation.run("light" if depth == "light" else "full", reason=frame_language.text('owned.sleep.14b181780d27'))
+        formation_line = formed.get("summary") or (frame_language.text('owned.sleep.c841701f97d6') if formed.get("noop") else frame_language.text('owned.sleep.b15413deaf8c'))
     except Exception:
         log.exception("сон: активное формирование упало")
-        formation_line = "сбой (сырьё сохранено, повторю)"
+        formation_line = frame_language.text('owned.sleep.278f63b17f28')
     try:  # PASS 20: ночная ревизия характера — по прожитому (self-claims формирования,
         # деформации, «всё ещё так?»); light пропускает, «кто я сейчас» держит СВС
         import identity
         identity_line = identity.night_pass(depth)
     except Exception:
         log.exception("сон: ночная ревизия характера упала")
-        identity_line = "сбой (основания сохранены)"
+        identity_line = frame_language.text('owned.sleep.882978cb4859')
     try:
         # Candidate discovery may write an episodic proposal, but automatic
         # dossier merge would bypass formation claim/attack/provenance.
@@ -755,7 +753,7 @@ def run(depth: str | None = None) -> str:
     try:  # PASS 14: прожитый день — сводка КОДОМ из лога ходов, не припоминание модели
         day = turns.day_line()
         if day:
-            _journal(f"прожитый день, кодом: {day}", salience=2)
+            _journal(frame_language.text('owned.sleep.db528bc0ed16', v0=day), salience=2)
     except Exception:
         log.exception("сон: сводка прожитых ходов упала")
     try:  # PASS 18.1: манифест рельсов не отстаёт от живых констант (пишет только при изменении)
@@ -765,11 +763,11 @@ def run(depth: str | None = None) -> str:
     try:  # deterministic nightly navigation/inventory; no model and no second memory authority
         import computer_inventory
         inventory = computer_inventory.refresh()
-        inventory_line = ("обновлена" if inventory.get("ok") else
-                          f"не обновлена ({inventory.get('code') or 'error'})")
+        inventory_line = (frame_language.text('owned.sleep.ac2ab8f7b365') if inventory.get("ok") else
+                          frame_language.text('owned.sleep.4a1a228bab0c', v0=inventory.get('code') or 'error'))
     except Exception:
         log.exception("сон: инвентаризация компьютера упала")
-        inventory_line = "сбой"
+        inventory_line = frame_language.text('owned.sleep.b15413deaf8c')
     try:
         import memory_catalog
         memory_catalog.rebuild()
@@ -780,35 +778,30 @@ def run(depth: str | None = None) -> str:
         runs_line = runs_prune.report_line(runs_prune.prune(agent.BASE, budget_seconds=600))
     except Exception:
         log.exception("сон: ретенция прогонов упала")
-        runs_line = "прогоны: ретенция упала (см. журнал)"
+        runs_line = frame_language.text('owned.sleep.823da26accd6')
     # Снятая фаза не может сработать. Если сработала — это событие, а не строка
     # в ряду цифр: пусть кричит, вместо того чтобы тихо слиться с нулями.
     surprises = [f"{name}: {n}" for name, n in
-                 (("подрезка рёбер", pruned), ("жвачка", rum_removed),
-                  ("пробуждение нитей", woke), ("цели-события", len(goal_lines)))
+                 ((frame_language.text('owned.sleep.228c4342cf7a'), pruned), (frame_language.text('owned.sleep.9678b687d015'), rum_removed),
+                  (frame_language.text('owned.sleep.cfc3ade35c79'), woke), (frame_language.text('owned.sleep.a8b0c1dc4097'), len(goal_lines)))
                  if n]
-    report = (f"сон: слито {merged}, предложено слияний {proposed}, гипотез {hyps}, "
-              f"inbox −{swept} файлов; "
-              f"снято намеренно: {', '.join(DISARMED)}; "
-              f"формирование: {formation_line}; личность: {identity_line}; "
-              f"карта компьютера: {inventory_line}; {runs_line}; "
-              "durable mutations — только через formation claims")
+    report = (frame_language.text('owned.sleep.98f21e37a652', v0=merged, v1=proposed, v2=hyps, v3=swept, v4=', '.join(_disarmed_labels()), v5=formation_line, v6=identity_line, v7=inventory_line, v8=runs_line))
     if night_lines:
         report += "; " + "; ".join(night_lines)
     if surprises:
-        report += "; ⚠ СНЯТАЯ ФАЗА СРАБОТАЛА — " + "; ".join(surprises)
+        report += frame_language.text('owned.sleep.578a21cd9d5f') + "; ".join(surprises)
     if depth == "light":  # 18.4: причина остановки — мой план, не тихий пропуск
-        report += "; лёгкий сон — РЕМ и жвачка пропущены (мой план аппетита)"
+        report += frame_language.text('owned.sleep.32371e0b2815')
     try:  # 18.4: фактический расход сна — честная цена ночи в отчёте
         if spent0 is not None:
-            report += f"; расход {appetite.usage_delta(spent0)}"
+            report += frame_language.text('owned.sleep.1940f84315da', v0=appetite.usage_delta(spent0))
     except Exception:
         pass
     _journal(report, salience=2)
     try:  # 18.3: сверка моего обещания Егору — каждый сон, пока обещание живо
         pline = appetite.promise_line()
         if pline:
-            _journal(f"сверка обещания об аппетитах: {pline}", salience=2)
+            _journal(frame_language.text('owned.sleep.22182a907c6f', v0=pline), salience=2)
     except Exception:
         pass
     return f"{svs} {report}"

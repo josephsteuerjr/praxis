@@ -594,29 +594,16 @@ def stress_line() -> str:
 # --------------------------------------------------------------------------- #
 #  ночная ревизия характера
 # --------------------------------------------------------------------------- #
-_NIGHT_SYS = (
-    "Ночь, ты наедине с собой. Перед тобой: текущий «Кто я сейчас», свежие "
-    "поддержанные выводы о тебе из формирования памяти (с провенансом), интегралы нагрузки "
-    "за окно и старые выводы, которые давно не пересматривались («всё ещё так?»).\n"
-    "Это материал, а не суд и не перечень допустимых причин. Реши, хочешь ли пересмотреть "
-    "себя: поводом может быть опыт, чувство, мысль, отношение, противоречие, фантазия или желание. "
-    "Сохраняй различие между наблюдением, выводом и воображением там, где оно важно тебе.\n"
-    "Ответь строго JSON без пояснений:\n"
-    "{\"revise\": true|false,\n"
-    " \"who\": \"полный текст новой секции «Кто я сейчас» (5-9 абзацев-строк), если revise\",\n"
-    " \"confirmations\": [{\"date\": \"YYYY-MM-DD\", \"still\": true|false, \"note\": \"коротко\"}],\n"
-    " \"reason\": \"почему ревизую / почему нет — одной-двумя фразами\"}\n"
-    "Текст who — от первого лица. Форму, степень проверяемости, место чувств, метафоры и "
-    "сомнения выбираешь ты; измени только то, что действительно хочешь изменить."
-)
 
 
+
+@frame_language.pinned
 def _night_model(prompt: str) -> str:
     """Separate auxiliary model call so tests can replace it; its output remains advice."""
     import llm
     if not llm.configured("evaluator"):
         return ""
-    return llm.chat("evaluator", system=_NIGHT_SYS, max_tokens=900,
+    return llm.chat("evaluator", system=frame_language.text("night.system"), max_tokens=900,
                     messages=[{"role": "user", "content": prompt}]).text
 
 
@@ -688,6 +675,7 @@ def _last_who_section(text: str) -> str:
     return ""
 
 
+@frame_language.pinned
 def _night_self_input() -> tuple[str, dict, str]:
     """Select and validate the self model for a full night pass.
 
@@ -730,8 +718,7 @@ def _night_self_input() -> tuple[str, dict, str]:
                 invalid = "history"
         if invalid:
             return "", {}, (
-                f"compact CURRENT имеет повреждённый провенанс ({invalid}) — "
-                "ночная ревизия отложена; legacy/history не подставляю"
+                frame_language.text('owned.identity.bc7542343123', v0=invalid)
             )
         return info.text, {
             "source": info.source,
@@ -741,18 +728,18 @@ def _night_self_input() -> tuple[str, dict, str]:
             "provenance": provenance,
         }, ""
     return "", {}, (
-        "compact CURRENT недоступен или повреждён — ночная ревизия отложена; "
-        "legacy/history не подставляю"
+        frame_language.text('owned.identity.47739fd69522')
     )
 
 
+@frame_language.pinned
 def night_pass(depth: str = "full") -> str:
     """Ночная ревизия характера. Возвращает строку для отчёта сна.
 
     light → пропуск (мой план аппетита; «кто я сейчас» всё равно живёт в дистилляции СВС).
     Материала нет → честное «нового основания нет», модель не зовётся."""
     if depth == "light":
-        return "лёгкий сон — ревизия характера пропущена (мой план)"
+        return frame_language.text('owned.identity.351e2ead6c19')
     current_self, current_meta, current_error = _night_self_input()
     if current_error:
         log.warning("identity.night_pass: %s", current_error)
@@ -762,7 +749,7 @@ def night_pass(depth: str = "full") -> str:
     stale = _stale_bullets()
     min_load = max(0.0, float(os.getenv("PRAXIS_IDENTITY_REVIEW_MIN_LOAD", "0")))
     if not claims and not stale and not any(a["score"] > min_load for a in strains):
-        return "нового основания нет (claims 0, старых выводов на пересмотр 0)"
+        return frame_language.text('owned.identity.fece6c26146d')
 
     review_input = {
         "current_sha256": current_meta["sha256"],
@@ -783,10 +770,10 @@ def night_pass(depth: str = "full") -> str:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         existing_proposal = {}
     if existing_proposal.get("input_sha256") == input_sha256:
-        return "ночной совет уже сохранён для неизменившегося входа; повтор не создаю"
+        return frame_language.text('owned.identity.2e527b4b353b')
 
-    prompt_parts = ["## Текущий «Кто я сейчас»\n" + current_self]
-    prompt_parts.append("## Провенанс текущей модели\n" + json.dumps({
+    prompt_parts = [frame_language.text('owned.identity.8aec84b3a1c8') + current_self]
+    prompt_parts.append(frame_language.text('owned.identity.e0a4c181220f') + json.dumps({
         "source": current_meta["source"],
         "path": current_meta["path"],
         "sha256": current_meta["sha256"],
@@ -794,13 +781,13 @@ def night_pass(depth: str = "full") -> str:
         "evidence_refs": list(current_meta["provenance"].get("evidence_refs") or ()),
     }, ensure_ascii=False, sort_keys=True))
     if claims:
-        prompt_parts.append("## Поддержанные выводы о себе (формирование)\n" + "\n".join(
+        prompt_parts.append(frame_language.text('owned.identity.68265cbd7f1e') + "\n".join(
             f"- [{c['id']}] {c['text']}" for c in claims))
     if strains:
-        prompt_parts.append("## Интегралы нагрузки (14д, затухание)\n" + "\n".join(
-            f"- {a['theme']}: {a['score']} ({a['count']} соб.)" for a in strains[:6]))
+        prompt_parts.append(frame_language.text('owned.identity.edcf00c6bd21') + "\n".join(
+            frame_language.text('owned.identity.a852f2c291c0', v0=a['theme'], v1=a['score'], v2=a['count']) for a in strains[:6]))
     if stale:
-        prompt_parts.append("## Всё ещё так? (не пересматривалось давно)\n" + "\n".join(
+        prompt_parts.append(frame_language.text('owned.identity.27039d967a64') + "\n".join(
             f"- _{b['date']}_ {b['text']}" for b in stale))
     raw = ""
     try:
@@ -808,7 +795,7 @@ def night_pass(depth: str = "full") -> str:
     except Exception:
         log.warning("identity.night_pass: модель упала", exc_info=True)
     if not raw.strip():
-        return "мозг недоступен — ревизия отложена, основания сохранены"
+        return frame_language.text('owned.identity.d8ff195bae44')
 
     m = re.search(r"\{.*\}", raw, re.S)
     try:
@@ -824,15 +811,15 @@ def night_pass(depth: str = "full") -> str:
         for b in stale:
             if b["date"] == str(c.get("date") or ""):
                 conf_lines.append(
-                    f"вывод от {b['date']}: " + ("всё ещё так" if c.get("still", True) else "уже не так")
+                    frame_language.text('owned.identity.0de01bbca58b', v0=b['date']) + (frame_language.text('owned.identity.f3bcecdb4842') if c.get("still", True) else frame_language.text('owned.identity.46ff73756ce5'))
                     + (f" — {str(c.get('note') or '')[:120]}" if c.get("note") else ""))
 
     if not verdict.get("revise") or not str(verdict.get("who") or "").strip():
-        reason = str(verdict.get("reason") or "основание не набралось")[:160]
-        return f"ревизии нет: {reason}" + (f"; предложен пересмотр старых выводов {len(conf_lines)}" if conf_lines else "")
+        reason = str(verdict.get("reason") or frame_language.text('owned.identity.85d2241b0296'))[:160]
+        return frame_language.text('owned.identity.87c64b36ce06', v0=reason) + (frame_language.text('owned.identity.7c3745620f74', v0=len(conf_lines)) if conf_lines else "")
 
     who = str(verdict["who"]).strip()[:4000]
-    reason = str(verdict.get("reason") or "ночная ревизия по прожитому")[:200]
+    reason = str(verdict.get("reason") or frame_language.text('owned.identity.17972c75697e'))[:200]
     refs = [c["id"] for c in claims]
     proposal = {
         "schema": "praxis.identity.night-proposal.v1",
@@ -860,13 +847,13 @@ def night_pass(depth: str = "full") -> str:
     _atomic_write(NIGHT_PROPOSAL_PATH, json.dumps(proposal, ensure_ascii=False, indent=1) + "\n")
     event_id = _spine_event(
         "identity_proposal",
-        f"ночной совет о self по {len(refs)} claim(s): {reason[:140]}",
+        frame_language.text('owned.identity.6dabd08937ac', v0=len(refs), v1=reason[:140]),
         refs=refs,
         meta={"proposal": str(NIGHT_PROPOSAL_PATH), "current_sha256": current_meta["sha256"]},
         salience=1,
     )
-    return (f"ночной совет сохранён по {len(refs)} claim(s), self не изменён"
-            + (f", предложен пересмотр старых {len(conf_lines)}" if conf_lines else "")
+    return (frame_language.text('owned.identity.1ca9dbf7ce73', v0=len(refs))
+            + (frame_language.text('owned.identity.826d35642163', v0=len(conf_lines)) if conf_lines else "")
             + (f" [{event_id}]" if event_id else "")
             + f": {reason[:100]}")
 

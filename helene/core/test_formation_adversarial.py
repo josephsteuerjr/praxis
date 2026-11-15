@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import formation
+import frame_language
 import graph
 import memory_provenance
 import memory_life as life
@@ -25,10 +26,10 @@ class TestFormationAdversarial(Pass19Base):
         def fake(system, user, max_tokens=0):
             claim = current["claim"]
             evidence_id = current["evidence_id"]
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": claim["subject"], "kind": claim["kind"]}],
                         "claims": [claim], "open_threads": [], "contradictions": []}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [evidence_id], "questions": [],
                         "changed_conclusion": "", "stop_now": False, "stop_reason": ""}
             key = formation._clean_claim(claim, {evidence_id})["key"]
@@ -50,10 +51,10 @@ class TestFormationAdversarial(Pass19Base):
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Егор", "kind": "person"}],
                         "claims": [claim]}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [substitute_id], "questions": [],
                         "changed_conclusion": "", "stop_now": False, "stop_reason": ""}
             return {"verdicts": [{"key": key, "status": "supported",
@@ -93,9 +94,9 @@ class TestFormationAdversarial(Pass19Base):
 
         def fake(system, user, max_tokens=0):
             calls.append((system, user))
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Егор", "kind": "person"}], "claims": []}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [], "questions": [], "changed_conclusion": "",
                         "stop_now": False, "stop_reason": ""}
             return {"verdicts": [], "counterexamples": [], "nothing_added": True}
@@ -109,8 +110,8 @@ class TestFormationAdversarial(Pass19Base):
         for _system, user in calls:
             for marker in markers:
                 self.assertNotIn(marker, user)
-        self.assertIn("# PRIMARY EVENT EVIDENCE", calls[0][1])
-        self.assertIn("# PRIMARY EVENT EVIDENCE", calls[2][1])
+        self.assertIn(frame_language.text("owned.formation.5eba986f948c"), calls[0][1])
+        self.assertIn(frame_language.text("owned.formation.5eba986f948c"), calls[2][1])
 
     def test_supported_contradiction_links_both_and_names_no_winner(self):
         """ПРАВКА 13.08 по ЕЁ решению: автомат больше не понижает старое утверждение.

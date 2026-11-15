@@ -13,6 +13,7 @@ from pathlib import Path
 
 import agent
 import formation
+import frame_language
 import frame_layout
 import memory_catalog
 
@@ -21,7 +22,8 @@ class ClaimsAreWrittenInHerVoice(unittest.TestCase):
     """1. Расписки о ней пишутся её голосом, а не голосом наблюдателя за ней."""
 
     def _phases(self, mod):
-        return {"harvest": mod._HARVEST_SYS, "dig": mod._DIG_SYS, "attack": mod._ATTACK_SYS}
+        with frame_language.use("en"):
+            return {phase: mod._system(phase) for phase in ("harvest", "dig", "attack")}
 
     def test_all_three_phases_say_they_write_as_her(self):
         for name, text in self._phases(formation).items():
@@ -41,7 +43,7 @@ class ClaimsAreWrittenInHerVoice(unittest.TestCase):
         os.environ["PRAXIS_CLAIMS_FIRST_PERSON"] = "off"
         try:
             mod = importlib.reload(formation)
-            self.assertEqual(mod._FIRST_PERSON_RULE, "",
+            self.assertEqual(mod._first_person_rule(), "",
                              "рычаг off обязан снимать правило целиком")
             for name, text in self._phases(mod).items():
                 with self.subTest(phase=name):

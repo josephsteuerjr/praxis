@@ -553,10 +553,10 @@ class TestFormation(Pass19Base):
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Егор", "kind": "person", "salience": 3}],
                         "claims": [claim], "open_threads": [], "contradictions": []}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [evidence_id], "claims": [claim], "relations": [],
                         "questions": [], "changed_conclusion": "портрет стал точнее",
                         "stop_now": False, "stop_reason": ""}
@@ -591,9 +591,9 @@ class TestFormation(Pass19Base):
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Маша", "kind": "person"}], "claims": [bad]}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [], "claims": [bad], "relations": [], "stop_now": True,
                         "stop_reason": "нечего подтверждать"}
             key = formation._clean_claim(bad, {evidence_id})["key"]
@@ -621,9 +621,9 @@ class TestFormation(Pass19Base):
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Егор", "kind": "person"}], "claims": []}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [evidence_id], "claims": [candidate],
                         "relations": [relation],
                         "stop_now": False, "stop_reason": ""}
@@ -649,10 +649,10 @@ class TestFormation(Pass19Base):
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
-            if "harvest phase" in system:
+            if system == formation._system("harvest"):
                 return {"entities": [{"name": "Егор", "kind": "person"}],
                         "claims": [candidate]}
-            if "DIG phase" in system:
+            if system == formation._system("dig"):
                 return {"evidence_found": [evidence_id], "claims": [candidate],
                         "relations": [], "stop_now": False}
             return {"verdicts": [{"key": key, "status": "supported", "reason": "подтверждено",
