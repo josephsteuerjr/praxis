@@ -61,6 +61,10 @@ import desires
 import frame_epoch
 import frame_language
 import tool_language
+
+# Owned templates use generic owner roles and literal data substitutions. Legacy
+# personalization must not rewrite a completed frame or an authored tool schema.
+FRAME_TEXT_BOUNDARIES_API = 1
 import frame_continuation
 import frame_dossiers
 import addressed_replies

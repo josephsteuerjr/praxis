@@ -257,6 +257,11 @@ def install(agent_mod, cfg: dict | None, name: str | None = None) -> dict:
     words = OwnerWords(name)
     report = {"owner": words.name, "active": words.active, "schemas": 0, "dicts": 0,
               "templates": 0, "marks": False, "functions": 0}
+    if getattr(agent_mod,"FRAME_TEXT_BOUNDARIES_API",0)==1:
+        # The new core selects owned templates explicitly. A post-render name
+        # replacement would modify literal names, paths, evidence and schemas.
+        report.update(active=False,locale_managed=True)
+        return report
     if not words.active:
         log.info("тексты дерева: владелец — %s, дерево зовёт его так же; не правлю",
                  words.name or "не назван")
