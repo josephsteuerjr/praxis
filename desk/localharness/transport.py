@@ -303,7 +303,7 @@ class Desk:
         except Exception:
             log.exception("событие жизни не записалось (ход продолжается)")
 
-    def retire_birth_note(self, sender: str, prefix: str) -> int:
+    def retire_birth_note(self, sender: str, prefix: str | tuple[str, ...]) -> int:
         """Записка первого запуска — в служебную плашку, когда первый ход состоялся (1.2.3).
 
         Записку кладут обычной строкой от `sender`: первый ход читает её из ленты

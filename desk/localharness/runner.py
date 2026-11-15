@@ -127,6 +127,30 @@ _mode: dict = {}       # картина режима (modes.resolve) — еде�
 _deliver_unspoken = True   # agent.deliver_unspoken в helene.json; см. _turn_in_window
 
 
+def _frame_word(key, legacy, **values):
+    language = getattr(_agent, 'frame_language', None)
+    if getattr(_agent, 'FRAME_TEXT_BOUNDARIES_API', 0) == 1 and language:
+        return language.text(key, **values)
+    return legacy.format_map(values) if values else legacy
+
+
+def _frame_pinned(function):
+    from functools import wraps
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        language = getattr(_agent, 'frame_language', None)
+        with (language.pin() if getattr(_agent, 'FRAME_TEXT_BOUNDARIES_API', 0) == 1 and language else contextlib.nullcontext()):
+            return function(*args, **kwargs)
+    return invoke
+
+
+def _birth_prefixes():
+    language = getattr(_agent, 'frame_language', None)
+    if getattr(_agent, 'FRAME_TEXT_BOUNDARIES_API', 0) == 1 and language:
+        return tuple(dict.fromkeys([_BIRTH_PREFIX, *(language.catalog(code)['native.runner.birth_prefix'] for code in language.LANGUAGES)]))
+    return _BIRTH_PREFIX
+
+
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -448,14 +472,15 @@ def _hear_attachments(paths: list[str]) -> tuple[list[str], list[str]]:
     return heard, rest
 
 
+@_frame_pinned
 def _transcribe_note(rel: str) -> str:
     name = Path(rel).name
     if _tree is None:
-        raise voice_admission.VoicePending('Дерево ещё не загружено')
+        raise voice_admission.VoicePending(_frame_word('native.runner._transcribe_note.454', 'Дерево ещё не загружено'))
     inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
     src = (inbox / rel).resolve()
     if inbox not in src.parents or not src.is_file():
-        raise voice_admission.VoicePending('Голосовое не найдено: '+name)
+        raise voice_admission.VoicePending(_frame_word('native.runner._transcribe_note.458', 'Голосовое не найдено: ')+name)
     return _transcribe_path(src)
 
 
@@ -463,6 +488,7 @@ def _stt_signature():
     return json.dumps({k:v for k,v in os.environ.items() if k.startswith('PRAXIS_STT_') or k=='PRAXIS_AUDIO_MODEL_DIR'},sort_keys=True)
 
 
+@_frame_pinned
 def _transcribe_path(src: Path) -> str:
     global _voice_state, _voice_signature, _recognition
     from localharness.recognition import Recognition
@@ -471,7 +497,7 @@ def _transcribe_path(src: Path) -> str:
         # config file. Keep their injected recognition path and receipt key.
         def decode(source):
             if not _voice_state.get('ready'):
-                raise RuntimeError(_voice_state.get('why') or 'Распознавание не настроено')
+                raise RuntimeError(_voice_state.get('why') or _frame_word('native.runner.decode.474', 'Распознавание не настроено'))
             import importlib
             from localharness.whisper_residency import install
             module = importlib.import_module('media_audio'); install(module)
@@ -491,6 +517,7 @@ def _transcribe_path(src: Path) -> str:
     return voice_admission.resolve(src, _recognition.transcribe, signature=signature)
 
 
+@_frame_pinned
 def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
                         move: bool = True) -> tuple[list, list[str]]:
     """Файлы окна -> медиа-спул дерева (`ingest_path`, перенос) -> ссылки для кадра.
@@ -515,23 +542,24 @@ def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
             spool = importlib.import_module("media").MediaSpool()
     except Exception:
         log.warning("медиа-спул недоступен — вложения окна не поедут", exc_info=True)
-        return [], [f"[вложение не прочитано: {Path(p).name} — медиа-спул недоступен]" for p in paths]
+        return [], [_frame_word('native.runner._ingest_attachments.518', '[вложение не прочитано: {p0} — медиа-спул недоступен]', p0=f'{Path(p).name}') for p in paths]
     inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
     refs, notes = [], []
     for rel in paths:
         src = (inbox / rel).resolve()
         if inbox not in src.parents or not src.is_file():
-            notes.append(f"[вложение не найдено: {Path(rel).name}]")
+            notes.append(_frame_word('native.runner._ingest_attachments.524', '[вложение не найдено: {p0}]', p0=f'{Path(rel).name}'))
             continue
         try:
             refs.append(spool.ingest_path(src, kind="photo", chat_id=chat_id,
                                           message_id=message_id, scope="owner", move=move))
         except Exception as exc:  # MediaValidationError и родня — словами
             log.warning("вложение окна отвергнуто спулом [%s]", rel, exc_info=True)
-            notes.append(f"[вложение не прочитано: {src.name} — {type(exc).__name__}: {exc}]")
+            notes.append(_frame_word('native.runner._ingest_attachments.531', '[вложение не прочитано: {p0} — {p1}: {p2}]', p0=f'{src.name}', p1=f'{type(exc).__name__}', p2=f'{exc}'))
     return refs, notes
 
 
+@_frame_pinned
 def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
     """Файлы окна без слуха и зрения -> папка настоящего хода, агент работает ими руками.
 
@@ -547,12 +575,12 @@ def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
         folder.mkdir(parents=True, exist_ok=True)
     except Exception:
         log.warning("папка хода недоступна — файлы названы исходными путями", exc_info=True)
-        return [f"[файл: {Path(p).name} — папка хода недоступна]" for p in paths]
+        return [_frame_word('native.runner._batch_files.550', '[файл: {p0} — папка хода недоступна]', p0=f'{Path(p).name}') for p in paths]
     lines: list[str] = []
     for rel in paths:
         src = (inbox / rel).resolve()
         if inbox not in src.parents or not src.is_file():
-            lines.append(f"[файл не найден: {Path(rel).name}]")
+            lines.append(_frame_word('native.runner._batch_files.555', '[файл не найден: {p0}]', p0=f'{Path(rel).name}'))
             continue
         target = folder / src.name
         import hashlib
@@ -570,9 +598,9 @@ def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
             shutil.copyfile(src, tmp)
             if not identical(tmp):
                 tmp.unlink(missing_ok=True)
-                raise ValueError("вложение изменилось во время копирования")
+                raise ValueError(_frame_word('native.runner._batch_files.573', 'вложение изменилось во время копирования'))
             os.replace(tmp, target)
-        lines.append(f"[файл хода: {target}]")
+        lines.append(_frame_word('native.runner._batch_files.575', '[файл хода: {p0}]', p0=f'{target}'))
     return lines
 
 
@@ -599,6 +627,7 @@ def _drain_owner_inputs(current, messages):
     return additions, ack
 
 
+@_frame_pinned
 def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,
                   run_id: str) -> tuple[str | list[dict], str]:
     """Use normal image admission/rendering, then make every pixel durable.
@@ -618,31 +647,31 @@ def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,
         limit = None
     if limit is not None and len(refs) > limit:
         dropped = ', '.join(Path(r.path).name for r in refs[:-limit])
-        caption = (caption + '\n' + f'[вложений больше лимита хода: {len(refs)} > {limit}; '
-                   f'показаны последние {limit}, не показаны: {dropped}]').strip()
+        caption = (caption + '\n' + _frame_word('native.runner._batch_images.621', '[вложений больше лимита хода: {p0} > {p1}; показаны последние {p2}, не показаны: {p3}]', p0=f'{len(refs)}', p1=f'{limit}', p2=f'{limit}', p3=f'{dropped}')).strip()
     ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True)
     _augmented, content = _agent._media_prompt(caption, tuple(refs), ctx)
     if not run_id:
-        raise RuntimeError('active image intake requires a durable run')
+        raise RuntimeError(_frame_word('native.runner._batch_images.626', 'active image intake requires a durable run'))
     archived = _agent._archive_run_media(run_id, refs, prefix='inbox', strict=True)
     if isinstance(content, list):
         for block in content:
             if block.get('type') == 'image':
                 replacement = archived.get(str(block.get('path') or ''))
                 if replacement is None:
-                    raise RuntimeError('active image was not archived')
+                    raise RuntimeError(_frame_word('native.runner._batch_images.633', 'active image was not archived'))
                 block['path'] = str(replacement)
     # Future text history can locate the exact durable media, without pretending
     # it contains pixels. The current model input carries the image blocks.
-    locators = [f'[изображение: {path}]' for path in archived.values()]
+    locators = [_frame_word('native.runner._batch_images.637', '[изображение: {p0}]', p0=f'{path}') for path in archived.values()]
     archive = (caption + '\n' + '\n'.join(locators)).strip()
     return content, archive
 
 
+@_frame_pinned
 def _orient(chat_id: str) -> str:
-    bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
+    bits = [_frame_word('native.runner.window_orient', _WINDOW_ORIENT)] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
-        bits.append(_ORIENT_EXTRA)
+        bits.append(_ORIENT_EXTRA() if callable(_ORIENT_EXTRA) else _ORIENT_EXTRA)
     # Addressing knows the authenticated handle; the voice must know it too.
     # Read the active transport on every turn rather than teaching a nickname
     # through authored memory or changing the agent's name/constitution.
@@ -654,7 +683,7 @@ def _orient(chat_id: str) -> str:
                 bits.append(line)
             cooldown = getattr(_bot, "cooldown_snapshot", None)
             if callable(cooldown):
-                bits.append("Telegram send constraint (not voluntary cadence): " + json.dumps(cooldown(chat_id), ensure_ascii=False))
+                bits.append(_frame_word('native.runner._orient.657', 'Telegram send constraint (not voluntary cadence): ') + json.dumps(cooldown(chat_id), ensure_ascii=False))
             status = getattr(_bot, "status_line", None)
             if callable(status):
                 bits.append(status())
@@ -668,9 +697,7 @@ def _orient(chat_id: str) -> str:
             config=json.loads(boot.read_config_text(_install_root/'helene.json'))
             proxy=(config.get('telegram') or {}).get('proxy') or {}
             if proxy.get('enabled'):
-                bits.append(f"Telegram: выбран серверный прокси {telegram_proxy.public_address(str(proxy.get('url') or ''))}, "
-                    "но транспорт не запущен; связь не подтверждена. Настройка — telegram.proxy в helene.json, "
-                    "карточка Telegram → Telegram через сервер. Ключ прокси секретный, в сообщения его не выводить.")
+                bits.append(_frame_word('native.runner._orient.671', 'Telegram: выбран серверный прокси {p0}, но транспорт не запущен; связь не подтверждена. Настройка — telegram.proxy в helene.json, карточка Telegram → Telegram через сервер. Ключ прокси секретный, в сообщения его не выводить.', p0=f"{telegram_proxy.public_address(str(proxy.get('url') or ''))}"))
         except (OSError,ValueError,TypeError):
             pass
     # 1.2.5: на чём агент работает сейчас и кто менял последним — в каждом ходе. Без этого
@@ -2452,6 +2479,7 @@ def _update_report_due() -> None:
 _BIRTH_TRIES = 5           # столько попыток первого хода, дальше — словами владельцу
 
 
+@_frame_pinned
 def _birth_note(*, note_written: bool = False) -> str:
     """Записка первого запуска в память комнаты. -> source_id для хода.
 
@@ -2473,10 +2501,10 @@ def _birth_note(*, note_written: bool = False) -> str:
         # 26.09: паспорт вместо «осмотрись». Первый ход у мамы Егора ушёл на поиски
         # своей папки по чужим адресам (135 с, семь команд, `/app`): агент офигевал,
         # кто он и где. Теперь дом, имена и границы названы в самой записке.
-        note = _BIRTH_NOTE.format(where=f"на устройстве {device}" if device
-                                  else "на этом компьютере",
+        note = _frame_word('native.runner.birth_note', _BIRTH_NOTE, where=_frame_word('native.runner._birth_note.2476', 'на устройстве {p0}', p0=f'{device}') if device
+                                  else _frame_word('native.runner._birth_note.2477', 'на этом компьютере'),
                                   agent=_agent_name, owner=_speaker,
-                                  home=str(_tree) if _tree else "рядом с программой")
+                                  home=str(_tree) if _tree else _frame_word('native.runner._birth_note.2479', 'рядом с программой'))
         _desk.archive(note, outgoing=False, now=now, sender="Hélène")
         _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
     return source_id
@@ -2497,7 +2525,7 @@ def _retire_birth_note(marker: Path, state: dict) -> None:
     if state.get("note_retired"):
         return
     try:
-        changed = _desk.retire_birth_note("Hélène", _BIRTH_PREFIX)
+        changed = _desk.retire_birth_note("Hélène", _birth_prefixes())
         _write_json(marker, {**state, "note_retired": True})
         if changed:
             log.info("рождение: записка первого запуска стала плашкой окна (%d)", changed)
@@ -2621,21 +2649,19 @@ _ALARM_HOUR_CAP = 6
 _ALARM_FIRED: list[float] = []
 
 
+@_frame_pinned
 def _alarm_note(task: dict) -> str:
     """Чем продукт будит агента. Его же словами о его же намерении, без машинных скобок."""
     kind = str(task.get("kind") or "")
     goal = str(task.get("goal") or "").strip()
     target = str(task.get("target") or "").strip()
     if kind == "message" and target:
-        return (f"Сработал твой будильник: намечено сказать «{target}» — {goal}\n"
-                "Отправить за тебя продукт не может: если это ещё нужно, скажи это "
-                "рукой send_message.")
+        return (_frame_word('native.runner._alarm_note.2630', 'Сработал твой будильник: намечено сказать «{p0}» — {p1}\nОтправить за тебя продукт не может: если это ещё нужно, скажи это рукой send_message.', p0=f'{target}', p1=f'{goal}'))
     if kind == "email" and target:
-        return (f"Сработал твой будильник: намечено письмо на {target} — {goal}\n"
-                "Продукт писем сам не шлёт: если это ещё нужно, отправь рукой.")
+        return (_frame_word('native.runner._alarm_note.2634', 'Сработал твой будильник: намечено письмо на {p0} — {p1}\nПродукт писем сам не шлёт: если это ещё нужно, отправь рукой.', p0=f'{target}', p1=f'{goal}'))
     if goal:
-        return f"Сработал твой будильник. Намечено было вот что: {goal}"
-    return "Сработал твой будильник на это время (чем именно — не записано)."
+        return _frame_word('native.runner._alarm_note.2637', 'Сработал твой будильник. Намечено было вот что: {p0}', p0=f'{goal}')
+    return _frame_word('native.runner._alarm_note.2638', 'Сработал твой будильник на это время (чем именно — не записано).')
 
 
 def _reflection_tick() -> None:
@@ -2867,7 +2893,7 @@ def _announce_git(tree: Path) -> None:
         log.info("откат правок: git есть (%s), репозиторий в дереве данных есть — "
                  "автокоммит правок и страховочные снимки живы", shutil.which("git"))
         return
-    _ORIENT_EXTRA = _NO_GIT_ORIENT
+    _ORIENT_EXTRA = lambda: _frame_word('native.runner.no_git_orient', _NO_GIT_ORIENT)
     log.warning("откат правок: git %s, репозитория в дереве %s — автокоммита и "
                 "автоотката НЕТ (агенту сказано в ориентире кадра)",
                 "есть" if state["exe"] else "нет",
