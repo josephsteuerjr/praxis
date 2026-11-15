@@ -43,8 +43,8 @@ class ReviewCorrections(unittest.TestCase):
         directory=self.base/'memory/.control';directory.mkdir(parents=True)
         (directory/'autonomy-paused.json').write_text('{}')
         with mock.patch.object(forge,'_finish_survey') as survey:
-            self.assertIn('owner Pause',forge.finish(self.tid,submit=False))
-            self.assertIn('owner Pause',forge._finish_unlocked(self.tid,submit=False,survey={}))
+            self.assertIn(forge.frame_language.text('forge.workers.11'),forge.finish(self.tid,submit=False))
+            self.assertIn(forge.frame_language.text('forge.workers.11'),forge._finish_unlocked(self.tid,submit=False,survey={}))
         survey.assert_not_called()
 
     def test_owner_event_second_page_preserves_both_cursor_coordinates(self):
@@ -78,8 +78,8 @@ class ReviewCorrections(unittest.TestCase):
         unit,_=self.fixture.unit(status='running')
         forge._atomic_json(unit/'result.json',{'status':'done'})
         with mock.patch.object(forge,'_checkpoint_unlocked') as integrate:
-            self.assertIn('Finish refused',forge.finish(self.tid,submit=True))
-            self.assertIn('Finish refused',forge._finish_unlocked(self.tid,submit=True,survey={}))
+            self.assertIn(forge.frame_language.text('forge.finish.43'),forge.finish(self.tid,submit=True))
+            self.assertIn(forge.frame_language.text('forge.finish.19'),forge._finish_unlocked(self.tid,submit=True,survey={}))
         integrate.assert_not_called();self.assertEqual(forge.get(self.tid)['status'],'active')
         forge.release_worker_root(unit/'request.json')
         job=forge._unit_dir(self.tid,'processes','proc-lost')
@@ -100,13 +100,13 @@ class ReviewCorrections(unittest.TestCase):
     def test_finish_respects_pause_and_owner_fences_before_any_survey_or_integration(self):
         forge.control(self.tid,'pause')
         with mock.patch.object(forge,'_finish_survey') as survey:
-            self.assertIn('pause-fenced',forge.finish(self.tid,submit=False))
-            self.assertIn('pause-fenced',forge._finish_unlocked(self.tid,submit=False,survey={}))
+            self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'),forge.finish(self.tid,submit=False))
+            self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'),forge._finish_unlocked(self.tid,submit=False,survey={}))
         survey.assert_not_called();self.assertEqual(forge.get(self.tid)['status'],'active')
         forge.control(self.tid,'resume')
         (self.base/'memory/.panic').write_text('fixture panic')
         with mock.patch.object(forge,'_finish_survey') as survey:
-            self.assertIn('panic',forge.finish(self.tid,submit=False))
+            self.assertIn(forge.frame_language.text('forge.workers.12'),forge.finish(self.tid,submit=False))
         survey.assert_not_called()
 
     def test_legacy_terminal_writer_without_generation_or_release_stays_visible(self):

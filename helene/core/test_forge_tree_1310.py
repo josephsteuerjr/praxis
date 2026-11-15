@@ -172,7 +172,7 @@ class WorkerTree(unittest.TestCase):
             self.assertEqual(request["parent_unit_id"], "agent-aaaaaaaa")
             self.assertEqual(request["spawned_by"], "agent-evil000")
             denied = self.call("spawn", brief="third", role="scout", spawned_by="agent-aaaaaaaa")
-            self.assertIn("Active worker slots exhausted: 2/2", denied)
+            self.assertIn(forge.frame_language.text('forge.workers.20', v1='2', v3='2'), denied)
             bad = self.call("spawn", brief="bad", role="worker",
                             _parent_request_path=str(self.root / "request.json"))
             self.assertIn("Worker identity refused", bad)
@@ -247,7 +247,7 @@ class WorkerTree(unittest.TestCase):
         with mock.patch.object(forge, "_spawn_runner") as spawn:
             denied = self.call("spawn", brief="after stop", role="scout",
                                _parent_request_path=str(c / "request.json"))
-        self.assertIn("stop-fenced", denied)
+        self.assertIn(forge.frame_language.text('forge.workers.13', v1=c.name), denied)
         spawn.assert_not_called()
 
     def test_old_unit_without_parent_stays_readable(self):

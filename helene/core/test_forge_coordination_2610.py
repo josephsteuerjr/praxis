@@ -88,7 +88,7 @@ class Coordination(unittest.TestCase):
         first = self.unit()
         queued = forge.agent(self.tid, "spawn", brief="second writer", agent_id="agent-bbbbbbbb")
         self.assertIn("Queued agent-bbbbbbbb", queued)
-        self.assertIn("shared-root", queued)
+        self.assertIn(forge.frame_language.text('forge.workers.21'), queued)
         self.assertEqual(forge._unit_state(self.directory / "agents/agent-bbbbbbbb")["status"], "queued")
         self.assertIn("уже существует", forge.agent(self.tid, "spawn", brief="duplicate", agent_id="agent-bbbbbbbb"))
         self.assertIn("Порождён", forge.agent(self.tid, "spawn", brief="read", role="reviewer", agent_id="agent-cccccccc"))
@@ -105,11 +105,11 @@ class Coordination(unittest.TestCase):
     def test_terminal_writer_requires_exact_release_or_proven_tree_exit(self):
         first = self.unit(result={"status": "done", "result": "one"})
         request = {"id": "agent-bbbbbbbb", "role": "worker"}
-        self.assertIn("shared-root", forge._agent_capacity(self.tid, request))
+        self.assertIn(forge.frame_language.text('forge.workers.21'), forge._agent_capacity(self.tid, request))
         forge.release_worker_root(first / "request.json")
         self.assertEqual(forge._agent_capacity(self.tid, request), "")
         forge._atomic_json(first / "result.json", {"status": "done", "result": "two"})
-        self.assertIn("shared-root", forge._agent_capacity(self.tid, request))
+        self.assertIn(forge.frame_language.text('forge.workers.21'), forge._agent_capacity(self.tid, request))
         with mock.patch.object(forge, "_writer_ended", return_value=True):
             self.assertEqual(forge._agent_capacity(self.tid, request), "")
 
@@ -123,11 +123,11 @@ class Coordination(unittest.TestCase):
                            forge.checkpoint(self.tid), forge.run(self.tid, 'echo forbidden'),
                            forge.process(self.tid, 'start', command='echo forbidden'),
                            forge.verify(self.tid, 'start', commands='echo forbidden')):
-                self.assertIn('shared-root', answer)
+                self.assertIn(forge.frame_language.text('forge.workers.18'), answer)
             for call in (edit, checkpoint, process, verify):call.assert_not_called()
         self.assertEqual(forge._admission_reason(self.tid, str(owner/'request.json'), general=True), '')
         forge._atomic_json(owner/'result.json', {'status':'done'})
-        self.assertIn('shared-root', forge._admission_reason(self.tid, general=True))
+        self.assertIn(forge.frame_language.text('forge.workers.18'), forge._admission_reason(self.tid, general=True))
         forge.release_worker_root(owner/'request.json')
         self.assertEqual(forge._admission_reason(self.tid, general=True), '')
 
@@ -137,7 +137,7 @@ class Coordination(unittest.TestCase):
                           {'id':'proc-aaaaaaaa','task_id':self.tid,'status':'running',
                            'parent_unit_id':owner.name})
         for caller in ('', str(owner/'request.json')):
-            self.assertIn('shared-root', forge._admission_reason(self.tid, caller, general=True))
+            self.assertIn(forge.frame_language.text('forge.workers.18'), forge._admission_reason(self.tid, caller, general=True))
 
 
     def test_selected_stop_ignores_live_sibling_and_its_jobs(self):
@@ -198,16 +198,16 @@ class Coordination(unittest.TestCase):
     def test_terminal_pause_and_nested_fences_refuse_admission(self):
         for status in ("done", "abandoned", "stopped"):
             forge._atomic_json(self.directory / "task.json", {**self.task, "status": status})
-            self.assertIn("terminal", forge.agent(self.tid, "spawn", brief="late"))
+            self.assertIn(forge.frame_language.text('forge.workers.7'), forge.agent(self.tid, "spawn", brief="late"))
         forge._atomic_json(self.directory / "task.json", self.task)
         forge._atomic_json(self.directory / "control.json", {"action": "pause"})
-        self.assertIn("pause-fenced", forge.agent(self.tid, "spawn", brief="paused"))
+        self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'), forge.agent(self.tid, "spawn", brief="paused"))
         self.assertEqual(forge.control(self.tid, "resume")["status"], "resumed")
         parent = self.unit(role="scout")
         self.assertIn("read-oriented", forge.agent(self.tid, "spawn", brief="edit", role="worker",
             _parent_request_path=str(parent / "request.json")))
         forge._atomic_json(parent / "stop.json", {"state": "pending"})
-        self.assertIn("stop-fenced", forge.agent(self.tid, "spawn", brief="child", role="scout",
+        self.assertIn(forge.frame_language.text('forge.workers.13', v1=parent.name), forge.agent(self.tid, "spawn", brief="child", role="scout",
             _parent_request_path=str(parent / "request.json")))
         self.assertFalse(forge.worker_control(parent / "request.json")["allowed"])
         self.spawn.assert_not_called()
@@ -218,15 +218,15 @@ class Coordination(unittest.TestCase):
         forge._atomic_json(self.directory / "task.json", {**self.task, "max_active_workers": 1})
         forge.agent(self.tid, "spawn", brief="child", agent_id="agent-bbbbbbbb", _parent_request_path=pp)
         child = self.directory / "agents/agent-bbbbbbbb"
-        self.assertIn("exhausted", forge._agent_capacity(self.tid, forge._read_json(child / "request.json")))
+        self.assertIn(forge.frame_language.text('forge.workers.20', v1='1', v3='1'), forge._agent_capacity(self.tid, forge._read_json(child / "request.json")))
         forge.tick_queued(self.tid)
         self.spawn.assert_not_called()  # waiting in prose or finishing is NOT a yield
         def finish_on_spawn(*args):
-            self.assertIn("yielded", forge._admission_reason(self.tid, pp, general=True))
+            self.assertIn(forge.frame_language.text('forge.workers.15', v1=parent.name, v3=child.name), forge._admission_reason(self.tid, pp, general=True))
             # Use a separate slot budget here so the assertion targets writer
             # ownership, not the already-proven one-slot count.
             forge._atomic_json(self.directory / "task.json", self.task)
-            self.assertIn("writer occupied", forge._agent_capacity(self.tid,
+            self.assertIn(forge.frame_language.text('forge.workers.21'), forge._agent_capacity(self.tid,
                 {"id": "agent-cccccccc", "role": "worker"}))
             forge._atomic_json(child / "result.json", {"status": "done", "result": "child complete"})
             forge._atomic_json(child / "root-released.json", {"unit_id": child.name,
@@ -246,9 +246,9 @@ class Coordination(unittest.TestCase):
         sibling = self.unit("agent-dddddddd", parent=parent.name, status="queued")
         forge._atomic_json(parent / "handoff.json", {"state": "waiting", "child_unit_id": child.name})
         self.assertEqual(forge._admission_reason(self.tid, str(reader / "request.json")), "")
-        self.assertIn("another child", forge._admission_reason(self.tid, str(sibling / "request.json")))
+        self.assertIn(forge.frame_language.text('forge.workers.16', v1=parent.name), forge._admission_reason(self.tid, str(sibling / "request.json")))
         forge._atomic_json(parent / "stop.json", {"state": "pending"})
-        self.assertIn("stop-fenced", forge._admission_reason(self.tid, str(reader / "request.json")))
+        self.assertIn(forge.frame_language.text('forge.workers.13', v1=parent.name), forge._admission_reason(self.tid, str(reader / "request.json")))
 
     def test_windows_json_sharing_retry_is_bounded_not_suppressed(self):
         target = self.root / "publication.json"
@@ -284,7 +284,7 @@ class Coordination(unittest.TestCase):
         forge._atomic_json(job / "stop.json", {"state": "unresolved", "note": "detached shell unknown"})
         reply = json.loads(forge.agent(self.tid, "wait", agent_id="agent-bbbbbbbb", _parent_request_path=pp))
         self.assertEqual(reply["status"], "refused")
-        self.assertIn("detached writer", reply["reason"])
+        self.assertIn(forge.frame_language.text('forge.workers.22'), reply["reason"])
         self.assertFalse((parent / "handoff.json").exists())
         forge._atomic_json(job / "result.json", {"status": "done"})
         self.assertEqual(json.loads(forge.agent(self.tid, "wait", agent_id="agent-bbbbbbbb",
@@ -292,7 +292,7 @@ class Coordination(unittest.TestCase):
         forge._atomic_json(job / "stop.json", {"state": "settled"})
         forge._atomic_json(parent / "stop.json", {"state": "pending"})
         reply = json.loads(forge.agent(self.tid, "wait", agent_id="agent-bbbbbbbb", _parent_request_path=pp))
-        self.assertIn("stop-fenced", reply["reason"])
+        self.assertIn(forge.frame_language.text('forge.workers.13', v1=parent.name), reply["reason"])
         self.spawn.assert_not_called()
 
     def test_pause_during_yield_keeps_ownership_fenced(self):
@@ -305,7 +305,7 @@ class Coordination(unittest.TestCase):
             return real_tick(self.tid)
         with mock.patch.object(forge, "tick_queued", side_effect=pause):
             reply = json.loads(forge.agent(self.tid, "wait", agent_id="agent-bbbbbbbb", _parent_request_path=pp))
-        self.assertIn("pause-fenced", reply["reason"])
+        self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'), reply["reason"])
         self.assertEqual(forge._read_json(parent / "handoff.json")["state"], "waiting")
         self.spawn.assert_not_called()
 
@@ -314,7 +314,7 @@ class Coordination(unittest.TestCase):
         child = self.unit("agent-bbbbbbbb", parent=parent.name, status="queued")
         forge._atomic_json(parent / "result.json", {"status": "done"})
         forge.tick_queued(self.tid)
-        self.assertIn("terminal", forge._read_json(child / "request.json")["queued_reason"])
+        self.assertIn(forge.frame_language.text('forge.workers.14', v1=parent.name), forge._read_json(child / "request.json")["queued_reason"])
         self.assertFalse(forge._root_released(self.tid, child.name))
         self.spawn.assert_not_called()
 
@@ -337,8 +337,8 @@ class Coordination(unittest.TestCase):
             forge.control(self.tid, "stop")
         process.assert_called_once_with(self.tid, "stop", process_id="proc-aaaaaaaa")
         verify.assert_called_once_with(self.tid, "stop", verification_id="verify-aaaaaaaa")
-        self.assertIn("terminal", forge.process(self.tid, "start", command="echo unsafe"))
-        self.assertIn("terminal", forge.verify(self.tid, "start", commands="echo unsafe"))
+        self.assertIn(forge.frame_language.text('forge.workers.7'), forge.process(self.tid, "start", command="echo unsafe"))
+        self.assertIn(forge.frame_language.text('forge.workers.7'), forge.verify(self.tid, "start", commands="echo unsafe"))
 
     def test_rework_keeps_attempt_and_old_result_and_plan_cannot_overwrite(self):
         forge.swarm(self.tid, "plan", plan='[{"id":"build","brief":"build"}]')
@@ -512,7 +512,7 @@ class Coordination(unittest.TestCase):
                 forge.source_update_task(other, str(self.root), "a" * 64, "c" * 64, str(script))
             self.assertIn("Порождён", forge.agent(other, "spawn", brief="merge", agent_id="agent-dddddddd"))
             self.assertIn("sole root", forge.agent(other, "spawn", brief="again"))
-            self.assertIn("general", forge.process(other, "start", command="echo forbidden"))
+            self.assertIn(forge.frame_language.text('forge.workers.9'), forge.process(other, "start", command="echo forbidden"))
             self.assertEqual(self.spawn.call_args.args[0], script)
 
 

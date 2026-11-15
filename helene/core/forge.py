@@ -3473,6 +3473,7 @@ def _pid_alive(pid: int, started_at: str = "") -> bool:
     return _owner_alive(int(pid), str(started_at or ""))
 
 
+@frame_language.pinned
 def _unit_state(path: Path) -> dict:
     request = _read_json(path / "request.json", {}) or {}
     request.pop('custody_recovered', None)
@@ -3494,13 +3495,13 @@ def _unit_state(path: Path) -> dict:
         # whole tree exited. A racing supervisor result cannot discharge that
         # uncertainty; this unit must be reconciled before finish.
         return {**request, "id": request.get("id") or path.name,
-                "status": "unknown", "liveness": str(stop.get("note") or "stop unconfirmed")}
+                "status": "unknown", "liveness": str(stop.get("note") or frame_language.text('forge.workers.0'))}
     if (path / "stop-request.json").is_file() and not isinstance(result, dict):
         # A verify supervisor is still reconciling its private child groups;
         # the request is durable but not a terminal receipt. If the supervisor
         # dies before answering, the unknown remains visible to finish.
         return {**request, "id": request.get("id") or path.name,
-                "status": "unknown", "liveness": "verification stop requested; group exit not confirmed"}
+                "status": "unknown", "liveness": frame_language.text('forge.workers.1')}
     if isinstance(result, dict):
         pid = int(request.get("supervisor_pid") or 0)
         local = _RUNNERS.get(pid)
@@ -3516,7 +3517,7 @@ def _unit_state(path: Path) -> dict:
         remote_state = _read_json(path / "state.json", {}) or {}
         remote_state.pop('custody_recovered', None)
         return {**request, **remote_state,
-                "status": "unknown", "liveness": "remote process requires poll/stop reconciliation"}
+                "status": "unknown", "liveness": frame_language.text('forge.workers.2')}
     if request.get("status") == "queued":
         return {**request, "id": request.get("id") or path.name}
     pid = int(request.get("supervisor_pid") or 0)
@@ -3526,7 +3527,7 @@ def _unit_state(path: Path) -> dict:
         # This PID belongs to the shell, not to a durable group supervisor.
         # Losing it does not prove that its descendants stopped writing.
         # Only an explicit reconciliation/terminal receipt may release custody.
-        state.update(status="unknown", liveness="foreground command custody lost; group exit not confirmed")
+        state.update(status="unknown", liveness=frame_language.text('forge.workers.3'))
         return state
     if born or not pid:
         # ⚠ Та же болезнь, что чинил fb09430b в замке, но здесь она страшнее. В
@@ -3546,10 +3547,7 @@ def _unit_state(path: Path) -> dict:
         # Врать «running» нельзя, хоронить без доказательства — тоже.
         state["status"] = "unknown"
         state["liveness"] = (
-            f"номер процесса {pid} кем-то занят, но юнит открыт {age / 3600:.0f}ч назад "
-            f"и метки рождения у него нет (юниты до 27.07) — номер могли переиспользовать. "
-            f"Ни жив, ни мёртв доказать не могу; порог доверия номеру "
-            f"{UNIT_LIVENESS_TRUST_SEC / 3600:.0f}ч")
+            frame_language.text('forge.workers.4', v1=f'{pid}', v3=f'{age / 3600:.0f}', v5=f'{UNIT_LIVENESS_TRUST_SEC / 3600:.0f}'))
     else:
         state["status"] = "running"
     return state
@@ -3564,6 +3562,7 @@ def _units(task_id: str, kind: str) -> list[dict]:
     return rows
 
 
+@frame_language.pinned
 def _worker_parent(task_id: str, request_path: str) -> tuple[str, dict]:
     """Resolve ancestry from the actual running worker request, never spawned_by/model input."""
     if not request_path:
@@ -3571,11 +3570,11 @@ def _worker_parent(task_id: str, request_path: str) -> tuple[str, dict]:
     path = Path(request_path).resolve()
     base = (_task_dir(task_id) / "agents").resolve()
     if path.name != "request.json" or path.parent.parent != base:
-        raise ValueError("worker request is not a unit of this task")
+        raise ValueError(frame_language.text('forge.workers.5'))
     request = _read_json(path)
     if (not isinstance(request, dict) or request.get("task_id") != task_id
             or request.get("id") != path.parent.name):
-        raise ValueError("worker request identity does not match its durable unit")
+        raise ValueError(frame_language.text('forge.workers.6'))
     return path.parent.name, request
 
 
@@ -3612,24 +3611,25 @@ def _result_identity(path: Path) -> str:
         return ""
 
 
+@frame_language.pinned
 def _admission_reason(task_id: str, parent_request_path: str = "", *, general: bool = False,
                       waiting: bool = False, executing_process: str = "") -> str:
     """Called under the task mutex by every admitting writer, including nested work."""
     task = get(task_id)
     if not task or task.get("status") not in LIVE_TASK_STATUSES:
-        return "task is terminal or missing"
+        return frame_language.text('forge.workers.7')
     control = _read_json(_task_dir(task_id) / "control.json", {}) or {}
     if control.get("action") in {"stop", "pause"}:
-        return f"task is {control['action']}-fenced"
+        return frame_language.text('forge.workers.8', v1=f"{control['action']}")
     if general and (task.get("self_review") or task.get("source_update")):
-        return "trusted adapter task cannot use general mutation/process tools"
+        return frame_language.text('forge.workers.9')
     owner = sys.modules.get("localharness.owner_stop") or sys.modules.get("owner_stop")
     if owner is not None and owner.paused():
-        return "owner Stop/Pause is active"
+        return frame_language.text('forge.workers.10')
     if (BASE / "memory" / ".control" / "autonomy-paused.json").exists():
-        return "owner Pause is active"
+        return frame_language.text('forge.workers.11')
     if (BASE / 'memory' / '.panic').exists():
-        return 'owner panic Stop is active'
+        return frame_language.text('forge.workers.12')
     parent_id, caller_request = _worker_parent(task_id, parent_request_path)
     caller, below = parent_id, ""
     seen: set[str] = set()
@@ -3637,7 +3637,7 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
         seen.add(parent_id)
         directory = _unit_dir(task_id, "agents", parent_id)
         if (directory / "stop.json").exists():
-            return f"ancestor {parent_id} is stop-fenced"
+            return frame_language.text('forge.workers.13', v1=f'{parent_id}')
         result_path = directory / "result.json"
         if result_path.exists():
             result = _read_json(result_path)
@@ -3645,21 +3645,22 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
             # Only explicit live statuses may advance; missing/corrupt/unknown
             # results remain fenced just like settled results.
             if not isinstance(result, dict) or str(result.get("status") or "") not in _LIVE_UNIT_STATES:
-                return f"ancestor {parent_id} is terminal or result status is unknown"
+                return frame_language.text('forge.workers.14', v1=f'{parent_id}')
         handoff = _read_json(directory / "handoff.json", {}) or {}
         if handoff.get("state") == "waiting":
             if parent_id == caller:
                 if not waiting:
-                    return f"writer {parent_id} yielded to {handoff.get('child_unit_id')}"
+                    return frame_language.text('forge.workers.15', v1=f'{parent_id}', v3=f"{handoff.get('child_unit_id')}")
             elif handoff.get("child_unit_id") != below and caller_request.get("role") == "worker":
-                return f"ancestor {parent_id} yielded to another child"
+                return frame_language.text('forge.workers.16', v1=f'{parent_id}')
         below = parent_id
         parent_id = _parent_of(task_id, parent_id)
     if parent_id:
-        return "corrupt/cyclic worker ancestry"
+        return frame_language.text('forge.workers.17')
     return (_shared_writer_reason(task_id, caller, executing_process) if executing_process else _shared_writer_reason(task_id, caller)) if general else ""
 
 
+@frame_language.pinned
 def _shared_writer_reason(task_id: str, caller: str, executing_process: str = "") -> str:
     """General tools obey the same root ownership as worker admission."""
     writers = []
@@ -3679,7 +3680,7 @@ def _shared_writer_reason(task_id: str, caller: str, executing_process: str = ""
         writers.extend(str(row["id"]) for row in _units(task_id, kind)
                        if not (kind == "processes" and str(row["id"]) == executing_process) and not row.get('custody_recovered') and row.get("status") not in (_TERMINAL_AGENT_STATES | {
                            "passed", "passed_with_skips", "stale"}))
-    return "shared-root writer occupied: " + ",".join(writers) if writers else ""
+    return frame_language.text('forge.workers.18') + ",".join(writers) if writers else ""
 
 
 def _worker_control_unlocked(request_path: str | Path) -> dict:
@@ -3689,6 +3690,7 @@ def _worker_control_unlocked(request_path: str | Path) -> dict:
     return {"allowed": not reason, "reason": reason}
 
 
+@frame_language.pinned
 def worker_control(request_path: str | Path) -> dict:
     path = Path(request_path).resolve()
     request = _read_json(path, {}) or {}
@@ -3697,7 +3699,7 @@ def worker_control(request_path: str | Path) -> dict:
         with _mutation_lock(task_id):
             return _worker_control_unlocked(path)
     except (ValueError, OSError, TimeoutError) as exc:
-        return {"allowed": False, "reason": f"control unavailable: {exc}"}
+        return {"allowed": False, "reason": frame_language.text('forge.workers.19', v1=f'{exc}')}
 
 
 def _agent_snapshot(task_id: str, unit_id: str, state: dict | None = None) -> dict:
@@ -4483,6 +4485,7 @@ def _snapshot_reviewer_has_no_children(task_id: str, request: dict) -> bool:
     return True
 
 
+@frame_language.pinned
 def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
                     task: dict | None = None) -> str:
     task = task if task is not None else (get(task_id) or {})
@@ -4499,7 +4502,7 @@ def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
     active = [row for row in active if not _yielded_to(task_id, str(row["id"]), str(request["id"]))]
     limit = _worker_slots(task.get("max_active_workers", DEFAULT_WORKERS))
     if len(active) >= limit:
-        return f"Active worker slots exhausted: {len(active)}/{limit}"
+        return frame_language.text('forge.workers.20', v1=f'{len(active)}', v3=f'{limit}')
     if request.get("role") == "worker":
         writers = [str(r["id"]) for r in active if r.get("role") == "worker"]
         for kind in ("processes", "verifications"):
@@ -4507,7 +4510,7 @@ def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
                            if not r.get('custody_recovered') and r.get("status") not in (_TERMINAL_AGENT_STATES | {
                                "passed", "passed_with_skips", "stale"}))
         if writers:
-            return "shared-root writer occupied: " + ",".join(writers)
+            return frame_language.text('forge.workers.21') + ",".join(writers)
     return ""
 
 
@@ -4545,13 +4548,15 @@ def _root_released(task_id: str, unit_id: str) -> bool:
             and release.get("result_sha256") == digest)
 
 
+@frame_language.pinned
 def _detached_writer_reason(task_id: str) -> str:
     settled = _TERMINAL_AGENT_STATES | {"passed", "passed_with_skips", "stale"}
     outstanding = [str(row["id"]) for kind in ("processes", "verifications")
                    for row in _units(task_id, kind) if not row.get('custody_recovered') and row.get("status") not in settled]
-    return "detached writer exit unconfirmed: " + ",".join(outstanding) if outstanding else ""
+    return frame_language.text('forge.workers.22') + ",".join(outstanding) if outstanding else ""
 
 
+@frame_language.pinned
 def _wait_worker_child(task_id: str, parent_path: str, child: str) -> str:
     """Explicit serialized worker->worker handoff, inside ONE blocking tool call.
 
@@ -4572,7 +4577,7 @@ def _wait_worker_child(task_id: str, parent_path: str, child: str) -> str:
         child_request = _read_json(target / "request.json", {}) or {}
         if (not parent or request.get("role") != "worker" or child_request.get("role") != "worker"
                 or child_request.get("parent_unit_id") != parent):
-            return answer("refused", "wait transfers ownership only to an immediate worker child")
+            return answer("refused", frame_language.text('forge.workers.23'))
         reason = _detached_writer_reason(task_id)
         if reason:
             return answer("refused", reason)
@@ -4586,7 +4591,7 @@ def _wait_worker_child(task_id: str, parent_path: str, child: str) -> str:
                 return answer("refused", reason)  # fence survives; no regained write authority
             state = _unit_state(target)
             if state.get("status") in {"lost", "unknown"}:
-                return answer("unknown", "child execution is unconfirmed; ownership remains yielded",
+                return answer("unknown", frame_language.text('forge.workers.24'),
                               execution_status=state.get("status"), liveness=state.get("liveness"))
             result = _read_json(target / "result.json")
             if isinstance(result, dict) and state.get("status") in _TERMINAL_AGENT_STATES:
@@ -4604,10 +4609,10 @@ def _wait_worker_child(task_id: str, parent_path: str, child: str) -> str:
                     _atomic_json(directory / "handoff.json", {"state": "returned",
                         "child_unit_id": child, "result_sha256": digest, "at": _now()})
                     _event(task_id, "worker_reacquired", agent_id=parent, child_unit_id=child)
-                    return answer("settled", "serialized child released task root",
+                    return answer("settled", frame_language.text('forge.workers.25'),
                                   result_sha256=digest, result=result)
                 if reason:
-                    return answer("unknown", reason + "; ownership remains yielded")
+                    return answer("unknown", reason + frame_language.text('forge.workers.26'))
         tick_queued(task_id)
         time.sleep(.1)
 
@@ -4704,13 +4709,14 @@ def _queued_identities() -> list[Path]:
         return sorted(state["queued"])
 
 
+@frame_language.pinned
 def _queued_dependency_reason(request: dict, by_id: dict) -> str:
     nid = str(request.get("node_id") or "")
     if not nid or request.get("parent_unit_id"):
         return ""
     node = by_id.get(nid)
     if not node or node.get("agent_id") != request.get("id"):
-        return "swarm reservation identity changed"
+        return frame_language.text('forge.workers.27')
     return forge_swarm.dependency_reason(node, by_id)
 
 
@@ -4725,6 +4731,7 @@ def observe_liveness() -> None:
             _QUEUE_OBSERVER.get("current", {}).pop(directory, None)
 
 
+@frame_language.pinned
 def tick_queued(task_id: str = "") -> list[dict]:
     """Drain current admitted identities; never recreate/retry a lost execution."""
     discovered = _queued_identities()
@@ -4762,7 +4769,7 @@ def tick_queued(task_id: str = "") -> list[dict]:
                 for directory, request in requests:
                     reason = _admission_reason(tid, str(directory / "request.json"))
                     if (directory / "stop.json").exists():
-                        reason = "unit is stop-fenced"
+                        reason = frame_language.text('forge.workers.28')
                     reason = reason or _queued_dependency_reason(request, nodes)
                     reason = reason or _agent_capacity(tid, request, units=units, task=task)
                     if reason:
@@ -4802,6 +4809,7 @@ def _writer_ended(directory: Path) -> bool:
     return _group_live_members(pid) is False
 
 
+@frame_language.pinned
 def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") -> dict:
     import forge_runtime
     with _mutation_lock(task_id):
@@ -4810,7 +4818,7 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
             return {"status": "refused", "reason": reason}
         task = get(task_id) or {}
         if task.get("self_review") or task.get("source_update"):
-            return {"status": "refused", "reason": "trusted adapter correction needs a new bound task"}
+            return {"status": "refused", "reason": frame_language.text('forge.workers.29')}
         original_parent = _parent_of(task_id, agent_id)
         if original_parent:
             reason = _admission_reason(task_id, str(_unit_dir(task_id, "agents", original_parent) / "request.json"))
@@ -4820,9 +4828,9 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
         request = _read_json(source / "request.json", {}) or {}
         progress = forge_runtime.read_progress(source)
         if expected_generation and progress.get("generation") != expected_generation:
-            return {"status": "refused", "reason": "generation changed"}
+            return {"status": "refused", "reason": frame_language.text('forge.workers.30')}
         if not request or not _writer_ended(source):
-            return {"status": "unknown", "reason": "old writer tree exit is unproven"}
+            return {"status": "unknown", "reason": frame_language.text('forge.workers.31')}
         for prior_path in (_task_dir(task_id) / "agents").glob("*/request.json"):
             prior_request = _read_json(prior_path, {}) or {}
             if (prior_request.get("previous_unit_id") == agent_id
@@ -4830,14 +4838,14 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
                          or prior_request.get("continuation_source"))):
                 return {"status": _unit_state(prior_path.parent).get("status") or "unknown",
                         "agent_id": prior_path.parent.name, "previous_unit_id": agent_id,
-                        "reason": "existing continuation retained; select that unit for any later resume"}
+                        "reason": frame_language.text('forge.workers.32')}
         result = _read_json(source / "result.json", {}) or {}
         if result.get("status") == "done":
-            return {"status": "refused", "reason": "completed result is immutable; use new rework brief"}
+            return {"status": "refused", "reason": frame_language.text('forge.workers.33')}
         info = forge_runtime.continuation_info(source)
         never_started = result.get("never_started") is True
         if not never_started and not info.get("safe"):
-            return {"status": "refused", "reason": str(info.get("reason") or "no safe checkpoint")}
+            return {"status": "refused", "reason": str(info.get("reason") or frame_language.text('forge.workers.34'))}
         # A resumed execution has a NEW durable identity. Its old Stop/result and
         # transcript remain intact, rather than silently reviving a terminal unit.
         unit = _id("agent")
@@ -4853,7 +4861,7 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
             _atomic_json(directory / "resume.json", {"schema": 1,
                 "generation": info["generation"], "checkpoint_sha256": info["checkpoint_sha256"],
                 "authorized": True, "old_writer_ended": True, "task_control_permits": True})
-        resumed["queued_reason"] = _agent_capacity(task_id, resumed) or "explicit continuation admitted"
+        resumed["queued_reason"] = _agent_capacity(task_id, resumed) or frame_language.text('forge.workers.35')
         _atomic_json(directory / "request.json", resumed)
         plan = forge_swarm.load(_task_dir(task_id))
         for node in plan.get("nodes", []):

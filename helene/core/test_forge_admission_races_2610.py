@@ -331,7 +331,7 @@ class AdmissionRaces(unittest.TestCase):
         self.assertEqual(forge.get(self.tid)['status'], 'stopped')
         self.assertEqual(forge.control(self.tid, 'resume')['status'], 'refused')
         self.assertEqual(forge.control(self.tid, 'pause')['status'], 'refused')
-        self.assertIn('terminal', forge.agent(self.tid, 'spawn', brief='must not run'))
+        self.assertIn(forge.frame_language.text('forge.workers.7'), forge.agent(self.tid, 'spawn', brief='must not run'))
         self.spawn.assert_not_called()
         self.assertEqual(forge._read_json(directory / 'result.json')['status'], 'done')
 
@@ -346,7 +346,7 @@ class AdmissionRaces(unittest.TestCase):
         forge._atomic_json(self.directory / 'control.json', {'action': 'pause'})
         forge.tick_queued()
         req = self.directory / 'agents/agent-bbbbbbbb/request.json'
-        self.assertIn('pause-fenced', forge._read_json(req)['queued_reason'])
+        self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'), forge._read_json(req)['queued_reason'])
         forge.control(self.tid, 'resume')
         forge._atomic_json(self.directory / 'agents/agent-aaaaaaaa/result.json', {'status': 'done'})
         forge.release_worker_root(self.directory / 'agents/agent-aaaaaaaa/request.json')
