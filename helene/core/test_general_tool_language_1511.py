@@ -17,7 +17,9 @@ REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','
             'group_context','speak','search_chats','search_private_messages','read_other_chat','reread_this_chat',
             'python','run_command','code_query','proposal','project','memory_graph',
             'write_skill','restart_self','freeze_chat','panic','find_telegram_id','my_agenda',
-            'unschedule','send_message','narrate','home_note','git','code_outline','second_look','describe','call')
+            'unschedule','send_message','narrate','home_note','git','code_outline','second_look','describe','call',
+            'shell','fs_read','edit','fs_search','fs_ls','send_file','web_read','web_find',
+            'send_email','check_email','mail_read','mail_draft_reply','task_control')
 
 
 def stock():
