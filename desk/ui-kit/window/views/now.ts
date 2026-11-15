@@ -1,4 +1,5 @@
 import { t as uiText } from "../../../lang/lang";
+import {agentStatePhrase} from '../../status';
 // «Сейчас» — главный экран (слово владельца 07.09: «я должен видеть сразу
 // текущий ход»): идущий ход во всю ширину, шаги живьём, кадр, недавние ходы
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
@@ -80,7 +81,7 @@ function idleHTML(): string {
   const at = s.brain?.last_call_at;
   const age = at ? Math.round((Date.now() / 1000 - at) / 60) : null;
   const when = age == null ? "" : age < 1 ? uiText("ui.ui.kit.window.views.now.0f9229ccb7") : age < 60 ? uiText("ui.ui.kit.window.views.now.59a9097481", {p0: String(age)}) : uiText("ui.ui.kit.window.views.now.38c8a65581", {p0: String(Math.round(age / 60))});
-  const phrase = foreignHarness() ? uiText("ui.ui.kit.window.views.now.d94e047496", {p0: String(when ? " · " + when : "")}) : `${s.phrase}${when ? " · " + when : ""}`;
+  const phrase = foreignHarness() ? uiText("ui.ui.kit.window.views.now.d94e047496", {p0: String(when ? " · " + when : "")}) : `${agentStatePhrase(s)}${when ? " · " + when : ""}`;
   const wake = s.next_wake ? uiText("ui.ui.kit.window.views.now.e1a5d49bb2", {p0: String(fmtTime(s.next_wake) || s.next_wake)}) : "";
   return `<div class="now-idle"><span class="dot ${!foreignHarness() && s.level === "error" ? "failed" : "ok"}"></span><span>${esc(phrase)}${esc(wake)}</span></div>`;
 }

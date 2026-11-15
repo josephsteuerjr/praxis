@@ -6,9 +6,10 @@ import { RecentMap } from "../recent-map";
 export interface AgentState {
   agent: string;
   owner: string;
-  level: "ok" | "live" | "warn" | "error";
+  level: "ok" | "live" | "warn" | "error" | "off";
   phrase: string;
-  action: { label: string; target: string } | null;
+  display_phrase?: unknown;
+  action: { label: string; target: string; display_label?: unknown } | null;
   runner: { alive: boolean; age_s: number | null; busy: boolean; run: string; since: number; ever?: boolean; pid?: number };
   activity?: { run_id: string; phase: "model" | "tool" | "working"; tool: string; chat_id: string; kind: string; event_seq: number } | null;
   brain: {
@@ -27,7 +28,7 @@ export interface AgentState {
   relay: { used: boolean; authorized: boolean };
   telegram: { enabled: boolean };
   next_wake: string | null;
-  alarms: Array<{ kind: string; text: string }>;
+  alarms: Array<{ kind: string; text: string; display_text?: unknown }>;
   /** Сон движка издания: включён ли и окно часов машины (ручки из anatomy.json). Нет —
    *  у агента свой харнесс, и окно сна ему неизвестно (ревью 26.09, W4 S2). */
   sleep?: { on: boolean; window: string; tz: string } | null;

@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from deskd import state_words
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -1911,7 +1912,7 @@ def health() -> dict:
         log.exception("сторож тишины не собрался")
         return {"alarms": [{"kind": "reader_failed",
                             "text": "сторож тишины не прочитался — "
-                                    "подробности в helene.log"}],
+                                    "подробности в helene.log", 'display_text': state_words.make('alarm.reader_pulse')}],
                 "checked_at": _time.time(), "last_call_min_ago": None,
                 "restarts_20m": 0, "undelivered": 0, "skips_5m": 0}
 
@@ -1964,7 +1965,7 @@ def _health_impl() -> dict:
                 recent_restarts += 1
     if recent_restarts >= 3:
         alarms.append({"kind": "restart_loop",
-                       "text": f"петля рестартов: {recent_restarts} за 20 минут"})
+                       "text": f"петля рестартов: {recent_restarts} за 20 минут", 'display_text': state_words.make('alarm.restart_loop',count=recent_restarts)})
 
     # 2. Молчание при долге: вызовов модели давно нет, а недоставленные события есть.
     llm_rows = tail_jsonl(state / "llm_calls.jsonl", 5)
@@ -1984,17 +1985,17 @@ def _health_impl() -> dict:
     if quiet_min is not None and quiet_min > 20 and undelivered > 0:
         alarms.append({"kind": "deaf_with_debt",
                        "text": (f"тишина {quiet_min:.0f} мин при {undelivered} "
-                                "недоставленных событиях")})
+                                "недоставленных событиях"), 'display_text': state_words.make('alarm.debt',minutes=round(quiet_min),count=undelivered)})
     elif quiet_min is not None and quiet_min > 90:
         alarms.append({"kind": "long_silence",
-                       "text": f"ни одного вызова модели {quiet_min:.0f} мин"})
+                       "text": f"ни одного вызова модели {quiet_min:.0f} мин", 'display_text': state_words.make('alarm.long_silence',minutes=round(quiet_min))})
 
     # 3. Шторм откладываний: perception_skips растёт лавиной (defer-петля 20 Гц).
     skips = tail_jsonl(state / "perception_skips.jsonl", 400)
     recent_skips = sum(1 for r in skips if now - _num(r.get("ts")) < 300)
     if recent_skips >= 150:
         alarms.append({"kind": "defer_storm",
-                       "text": f"{recent_skips} откладываний за 5 минут — похоже на defer-петлю"})
+                       "text": f"{recent_skips} откладываний за 5 минут — похоже на defer-петлю", 'display_text': state_words.make('alarm.defer_storm',count=recent_skips)})
 
     return {"alarms": alarms, "checked_at": now,
             "last_call_min_ago": round(quiet_min, 1) if quiet_min is not None else None,
@@ -2336,39 +2337,39 @@ def runner_activity(runner: dict) -> dict | None:
             "event_seq": _receipt_int(manifest.get("event_seq"))}
 
 
-def _short_error(err) -> str:
+def _short_error(err, *, owned=False):
     """Ошибка модели человеческими словами; хвост сырого текста — в last_error_raw."""
     text = str(err or "").strip().replace("\n", " ")
     low = text.lower()
     if "401" in low or "unauthorized" in low or "invalid api key" in low \
             or "incorrect api key" in low:
-        return "ключ не подошёл"
+        return state_words.error_hint('auth', "ключ не подошёл", owned)
     if "429" in low or "rate limit" in low or "quota" in low or "insufficient" in low:
-        return "лимит или баланс исчерпан"
+        return state_words.error_hint('quota', "лимит или баланс исчерпан", owned)
     if "timeout" in low or "timed out" in low:
-        return "модель не ответила вовремя"
+        return state_words.error_hint('timeout', "модель не ответила вовремя", owned)
     if "connect" in low or "getaddrinfo" in low or "name or service" in low \
             or "network" in low:
-        return "нет связи с моделью"
+        return state_words.error_hint('network', "нет связи с моделью", owned)
     if "404" in low or "not found" in low or "model_not_found" in low:
-        return "такой модели нет по этому адресу"
+        return state_words.error_hint('address', "такой модели нет по этому адресу", owned)
     if "unsupported_parameter" in low or "unsupported parameter" in low \
             or "unsupported value" in low or "unrecognized request argument" in low:
-        return "модель не принимает одну из настроек — проверь усилие рассуждения"
+        return state_words.error_hint('parameter', "модель не принимает одну из настроек — проверь усилие рассуждения", owned)
     if "context_length" in low or "context length" in low \
             or "maximum context" in low or "too many tokens" in low:
-        return "разговор длиннее, чем модель принимает"
+        return state_words.error_hint('context', "разговор длиннее, чем модель принимает", owned)
     if "content_filter" in low or "content policy" in low or "safety" in low:
-        return "модель отказалась отвечать по своим правилам"
+        return state_words.error_hint('policy', "модель отказалась отвечать по своим правилам", owned)
     if "invalid_request_error" in low or "400" in low:
-        return "модель не приняла запрос"
+        return state_words.error_hint('request', "модель не приняла запрос", owned)
     if "500" in low or "502" in low or "503" in low or "overloaded" in low \
             or "internal server error" in low:
-        return "сбой на стороне модели"
+        return state_words.error_hint('server', "сбой на стороне модели", owned)
     # Было: `text[:90]` — сырой английский Python-эксепшн, обрезанный по счётчику
     # посреди слова, прямо в шапку окна (и ещё дважды на других экранах).
     # Сырой текст остаётся в last_error_raw и в Журнале, человеку — фраза.
-    return "подробности в Журнале"
+    return state_words.error_hint('unknown', "подробности в Журнале", owned)
 
 
 def _key_present(anatomy: dict, llm: dict, voice: dict, product: dict) -> bool:
@@ -2508,8 +2509,8 @@ def state() -> dict:
             "next_wake": None,
             "alarms": [{"kind": "reader_failed",
                         "text": "состояние агента не прочиталось — "
-                                "подробности в helene.log"}],
-        }
+                                "подробности в helene.log", 'display_text': state_words.make('alarm.reader_state')}],
+        'display_phrase': state_words.make('reader_failed')}
 
 
 def _state_impl() -> dict:
@@ -2611,12 +2612,14 @@ def _state_impl() -> dict:
     action = None
     if not runner_alive:
         level, phrase = "error", "Не запущен"
-        action = {"label": "Перезапустить", "target": "restart"}
+        display_phrase = state_words.make('not_running')
+        action = {"label": "Перезапустить", "target": "restart", 'display_label': state_words.make('action.restart')}
     elif quota is not None:
         words = str(quota.get("words") or "подписка исчерпана")
         level, phrase = "warn", (f"{words} — отвечает запасная модель" if fallback_armed
                                  else f"{words} — запасной модели на другом эндпойнте нет")
-        action = {"label": "Настройки", "target": "settings"}
+        display_phrase = state_words.make('quota_fallback' if fallback_armed else 'quota_no_fallback',until=max(0.0,_num(quota.get('until'))))
+        action = {"label": "Настройки", "target": "settings", 'display_label': state_words.make('action.settings')}
     elif not configured:
         if named:
             # Отдельная фраза: имя модели заполнено, а ключа нет. Прежнее
@@ -2624,29 +2627,37 @@ def _state_impl() -> dict:
             # модели, которое на самом деле заполнено, — и он уходил ни с чем.
             # Коротко намеренно: шапка окна режет длинную фразу многоточием.
             level, phrase = "warn", "Ключ модели не введён"
-            action = {"label": "Ввести ключ", "target": "settings"}
+            display_phrase = state_words.make('key_missing')
+            action = {"label": "Ввести ключ", "target": "settings", 'display_label': state_words.make('action.key')}
         else:
             level, phrase = "warn", "Модель не настроена"
-            action = {"label": "Настроить", "target": "settings"}
+            display_phrase = state_words.make('model_missing')
+            action = {"label": "Настроить", "target": "settings", 'display_label': state_words.make('action.configure')}
     elif recent_error:
         # Свежая ошибка модели важнее предупреждения про вход в реле: раньше
         # ветка реле стояла выше и перекрывала настоящую причину молчания.
         level, phrase = "error", f"Модель отвечает ошибкой: {_short_error(last_err)}"
-        action = {"label": "Настройки", "target": "settings"}
+        display_phrase = _short_error(last_err,owned=True)
+        action = {"label": "Настройки", "target": "settings", 'display_label': state_words.make('action.settings')}
     elif relay_used and not relay_auth:
         level, phrase = "warn", "Подписка ChatGPT не подключена"
-        action = {"label": "Войти", "target": "settings"}
+        display_phrase = state_words.make('relay_signin')
+        action = {"label": "Войти", "target": "settings", 'display_label': state_words.make('action.signin')}
     elif busy and runner.get("run") == "sleep":
         # Ревью 26.09 (W3 S1): сон — не ход. «Думает» и «агент читает сейчас» обещали
         # ответ, которого до конца сна не будет; записки ждут его конца.
         level, phrase = "live", "Спит — прочтёт сообщения, когда проснётся"
+        display_phrase = state_words.make('sleeping')
     elif busy:
         level, phrase = "live", "Думает"
+        display_phrase = state_words.make('thinking')
     elif next_wake is not None:
         local = next_wake.astimezone()
         level, phrase = "ok", f"Ждёт, проснётся в {local.strftime('%H:%M')}"
+        display_phrase = state_words.make('wake_wait',at=next_wake.timestamp())
     else:
         level, phrase = "ok", "На связи"
+        display_phrase = state_words.make('online')
     return {
         "agent": agent,
         "owner": str(anatomy.get("owner_name") or ""),
@@ -2685,7 +2696,7 @@ def _state_impl() -> dict:
         # сверяет, что канал встал именно с тем пакетом, который положен.
         "desk": desk_build(),
         "update_inspection": _load_json(st / "update-inspection.json"),
-    }
+        'display_phrase': display_phrase}
 
 
 _OWNER_MARK_PREFIX = "> [правка владельца · "

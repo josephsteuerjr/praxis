@@ -1,4 +1,5 @@
 import { t as uiText, UiError } from "../../lang/lang";
+import {agentStatePhrase,stateActionLabel,stateAlarmText} from '../status';
 // Окно как таковое: полка слева (разделы и чаты), переписка в центре, ход агента
 // справа; состояние агента одной фразой в шапке; настройки экраном, а не файлом.
 // Большой надписи с именем продукта нет — только подпись внизу полки (слово
@@ -1185,11 +1186,11 @@ export function start(opts: WindowOptions): void {
     statePill.dataset.level = s.level;
     stateText.textContent = s.level === "live" && s.activity
       ? s.activity.phase==='model' ? uiText("ui.ui.kit.window.main.e497673800") : s.activity.phase==='tool' ? uiText("ui.ui.kit.window.main.33639ee7ba") : uiText("ui.ui.kit.window.main.0232a30541")
-      : s.phrase;
-    statePill.title = s.phrase;
+      : agentStatePhrase(s);
+    statePill.title = agentStatePhrase(s);
     if (s.action) {
       stateAction.hidden = false;
-      stateAction.textContent = s.action.label;
+      stateAction.textContent = stateActionLabel(s.action);
       stateAction.onclick = () => {
         if (s.action?.target === "settings") void show("settings");
         else if (s.action?.target === "restart") void restartHarness();
@@ -1200,7 +1201,7 @@ export function start(opts: WindowOptions): void {
     // «Долгое молчание» без долга — сигнал разработчику, не тревога для человека.
     const alarms = (s.alarms || []).filter((a) => a.kind !== "long_silence");
     alarmBox.hidden = !alarms.length;
-    alarmBox.innerHTML = alarms.map((a) => `<span>⚠ ${esc(a.text)}</span>`).join(" · ");
+    alarmBox.innerHTML = alarms.map((a) => `<span>⚠ ${esc(stateAlarmText(a))}</span>`).join(" · ");
   }
 
   let stateReading = false;

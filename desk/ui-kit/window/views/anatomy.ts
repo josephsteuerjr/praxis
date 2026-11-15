@@ -1,4 +1,5 @@
 import {localizeMode} from "../mode-owned";
+import {agentStatePhrase} from '../../status';
 import { t as uiText, locale } from "../../../lang/lang";
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
@@ -334,7 +335,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const memory = memoryR.status === "fulfilled" ? memoryR.value : null;
   const mode = mR.status === "fulfilled" ? mR.value : null;
   const computer = computerOverview(mode?.computer || a.computer, mode?.computer_live);
-  const overview = uiText("ui.ui.kit.window.views.anatomy.ad3a306e59", {p0: String(esc(current?.phrase || uiText("ui.ui.kit.window.views.anatomy.9f07bc1895"))), p1: String(esc(a.agent_name || "")), p2: String(esc(current?.brain?.model || uiText("ui.ui.kit.window.views.anatomy.9f07bc1895"))), p3: String(esc(computer.status)), p4: String(esc(computer.scopes.join(", "))), p5: String(memory?.hot == null ? uiText("ui.ui.kit.window.views.anatomy.9f07bc1895") : uiText("ui.ui.kit.window.views.anatomy.306eb57ee2", {p0: String(fmtN(memory.hot))})), p6: String(memory?.tape_chars ? uiText("ui.ui.kit.window.views.anatomy.ecee140de3", {p0: String(fmtN(memory.tape_chars))}) : uiText("ui.ui.kit.window.views.anatomy.2968cbf1b3")), p7: String(inspectionHTML(current?.update_inspection))});
+  const overview = uiText("ui.ui.kit.window.views.anatomy.ad3a306e59", {p0: String(esc(agentStatePhrase(current) || uiText("ui.ui.kit.window.views.anatomy.9f07bc1895"))), p1: String(esc(a.agent_name || "")), p2: String(esc(current?.brain?.model || uiText("ui.ui.kit.window.views.anatomy.9f07bc1895"))), p3: String(esc(computer.status)), p4: String(esc(computer.scopes.join(", "))), p5: String(memory?.hot == null ? uiText("ui.ui.kit.window.views.anatomy.9f07bc1895") : uiText("ui.ui.kit.window.views.anatomy.306eb57ee2", {p0: String(fmtN(memory.hot))})), p6: String(memory?.tape_chars ? uiText("ui.ui.kit.window.views.anatomy.ecee140de3", {p0: String(fmtN(memory.tape_chars))}) : uiText("ui.ui.kit.window.views.anatomy.2968cbf1b3")), p7: String(inspectionHTML(current?.update_inspection))});
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
   const materials = materialsHTML(retR.status === "fulfilled" ? retR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);

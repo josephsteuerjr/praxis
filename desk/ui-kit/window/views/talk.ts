@@ -1,4 +1,5 @@
 import { t as uiText } from "../../../lang/lang";
+import {agentStatePhrase,stateActionLabel} from '../../status';
 import { VoiceArrivals } from "../voice-arrivals";
 import { voicePreferences } from "../voice-preferences";
 const voiceArrivals = new VoiceArrivals();
@@ -136,8 +137,8 @@ function brainNotice(): string {
     const raw = brainErrorIsCurrent() ? s.brain.last_error_raw : null;
     return `<div class="notice ${s.level === "error" ? "err" : ""}">
       <span class="dot ${s.level === "error" ? "failed" : ""}"></span>
-      <span>${esc(s.phrase)}</span>
-      ${s.action ? `<button class="notice-action" data-act="${esc(s.action.target)}" type="button">${esc(s.action.label)}</button>` : ""}
+      <span>${esc(agentStatePhrase(s))}</span>
+      ${s.action ? `<button class="notice-action" data-act="${esc(s.action.target)}" type="button">${esc(stateActionLabel(s.action))}</button>` : ""}
       ${raw ? uiText("ui.ui.kit.window.views.talk.06e379d3ed", {p0: String(esc(raw))}) : ""}
     </div>`;
   }

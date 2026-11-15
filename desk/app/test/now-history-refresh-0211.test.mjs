@@ -5,17 +5,19 @@ import {stripTypeScriptTypes} from 'node:module';
 import test from 'node:test';
 
 const source=readFileSync(new URL('../../ui-kit/window/views/now.ts',import.meta.url),'utf8');
+const statusSource=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/status.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,''));
+const agentStatePhrase=new Function('locale',statusSource+'\nreturn agentStatePhrase;')(globalThis.locale);
 function windowFixture(view='now') {
   const S={view,runs:[],agentState:{phrase:'Ready',runner:{alive:true,busy:false}},evCache:new Map()};
   const container={html:'',writes:0,querySelector:()=>null,querySelectorAll:()=>[],
     set innerHTML(value){this.html=value;this.writes++;}};
   const compiled=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,''));
   const factory=new Function('S','cfg','api','mountUsage','usageShell','frameStripHTML','activityHTML','updateActivity',
-    'foreignHarness','runIsRecent','bindRuns','loadWords','runDetail','runRowHTML','esc','fmtDur','fmtTime','window',
+    'foreignHarness','runIsRecent','bindRuns','loadWords','runDetail','runRowHTML','esc','fmtDur','fmtTime','window','agentStatePhrase',
     compiled+'\nreturn {render,runsChanged:typeof runsChanged === "function" ? runsChanged : ()=>{}};');
   const noop=()=>'';
   const now=factory(S,{},noop,noop,noop,noop,noop,noop,()=>false,()=>true,noop,async()=>{},async()=>undefined,
-    r=>`<article>${r.id}</article>`,String,String,String,{setTimeout:()=>0});
+    r=>`<article>${r.id}</article>`,String,String,String,{setTimeout:()=>0},agentStatePhrase);
   return {S,container,now};
 }
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};

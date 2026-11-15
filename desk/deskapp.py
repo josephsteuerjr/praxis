@@ -1075,11 +1075,11 @@ async def _r_forge_receipt(c: Call):
 
 
 def _state_with_autonomy():
-    from deskd import autonomy
+    from deskd import autonomy,state_words
     snapshot=dict(readers.state())
     snapshot['autonomy']=autonomy.state(readers.tree())
     if snapshot['autonomy']['paused'] and snapshot['autonomy']['available'] and (snapshot.get('runner') or {}).get('alive'):
-        snapshot.update(level='off',phrase='На связи · агент на паузе',action=None)
+        snapshot.update(level='off',phrase='На связи · агент на паузе',action=None,display_phrase=state_words.make('paused'))
     return snapshot
 
 

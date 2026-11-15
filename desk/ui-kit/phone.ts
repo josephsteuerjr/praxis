@@ -13,6 +13,7 @@ import { t as uiText } from "../lang/lang";
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
 import { esc, fmtDay, fmtTime, isToday, md, runTitle, systemNoticeText } from "./text";
+import {agentStatePhrase} from './status';
 import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 import { RecentMap } from "./recent-map";
@@ -34,6 +35,7 @@ export interface AgentState {
   owner?: string;
   level: Level;
   phrase: string;
+  display_phrase?: unknown;
   runner?: { alive: boolean; busy: boolean; run: string; since: number; ever?: boolean };
   brain?: { last_call_at: number | null };
   next_wake?: string | null;
@@ -462,7 +464,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     topName.textContent = agent;
     topName.classList.add("hand");
     if (!state) return;
-    const f = foreign() ? foreignPhrase() : { level: state.level, phrase: state.phrase };
+    const f = foreign() ? foreignPhrase() : { level: state.level, phrase: agentStatePhrase(state) };
     topState.dataset.level = f.level;
     topPhrase.textContent = f.phrase;
     const nowTab = tabsNav.querySelector<HTMLElement>('.tab[data-tab="now"]');
