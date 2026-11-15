@@ -816,5 +816,6 @@
   "mcp.invalid_catalog": "Windows MCP a renvoyé un catalogue d’outils vide ou invalide.",
   "mcp.not_ready": "Windows MCP n’a pas confirmé sa disponibilité.",
   "mcp.exited": "Windows MCP s’est arrêté. Choisir Démarrer.",
-  "mcp.unsupported_platform": "Windows MCP exige Windows x64."
+  "mcp.unsupported_platform": "Windows MCP exige Windows x64.",
+  "schema.no_description": "sans description"
 }

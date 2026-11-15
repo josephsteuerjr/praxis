@@ -9,6 +9,7 @@ import agent
 import frame_language
 import tool_language
 import windows_mcp_tools as mcp
+import tool_text_en
 
 RAW='AUTHORED Русский 日本語 {unknown} $&'
 
@@ -21,6 +22,32 @@ def structural(value):
 
 
 class ToolLanguages(unittest.TestCase):
+    def test_stock_english_fallback_stays_exact_before_general_translations(self):
+        names=('BASE_TOOLS','SHARED_CONTEXT_TOOLS','OWNER_TOOLS','WEB_READ_TOOL','WEB_FIND_TOOL',
+               'SEND_EMAIL_TOOL','CHECK_EMAIL_TOOL','MAIL_READ_TOOL','MAIL_DRAFT_TOOL',
+               'TASK_CONTROL_TOOL','DESCRIBE_TOOL','CALL_TOOL')
+        stock={}
+        for name in names:
+            value=getattr(agent,name)
+            for tool in value if isinstance(value,list) else [value]:
+                if tool.get('input_schema'):stock[tool['name']]=tool
+        self.assertEqual(set(stock),set(tool_language.sources()))
+        before=copy.deepcopy(list(stock.values()))
+        with frame_language.use('en'):
+            self.assertEqual(tool_language.apply(list(stock.values()),fallback=tool_text_en.apply),
+                             tool_text_en.apply(list(stock.values())))
+        self.assertEqual(list(stock.values()),before)
+
+    def test_general_author_edit_is_preserved_before_legacy_overlay_can_erase_it(self):
+        authored=copy.deepcopy(agent.DESCRIBE_TOOL);authored['description']=RAW
+        with patch.object(tool_text_en,'apply',wraps=tool_text_en.apply) as legacy:
+            for language in frame_language.LANGUAGES:
+                with frame_language.use(language):
+                    self.assertIs(tool_language.apply([authored],fallback=legacy)[0],authored)
+                    self.assertEqual(agent._hand_purpose(authored),RAW)
+                    self.assertFalse(tool_language.known(authored))
+        legacy.assert_not_called()
+
     def test_complete_native_catalog_has_fresh_reviewed_text_and_no_template_parameters(self):
         self.assertEqual(tool_language.coverage(mcp.TOOLS),{'reviewed':21,'missing':[],'stale':[]})
         self.assertEqual(sum(len(row['descriptions']) for row in tool_language.registry().values()),112)

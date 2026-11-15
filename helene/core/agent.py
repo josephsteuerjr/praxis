@@ -9195,16 +9195,15 @@ def _hand_purpose(tool: dict) -> str:
     строками, и русский текст выбросил бы английские описания 86 рук из 95.
     """
     name = str(tool.get("name") or "")
+    localized = tool_language.purpose(tool)
+    if localized:
+        return localized
     known = HAND_PURPOSE.get(name)
-    if known:
+    if known and tool_language.known(tool):
         return tool_text_en.pointer_purpose(name, known)
-    if name in windows_mcp_tools.PURPOSES:
-        localized = tool_language.purpose(tool)
-        if localized:
-            return localized
     text = " ".join(str(tool.get("description") or "").split())
     first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0] if text else ""
-    return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
+    return (first[:88] + "…") if len(first) > 90 else (first or frame_language.text('schema.no_description'))
 
 
 def _hand_signature(tool: dict, *, limit: int | None = 6) -> str:
@@ -17647,7 +17646,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # в ЕДИНСТВЕННОМ сборщике списка (контракт A1), потому что иначе отпечаток набора,
     # тень кадра и то, что видит модель, разошлись бы между собой. Меняется только
     # пояснительный текст: имена, типы, enum и порядок остаются как были.
-    return tool_language.apply(tool_text_en.apply(tools))
+    return tool_language.apply(tools, fallback=tool_text_en.apply)
 
 
 def offered_tools_for(ctx: "ChannelContext") -> list:
@@ -17668,7 +17667,7 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     body = [t for t in natives if t.get("name") != "end_turn"]
     # Схемы `describe`/`call` — через ту же английскую накладку, что и остальные:
     # иначе две родные руки говорили бы по-русски посреди английского набора.
-    return body + tool_language.apply(tool_text_en.apply([DESCRIBE_TOOL, CALL_TOOL])) + closer
+    return body + tool_language.apply([DESCRIBE_TOOL, CALL_TOOL], fallback=tool_text_en.apply) + closer
 
 
 def reply_hand_offered(ctx: "ChannelContext", *, no_tools: bool = False,

@@ -1,0 +1,426 @@
+{
+  "generate_image": {
+    "raw": "a3b53f3e178c816d89c8288522cdeea0656976aee0981891f4c1b35b9aa2cf03",
+    "english": "a3b53f3e178c816d89c8288522cdeea0656976aee0981891f4c1b35b9aa2cf03"
+  },
+  "recall": {
+    "raw": "c320f39acc67c918d054237a7272a4d44ac8e358303a31365d2afc9fff3250cb",
+    "english": "c320f39acc67c918d054237a7272a4d44ac8e358303a31365d2afc9fff3250cb"
+  },
+  "clear_owner_marks": {
+    "raw": "0835680ea323280dd64199c144fdb76fa79d8cbd57e7cfe9a611b176284ddf62",
+    "english": "a7f9de07858c9a2b615dd2631b5a7586eaf29d6b30304d0245a60112c9e07be8"
+  },
+  "remember": {
+    "raw": "2f0c1921a5578e2518b20c1bc608f054946135df8d1b36a7b76029e4f387db3c",
+    "english": "cea0b063186ca6e6c3b20a59d08bcf2a95def1368546cca2254485fcc223619a"
+  },
+  "journal": {
+    "raw": "e45ad25176c6d8f7c8aefd571c3e737ba8c9e62429196da194dea9f3db77ccd4",
+    "english": "4cc5f2e8b1a55ef51fcaeb0b6794ad4ad051f1c5b5655ef4bb203fac02018afc"
+  },
+  "manage_identity": {
+    "raw": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f",
+    "english": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f"
+  },
+  "manage_perception": {
+    "raw": "d0aed83bd421927f915716b0ff6fdd5f6f55354c524f89a407803b8e2153e079",
+    "english": "5dc675001bb9dfb2241d940a3b1d58ed85324b948c3cf466544b28cf02e1f9fe"
+  },
+  "reply": {
+    "raw": "c453fe9604484fea098884de4281989590e26316323e815b50a382378991bc9a",
+    "english": "ea078658dab950ddc541522e9164b0e19c92083dcad01d5443d75d95529b7aec"
+  },
+  "end_turn": {
+    "raw": "8ca27b01dd3e48d75aa4ce5af364a78790fc20e716741f1fe945c560b3c61a0c",
+    "english": "e0fc28f6ba1914b892b6fad9683b97be0cdd0770202e79446239af29b19611c4"
+  },
+  "preview_reply": {
+    "raw": "aa61f161c1958555f07d4ce722e955fca5f842b4eb7e3d48aa11ba062cafc9a2",
+    "english": "cdb2034e0c44c152bc010df04ed277c10b2c6520e2053def0c038498d3879686"
+  },
+  "switch_brain": {
+    "raw": "1ded8d32d3b93e3c34e574384dcdb702618d4c180a26fc644efacd960975180e",
+    "english": "38d1540ec33f29eedebaa71e894446f1764e3e42de9ec1815c752fe3fc33c9d2"
+  },
+  "stay_silent": {
+    "raw": "d04c746adcf9e891858446ad5cd1ed5f63bec0d6b7cdc8e562cca20f3765a415",
+    "english": "dc0106ce23e907e2c55e4f0043b8dbcc86baa7bab5724784c52cebd04cd92758"
+  },
+  "focus": {
+    "raw": "f2b8d4ad530dbbf25b0232c16b70f903747f2417d16af948a44b8a7091a25f18",
+    "english": "f8ede492bd555ddf1d8758f396764b5ec6e0317fa22bcd3424ae5ec16bf6f991"
+  },
+  "rest": {
+    "raw": "722892ec4b0c42341a588121875905a4fc59d631c3e9ae0a5590ca3589650d32",
+    "english": "018caf3c36ea27072ce6e523f532cce10e0a21af4c59d85397fa6f940fe5dcd2"
+  },
+  "my_capabilities": {
+    "raw": "4ad843f30e29b9dfd9428f519b37ba42971eca2adeff6a518c3f817ff632bafa",
+    "english": "4ad843f30e29b9dfd9428f519b37ba42971eca2adeff6a518c3f817ff632bafa"
+  },
+  "read_run_result": {
+    "raw": "a308edd9ef305495f39ecd15e5759c837989c331eb6e2609decdab521a84206e",
+    "english": "e7ec4d3c09c5cc226651fd156855f03a93f9d743530987cdcd9632f8f8ca3a5a"
+  },
+  "list_active_runs": {
+    "raw": "4ff51452f29d9dfdad26b6595b0a49929e2df797c7df18800480e4bbc51c6c63",
+    "english": "70b6d3ec5dcabcf1ca4c550dc82388cbacd07f2e5a2f3a5a0a2f1c0f057457e7"
+  },
+  "reconcile_run": {
+    "raw": "8660993be4394f6bc032e073e2d2160785524ff8a93abbfde2ab16c71b89469e",
+    "english": "4ed26ba83cdf47678fa094efd32279b9913b91d1f08807cc806840b8612c2469"
+  },
+  "group_context": {
+    "raw": "ea735d68593249c8036f02892644fd75cd07c99f5cea41483c7a210bfa320a5d",
+    "english": "7dd7d33ec45fb6f048dbafdde395d241b3e2e74a521c3b036925085bc901ba4f"
+  },
+  "speak": {
+    "raw": "376cb77c3f29247048f646522c4b271b5034e71982c705cd06eb0eb2ab01a777",
+    "english": "af61b75a0112930b45ae053c2c44d6cdf557b583befc41db4428d52e06bc6ff1"
+  },
+  "search_chats": {
+    "raw": "25488467d97ed5b1ce8d35c694913f77757641172b5cb8815d9f35e26625f7b7",
+    "english": "cb0e0b1ab6b2aa0c9365460c2ed8cc2971e2ecc94c388c2f038744d2370a5650"
+  },
+  "search_private_messages": {
+    "raw": "154c5e3ede99120b6a99130f8380164c424aa1c1d7a0be96691029642fa7873c",
+    "english": "d3c8ec092241b0fad3a9b30e0fcc9a81f0b4d6de021071e301c3720313e34196"
+  },
+  "read_other_chat": {
+    "raw": "2aa003f572b751fa0dee0fdc5a50d64f3aeb83e786e4a6d847ab1e423d5e1edc",
+    "english": "0f79d8f58a9f047c9de527bd26e1722e9206d01d59918c418d93586c0a34748f"
+  },
+  "reread_this_chat": {
+    "raw": "6b81af38e359bf8cf727664a8d8d791aeec7e1568c46773fd22aee9e201e2e16",
+    "english": "9110770cee9fecdeeeee90dcd80d84861a55bf9d931bbdeeccffc1d5f5b2e581"
+  },
+  "python": {
+    "raw": "b2999362f6dfaf47a9f50ffd41a73f7c710bf875f21e85159cda931766908a3c",
+    "english": "b2999362f6dfaf47a9f50ffd41a73f7c710bf875f21e85159cda931766908a3c"
+  },
+  "run_command": {
+    "raw": "83813501768501588f53fbfe847fcf863764a030b933505c71d6ada8c58cb683",
+    "english": "83813501768501588f53fbfe847fcf863764a030b933505c71d6ada8c58cb683"
+  },
+  "code_query": {
+    "raw": "3a40a5aca1981b3de1f2c7ae826646fa923450c34787fcf40fed9c0c4a9a67f3",
+    "english": "3a40a5aca1981b3de1f2c7ae826646fa923450c34787fcf40fed9c0c4a9a67f3"
+  },
+  "proposal": {
+    "raw": "b47a409342944c2da39b970259ea859ef00226ccbe57f514e71a4ed684e3f530",
+    "english": "b47a409342944c2da39b970259ea859ef00226ccbe57f514e71a4ed684e3f530"
+  },
+  "project": {
+    "raw": "2f47941b814df151a810b55725c0c6ab2caf3ff6fdfb5b36ba57f51a25dd64d4",
+    "english": "2f47941b814df151a810b55725c0c6ab2caf3ff6fdfb5b36ba57f51a25dd64d4"
+  },
+  "memory_graph": {
+    "raw": "f54c606222bb813a4e4d55f54b6715c589b940ea2bc96b88c84037e1d6cc6c8d",
+    "english": "f54c606222bb813a4e4d55f54b6715c589b940ea2bc96b88c84037e1d6cc6c8d"
+  },
+  "shell": {
+    "raw": "c3bf70dcbcd358e1e99b7f2634dbb52ece975c09613bb3b8a674bd75578cda5e",
+    "english": "93c8cf41cff1d2eb5db67f41d357b11800d90a2a50c0a477388b5df2eca4450e"
+  },
+  "manage_room": {
+    "raw": "42973f04c9e6828f2fe7c62ffdd4cacde23454515e7423bc18fda6d3e8dbfa95",
+    "english": "53c241168dc8958d7e9e114c39dd23d47919dd7e08e546ebe42979411598cf55"
+  },
+  "write_skill": {
+    "raw": "28de5522874297b9939e987e8db44a06e417ac151e89396e8d16eaa707494225",
+    "english": "bc59f97a373864c06712ee8c437ba38d494212d65176e0c4c44528b3920c3bc5"
+  },
+  "restart_self": {
+    "raw": "c66eae2a1489fecef658f252429c9fc1bb42e8d2565b1b3598f6fb4dfad56749",
+    "english": "3d60c1384dce7e13e3e123a828456c1ddc9da97e20f8215c5d587359ffc69836"
+  },
+  "freeze_chat": {
+    "raw": "10e030b4dde3b74d500d31874c67d70c0fedc0c3580486a30911b8e60e1d51c0",
+    "english": "10e030b4dde3b74d500d31874c67d70c0fedc0c3580486a30911b8e60e1d51c0"
+  },
+  "panic": {
+    "raw": "6e450cf20d1322b10dd1512f4474e9d8b58588d5f9016e0f47702f829448760f",
+    "english": "e16dae7e5dc77d5cce6915ec35761392e400a1863f79f42158b2ed2610cd05bd"
+  },
+  "find_telegram_id": {
+    "raw": "68d9542d8b7bc316a257d760fe690f79237228b5e1285a7ea3376ff4a7c6f617",
+    "english": "68d9542d8b7bc316a257d760fe690f79237228b5e1285a7ea3376ff4a7c6f617"
+  },
+  "manage_notes": {
+    "raw": "b4daf92be8424e5d903a4dcf7b622e688740e930fe71b3a526893083ca7bf26e",
+    "english": "4b9811cecf32ee35cd71a879f009909de0a867817669b7969d5cebca0e4fe844"
+  },
+  "memory_compact": {
+    "raw": "91b6bffdb39cb887136ffbfaaadc6f61a50d9604ebb16feaafb6f1816ce739ac",
+    "english": "ea2ce7deabceeb6799d494811e5282626b7ff2763a2976c660f3d2ef8c4074c2"
+  },
+  "manage_loop": {
+    "raw": "e343f8078c470b3b8706204a0102622f2e9b667759f80001ee7b0c3e6e386eab",
+    "english": "1e075ce6bd2767b26e3826a78f0efe2e3468fc31680a65e45fbfc532bb51244a"
+  },
+  "recent_turns": {
+    "raw": "d1efc5a9ae1bdad7d7c04d9661a2260a625f9ca13a8695361008318745796b7c",
+    "english": "1af81763a21cc65528e28446c2e9a1272e3af823624204c1a95448122ece0c83"
+  },
+  "manage_appetite": {
+    "raw": "a12d787f90ceae62fac9ab43ce3b9d68db36b46a8f8ea28a496b3861a09190f0",
+    "english": "4ad17c05dcd0c46c5d814909868f712a138d8e28fd2f827e9cc26b47c795ef43"
+  },
+  "remind_self": {
+    "raw": "63ac7fc345558621e6dd56cb00efd7964bf2d394a0f9483a3f287a08b505df39",
+    "english": "fee2c59e15d31db0ebf8280abd3fe63d69c34df9af7086daa00152e62ac68758"
+  },
+  "my_agenda": {
+    "raw": "d82973769c3ac60f0df0a358ff6500a847089c062702c19658162d28031dd72d",
+    "english": "7b4031e85ac4a784c72e1b08134b0638e975695763f09939d4c5ba59b9cfb53e"
+  },
+  "unschedule": {
+    "raw": "55050a2b5e7a7c207d07579ea15fcb17512e028a7416e7bf870cb361793bd84d",
+    "english": "389a972dcd4d968d3b172ed5ab4a5cbc5e1e6a0e252c29327b8f1b8e755a1ac0"
+  },
+  "send_message": {
+    "raw": "a2f6aaef36dc4927ec44d483d3f7fe1c6d25609fb1a5e13e25386d242810a1f1",
+    "english": "9dee812a89113a08e04acfd2c60610f948fd61a203f0893af87255f66f176dc1"
+  },
+  "narrate": {
+    "raw": "b2ea87c46824d5aa865a147eda4a421cbdd689724cddc7f57f29992c460478c0",
+    "english": "bd5ba334e77e876d24e8c2df1a28dba03ffa01cd64f30f528b84a45fdb08203f"
+  },
+  "telegram_account": {
+    "raw": "9613176bbb6fa4897dd9f3c38f527417f41400443597b6f9f5503e51a3e036dd",
+    "english": "c631e02c43944aab00f9cf9e530cb5352b62795f7f1d7e2f3928603fedec3d2d"
+  },
+  "manage_desire": {
+    "raw": "b9c26780ddcd9bb9f3ca5e2c6ac5629ff630917d29a0410bb4dec6b44a5fbbf2",
+    "english": "6b38192e0b57afe6015958654e1252dfd9d426ee1480c15acde1e7439ec00a3b"
+  },
+  "home_note": {
+    "raw": "211999fdf0d7e2ab54e826651e0bf4ccbefcc2575745bb1670d15ecd3468af7b",
+    "english": "d26e96b1c78c1b9d8efe66399522acdb4f99886983c507add4e5c42245365ba0"
+  },
+  "update_profile": {
+    "raw": "b957fa4a6c324ccf8329cdd6a2e875ac5b1b45504fd6584af171a7f77afbec50",
+    "english": "b957fa4a6c324ccf8329cdd6a2e875ac5b1b45504fd6584af171a7f77afbec50"
+  },
+  "react": {
+    "raw": "5643cf12bfb388592e5ab7fda32619cd87694a9879c98c6c512f1fb5b2e68dc9",
+    "english": "fcea292b82040d3d846a6566d84e4d9631c71f2e75779be6d8e25f06218b3035"
+  },
+  "read_log": {
+    "raw": "fbc4c5f2159a182ee1c3fdb023f034ae43faea45c6cc0f3d72b82e2fc7c293bf",
+    "english": "fbc4c5f2159a182ee1c3fdb023f034ae43faea45c6cc0f3d72b82e2fc7c293bf"
+  },
+  "second_look": {
+    "raw": "ce4cfbdbdaf6b981d38651372c361365a72938550bc9a0f3e4bda4c0f174db36",
+    "english": "ce4cfbdbdaf6b981d38651372c361365a72938550bc9a0f3e4bda4c0f174db36"
+  },
+  "git": {
+    "raw": "18ee1c6094bdf30bc2b3a9125543c8097d696e01a56561ee5f9bdc1b94d2ac8c",
+    "english": "70f468b1a22c3d9e4dca5debeeaab450c9f6be9607ab1a8fce0d2c4b864e37f7"
+  },
+  "server_status": {
+    "raw": "be4bf09b1354aa49f72930522f63852c271e8809c7a53579ebce942bb5813e3a",
+    "english": "111caff5f578deab76e55960c2fa56b9814ab0679158484b32fc5809ab000ba3"
+  },
+  "manage_service": {
+    "raw": "62870ffc9c89ba00eb545865a39f1b350e2bd8f93b3d10d3f0557d339b169bd2",
+    "english": "f5d2e9712bb23774655ef0e97deda0d456bf3bd7722ef666c533dc9f65b125f3"
+  },
+  "computer": {
+    "raw": "fdf90c7b2ce90428c843e8983b9024e7442cefbd757fa4248863996d69cfdacf",
+    "english": "912a7bc6e6bd93b713d0d94cb0e1a28007af1f91391fa3f9c5252c664a36b330"
+  },
+  "fs_read": {
+    "raw": "23c80c3093f812e56fc8c19d254277550df3408a4d892c933b3629ca6c403666",
+    "english": "23c80c3093f812e56fc8c19d254277550df3408a4d892c933b3629ca6c403666"
+  },
+  "edit": {
+    "raw": "5f6be2fe345b6c20757e3fcbfbb11cfd7c9e6330e1b68d8c87e75a586a99b39f",
+    "english": "5f6be2fe345b6c20757e3fcbfbb11cfd7c9e6330e1b68d8c87e75a586a99b39f"
+  },
+  "code_outline": {
+    "raw": "8f811abbf14a1307d72524e34843628088ff97e1f8b733d29cec72bbd6a9a28b",
+    "english": "8f811abbf14a1307d72524e34843628088ff97e1f8b733d29cec72bbd6a9a28b"
+  },
+  "fs_search": {
+    "raw": "3ea006d9306dd0e09a37ab1a56f930b03b2404003fc26f5be265f2eaa3965780",
+    "english": "3ea006d9306dd0e09a37ab1a56f930b03b2404003fc26f5be265f2eaa3965780"
+  },
+  "fs_ls": {
+    "raw": "4d1a3233c262034678d243bd963604b40b17e9bf208b974d9c32cd430ca570f4",
+    "english": "4d1a3233c262034678d243bd963604b40b17e9bf208b974d9c32cd430ca570f4"
+  },
+  "send_file": {
+    "raw": "5729513a2e59f5fedda5740463797e341627d0515ee160d8dcfd1b62d1b13531",
+    "english": "5729513a2e59f5fedda5740463797e341627d0515ee160d8dcfd1b62d1b13531"
+  },
+  "coding_session": {
+    "raw": "efed0b9e71c179b40e993eceb2cb98473a16d4150cb6f661e5c9328c58a82e3c",
+    "english": "387791d8786292661e6678564fc662f9fd245ea49ddc7f14d2772c1d7a6adad6"
+  },
+  "coding_inspect": {
+    "raw": "5efdeb1c3a837a5ff67235c0e57475eabd4528b9831e27f816eaac3750c70f50",
+    "english": "5efdeb1c3a837a5ff67235c0e57475eabd4528b9831e27f816eaac3750c70f50"
+  },
+  "coding_run": {
+    "raw": "3762913a61cd1d3bb54b8a1a63ac23569d27eda26129cd7f28c3e707d689e5a2",
+    "english": "634375b8fc2e0e2b8080c584fbcb5fbb1d55cf3060e6e94f75a4134195ca8613"
+  },
+  "coding_process": {
+    "raw": "a770a540f72a9fde7d5357eaa7af3fbce580c78beeb16f8e968192050fe4b690",
+    "english": "f6f144a7573229d39e6e6c2a21680249e581c868cd5e914422f27ede55b117da"
+  },
+  "coding_agent": {
+    "raw": "5a668134d3ad954440ea1b2dd557b9554ab6d1e9489bbf9b0a8bb9b1fe5d058e",
+    "english": "f87b9d743e71c0a5e885ad095658b6c62aa0217b3b46172962aa5b617a4f6f22"
+  },
+  "coding_checkpoint": {
+    "raw": "fcfccc61dc7ff39856fa894e70e5ed6ab68a22bb339d81358e3d15af682752e4",
+    "english": "7be900f4fc46f7a1d85c2f739c5a79a285abcebab3756cea0ceb87a83a1240da"
+  },
+  "coding_verify": {
+    "raw": "f42698981e37d002a0dde65791d94f79f64406622a9645c01c9c5c95de699762",
+    "english": "55ff5fa0ffd9feceb6059575e3124421346ffeea6d6a9c2ce506f6fb465c26ef"
+  },
+  "coding_swarm": {
+    "raw": "13d7eef36d8ef2a0731ba05adbfb86d145c2a3714711d95682e1c14897fc2ecf",
+    "english": "d363f3ebf9383e1c3a5234b3d312eef6e2865cb069de613eecb9fd3d76d2a473"
+  },
+  "coding_learn": {
+    "raw": "b81887376732da46a491cd27270099a51d68a981f949efdc8d4216b8ac7e2d11",
+    "english": "0748666f91fd97eb8d95833646e893f66b10b236ab7bff10149c7d27d3c1891b"
+  },
+  "host_ctl": {
+    "raw": "4865efeaff7f2db2a43d10e96a0a501106623fd84465166c8de49300678c4b89",
+    "english": "489820e77b4df6e022208f48d74bcc1001db7ec9cbad339dffc7b4a7d137014a"
+  },
+  "coding_control": {
+    "raw": "03a031367459b927299dc793cd6db5b63df232560411cb07ad50bba51b5fc0e5",
+    "english": "03a031367459b927299dc793cd6db5b63df232560411cb07ad50bba51b5fc0e5"
+  },
+  "coding_review": {
+    "raw": "52a10ec34bc817f39a6c73f8b2b3754499d146cb1b3c35e124ccb61466806c8d",
+    "english": "52a10ec34bc817f39a6c73f8b2b3754499d146cb1b3c35e124ccb61466806c8d"
+  },
+  "web_read": {
+    "raw": "603f56c0a6b6bf576574e22f3c170d2276a953a75a77cda32bc1ce692de58742",
+    "english": "d023a898a9a96db2b1970cb1b9a635634066d78a3a4a60dd27b142ebbd4c949d"
+  },
+  "web_find": {
+    "raw": "33d5f5a0af1bee7338d2af64350eebf7cbf743eb68a19cae68c713c9849d4f62",
+    "english": "cd64f45bd4dec0dbafbeb16b52f8d16e0fc5bc5ff162019f198b7b230081f187"
+  },
+  "send_email": {
+    "raw": "b2fe92b020581927e57bd127a29789f8d0a0ead9f81085fd2f726700b9a8236d",
+    "english": "84acdb0d8a30310cd66ae492ea14d93cac9169a1690cbf9fbbc0d0ea8415bda6"
+  },
+  "check_email": {
+    "raw": "ecfee9cd58eafa5e7b3a496ab99d34ba6d39433b2f7874db2e1a501bfd2a48ea",
+    "english": "ecfee9cd58eafa5e7b3a496ab99d34ba6d39433b2f7874db2e1a501bfd2a48ea"
+  },
+  "mail_read": {
+    "raw": "138d0330a7fb969de49cb910543f431d03dd60627443af8aa6db71a6fc88b9ec",
+    "english": "46f0080f51ddb9fcedd758c23b95b569f81214aa407924b00d1ac34fffa0fb97"
+  },
+  "mail_draft_reply": {
+    "raw": "29a293d156a590fef694e91a3b938e09d811dfc1dcc7cc9c41749674d429030b",
+    "english": "5417befe7d19ba7e24d664d7fc67e6daea2a7daa53b6d1dff8bbe00ea0a720c5"
+  },
+  "task_control": {
+    "raw": "783ce62a92c2aa44337ac612625b8cc524708bf6fb3e55b8f27a45d908227f85",
+    "english": "783ce62a92c2aa44337ac612625b8cc524708bf6fb3e55b8f27a45d908227f85"
+  },
+  "describe": {
+    "raw": "6292ebbd4f3552f8c071b35b434fee8f5418f1ddd993a7a7de8fe9a9d0f50962",
+    "english": "d97c0583afddda4ed17116953f043f927282edb2a22758638eeb06f9f8863df8"
+  },
+  "call": {
+    "raw": "f10ae0557f115f1cbf4c9ee888a9e49c99781472055e6b796cf049890f446605",
+    "english": "781da531d217a1ab47ce8db021ea0dd0640fe9e5aa818436d1d7ce9fb81e266f"
+  },
+  "windows_mcp_ControlStatus": {
+    "raw": "3f7a8b5e8bf191416a58ba9c5d8e08924973d10c454274ee1ffd118b4e8788f2",
+    "english": "3f7a8b5e8bf191416a58ba9c5d8e08924973d10c454274ee1ffd118b4e8788f2"
+  },
+  "windows_mcp_App": {
+    "raw": "9d7b7f838903ca05c63e689fcda266155158378283b3cdc4239c962a710df0aa",
+    "english": "9d7b7f838903ca05c63e689fcda266155158378283b3cdc4239c962a710df0aa"
+  },
+  "windows_mcp_DisplayInventory": {
+    "raw": "7127fa4917db31c7cfd06c6d62568f7bb6c7dc46e64909c3c2f9e521e13e486a",
+    "english": "7127fa4917db31c7cfd06c6d62568f7bb6c7dc46e64909c3c2f9e521e13e486a"
+  },
+  "windows_mcp_PowerShell": {
+    "raw": "187d7be92dc53e945f1126b27aee0b7e2b298f89c74229d53a1e8c09c78f3a57",
+    "english": "187d7be92dc53e945f1126b27aee0b7e2b298f89c74229d53a1e8c09c78f3a57"
+  },
+  "windows_mcp_FileSystem": {
+    "raw": "e9f8ad3fdfb838d265c6a878c14fbee7b347275294df8f93305e846e0e9556d2",
+    "english": "e9f8ad3fdfb838d265c6a878c14fbee7b347275294df8f93305e846e0e9556d2"
+  },
+  "windows_mcp_Snapshot": {
+    "raw": "bc78da4e5d9148e8384ed00e112d9e10a2ff4b89072f7ac57ccc8b526fe38f70",
+    "english": "bc78da4e5d9148e8384ed00e112d9e10a2ff4b89072f7ac57ccc8b526fe38f70"
+  },
+  "windows_mcp_Screenshot": {
+    "raw": "79e6005c40b16efde7f8b87d892c4519ab7511cbff3baae302c14e2aa4743d34",
+    "english": "79e6005c40b16efde7f8b87d892c4519ab7511cbff3baae302c14e2aa4743d34"
+  },
+  "windows_mcp_Click": {
+    "raw": "7296a30a6b60dda0c295a098544f5fc882e54423a74151ab03537e94e518e26b",
+    "english": "7296a30a6b60dda0c295a098544f5fc882e54423a74151ab03537e94e518e26b"
+  },
+  "windows_mcp_Type": {
+    "raw": "161bb17b84b3702bb29af36eca4aed03947203f150d45badb6264adaa90f4b6c",
+    "english": "161bb17b84b3702bb29af36eca4aed03947203f150d45badb6264adaa90f4b6c"
+  },
+  "windows_mcp_Scroll": {
+    "raw": "92220270349be35fed2105eaa7da5fbfd3248a34d2811d181afab0319fcc0daf",
+    "english": "92220270349be35fed2105eaa7da5fbfd3248a34d2811d181afab0319fcc0daf"
+  },
+  "windows_mcp_Move": {
+    "raw": "7bb41c06e1e670dc9c44974c4883bb87772850e8738174daed5ab4de04566038",
+    "english": "7bb41c06e1e670dc9c44974c4883bb87772850e8738174daed5ab4de04566038"
+  },
+  "windows_mcp_Shortcut": {
+    "raw": "b486dfce06d08e640dd66c50f9680006dbf5ee4e8f19bbea23cf891d4690c0a1",
+    "english": "b486dfce06d08e640dd66c50f9680006dbf5ee4e8f19bbea23cf891d4690c0a1"
+  },
+  "windows_mcp_Wait": {
+    "raw": "bf51ee0eeee9d44f5f503f3e9a41bb0b44bfe54f04f8a167a707157ecaabcfa6",
+    "english": "bf51ee0eeee9d44f5f503f3e9a41bb0b44bfe54f04f8a167a707157ecaabcfa6"
+  },
+  "windows_mcp_WaitFor": {
+    "raw": "b8047cb7126617b41757c233ae5d14d65ef0d364dc8d291c3320ed3a9d308b9f",
+    "english": "b8047cb7126617b41757c233ae5d14d65ef0d364dc8d291c3320ed3a9d308b9f"
+  },
+  "windows_mcp_Scrape": {
+    "raw": "dd10c3089ef1b407b6219463e780d00455c7998a0882acbaf73d5e84d7f9622a",
+    "english": "dd10c3089ef1b407b6219463e780d00455c7998a0882acbaf73d5e84d7f9622a"
+  },
+  "windows_mcp_MultiSelect": {
+    "raw": "b81c8afc276e6aaa771572a85679dfcc35da54612583917a308dd65502f58451",
+    "english": "b81c8afc276e6aaa771572a85679dfcc35da54612583917a308dd65502f58451"
+  },
+  "windows_mcp_MultiEdit": {
+    "raw": "388c04d3765ecc409cfc018ddbb1d2ed72363702705fa67dd89ab7b4c4574243",
+    "english": "388c04d3765ecc409cfc018ddbb1d2ed72363702705fa67dd89ab7b4c4574243"
+  },
+  "windows_mcp_Clipboard": {
+    "raw": "4ae5cb18fb6b361dd5fbac1748e199e97a4a590c49363fc41e5112b88df69128",
+    "english": "4ae5cb18fb6b361dd5fbac1748e199e97a4a590c49363fc41e5112b88df69128"
+  },
+  "windows_mcp_Process": {
+    "raw": "74e523b01073c8dd379ec7f7c242cd9bd35f037c901d076da96fdd69f3955070",
+    "english": "74e523b01073c8dd379ec7f7c242cd9bd35f037c901d076da96fdd69f3955070"
+  },
+  "windows_mcp_Notification": {
+    "raw": "2b9ab20a0dd179b152d9e8d08eb80186b00301e95df3b6569baac70d104d19e8",
+    "english": "2b9ab20a0dd179b152d9e8d08eb80186b00301e95df3b6569baac70d104d19e8"
+  },
+  "windows_mcp_Registry": {
+    "raw": "c38761dba5e35782128312d23df63447348956e715256fe79fb2b6d465109b3c",
+    "english": "c38761dba5e35782128312d23df63447348956e715256fe79fb2b6d465109b3c"
+  }
+}

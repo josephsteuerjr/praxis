@@ -816,5 +816,6 @@
   "mcp.invalid_catalog": "Windows MCP returned an empty or invalid tool catalog.",
   "mcp.not_ready": "Windows MCP did not confirm readiness.",
   "mcp.exited": "Windows MCP exited. Choose Start.",
-  "mcp.unsupported_platform": "Windows MCP requires Windows x64."
+  "mcp.unsupported_platform": "Windows MCP requires Windows x64.",
+  "schema.no_description": "no description"
 }

@@ -816,5 +816,6 @@
   "mcp.invalid_catalog": "Windows MCP вернул пустой или неверный каталог инструментов.",
   "mcp.not_ready": "Windows MCP не подтвердил готовность.",
   "mcp.exited": "Windows MCP завершился. Нажми «Запустить».",
-  "mcp.unsupported_platform": "Windows MCP доступен на Windows x64."
+  "mcp.unsupported_platform": "Windows MCP доступен на Windows x64.",
+  "schema.no_description": "без описания"
 }

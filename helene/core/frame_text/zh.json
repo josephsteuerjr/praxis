@@ -816,5 +816,6 @@
   "mcp.invalid_catalog": "Windows MCP 返回的工具目录为空或无效。",
   "mcp.not_ready": "Windows MCP 未确认就绪。",
   "mcp.exited": "Windows MCP 已退出。请选择启动。",
-  "mcp.unsupported_platform": "Windows MCP 需要 Windows x64。"
+  "mcp.unsupported_platform": "Windows MCP 需要 Windows x64。",
+  "schema.no_description": "没有说明"
 }
