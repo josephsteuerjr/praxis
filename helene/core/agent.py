@@ -1375,7 +1375,7 @@ def _live_window_run_ids() -> list[str]:
     """
     try:
         runs = _runs()
-        live = [str(x) for x in runs.live_run_ids() if x]
+        live = [str(x) for x in (getattr(runs,"unsettled_run_ids",None) or runs.live_run_ids)() if x]
     except Exception:
         return []
     from core import notices as core_notices
