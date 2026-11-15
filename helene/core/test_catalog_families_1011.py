@@ -128,8 +128,8 @@ class CatalogFamilies(unittest.TestCase):
 
     def test_boundary_is_current_only_and_owner_dm_is_preserved(self):
         with patch.object(agent,'_current_room',return_value='42'),patch.object(agent,'_active_scope',return_value='owner'),patch.object(agent.rooms,'self_demote') as fn:
-            self.assertIn('Егора',self.call('freeze_chat',action='boundary',reason='boundary'))
-            self.assertIn('current',self.call('freeze_chat',action='boundary',chat_id='other'))
+            self.assertEqual(agent.frame_language.text('lifecycle.result.owner_boundary'),self.call('freeze_chat',action='boundary',reason='boundary'))
+            self.assertEqual(agent.frame_language.text('lifecycle.result.boundary_current'),self.call('freeze_chat',action='boundary',chat_id='other'))
             fn.assert_not_called()
         with patch.object(agent,'_current_room',return_value='99'),patch.object(agent,'_active_scope',return_value='guest'),patch.object(agent.rooms,'self_demote',return_value=(True,'frozen')) as fn,patch.object(agent,'tool_journal'):
             self.call('freeze_chat',action='boundary',reason='my boundary')

@@ -362,43 +362,45 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=60)
 
 
+@frame_language.pinned
 def project_create(name: str, brief: str = "") -> str:
     slug = _slug(name)
     d = PROJECTS / slug
     if d.exists():
-        return f"Проект {slug} уже есть — project_status(\"{slug}\")."
+        return frame_language.text('workshop.project.18', v1=f'{slug}', v3=f'{slug}')
     d.mkdir(parents=True)
     (d / "README.md").write_text(
-        f"# {name}\n\n{(brief or '').strip() or '(бриф не задан)'}\n\n"
-        f"_создан {praxis_time.day_key()} мастерской Praxis_\n", encoding="utf-8")
+        frame_language.text('workshop.project.19', v1=f'{name}', v3=f"{(brief or '').strip() or frame_language.text('workshop.project.20')}", v5=f'{praxis_time.day_key()}'), encoding="utf-8")
     r = _git(d, "init", "-q")
     if r.returncode == 0:
         _git(d, "add", "-A")
         subprocess.run(["git", "-C", str(d), "-c", "user.name=Praxis", "-c", "user.email=praxis@local",
                         "commit", "-q", "-m", f"init: {name}"], capture_output=True, text=True, timeout=60)
     log.info("project_create %s", slug)
-    return f"Проект создан: workspace/projects/{slug} (свой git, README с брифом)."
+    return frame_language.text('workshop.project.21', v1=f'{slug}')
 
 
+@frame_language.pinned
 def project_list() -> str:
     if not PROJECTS.is_dir():
-        return "Проектов пока нет — project_create(имя, бриф)."
+        return frame_language.text('workshop.project.22')
     out = []
     for d in sorted(PROJECTS.iterdir()):
         if d.is_dir():
-            out.append(f"- {d.name} · {_du_mb(d):.1f} МБ")
-    return "Проекты:\n" + "\n".join(out) if out else "Проектов пока нет."
+            out.append(frame_language.text('workshop.project.23', v1=f'{d.name}', v3=f'{_du_mb(d):.1f}'))
+    return frame_language.text('workshop.project.24') + "\n".join(out) if out else frame_language.text('workshop.project.25')
 
 
+@frame_language.pinned
 def project_status(name: str) -> str:
     d = _project_dir(name)
     if d is None:
-        return f"Нет проекта {_slug(name)} — см. project_list()."
+        return frame_language.text('workshop.project.26', v1=f'{_slug(name)}')
     size = _du_mb(d)
     st = _git(d, "status", "--porcelain", "-b")
-    stat = st.stdout.strip() if st.returncode == 0 else "(git недоступен)"
-    quota = f" ⚠ квота {QUOTA_MB} МБ превышена!" if size > QUOTA_MB else ""
-    return f"{d.name}: {size:.1f} МБ{quota}\n{stat}"
+    stat = st.stdout.strip() if st.returncode == 0 else frame_language.text('workshop.project.27')
+    quota = frame_language.text('workshop.project.28', v1=f'{QUOTA_MB}') if size > QUOTA_MB else ""
+    return frame_language.text('workshop.project.29', v0=f'{d.name}', v2=f'{size:.1f}', v4=f'{quota}', v6=f'{stat}')
 
 
 # --------------------------------------------------------------------------- #
@@ -573,30 +575,31 @@ def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "", expe
     return result
 
 
+@frame_language.pinned
 def code_outline(path: str = "", scope: str = "") -> str:
     """Скелет python-файла: классы/функции со строками. Дешёвая ориентация вместо
     чтения 2000 строк ради одной функции (PASS 16.5)."""
     if scope:
         if path:
             from catalog_families import PreflightRefusal
-            raise PreflightRefusal("Choose path OR scope")
+            raise PreflightRefusal(frame_language.text('workshop.project.53'))
         return code_map(scope)
     if not path:
         return code_map("self")
     target = _resolve_read(path)
     if target is None:
-        return "путь вне дома (BASE/REPO)"
+        return frame_language.text('workshop.project.54')
     if target.is_dir():
         return _map_for_root(target)
     r = hands.outline(str(target), base=target.parent)
     if not r.get("ok"):
-        return r.get("msg") or "Не смотрю."
+        return r.get("msg") or frame_language.text('workshop.project.55')
     items = r.get("items") or []
     if not items:
-        return f"{path}: ни одного класса или функции."
-    rows = ["  " * (int(i.get("indent", 0)) // 4) + f"{i['kind']} {i['name']}  · строка {i['line']}"
+        return frame_language.text('workshop.project.56', v0=f'{path}')
+    rows = ["  " * (int(i.get("indent", 0)) // 4) + frame_language.text('workshop.project.57', v0=f"{i['kind']}", v2=f"{i['name']}", v4=f"{i['line']}")
             for i in items]
-    return f"{path} — скелет ({len(items)}):\n" + "\n".join(rows[:400])
+    return frame_language.text('workshop.project.58', v0=f'{path}', v2=f'{len(items)}') + "\n".join(rows[:400])
 
 
 #: Бюджет файлов на один вызов `hands.search`. Пол собирает не больше стольких файлов под маску
@@ -891,13 +894,14 @@ def pip_install(project: str, packages: str) -> str:
 #  Доставка и карта кода
 # --------------------------------------------------------------------------- #
 
+@frame_language.pinned
 def send_file(path: str, caption: str = "", to: str = "") -> str:
     """Документ в текущий Telegram-чат; photo/audio идут через live-turn spool."""
     p = _resolve_read(path)
     if p is None:
-        return "Не отправляю: путь вне дома."
+        return frame_language.text('workshop.project.108')
     if not p.is_file():
-        return f"Нет файла {path}."
+        return frame_language.text('workshop.project.109', v1=f'{path}')
     import agent  # лениво: мост живёт в agent._TELETHON, кладёт его раннер
     import media as media_core
     kind = media_core.media_kind(media_core.sniff_mime(p))
@@ -911,7 +915,7 @@ def send_file(path: str, caption: str = "", to: str = "") -> str:
     direct_owned = execution_key.startswith("telegram-outbox:")
     if not explicit_to and (stage_owned or (live_turn and not direct_owned)):
         if not live_turn:
-            return "Медиа можно подготовить только из живого хода Telegram."
+            return frame_language.text('workshop.project.110')
         if kind in ("photo", "audio"):
             return agent.tool_send_media(str(p), kind, caption=caption or "")
         # A normal document authored/requested in a live Telegram turn belongs to
@@ -920,7 +924,7 @@ def send_file(path: str, caption: str = "", to: str = "") -> str:
         return agent.tool_send_media(str(p), "document", caption=caption or "")
     fn = agent._TELETHON.get("send_file")
     if not fn:
-        return "Недоступно (нет связи с Telethon)."
+        return frame_language.text('workshop.project.111')
     # 03.10: подпись прямого файла — текст модели; чистим тем же гардом, что и голос
     caption, _cap_note = agent._strip_generation_artifacts(str(caption or ""), "")
     try:
@@ -934,7 +938,7 @@ def send_file(path: str, caption: str = "", to: str = "") -> str:
     except Exception as e:
         if isinstance(e, agent.DurableSideEffectPending):
             raise
-        return f"Не отправился: {type(e).__name__}: {str(e)[:150]}"
+        return frame_language.text('workshop.project.112', v1=f'{type(e).__name__}', v3=f'{str(e)[:150]}')
 
 
 _MAP_CACHE: dict = {"key": None, "text": None}
@@ -952,6 +956,7 @@ def _map_fingerprint(root: Path) -> str:
     return "|".join(parts)
 
 
+@frame_language.pinned
 def code_map(scope: str = "self") -> str:
     """ast-карта: модуль → классы/def (строки, первая строка докстринга). Кэш по mtime."""
     scope = (scope or "self").strip()
@@ -960,13 +965,14 @@ def code_map(scope: str = "self") -> str:
     else:
         d = _project_dir(scope)
         if d is None:
-            return f"Нет проекта {_slug(scope)} (для своего кода — scope=\"self\")."
+            return frame_language.text('workshop.project.113', v1=f'{_slug(scope)}')
         root = d
     return _map_for_root(root)
 
 
+@frame_language.pinned
 def _map_for_root(root: Path) -> str:
-    fp = _map_fingerprint(root)
+    fp = (frame_language.language(), _map_fingerprint(root))
     if _MAP_CACHE["key"] == fp and _MAP_CACHE["text"]:
         return _MAP_CACHE["text"]
     out = []
@@ -977,7 +983,7 @@ def _map_for_root(root: Path) -> str:
         try:
             tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
         except (SyntaxError, OSError):
-            out.append(f"{rel} — (не разобрался)")
+            out.append(frame_language.text('workshop.project.114', v0=f'{rel}'))
             continue
         doc = (ast.get_docstring(tree) or "").strip().splitlines()
         out.append(f"{rel}" + (f" — {doc[0][:100]}" if doc else ""))
@@ -991,7 +997,7 @@ def _map_for_root(root: Path) -> str:
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 fdoc = (ast.get_docstring(n) or "").strip().splitlines()
                 out.append(f"  def {n.name} :{n.lineno}" + (f" — {fdoc[0][:80]}" if fdoc else ""))
-    text = "\n".join(out)[:MAP_CAP] or "(нет .py файлов)"
+    text = "\n".join(out)[:MAP_CAP] or frame_language.text('workshop.project.115')
     _MAP_CACHE.update(key=fp, text=text)
     return text
 
