@@ -1366,8 +1366,16 @@ def epoch_life_signature(row: dict):
     return str(mid), "in", (sender + ": " + text).strip()
 
 
-def epoch_occurrence_row(occurrence: dict) -> dict:
-    """Render exact stored text once: no text cap, strip or NUL deletion."""
+EPOCH_DELETED_LATER = "[later deleted in Telegram]"
+
+
+def epoch_occurrence_row(occurrence: dict, *, deleted_later: bool = False,
+                         elsewhere: bool = False) -> dict:
+    """Render exact stored bytes as evidence or a delivered dialogue turn.
+
+    A later-deleted message and an own message from another selected topic retain
+    exact evidence and occurrence receipts, without becoming an assistant turn here.
+    """
     if "gap" in occurrence:
         line = "[ARCHIVE GAP; exact bytes hex=" + occurrence["raw_hex"] + "]"
         return dict(self=False, service=True, line=line, role_line=line)
@@ -1380,9 +1388,22 @@ def epoch_occurrence_row(occurrence: dict) -> dict:
             else media + ("\n" if media and text else "") + text)
     line = head + "\n" + body
     own = row.get("kind") == "message" and row.get("outgoing") is True
-    return {"self": own, "line": line, "role_line": body if own else line,
-            "archive_occurrence": {key: occurrence[key] for key in ("offset", "sha256")},
-            "archive_residual": True}
+    deleted_later = bool(deleted_later and row.get("kind") == "message")
+    if deleted_later:
+        line += "\n" + EPOCH_DELETED_LATER
+        own = False
+    elsewhere = bool(elsewhere and own)
+    if elsewhere:
+        own = False
+    rendered = {"self": own, "line": line, "role_line": body if own else line,
+                "archive_occurrence": {key: occurrence[key] for key in ("offset", "sha256")},
+                "archive_residual": True}
+    if deleted_later:
+        rendered["deleted_later"] = True
+    if elsewhere:
+        rendered["other_topic"] = True
+    return rendered
+
 
 
 def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | None,
