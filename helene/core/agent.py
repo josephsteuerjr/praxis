@@ -3524,6 +3524,7 @@ def tool_mail_draft_reply(hash: str, body: str) -> str:
     return f"Не удалось поставить черновик для {hash} (возможно, письмо уже отправлено)."
 
 
+@frame_language.pinned
 def tool_my_capabilities() -> str:
     """Снимок возможностей КОДОМ: аудитория этого канала И руки этого хода — раздельно.
 
@@ -3550,7 +3551,7 @@ def tool_my_capabilities() -> str:
         return capabilities.describe(_active_scope(), offered=offered)
     except Exception as e:
         log.warning("my_capabilities упал", exc_info=True)
-        return f"[не собрался снимок] {type(e).__name__}"
+        return frame_language.text('control.result.capabilities_error', error=type(e).__name__)
 
 
 @frame_language.pinned
@@ -4431,16 +4432,17 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
             " | list | search | describe | call")
 
 
+@frame_language.pinned
 def tool_add_alias(name: str, canonical: str) -> str:
     """PASS 8.6: связать имя-алиас с существующим досье («Егор» ↔ yegor-kosyrev)."""
     slug = graph.resolve(canonical)
     if not people.path_for(slug).exists():
-        return f"Не вижу досье для «{canonical}» — алиас вяжется к существующему человеку."
+        return frame_language.text('control.result.alias_missing', person=canonical)
     added = people.add_alias(slug, name)
     if added:
         _reindex(people.path_for(slug))
-        return f"Связала: «{name}» — это {graph.display(slug)} ({slug})."
-    return f"«{name}» и так резолвится в {graph.display(slug)}."
+        return frame_language.text('control.result.alias_added', name=name, display=graph.display(slug), slug=slug)
+    return frame_language.text('control.result.alias_existing', name=name, display=graph.display(slug))
 
 
 def tool_forget_connection(a: str, b: str) -> str:
@@ -4448,6 +4450,7 @@ def tool_forget_connection(a: str, b: str) -> str:
     return graph.forget_connection(a, b)
 
 
+@frame_language.pinned
 def tool_manage_loop(action: str, person: str = "", match: str = "", until: str = "",
                      force: bool = False, reason: str = "") -> str:
     """PASS 11.1: рука на своих нитях — одно касание, одно решение.
@@ -4466,29 +4469,26 @@ def tool_manage_loop(action: str, person: str = "", match: str = "", until: str 
             lines = [l.strip() for l in (body.get(people.LOOPS, "")).splitlines() if l.strip()]
             if lines:
                 chunks.append(f"[{slug}]\n" + "\n".join(lines))
-        return "\n\n".join(chunks) if chunks else "Нитей нет."
+        return "\n\n".join(chunks) if chunks else frame_language.text('control.result.loop_none')
     slug = graph.resolve((person or "").strip())
     if not slug or not people.path_for(slug).exists():
-        return f"Не вижу досье для «{person}» — нить живёт у человека."
+        return frame_language.text('control.result.loop_person', person=person)
     if act == "list":
         _, body = people.read(slug)
         lines = [l.strip() for l in (body.get(people.LOOPS, "")).splitlines() if l.strip()]
-        return "\n".join(lines) if lines else "Нитей нет."
+        return "\n".join(lines) if lines else frame_language.text('control.result.loop_none')
     if act == "close":
         ok = people.close_open_loop(slug, match)
         if ok:
             _reindex(people.path_for(slug))
             log.info("manage_loop close %s: %s", slug, match[:60])
-        return "Нить закрыта." if ok else f"Открытой нити по «{match}» нет."
+        return frame_language.text('control.result.loop_closed') if ok else frame_language.text('control.result.loop_missing', match=match)
     if act == "park":
         # PASS 16: парко-храповик — нить, спавшая уже дважды и всплывшая снова, это
         # жвачка (09.07: «доставка ответа» перепарковывалась сутками и глушила окна).
         slept = people.park_count(slug, match)
         if slept >= 2 and not force:
-            return (f"Эта нить уже спала ×{slept} и снова всплыла — третью парковку не "
-                    "делаю, это жвачка. Реши сейчас: сделать — или close с одной честной "
-                    "строкой почему отпускаешь. Это моя дисциплина, не закон: если у тебя "
-                    "есть настоящая причина парковать ещё раз — повтори с force=true и назови её.")
+            return (frame_language.text('control.result.loop_repeated', count=slept))
         if slept >= 2 and force:
             why = (reason or "").strip() or "причина не названа"
             tool_journal(f"[нить] парковка ×{slept + 1} поверх храповика ({person}): {why[:160]}")
@@ -4501,27 +4501,27 @@ def tool_manage_loop(action: str, person: str = "", match: str = "", until: str 
         if ok:
             _reindex(people.path_for(slug))
             log.info("manage_loop park %s до %s: %s", slug, u, match[:60])
-        return (f"Запарковано до {u} — проснётся по сроку или когда {person} объявится."
-                if ok else f"Не запарковалось: нить по «{match}» не нашлась или дата кривая ({u}).")
+        return (frame_language.text('control.result.loop_parked', until=u, person=person) if ok else frame_language.text('control.result.loop_park_failed', match=match, until=u))
     if act == "reopen":
         n = people.unpark_loops(slug)
         if n:
             _reindex(people.path_for(slug))
-        return f"Разбужено: {n}." if n else "Спящих нитей нет."
-    return f"Не знаю действия «{action}» (close|park|reopen|list)."
+        return frame_language.text('control.result.loop_reopened', count=n) if n else frame_language.text('control.result.loop_no_sleeping')
+    return frame_language.text('control.result.loop_action', action=action)
 
 
+@frame_language.pinned
 def tool_connections(name: str, depth: int = 1, to: str = "") -> str:
     """Взгляд на граф памяти: с кем/чем связан узел; to — как связаны A и B. Карта — только дома."""
     if _active_scope() != "owner":
-        return "Карта связей — не для этого канала."
+        return frame_language.text('control.result.connections_scope')
     try:
         if (to or "").strip():
             return graph.path_text(name, to)
         return graph.neighbors_text(name, depth)
     except Exception as e:
         log.warning("connections упал", exc_info=True)
-        return f"[не получилось посмотреть связи] {type(e).__name__}"
+        return frame_language.text('control.result.connections_error', error=type(e).__name__)
 
 
 # --- PASS 8.5: мастерская (workshop.py) — обёртки с автокоммитом её правок дома --- #
@@ -5498,6 +5498,7 @@ def _host_text_cap() -> int:
 HOST_TEXT_CAP = _host_text_cap()
 
 
+@frame_language.pinned
 def _clip_host_text(text: str, limit: int = 0) -> str:
     """Резать вывод хоста ЧЕСТНО и с двух сторон.
 
@@ -5521,11 +5522,10 @@ def _clip_host_text(text: str, limit: int = 0) -> str:
     cut = len(value) - head - tail
     if cut <= 0:
         return value[:cap]
-    return (f"{value[:head]}\n[вырезано {cut} символов из {len(value)}; "
-            f"кап вывода хоста {cap} симв. (PRAXIS_HOST_TEXT_CAP), "
-            f"показаны начало и конец]\n{value[-tail:]}")
+    return frame_language.text('control.result.host_clipped', head=value[:head], omitted=cut, total=len(value), cap=cap, tail=value[-tail:])
 
 
+@frame_language.pinned
 def tool_host_ctl(verb: str, action: str = "", unit: str = "", name: str = "",
                   args: str = "", names: str = "", path: str = "", target: str = "",
                   content: str = "", mode: str = "", owner: str = "", receipt_id: str = "",
@@ -5573,29 +5573,24 @@ def tool_host_ctl(verb: str, action: str = "", unit: str = "", name: str = "",
         # это ещё одна строка блока, а не замена блока.
         parts.append(f"[serverd] {r.get('error')}")
     if r.get("before") or r.get("after"):
-        parts.append(f"было: {r.get('before')}\nстало: {r.get('after')}")
+        parts.append(frame_language.text('control.result.host_state', before=r.get('before'), after=r.get('after')))
     if r.get("text"):
         parts.append(_clip_host_text(str(r["text"])))
     if r.get("recovery"):
         recovery = r["recovery"]
-        parts.append(f"recovery receipt: {recovery.get('id')} [{recovery.get('status')}] "
-                     f"deadline={recovery.get('deadline_epoch')} — после проверки вызови host_ctl "
-                     f"verb=confirm receipt_id={recovery.get('id')}")
+        parts.append(frame_language.text('control.result.host_recovery', id=recovery.get('id'), status=recovery.get('status'), deadline=recovery.get('deadline_epoch')))
     if r.get("verify"):
-        parts.append("audit verify: " + str(r["verify"]))
+        parts.append(frame_language.text('control.result.host_verify', data=str(r['verify'])))
     return "\n".join(parts)
 
 
+@frame_language.pinned
 def tool_start_proposal(reason: str = "") -> str:
     """Открыть предложение к своему коду: ветка + рабочая копия. Живой код не трогается."""
     r = selfdev.begin(reason)
     if not r.get("ok"):
-        return f"Не получилось открыть предложение: {r.get('msg')}"
-    return (f"Предложение {r['id']} открыто. Твоя рабочая копия: {r['path']} — правь файлы там "
-            f"(shell, полные пути). Живой код не тронется. Когда готова: "
-            f"proposal(action=\"submit\", id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами; "
-            "перед submit прогони гнома: coding_agent(role=\"reviewer\") по диффу, вердикт в "
-            "reviewer= (гейт с 28.09).")
+        return frame_language.text('control.result.proposal_error', detail=r.get('msg'))
+    return (frame_language.text('control.result.proposal_open', id=r['id'], path=r['path']))
 
 
 def tool_submit_proposal(id: str, title: str, why: str = "", review: str = "",
@@ -5608,12 +5603,13 @@ def tool_submit_proposal(id: str, title: str, why: str = "", review: str = "",
     )
 
 
+@frame_language.pinned
 def tool_proposal_diff(id: str) -> str:
     """PASS 16.4: её глаза на собственный дифф — читается ДО submit (видны и незакоммиченные
     правки), ревью в submit_proposal пишется по нему."""
     d = selfdev.diff_text(str(id).strip())
     if not d.strip():
-        return "Дифф пуст: либо нет такого предложения, либо в его копии ещё нет изменений."
+        return frame_language.text('control.result.proposal_empty')
     return d
 
 
@@ -5688,6 +5684,7 @@ def resolve_room(query: str) -> tuple[str | None, str]:
                   + "\n".join(rows) + tail)
 
 
+@frame_language.pinned
 def tool_recent_turns(n: int = 6, room: str = "") -> str:
     """PASS 14: её честное «что я только что делала» — из кольца прожитых ходов, кодом.
     Scope-честно: в личке Егора видно всё (включая её окна), в чужом канале — только он сам.
@@ -5707,8 +5704,7 @@ def tool_recent_turns(n: int = 6, room: str = "") -> str:
     if not room:
         return turns.describe(n=n, scope=_active_scope(), chat_id=_active_chat())
     if not _may_name_other_rooms():
-        return ("Назвать другое место я могу только в личке с Егором или в своём окне: "
-                "содержимое одних комнат в других не раскрываю.")
+        return (frame_language.text('control.result.turns_scope'))
     key, instead = resolve_room(room)
     if key is None:
         return instead
@@ -5726,10 +5722,8 @@ def tool_recent_turns(n: int = 6, room: str = "") -> str:
     # (что пришло, чем отвечала, что удержала), записка — её собственную реплику её же
     # словами. Пустая записка не значит «ничего не было»: путь, который её пишет, не
     # единственный, и это сказано вслух, а не подразумевается.
-    said = ("Моя записка этого места:\n" + note if note else
-            "Записки этого места у меня нет — значит либо здесь ещё не было моих слов, либо "
-            "они шли мимо того пути, который её пишет.")
-    return "Место: " + label + " [" + str(key) + "]\n\n" + lived + "\n\n" + said
+    said = (frame_language.text('control.result.turns_note', note=note) if note else frame_language.text('control.result.turns_no_note'))
+    return frame_language.text('control.result.turns_place', label=label, id=str(key), lived=lived, said=said)
 
 
 def tool_manage_autonomy(action: str, pattern: str = "") -> str:
@@ -9263,19 +9257,19 @@ def _bind_tool_catalog(ctx: "ChannelContext", override: list | None = None):
         _TOOL_CATALOG.reset(token)
 
 
+@frame_language.pinned
 def tool_describe(name: str = "") -> str:
     """Схема руки из указателя — результатом руки, в накопитель хода."""
     catalog = _catalog_for_turn()
     names = [n.strip() for n in re.split(r"[\s,;]+", str(name or "")) if n.strip()]
     if not names:
-        return "назови руку: describe(name); имена — в указателе рук"
+        return frame_language.text('control.result.describe_name')
     out = []
     for n in names[:8]:
         tool = catalog.get(n)
         if tool is None:
             close = difflib.get_close_matches(n, list(catalog), n=4, cutoff=0.5)
-            out.append(f"руки «{n}» в этом ходе нет"
-                       + (f"; похожие: {', '.join(close)}" if close else ""))
+            out.append(frame_language.text('control.result.describe_missing', name=n, similar=(frame_language.text('control.result.describe_similar', names=', '.join(close)) if close else '')))
             continue
         out.append(json.dumps({"name": tool.get("name"),
                                "description": tool.get("description", ""),

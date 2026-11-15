@@ -1154,8 +1154,8 @@ class HostOutputTruthTests(unittest.TestCase):
         cap = agent.HOST_TEXT_CAP
         exact = "я" * cap
         self.assertEqual(agent._clip_host_text(exact), exact)
-        self.assertNotIn("вырезано", agent._clip_host_text(exact))
-        self.assertIn("вырезано", agent._clip_host_text("я" * (cap + 1)))
+        self.assertNotIn("Пропущено символов:", agent._clip_host_text(exact))
+        self.assertIn("Пропущено символов:", agent._clip_host_text("я" * (cap + 1)))
 
     def test_the_postscript_at_the_tail_survives_the_cut(self):
         body = "Get:1 http://deb.debian.org/debian bookworm/main amd64 nginx\n" * 200
@@ -1165,13 +1165,13 @@ class HostOutputTruthTests(unittest.TestCase):
                       "признание демона живёт в хвосте — голый [:4000] его съедал")
         self.assertTrue(clipped.startswith("Get:1 "),
                         "голова тоже нужна: без неё не видно, что за команда шла")
-        self.assertIn("вырезано", clipped)
+        self.assertIn("Пропущено символов:", clipped)
 
     def test_the_cut_names_its_size_its_cap_and_the_knob_that_moves_it(self):
         cap = agent.HOST_TEXT_CAP
         tail = min(cap // 3, 1200)
         clipped = agent._clip_host_text("щ" * 9000)
-        self.assertIn(f"вырезано {9000 - (cap - tail) - tail} символов из 9000", clipped)
+        self.assertIn(f"Пропущено символов: {9000 - (cap - tail) - tail} из 9000", clipped)
         self.assertIn(str(cap), clipped)
         self.assertIn("PRAXIS_HOST_TEXT_CAP", clipped,
                       "закон 2: у предела обязано быть имя, которым его двигают")
@@ -1193,7 +1193,7 @@ class HostOutputTruthTests(unittest.TestCase):
         out = self._host(reply, verb="pkg", action="install", names="nginx")
         self.assertIn(self.PKG_NOTE, out)
         self.assertIn("Setting up nginx", out, "голова вывода никуда не девается")
-        self.assertIn("вырезано", out, "рез обязан быть назван, а не молчалив")
+        self.assertIn("Пропущено символов:", out, "рез обязан быть назван, а не молчалив")
 
 # --------------------------------------------------------------------------- #
 #  10. Рычаги темпа — по принципалу, не по аудитории

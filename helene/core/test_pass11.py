@@ -141,7 +141,7 @@ class TestManageLoop(Base):
 
     def test_park_bad_date_honest(self):
         out = agent.tool_manage_loop("park", "vasya", match="маршрут", until="скоро")
-        self.assertIn("Не запарковалось", out)
+        self.assertIn("Нить не отложена", out)
 
     def test_list_shows_states(self):
         people.add_open_loop("vasya", "Вася", "вторая нить о деле")
@@ -152,7 +152,7 @@ class TestManageLoop(Base):
 
     def test_no_dossier_honest(self):
         out = agent.tool_manage_loop("close", "нет-такого-человека", match="x")
-        self.assertIn("Не вижу досье", out)
+        self.assertIn("Нет досье", out)
 
     def test_owner_tool_and_dispatch_registered(self):
         self.assertIn("manage_loop", [t["name"] for t in agent.OWNER_TOOLS])
