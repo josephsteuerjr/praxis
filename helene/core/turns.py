@@ -23,6 +23,8 @@ memory/.state/turns.jsonl). Что пришло, что она ДЕЛАЛА (т�
 
 from __future__ import annotations
 
+import frame_language
+
 import datetime as _dt
 import hashlib
 import json
@@ -124,21 +126,20 @@ _OWNER_RU = {"voice": "голос", "evaluator": "вспомогательная
 
 def _owner_ru(owner: str) -> str:
     name = str(owner or "?")
-    return _OWNER_RU.get(name, name)
+    return frame_language.text('turns.role.'+name) if name in _OWNER_RU else name
 
 
 def _slot(owner: str) -> tuple[int, str]:
     return (threading.get_ident(), str(owner or "voice"))
 
 
+@frame_language.pinned
 def _cut_phrase(owner: str, mark: dict) -> str:
-    """Фраза для записи хода: чей обрыв, какой моделью, на сколько символов."""
     who = _owner_ru(owner)
-    tail = ("фраза не закончена (обрыв не сведён с ответом этого хода)"
-            if str(owner) == "voice" else "это не фраза агента — оборвался служебный вызов")
-    return (f"оборвано потолком max_tokens: {who} "
-            f"({mark.get('model') or 'модель'}, {int(mark.get('chars') or 0)} симв.) — "
-            f"{tail}")[:CUT_LINE_CHARS]
+    tail = frame_language.text('turns.cut.voice' if str(owner)=='voice' else 'turns.cut.service')
+    return frame_language.text('turns.cut.line',who=who,
+        model=mark.get('model') or frame_language.text('turns.cut.model'),
+        chars=int(mark.get('chars') or 0),tail=tail)[:CUT_LINE_CHARS]
 
 
 def _retire(key: tuple[int, str], mark: dict, why: str) -> None:
@@ -248,6 +249,7 @@ def unclaimed_truncations() -> list[dict]:
         return [dict(r) for r in _UNCLAIMED]
 
 
+@frame_language.pinned
 def unclaimed_line(now: float | None = None) -> str:
     """Строка про обрывы без читателя — те, что случились вне какого-либо её хода.
 
@@ -261,10 +263,7 @@ def unclaimed_line(now: float | None = None) -> str:
     if not rows:
         return ""
     last = rows[-1]
-    return (f"⚠ обрывов потолком max_tokens без читателя за 6ч: {len(rows)} "
-            f"(свежий — {_owner_ru(last.get('owner'))}, "
-            f"{int(last.get('chars') or 0)} симв.); это оборванные служебные вызовы, "
-            f"не её фразы")
+    return (frame_language.text('owned.turns.c85da7b02ef5', v0=len(rows), v1=_owner_ru(last.get('owner')), v2=int(last.get('chars') or 0)))
 
 
 def begin(kind: str = "chat", chat_id=None, scope: str = "owner",
@@ -743,6 +742,7 @@ def in_room(n: int = 6, chat_id=None) -> list[dict]:
     return rows[-max(0, n):]
 
 
+@frame_language.pinned
 def describe_room(n: int = 6, chat_id=None) -> str:
     """Текст про КОНКРЕТНОЕ место для её руки `recent_turns(room=…)`."""
     try:
@@ -751,8 +751,8 @@ def describe_room(n: int = 6, chat_id=None) -> str:
         n = 6
     rows = in_room(n=n, chat_id=chat_id)
     if not rows:
-        return "Ни одного записанного хода в этом месте."
-    return ("Мои прожитые ходы здесь (лог кодом, не по памяти; новые снизу):" + chr(10)
+        return frame_language.text('owned.turns.93c2c45a4bb4')
+    return (frame_language.text('owned.turns.e5a98979c8b7') + chr(10)
             + chr(10).join("- " + format_line(t) for t in rows))
 
 
@@ -793,6 +793,7 @@ def _trace_sent_out(t: dict) -> bool:
     return any(any(m in str(line) for m in _SEND_MARKERS) for line in (t.get("tools") or []))
 
 
+@frame_language.pinned
 def format_line(t: dict) -> str:
     """Одна строка записи для блоков/тула: время [где] вошло | делала | итог."""
     try:
@@ -801,24 +802,24 @@ def format_line(t: dict) -> str:
         when = "?"
     kind = t.get("kind") or "chat"
     if kind == "heartbeat":
-        where = "тихий час, наедине с собой"
+        where = frame_language.text('owned.turns.c45d7e636ce8')
     elif kind == "forge_event":
         # ⚠ «(Telegram жив)» стояло здесь безусловно — третий контур с той же ложью, что
         # уже вычищали из окна и из пробуждения. Праксис назвала её сама; я починил рамку,
         # которую она читает В МОМЕНТ хода, и забыл строку, которую она читает ПОТОМ. Так
         # она узнавала правду сейчас и неправду через час — то есть ровно то же самое.
         state = str(t.get("telegram") or "")
-        where = ("пробуждение по событию своего субагента (Telegram жив)" if state == "connected"
-                 else f"пробуждение по событию своего субагента (связи не было: {state})"
-                 if state else "пробуждение по событию своего субагента")
+        where = (frame_language.text('owned.turns.75e5a64e248e') if state == "connected"
+                 else frame_language.text('owned.turns.908bc7e7fab7', v0=state)
+                 if state else frame_language.text('owned.turns.85d6ff35d702'))
     elif kind == "wake":
         # Её собственный будильник. Разница с окном ровно в связи — и связь берётся ИЗ
         # ЗАПИСИ, снятой в момент подъёма. Утверждать её задним числом нельзя: ровно так
         # («Telegram жив» безусловно) врал этот журнал про окна, пока не поймали.
         state = str(t.get("telegram") or "")
-        where = ("своё пробуждение по будильнику (Telegram открыт)" if state == "connected"
-                 else f"своё пробуждение по будильнику (связи не было: {state})" if state
-                 else "своё пробуждение по будильнику")
+        where = (frame_language.text('owned.turns.6a3b7bf63d58') if state == "connected"
+                 else frame_language.text('owned.turns.a96b88f898b0', v0=state) if state
+                 else frame_language.text('owned.turns.335355a6b575'))
     elif kind == "task_window":
         # ⚠ Здесь стояло «(Telegram жив)», и это было неправдой безусловно:
         # вызывающий — mtproto_runner._task_window — на время окна НАМЕРЕННО отключал
@@ -827,33 +828,33 @@ def format_line(t: dict) -> str:
         # же безусловной неправдой с обратным знаком. Поэтому связь читается ИЗ ЗАПИСИ,
         # снятой в момент хода; пусто — легаси-строка, читаем по-старому.
         state = str(t.get("telegram") or "")
-        where = ("свой фоновый run (связь была открыта)" if state == "connected"
-                 else f"свой фоновый run (связи не было: {state})"
+        where = (frame_language.text('owned.turns.c8bcfca292d1') if state == "connected"
+                 else frame_language.text('owned.turns.bec0fda38826', v0=state)
                  if state and state != "closed_for_window"
-                 else "свой фоновый run (Telegram закрыт на время окна)")
+                 else frame_language.text('owned.turns.fbed1b1aff36'))
     else:
         place = t.get("title") or t.get("who") or t.get("chat_id") or "?"
         where = f"{place} ({t.get('scope') or '?'})"
     parts = [f"{when} [{where}]"]
     if t.get("in"):
-        parts.append(f"вошло: «{t['in']}»")
+        parts.append(frame_language.text('owned.turns.a49b51ec96a8', v0=t['in']))
     if t.get("tools"):
-        parts.append("действия: " + "; ".join(t["tools"]))
+        parts.append(frame_language.text('owned.turns.3f8adb2955e6') + "; ".join(t["tools"]))
     held, why = t.get("held") or "", t.get("why") or ""
     if held == "voice":
-        parts.append("молчание по своему решению" + (f" ({why})" if why else ""))
+        parts.append(frame_language.text('owned.turns.653349d0f4ea') + (f" ({why})" if why else ""))
     elif held == "privacy":
-        parts.append(f"доставка удержана по полномочию данных ({why or 'без причины'})")
+        parts.append(frame_language.text('owned.turns.aad54a7673c0', v0=why or frame_language.text('owned.turns.24eccfee1a80')))
     elif held == "evaluator":
-        parts.append(f"legacy-оценщик придержал ({why or 'без причины'})")
+        parts.append(frame_language.text('owned.turns.abb17694a217', v0=why or frame_language.text('owned.turns.24eccfee1a80')))
     elif held == "anti-repeat":
-        parts.append("молчание (анти-повтор: едва не вышел повтор)")
+        parts.append(frame_language.text('owned.turns.47d81b56fe91'))
     elif held == "drift":
-        parts.append("оборвано: комната заморожена дрейфом")
+        parts.append(frame_language.text('owned.turns.05f29b6b7d8d'))
     elif held == "error":
-        parts.append("ход упал с ошибкой")
+        parts.append(frame_language.text('owned.turns.c3515d69d765'))
     elif held == "empty":
-        parts.append("ответ не родился (пусто)")
+        parts.append(frame_language.text('owned.turns.f3a022a231dd'))
     elif held == "unspoken":
         # ⚠ ЭТО НЕ «ПРОМОЛЧАЛА САМА», И РАЗНИЦА ЗДЕСЬ НЕСУЩАЯ.
         # Под контрактом «ответ рукой» ход может кончиться без вызова `reply` по разным
@@ -862,7 +863,7 @@ def format_line(t: dict) -> str:
         # просто отсутствие реплики, и приписывать его мне как решение значит выводить
         # моё слово из пустоты. Ровно за это здесь уже платили: «done выводится из её
         # молчания вместо того, чтобы быть её словом».
-        parts.append("ход кончился без реплики" + (f" ({why})" if why else ""))
+        parts.append(frame_language.text('owned.turns.00e833828ea0') + (f" ({why})" if why else ""))
     elif _no_addressee(t):
         # У хода нет канала доставки (chat_id=None): его ТЕКСТ — запись себе, а не
         # реплика наружу. Раньше он падал в ветку «сказала», и журнал утверждал, что
@@ -873,32 +874,30 @@ def format_line(t: dict) -> str:
         # подтверждает, а иначе отсылаем к следу, ничего не обещая.
         note = str(t.get("out") or "")
         if len(note) > OUT_SHOW_CHARS:
-            note = note[: OUT_SHOW_CHARS - 1] + "…[обрезано для показа; полный текст в записи хода]"
+            note = note[: OUT_SHOW_CHARS - 1] + frame_language.text('owned.turns.f60217f9b3e4')
         if not note:
             # Пустой out описывает только текст хода. След тулов может быть
             # обрезан: даже отсутствие send-маркеров не доказывает недоставку.
-            parts.append("текст хода пуст (не свидетельствует об отсутствии отправок)")
+            parts.append(frame_language.text('owned.turns.0fc88cb01c40'))
         elif _trace_sent_out(t):
-            parts.append(f"записано себе (это текст хода, не сообщение; что ушло — "
-                         f"см. «действия»): «{note}»")
+            parts.append(frame_language.text('owned.turns.4c8784bb6b90', v0=note))
         else:
-            parts.append(f"записано себе (у хода нет канала доставки; отправок в "
-                         f"следе нет): «{note}»")
+            parts.append(frame_language.text('owned.turns.ad334bffee55', v0=note))
     elif t.get("out"):
         said = str(t["out"])
         if len(said) > OUT_SHOW_CHARS:
-            said = said[: OUT_SHOW_CHARS - 1] + "…[обрезано для показа; полный текст в записи хода]"
+            said = said[: OUT_SHOW_CHARS - 1] + frame_language.text('owned.turns.f60217f9b3e4')
         # Контракт C1 на ЧТЕНИИ. Здесь безусловно стояло «сказала» — то есть строка,
         # которую она перечитывает в промпте и в дневнике, утверждала речь по факту
         # наличия черновика. Теперь глагол берётся из исхода доставки. Старые записи
         # (без поля) читаются как раньше: переписывать прошлое задним числом нельзя,
         # но и новую ложь копить незачем.
-        line = f"{_DELIVERY_VERB.get(str(t.get('delivery') or ''), 'сказано')}: «{said}»"
+        line = f"{frame_language.text('turns.delivery.'+str(t.get('delivery'))) if str(t.get('delivery') or '') in _DELIVERY_VERB else frame_language.text('owned.turns.203003ac640a')}: «{said}»"
         if t.get("rewrote"):
-            line += f" (правлено оценщиком: {why or t.get('verdict') or '?'})"
+            line += frame_language.text('owned.turns.4ad941fd889a', v0=why or t.get('verdict') or '?')
         parts.append(line)
     else:
-        parts.append("ничего не ушло наружу")
+        parts.append(frame_language.text('owned.turns.32bdd8486f61'))
     # ⚑ ЗАМЕТКА ПОКАЗЫВАЕТСЯ ОТДЕЛЬНОЙ ЧАСТЬЮ И НАЗЫВАЕТ СЕБЯ ЗАМЕТКОЙ.
     # Под контрактом «ответ рукой» текст хода — это то, что я додумала после отправки или
     # вместо неё. Он не речь, но и не мусор: без него я перечитываю свой ход и не нахожу
@@ -908,8 +907,8 @@ def format_line(t: dict) -> str:
     if note_text and not _no_addressee(t):
         if len(note_text) > OUT_SHOW_CHARS:
             note_text = (note_text[: OUT_SHOW_CHARS - 1]
-                         + "…[обрезано для показа; полный текст в записи хода]")
-        parts.append(f"записано себе: «{note_text}»")
+                         + frame_language.text('owned.turns.f60217f9b3e4'))
+        parts.append(frame_language.text('owned.turns.d04d5ba16def', v0=note_text))
     # Чужой обрыв — отдельной частью строки, ПОСЛЕ её итога и с названным владельцем.
     # Раньше он приезжал в `why` вплотную к её ответу, и прочесть это можно было только
     # как «её фразу оборвало».
@@ -917,6 +916,7 @@ def format_line(t: dict) -> str:
     return " | ".join(parts)
 
 
+@frame_language.pinned
 def tail_block(n: int = 3, scope: str = "owner", chat_id=None, budget: int = 900) -> str:
     """Свежие ходы строками под бюджет — для промптов мета-слоёв (без заголовка,
     заголовок даёт потребитель). Строки режутся поровну, как _clip_tool_trace."""
@@ -950,6 +950,7 @@ def recent_work_note(chat_id, scope: str, budget: int = 6000) -> dict | None:
                 read_more='recent_turns; full results via read_run_result(run_id, result_id)')
 
 
+@frame_language.pinned
 def state_line(boot_ts: float | None = None) -> str:
     """Одна строка для STATE (owner tier-0): самое свежее прожитое — факт, не припоминание."""
     with _LOCK:
@@ -962,8 +963,8 @@ def state_line(boot_ts: float | None = None) -> str:
     cut = unclaimed_line()
     if not last:
         return cut
-    pre = "(до рестарта) " if boot_ts and float(last.get("ts") or 0) < boot_ts else ""
-    line = f"последний прожитый ход {pre}— {format_line(last)}"
+    pre = frame_language.text('owned.turns.b889dfe433da') if boot_ts and float(last.get("ts") or 0) < boot_ts else ""
+    line = frame_language.text('owned.turns.bf41df6cb8d4', v0=pre, v1=format_line(last))
     return f"{line}\n{cut}" if cut else line
 
 
@@ -978,6 +979,7 @@ def chat_catchup_line(chat_id, boot_ts: float) -> str:
     return format_line(rows[-1]) if rows else ""
 
 
+@frame_language.pinned
 def day_line(now: float | None = None, hours: float = 24.0) -> str:
     """Сводка прожитых суток КОДОМ — сну для дневника (меньше конфабуляций в её памяти)."""
     cut = (now if now is not None else time.time()) - hours * 3600.0
@@ -1017,17 +1019,15 @@ def day_line(now: float | None = None, hours: float = 24.0) -> str:
     # а с появлением вида wake стало прямой неправдой: пробуждение — не окно, связь в нём
     # не рвётся. Считаем то, что действительно считается: ходы без собеседника.
     alone = sum(1 for t in rows if (t.get("kind") or "chat") != "chat")
-    line = (f"ходов {len(rows)} (своих, без собеседника {alone}): сказано наружу {said}, "
-            f"записано себе {self_notes}, "
-            f"молчание по своему решению {quiet}, удержано по data-authority {held_privacy}, "
-            f"legacy-удержаний {held_other}, legacy-правок {rewrites}, тул-вызовов {tools_n}")
+    line = (frame_language.text('owned.turns.d1b6056bc051', v0=len(rows), v1=alone, v2=said, v3=self_notes, v4=quiet, v5=held_privacy, v6=held_other, v7=rewrites, v8=tools_n))
     if undelivered:
-        line += f", не дошло {undelivered}"
+        line += frame_language.text('owned.turns.f91f7123935c', v0=undelivered)
     if errors:
-        line += f", ходов с ошибкой {errors}"
+        line += frame_language.text('owned.turns.f3cbfab99ab0', v0=errors)
     return line
 
 
+@frame_language.pinned
 def describe(n: int = 6, scope: str = "owner", chat_id=None) -> str:
     """Текст для её тула recent_turns — scope-честно (вне owner виден только этот канал)."""
     try:
@@ -1036,10 +1036,10 @@ def describe(n: int = 6, scope: str = "owner", chat_id=None) -> str:
         n = 6
     rows = recent(n=n, scope=scope, chat_id=chat_id)
     if not rows:
-        return ("Пока ни одного записанного хода"
-                + ("" if scope == "owner" else " в этом канале") + ".")
-    head = ("Мои последние прожитые ходы (лог кодом, не по памяти; новые снизу"
-            + ("" if scope == "owner" else "; вне лички Егора виден только этот канал") + "):")
+        return (frame_language.text('owned.turns.0933ae65ecbc')
+                + ("" if scope == "owner" else frame_language.text('owned.turns.3c3eb777aece')) + ".")
+    head = (frame_language.text('owned.turns.dbfe79a0e2ec')
+            + ("" if scope == "owner" else frame_language.text('owned.turns.5058b968f631')) + "):")
     return head + "\n" + "\n".join("- " + format_line(t) for t in rows)
 
 
