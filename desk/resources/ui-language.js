@@ -39,7 +39,20 @@
     const row=(source.progress || []).find(row=>row.stage===value?.stage&&row.text===value?.label);
     return row?text(row.key):String(value?.label || '');
   }
-  const errorText=value=>value instanceof OwnedError?text(value.key,value.values):value instanceof Error?value.message:String(value);
+  function errorText(value){
+    if(value instanceof OwnedError)return text(value.key,value.values);
+    const caption=value?.native_error,fields=source.native_errors;
+    if(caption&&Object.keys(caption).sort().join(',')==='code,schema,values'
+      &&caption.schema==='helene.native-error.v1'&&typeof caption.code==='string'
+      &&fields&&Object.hasOwn(fields,caption.code)){
+      const expected=fields[caption.code],values=caption.values;
+      if(Array.isArray(expected)&&values&&typeof values==='object'&&!Array.isArray(values)
+        &&Object.keys(values).length===expected.length&&expected.every(key=>Object.hasOwn(values,key))
+        &&Object.values(values).every(v=>typeof v==='string'||typeof v==='number'&&Number.isFinite(v)))
+        return text('native.app.error.'+caption.code,values);
+    }
+    return value instanceof Error?value.message:String(value);
+  }
   window.HELENE_I18N={text,apply,setLanguage,current,preference:()=>preference,progress,errorText,
     ownedError:(key,values)=>new OwnedError(key,values)};
 })();

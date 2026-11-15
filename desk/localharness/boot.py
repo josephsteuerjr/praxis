@@ -205,7 +205,7 @@ def initial_soul_seed(config_path: Path, tree: Path) -> str | None:
             if (tree/'soul/SOUL.md').is_file():
                 log.warning('запись рождения не читается (%s); существующая конституция сохранена: %s',seed,error)
                 return None
-            raise LayoutError(f'Не удалось прочитать выбранную конституцию ({seed}): {error}') from error
+            raise NativeLayoutError('layout_seed', f'Не удалось прочитать выбранную конституцию ({seed}): {error}', path=str(seed), detail=str(error)) from error
     seed=config_path.with_name('soul-seed.md')
     try:return read_config_text(seed) if seed.is_file() else None
     except (OSError,ValueError) as error:
@@ -262,6 +262,20 @@ def read_config_text(path: Path) -> str:
 
 class LayoutError(RuntimeError):
     """Раскладку завести не удалось — причина в тексте, для лога и для оболочки."""
+
+
+if __package__:
+    from .ui_language import NativeRuntimeError as _NativeRuntimeError
+else:
+    # Direct legacy imports use localharness on sys.path. Keep one canonical
+    # caption class identity with the native HTTP consumer.
+    _app_dir=str(Path(__file__).resolve().parents[1])
+    if _app_dir not in sys.path:sys.path.append(_app_dir)
+    from localharness.ui_language import NativeRuntimeError as _NativeRuntimeError
+
+
+class NativeLayoutError(_NativeRuntimeError,LayoutError):
+    """Same layout failure category and raw diagnostic, with an owned UI recipe."""
 
 
 def _stock_path(relative: str, cfg: dict) -> Path:
@@ -348,7 +362,7 @@ def _seed_kit(tree: Path, cfg: dict, *, birth: bool = True,
                     dst.write_text(_names(text, cfg), encoding="utf-8", newline="\n")
             except (OSError, UnicodeError) as exc:
                 if section == "soul" and not birth:
-                    raise LayoutError(f"кандидат soul/{rel} не сохранён: {exc}") from exc
+                    raise NativeLayoutError('layout_candidate', f"кандидат soul/{rel} не сохранён: {exc}", path=f'soul/{rel}', detail=str(exc)) from exc
                 log.warning("стартовый файл %s не лёг в дерево: %s", rel, exc)
                 continue
             planted += 1
@@ -839,13 +853,13 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
             # authorizes the first seed, once, bound to this exact tree.
             marker = Path(birth_receipt)
             if marker.is_symlink():
-                raise LayoutError(f"маркер рождения — symlink: {marker}")
+                raise NativeLayoutError('layout_marker_link', f"маркер рождения — symlink: {marker}", path=str(marker))
             if marker.is_file():
                 state = json.loads(marker.read_text(encoding="utf-8"))
                 if not isinstance(state, dict) or state.get("schema") != 1 or \
                         os.path.normcase(str(Path(state.get("tree", "")).resolve())) != \
                         os.path.normcase(str(tree.resolve())):
-                    raise LayoutError(f"маркер рождения не принадлежит дереву {tree}")
+                    raise NativeLayoutError('layout_marker_tree', f"маркер рождения не принадлежит дереву {tree}", path=str(tree))
                 if state.get("state") == "prepared":
                     claim = marker.with_name(marker.name + ".claim")
                     fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -861,18 +875,18 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
                 elif state.get("state") in ("complete", "partial"):
                     empty = False
                 else:
-                    raise LayoutError(f"первое рождение не завершено ({marker}); проверь дерево")
+                    raise NativeLayoutError('layout_birth_incomplete', f"первое рождение не завершено ({marker}); проверь дерево", path=str(marker))
             else:
                 if marker.exists():
-                    raise LayoutError(f"маркер рождения не файл: {marker}")
+                    raise NativeLayoutError('layout_marker_file', f"маркер рождения не файл: {marker}", path=str(marker))
                 empty = False
         else:
             # Only isolated direct boot callers use this compatibility route.
             empty = not tree.exists() or not any(tree.iterdir())
             marker = tree / "memory" / ".state" / "kit-birth.json"
             if not empty and not marker.exists() and _unfinished_birth_scaffold(tree):
-                raise LayoutError(f"рождение другого процесса ещё не отмечено ({tree}); "
-                                  "сохрани дерево и повтори после проверки")
+                raise NativeLayoutError('layout_birth_pending', f"рождение другого процесса ещё не отмечено ({tree}); "
+                                  "сохрани дерево и повтори после проверки", path=str(tree))
             if empty:
                 marker.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -886,18 +900,18 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
                         os.fsync(sink.fileno())
             if not empty and marker.exists():
                 if marker.is_symlink():
-                    raise LayoutError(f"маркер рождения — symlink: {marker}")
+                    raise NativeLayoutError('layout_marker_link', f"маркер рождения — symlink: {marker}", path=str(marker))
                 started = json.loads(marker.read_text(encoding="utf-8"))
                 if not isinstance(started, dict) or started.get("state") != "complete":
-                    raise LayoutError(f"первое рождение не завершено ({marker}); "
-                                      "сохрани дерево и проверь его до повторного старта")
+                    raise NativeLayoutError('layout_birth_incomplete', f"первое рождение не завершено ({marker}); "
+                                      "сохрани дерево и проверь его до повторного старта", path=str(marker))
     except (OSError, ValueError) as exc:
-        raise LayoutError(f"состояние рождения не читается ({tree}): {exc}") from exc
+        raise NativeLayoutError('layout_birth_state', f"состояние рождения не читается ({tree}): {exc}", path=str(tree), detail=str(exc)) from exc
     for rel in ("soul", "workspace/inbox", "memory/.control/desk_inbox/processed"):
         try:
             (tree / rel).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise LayoutError(f"не создаётся папка {tree / rel}: {exc}") from exc
+            raise NativeLayoutError('layout_folder', f"не создаётся папка {tree / rel}: {exc}", path=str(tree / rel), detail=str(exc)) from exc
     soul = tree / "soul" / "SOUL.md"
     if not soul.exists():
         text = soul_text(cfg)
@@ -914,7 +928,7 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
                 if selected:
                     proposals.add(selected)
         except (OSError, UnicodeError) as exc:
-            raise LayoutError(f"конституция не подготовлена ({soul}): {exc}") from exc
+            raise NativeLayoutError('layout_constitution', f"конституция не подготовлена ({soul}): {exc}", path=str(soul), detail=str(exc)) from exc
     planted = _seed_kit(tree, cfg, birth=empty,
                         skill_overrides=frozenset(skills_seed or ()), proposals=proposals)
     if planted:
@@ -938,7 +952,7 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
                     if selected:
                         proposals.add(selected)
         except (OSError, ValueError, UnicodeError) as exc:
-            raise LayoutError(f"не пишутся знания рождения {skills_root}: {exc}") from exc
+            raise NativeLayoutError('layout_skills', f"не пишутся знания рождения {skills_root}: {exc}", path=str(skills_root), detail=str(exc)) from exc
     refreshed = refresh_kit(tree, cfg, birth=empty,
                             skill_overrides=frozenset(skills_seed or ()), proposals=proposals)
     if refreshed:
@@ -1150,9 +1164,9 @@ def claim_tree(tree: Path, *, agent: str = "", role: str = "", reclaim_stale: bo
     try:
         moved = json.loads(transfer.read_text(encoding='utf-8'))
     except FileNotFoundError: moved = None
-    except (OSError,ValueError): raise LayoutError('Не прочитана квитанция переноса на VPS; местный запуск заблокирован') from None
+    except (OSError,ValueError): raise NativeLayoutError('layout_transfer_unreadable', 'Не прочитана квитанция переноса на VPS; местный запуск заблокирован') from None
     if moved is not None and (not isinstance(moved,dict) or moved.get('phase')!='server-stopped'):
-        raise LayoutError('Этот агент перенесён на VPS или перенос ещё не завершён; сначала останови серверную копию через восстановление')
+        raise NativeLayoutError('layout_transfer_active', 'Этот агент перенесён на VPS или перенос ещё не завершён; сначала останови серверную копию через восстановление')
     path = tree_lock_path(tree)
     mine = {"pid": os.getpid(), "at": time.time(), "agent": str(agent or ""),
             "role": str(role or ""), "host": platform.node(),
@@ -1251,15 +1265,15 @@ def birth_custody(tree: Path):
     """First Create must own a real tree lock; legacy fail-open is insufficient."""
     with _BIRTH_CUSTODY:
         if _LOCK['path'] is not None:
-            raise LayoutError('Этот процесс уже владеет деревом; новое рождение не начато')
+            raise NativeLayoutError('layout_custody_held', 'Этот процесс уже владеет деревом; новое рождение не начато')
         if os.path.lexists(tree_lock_path(tree)):
-            raise LayoutError('Есть прежняя запись владения данными; первое создание не удаляет чужие или неопределённые замки')
+            raise NativeLayoutError('layout_custody_previous', 'Есть прежняя запись владения данными; первое создание не удаляет чужие или неопределённые замки')
         busy=claim_tree(tree,role='explicit first-create',reclaim_stale=False)
         try:
             path=tree_lock_path(tree);holder=_read_lock(path)
             if (busy or _LOCK['path']!=path or not _LOCK['token']
                     or holder.get('token')!=_LOCK['token'] or holder.get('pid')!=os.getpid()):
-                raise LayoutError('Не подтверждено исключительное владение данными; первое создание не начато')
+                raise NativeLayoutError('layout_custody_unconfirmed', 'Не подтверждено исключительное владение данными; первое создание не начато')
             import psutil
             from .vision_policy import _document, _write
             holder['birth']=psutil.Process(os.getpid()).create_time()

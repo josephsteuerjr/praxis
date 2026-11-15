@@ -1,10 +1,71 @@
 import { t as uiText, UiError } from '../lang/lang';
 
 const fields:Record<string,readonly string[]>={
-  channel_missing:[],call_unavailable:[],restore_confirm:[],restore_session:[],
-  linux_migration:[],build_tools:[],agent_missing:[],components_first:[],
-  migration_identity:[],shutdown_incomplete:['detail'],session_admission:[],
-  root_mismatch:[],window_assets:['path'],interrupted_migration:[],
+  "channel_missing": [],
+  "call_unavailable": [],
+  "restore_confirm": [],
+  "restore_session": [],
+  "linux_migration": [],
+  "build_tools": [],
+  "agent_missing": [],
+  "components_first": [],
+  "migration_identity": [],
+  "shutdown_incomplete": [
+    "detail"
+  ],
+  "session_admission": [],
+  "root_mismatch": [],
+  "window_assets": [
+    "path"
+  ],
+  "interrupted_migration": [],
+  "layout_seed": [
+    "path",
+    "detail"
+  ],
+  "layout_candidate": [
+    "path",
+    "detail"
+  ],
+  "layout_marker_link": [
+    "path"
+  ],
+  "layout_marker_tree": [
+    "path"
+  ],
+  "layout_birth_incomplete": [
+    "path"
+  ],
+  "layout_marker_file": [
+    "path"
+  ],
+  "layout_birth_pending": [
+    "path"
+  ],
+  "layout_birth_state": [
+    "path",
+    "detail"
+  ],
+  "layout_folder": [
+    "path",
+    "detail"
+  ],
+  "layout_constitution": [
+    "path",
+    "detail"
+  ],
+  "layout_skills": [
+    "path",
+    "detail"
+  ],
+  "layout_transfer_unreadable": [],
+  "layout_transfer_active": [],
+  "layout_custody_held": [],
+  "layout_custody_previous": [],
+  "layout_custody_unconfirmed": [],
+  "first_ready": [],
+  "first_start_unconfirmed": [],
+  "first_action": []
 };
 const record=(v:unknown):Record<string,unknown>|null=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:null;
 const owns=(v:object,key:string)=>Object.prototype.hasOwnProperty.call(v,key);

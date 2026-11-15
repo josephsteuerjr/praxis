@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from python_app import Application,window_geometry,set_window_icon
 from localharness import first_start
+from localharness.ui_language import native_error,NativeValueError,NativeRuntimeError
 
 
 class FirstStartWindow(Application):
@@ -46,7 +47,10 @@ class FirstStartWindow(Application):
                 from localharness.startup_diagnostics import record
                 record(self.root,self.places.data,error)
             except Exception:pass  # An unavailable profile must not hide the original error.
-            self.publish({'stage':'error','label':'Не удалось завершить подготовку','error':str(error)})
+            value={'stage':'error','label':'Не удалось завершить подготовку','error':str(error)}
+            owned=native_error(error)
+            if owned is not None:value['native_error']=owned
+            self.publish(value)
 
     def invoke(self,command,args):
         if command=='first_start':
@@ -66,7 +70,7 @@ class FirstStartWindow(Application):
         if command=='first_open':
             if self.opening:return {'opening':True}
             if not self.flow.ready(self.root,self.places) or not self.flow.agent_exists(self.places.data):
-                raise ValueError('Сначала заверши создание агента')
+                raise NativeValueError('first_ready','Сначала заверши создание агента')
             self.opening=True
             if sys.platform!='win32':
                 self.exiting=True;self.exit_session=False
@@ -78,14 +82,14 @@ class FirstStartWindow(Application):
                 process=subprocess.Popen([str(self.root/'helene.exe')],cwd=self.root,
                     stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
                     creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-                if process.wait(timeout=100):raise RuntimeError('Обычное окно не подтвердило запуск')
+                if process.wait(timeout=100):raise NativeRuntimeError('first_start_unconfirmed','Обычное окно не подтвердило запуск')
                 self.exiting=True;self.exit_session=False
                 if self.window is not None:self.window.destroy()
                 return {'opened':True}
             finally:self.opening=False
         if command=='python_ready':return {'confirmed':True}
         if command in ('python_window','appearance_read'):return super().invoke(command,args)
-        raise ValueError('Unavailable first-start action')
+        raise NativeValueError('first_action','Unavailable first-start action')
 
     def _handler(self):
         parent=super()._handler();app=self

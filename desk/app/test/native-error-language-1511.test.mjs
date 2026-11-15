@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {writeFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -29,6 +29,16 @@ try{
   assert.equal(JSON.stringify(error.native_error),before);
  }
  assert.equal(calls,16);assert.equal(new Set(byUI.values()).size,4);
+ const captions=JSON.parse(readFileSync(resolve(desk,'lang/en.json'),'utf8'));
+ for(const key of Object.keys(captions).filter(key=>key.startsWith('native.app.error.'))){
+  const code=key.slice('native.app.error.'.length),params=Object.fromEntries([...captions[key].matchAll(/\{([A-Za-z_][A-Za-z_0-9]*)\}/g)].map(match=>[match[1],raw]));
+  const failure=Object.assign(new Error(raw),{native_error:{schema:'helene.native-error.v1',code,values:params}});
+  for(const ui of ['ru','en','fr','zh']){
+   language.setLocale(ui);const rendered=native.nativeError(failure);
+   assert(rendered instanceof language.UiError,code);assert.equal(rendered.message,language.t(key,params));
+   if(Object.keys(params).length)assert.ok(rendered.message.includes(raw));
+  }
+ }
  for(const value of [new Error(raw),Object.assign(new Error(raw),{native_error:{schema:'unknown',code:'agent_missing',values:{}}}),
   {native_error:{schema:'helene.native-error.v1',code:'unknown',values:{}}},
   {native_error:{schema:'helene.native-error.v1',code:'window_assets',values:{path:{}}}},

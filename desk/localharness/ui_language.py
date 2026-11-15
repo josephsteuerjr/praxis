@@ -18,11 +18,39 @@ PARAMETER = re.compile(r'\{([A-Za-z_][A-Za-z_0-9]*)\}')
 # Only these application-owned failures cross the native bridge as captions.
 # External exception messages never acquire ownership by matching their text.
 NATIVE_ERRORS = {
-    'channel_missing': (), 'call_unavailable': (), 'restore_confirm': (),
-    'restore_session': (), 'linux_migration': (), 'build_tools': (),
-    'agent_missing': (), 'components_first': (), 'migration_identity': (),
-    'shutdown_incomplete': ('detail',), 'session_admission': (),
-    'root_mismatch': (), 'window_assets': ('path',), 'interrupted_migration': (),
+    'channel_missing': (),
+    'call_unavailable': (),
+    'restore_confirm': (),
+    'restore_session': (),
+    'linux_migration': (),
+    'build_tools': (),
+    'agent_missing': (),
+    'components_first': (),
+    'migration_identity': (),
+    'shutdown_incomplete': ('detail',),
+    'session_admission': (),
+    'root_mismatch': (),
+    'window_assets': ('path',),
+    'interrupted_migration': (),
+    'layout_seed': ('path', 'detail'),
+    'layout_candidate': ('path', 'detail'),
+    'layout_marker_link': ('path',),
+    'layout_marker_tree': ('path',),
+    'layout_birth_incomplete': ('path',),
+    'layout_marker_file': ('path',),
+    'layout_birth_pending': ('path',),
+    'layout_birth_state': ('path', 'detail'),
+    'layout_folder': ('path', 'detail'),
+    'layout_constitution': ('path', 'detail'),
+    'layout_skills': ('path', 'detail'),
+    'layout_transfer_unreadable': (),
+    'layout_transfer_active': (),
+    'layout_custody_held': (),
+    'layout_custody_previous': (),
+    'layout_custody_unconfirmed': (),
+    'first_ready': (),
+    'first_start_unconfirmed': (),
+    'first_action': (),
 }
 
 
@@ -223,6 +251,7 @@ def bootstrap_data(root: Path, *, config=None, tags=None) -> dict:
     agent = config.get('agent')
     frame = agent.get('frame_language') if isinstance(agent, dict) else None
     return {'lang': interface_language(config, tags),
+            'native_errors': {code:list(fields) for code,fields in NATIVE_ERRORS.items()},
             'preference': preference,
             'system_language': interface_language({}, tags),
             'frame_language': frame if frame in LANGUAGES else None,
