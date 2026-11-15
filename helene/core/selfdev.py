@@ -406,6 +406,16 @@ def reviewer_gate(reviewer: str) -> dict:
     return {"status": "ok", "note": r, "verdict": v}
 
 
+class SubmitReply(str):
+    """Current submit outcome, separate from localized display or quoted text."""
+    def __new__(cls, text, *, status):
+        if status not in {"merged", "refused", "unknown"}:
+            raise ValueError("invalid submission status")
+        value = super().__new__(cls, text)
+        value.submission_status = status
+        return value
+
+
 def submit(pid: str, title: str, why: str = "", review: str = "", checked: str = "",
            override_reason: str = "", reviewer: str = "") -> str:
     """Commit, verify, classify and enact Praxis's reviewed decision.
@@ -420,18 +430,16 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     """
     t = get(pid)
     if not t:
-        return f"Не вижу предложения {pid} — начни с proposal(action=start)."
+        return SubmitReply(f'Не вижу предложения {pid} — начни с proposal(action=start).', status='refused')
     if t["status"] not in ("building", "proposed"):
-        return f"Предложение {pid} уже {t['status']} — оно закрыто."
+        return SubmitReply(f"Предложение {pid} уже {t['status']} — оно закрыто.", status='merged' if t['status'] == 'merged' else 'refused')
     wt = worktree_path(pid)
     if not wt.exists():
-        return f"Рабочая копия предложения {pid} пропала — начни заново."
+        return SubmitReply(f'Рабочая копия предложения {pid} пропала — начни заново.', status='refused')
     problem = _review_problem(review, title, why)
     if problem:
         _deny("proposal_review", "submit", f"{pid}: ревью {problem}")
-        return (f"Не отправляю: ревью {problem}. Прочитай свой дифф глазами — "
-                f"proposal(action=\"diff\", id=\"{pid}\") — и передай review=: что меняется, чем рискует, "
-                "почему это правильно. Твой код ревьюишь ты сама, никто за тебя.")
+        return SubmitReply(f'Не отправляю: ревью {problem}. Прочитай свой дифф глазами — proposal(action="diff", id="{pid}") — и передай review=: что меняется, чем рискует, почему это правильно. Твой код ревьюишь ты сама, никто за тебя.', status='refused')
     main = _main_branch()
 
     _git("add", "-A", cwd=wt)
@@ -443,7 +451,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     files = [l.strip() for l in
              _git("diff", "--name-only", f"{main}...HEAD", cwd=wt).stdout.splitlines() if l.strip()]
     if not files:
-        return "В предложении нет изменений — нечего отправлять. Правь файлы в его копии или закрой его (reject)."
+        return SubmitReply('В предложении нет изменений — нечего отправлять. Правь файлы в его копии или закрой его (reject).', status='refused')
     # Optional evidence is recorded BEFORE tests, so a crash or retry cannot
     # silently erase a critic's disagreement. Empty resubmission keeps history.
     evidence = list(t.get("reviewer_evidence") or [])
@@ -462,9 +470,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     if len(same_rejected) >= SAME_DIFF_REJECT_CAP and not override_reason:
         _update(pid, fingerprint=fp)
         _deny("proposal_review", "submit", f"{pid}: кап идентичных диффов ×{len(same_rejected)}")
-        return (f"Стоп: байт-в-байт такой же дифф уже отклонялся {len(same_rejected)} раза. "
-                "Повторная подача того же — жвачка. Измени подход (другой дифф обнуляет счёт) "
-                "или передай осознанный override_reason, почему именно этот вариант всё же нужен.")
+        return SubmitReply(f'Стоп: байт-в-байт такой же дифф уже отклонялся {len(same_rejected)} раза. Повторная подача того же — жвачка. Измени подход (другой дифф обнуляет счёт) или передай осознанный override_reason, почему именно этот вариант всё же нужен.', status='refused')
     stat = _git("diff", "--stat", f"{main}...HEAD", cwd=wt).stdout.strip().splitlines()
     diffstat = stat[-1].strip() if stat else ""
     # Crash-safe: гейт ниже — минуты, а рестарты штатны (каждый мёрж сам просит рестарт).
@@ -493,11 +499,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
         # proposed; повторный submit того же id перепрогоняет гейт и мёржит на вердикте.
         _journal(f"«{title.strip() or pid}» ({pid}): гейт не уложился в {TEST_TIMEOUT} с — "
                  "мёрж отложен до прогона, который успеет.")
-        return (f"Предложение {pid} «{title.strip()}» НЕ смёржено: тесты не уложились в "
-                f"{TEST_TIMEOUT} с, проверки нет. Правка, из-за которой тест виснет, даёт ровно "
-                "такой исход, поэтому вслепую не вливаю. Посмотри, что грузит машину "
-                "(долгие счёты, параллельные прогоны), и повтори proposal(action=\"submit\", id="
-                f"\"{pid}\", …) с тем же ревью — гейт прогонится заново.")
+        return SubmitReply(f'Предложение {pid} «{title.strip()}» НЕ смёржено: тесты не уложились в {TEST_TIMEOUT} с, проверки нет. Правка, из-за которой тест виснет, даёт ровно такой исход, поэтому вслепую не вливаю. Посмотри, что грузит машину (долгие счёты, параллельные прогоны), и повтори proposal(action="submit", id="{pid}", …) с тем же ревью — гейт прогонится заново.', status='refused')
 
     if should_automerge(zone):
         # 26.09 immunity contract (по слову Егора): красные тесты — блок, не предупреждение.
@@ -510,10 +512,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
             _journal(f"[иммунитет] мёрж «{title.strip() or pid}» ({pid}) заблокирован: "
                      "тесты красные, override_reason не дан. Стоит в proposed — "
                      "исправь тесты или дай осознанный override_reason.")
-            return (f"Предложение {pid} «{title.strip()}» НЕ смёржено (зона {zone}): "
-                    f"гейт красный ({state0}). Иммунитет по слову Егора от 26.09: "
-                    "красные тесты блокируют автомёрж. Исправь тесты/код или передай "
-                    "override_reason с объяснением, почему красное в этом диффе не относится к нему.")
+            return SubmitReply(f'Предложение {pid} «{title.strip()}» НЕ смёржено (зона {zone}): гейт красный ({state0}). Иммунитет по слову Егора от 26.09: красные тесты блокируют автомёрж. Исправь тесты/код или передай override_reason с объяснением, почему красное в этом диффе не относится к нему.', status='refused')
         res = apply(pid, by="auto", override_reason=override_reason)
         how = f"self-authority, зона {zone}"
         if res["ok"]:
@@ -533,11 +532,9 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
                 proof = f"красные тесты; объяснение: {override_reason}"
             else:
                 proof = "тесты красные; Егору уйдёт предупреждение постфактум"
-            return (f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржено самостоятельно. "
-                    f"{res['msg']}")
-        return f"Предложение {pid} ({how}), но технически не смёржилось: {res['msg']}."
-    return (f"Предложение {pid} «{title.strip()}» не получило известную risk-зону {zone!r}; "
-            "это неисправность классификатора, а не запрос Егору на мёрж.")
+            return SubmitReply(f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржено самостоятельно. {res['msg']}", status='merged')
+        return SubmitReply(f"Предложение {pid} ({how}), но технически не смёржилось: {res['msg']}.", status='unknown')
+    return SubmitReply(f'Предложение {pid} «{title.strip()}» не получило известную risk-зону {zone!r}; это неисправность классификатора, а не запрос Егору на мёрж.', status='refused')
 
 
 def diff_text(pid: str, cap: int | None = 12000) -> str:

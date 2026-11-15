@@ -5784,20 +5784,11 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
                                     why=task.get("goal") or "", review=review, checked=checked,
                                     reviewer=reviewer_evidence)
         beat()
-        lower = submission.lower()
-        # Классификатор статуса по тексту ответа submit. Порядок важен: сначала
-        # блокировки («НЕ смёржено», «Стоп», «отказ», «нет изменений») — только потом
-        # «смёрж». Раньше «НЕ смёржено» матчилось в «смёрж» и штамповало done
-        # поверх мёржа, удержанного проверками (например, красными тестами).
-        # Регрессия закреплена тестом test_forge_contract_0610 (06.10).
-        if (lower.startswith("не ") or lower.startswith("стоп")
-                or "отказ" in lower or "нет изменений" in lower
-                or "не смёржено" in lower or "не смёрж" in lower):
-            new_status = "active"
-        elif "смёрж" in lower:
-            new_status = "done"
-        else:
-            new_status = "submitted"
+        # Only the current producer's receipt can classify this submission.
+        # Missing/legacy text remains unknown, even if it contains success words.
+        outcome = (submission.submission_status
+                   if isinstance(submission, selfdev.SubmitReply) else "unknown")
+        new_status = {"merged": "done", "refused": "active"}.get(outcome, "submitted")
     elif submit and task.get("cleanup") == "git-worktree":
         beat(240)          # add -A + commit: свои сроки git-а, до четырёх минут
         cp = _checkpoint_unlocked(task_id, title or f"forge: {task.get('goal') or task_id}")
