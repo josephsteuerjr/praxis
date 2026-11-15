@@ -1,0 +1,1073 @@
+{
+  "windows_mcp_ControlStatus": {
+    "sha256": "3f7a8b5e8bf191416a58ba9c5d8e08924973d10c454274ee1ffd118b4e8788f2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.989afda1188e6436"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "release",
+          "description"
+        ],
+        "key": "schema.mcp.44b640bf2db5c418"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.ControlStatus"
+  },
+  "windows_mcp_App": {
+    "sha256": "9d7b7f838903ca05c63e689fcda266155158378283b3cdc4239c962a710df0aa",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.a46b4e570ab6669f"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.mcp.144f0a2788b61173"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.mcp.b478e14776805b01"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "window_loc",
+          "description"
+        ],
+        "key": "schema.mcp.0e84b4e2dbb857b5"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "window_size",
+          "description"
+        ],
+        "key": "schema.mcp.ea115c5d9815f470"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "executable",
+          "description"
+        ],
+        "key": "schema.mcp.731e80c473b038b0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "args",
+          "description"
+        ],
+        "key": "schema.mcp.e8b4f0d0dc92b4a9"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.mcp.395a5f21f96d33aa"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.App"
+  },
+  "windows_mcp_DisplayInventory": {
+    "sha256": "7127fa4917db31c7cfd06c6d62568f7bb6c7dc46e64909c3c2f9e521e13e486a",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.61606fe90bc61365"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.DisplayInventory"
+  },
+  "windows_mcp_PowerShell": {
+    "sha256": "187d7be92dc53e945f1126b27aee0b7e2b298f89c74229d53a1e8c09c78f3a57",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.b54ce8d1d8ea87e5"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "command",
+          "description"
+        ],
+        "key": "schema.mcp.8d9805714ffa9334"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.mcp.7d6eecdf7c77873a"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_output",
+          "description"
+        ],
+        "key": "schema.mcp.3ff006cfdc72d6da"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.PowerShell"
+  },
+  "windows_mcp_FileSystem": {
+    "sha256": "e9f8ad3fdfb838d265c6a878c14fbee7b347275294df8f93305e846e0e9556d2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.91a379a2fbaaa53e"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.mcp.144f0a2788b61173"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.mcp.043c5f619b86f41e"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "destination",
+          "description"
+        ],
+        "key": "schema.mcp.b784b7b9f73e16d8"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "content",
+          "description"
+        ],
+        "key": "schema.mcp.4ed41b38aaf6d257"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "pattern",
+          "description"
+        ],
+        "key": "schema.mcp.d8fc548a4e3c4729"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "recursive",
+          "description"
+        ],
+        "key": "schema.mcp.228acd09ca737605"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "append",
+          "description"
+        ],
+        "key": "schema.mcp.83a7c2d33259bb59"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "overwrite",
+          "description"
+        ],
+        "key": "schema.mcp.f0be3f61234f7362"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "offset",
+          "description"
+        ],
+        "key": "schema.mcp.fae4fae4c46494c2"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.mcp.4e4c70cf92b20edb"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "encoding",
+          "description"
+        ],
+        "key": "schema.mcp.208c99eaa55512ae"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "show_hidden",
+          "description"
+        ],
+        "key": "schema.mcp.ed09c905741bc42d"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.FileSystem"
+  },
+  "windows_mcp_Snapshot": {
+    "sha256": "bc78da4e5d9148e8384ed00e112d9e10a2ff4b89072f7ac57ccc8b526fe38f70",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.cf20544e49988d12"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_vision",
+          "description"
+        ],
+        "key": "schema.mcp.2a34b1113ee99fa8"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_dom",
+          "description"
+        ],
+        "key": "schema.mcp.c0139a32efd42b39"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_annotation",
+          "description"
+        ],
+        "key": "schema.mcp.ed291c436e3b6bb7"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_ui_tree",
+          "description"
+        ],
+        "key": "schema.mcp.036405d76150bfaf"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "width_reference_line",
+          "description"
+        ],
+        "key": "schema.mcp.46bc3e8a6f4edbaf"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "height_reference_line",
+          "description"
+        ],
+        "key": "schema.mcp.946139ea642c9cd8"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "display",
+          "description"
+        ],
+        "key": "schema.mcp.25d61b0be9127902"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "region",
+          "description"
+        ],
+        "key": "schema.mcp.f8cd4c0d50eca4bb"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "save_path",
+          "description"
+        ],
+        "key": "schema.mcp.b19707051eba01c4"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Snapshot"
+  },
+  "windows_mcp_Screenshot": {
+    "sha256": "79e6005c40b16efde7f8b87d892c4519ab7511cbff3baae302c14e2aa4743d34",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.8deae0b5c172d88e"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_annotation",
+          "description"
+        ],
+        "key": "schema.mcp.ed291c436e3b6bb7"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "width_reference_line",
+          "description"
+        ],
+        "key": "schema.mcp.46bc3e8a6f4edbaf"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "height_reference_line",
+          "description"
+        ],
+        "key": "schema.mcp.946139ea642c9cd8"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "display",
+          "description"
+        ],
+        "key": "schema.mcp.25d61b0be9127902"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "region",
+          "description"
+        ],
+        "key": "schema.mcp.f8cd4c0d50eca4bb"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "save_path",
+          "description"
+        ],
+        "key": "schema.mcp.b19707051eba01c4"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Screenshot"
+  },
+  "windows_mcp_Click": {
+    "sha256": "7296a30a6b60dda0c295a098544f5fc882e54423a74151ab03537e94e518e26b",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.f8712e35dc7aa44b"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "loc",
+          "description"
+        ],
+        "key": "schema.mcp.be62460acc643632"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "label",
+          "description"
+        ],
+        "key": "schema.mcp.999ef5fa0beba1c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "button",
+          "description"
+        ],
+        "key": "schema.mcp.48fc684acc780d6f"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "clicks",
+          "description"
+        ],
+        "key": "schema.mcp.7ee4ad5e37e01f0b"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Click"
+  },
+  "windows_mcp_Type": {
+    "sha256": "161bb17b84b3702bb29af36eca4aed03947203f150d45badb6264adaa90f4b6c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.77f782c47789d491"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.mcp.ad35f4c041ddb0c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "loc",
+          "description"
+        ],
+        "key": "schema.mcp.be62460acc643632"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "label",
+          "description"
+        ],
+        "key": "schema.mcp.999ef5fa0beba1c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "clear",
+          "description"
+        ],
+        "key": "schema.mcp.35d617baacae1a89"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "caret_position",
+          "description"
+        ],
+        "key": "schema.mcp.adf0f6c0df96c7fe"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "press_enter",
+          "description"
+        ],
+        "key": "schema.mcp.57de4bad90257cfe"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Type"
+  },
+  "windows_mcp_Scroll": {
+    "sha256": "92220270349be35fed2105eaa7da5fbfd3248a34d2811d181afab0319fcc0daf",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.cd6fa9c3a0f7bf9b"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "loc",
+          "description"
+        ],
+        "key": "schema.mcp.be62460acc643632"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "label",
+          "description"
+        ],
+        "key": "schema.mcp.999ef5fa0beba1c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "type",
+          "description"
+        ],
+        "key": "schema.mcp.658caeeeb020ea99"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "direction",
+          "description"
+        ],
+        "key": "schema.mcp.1b4b4730b4593de1"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "wheel_times",
+          "description"
+        ],
+        "key": "schema.mcp.ef8cfd96e8721d02"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Scroll"
+  },
+  "windows_mcp_Move": {
+    "sha256": "7bb41c06e1e670dc9c44974c4883bb87772850e8738174daed5ab4de04566038",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.0c448444901789d7"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "loc",
+          "description"
+        ],
+        "key": "schema.mcp.be62460acc643632"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "label",
+          "description"
+        ],
+        "key": "schema.mcp.999ef5fa0beba1c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "drag",
+          "description"
+        ],
+        "key": "schema.mcp.7bff36cab025db63"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "from_loc",
+          "description"
+        ],
+        "key": "schema.mcp.b781a9b8096a9bc0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "duration",
+          "description"
+        ],
+        "key": "schema.mcp.3678aa109de78f35"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Move"
+  },
+  "windows_mcp_Shortcut": {
+    "sha256": "b486dfce06d08e640dd66c50f9680006dbf5ee4e8f19bbea23cf891d4690c0a1",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.fb45e2a3016df301"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "shortcut",
+          "description"
+        ],
+        "key": "schema.mcp.618d3a576fcf5476"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Shortcut"
+  },
+  "windows_mcp_Wait": {
+    "sha256": "bf51ee0eeee9d44f5f503f3e9a41bb0b44bfe54f04f8a167a707157ecaabcfa6",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.15b4ecd02455c085"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "duration",
+          "description"
+        ],
+        "key": "schema.mcp.3678aa109de78f35"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Wait"
+  },
+  "windows_mcp_WaitFor": {
+    "sha256": "b8047cb7126617b41757c233ae5d14d65ef0d364dc8d291c3320ed3a9d308b9f",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.db2b9069a7cea566"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "condition",
+          "description"
+        ],
+        "key": "schema.mcp.0fdd1ea370e18813"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.mcp.ad35f4c041ddb0c0"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "window_name",
+          "description"
+        ],
+        "key": "schema.mcp.1903f4f0930d47e8"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.mcp.7d6eecdf7c77873a"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "interval",
+          "description"
+        ],
+        "key": "schema.mcp.1290d15e6da77f53"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_dom",
+          "description"
+        ],
+        "key": "schema.mcp.c0139a32efd42b39"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.WaitFor"
+  },
+  "windows_mcp_Scrape": {
+    "sha256": "dd10c3089ef1b407b6219463e780d00455c7998a0882acbaf73d5e84d7f9622a",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.a3e8bd949d655286"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "url",
+          "description"
+        ],
+        "key": "schema.mcp.4a3049d5e0ba9e2e"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.mcp.e3d9b5bced5bdd6c"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_dom",
+          "description"
+        ],
+        "key": "schema.mcp.c0139a32efd42b39"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "use_sampling",
+          "description"
+        ],
+        "key": "schema.mcp.cd73828e42e56e79"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Scrape"
+  },
+  "windows_mcp_MultiSelect": {
+    "sha256": "b81c8afc276e6aaa771572a85679dfcc35da54612583917a308dd65502f58451",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.2b61529bdde4576a"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "locs",
+          "description"
+        ],
+        "key": "schema.mcp.a12e7ca914bf31f2"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "labels",
+          "description"
+        ],
+        "key": "schema.mcp.d8e5436afbf988aa"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "press_ctrl",
+          "description"
+        ],
+        "key": "schema.mcp.7b8149ad390c02fe"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.MultiSelect"
+  },
+  "windows_mcp_MultiEdit": {
+    "sha256": "388c04d3765ecc409cfc018ddbb1d2ed72363702705fa67dd89ab7b4c4574243",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.6216d9917827fa41"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "locs",
+          "description"
+        ],
+        "key": "schema.mcp.a12e7ca914bf31f2"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "labels",
+          "description"
+        ],
+        "key": "schema.mcp.d8e5436afbf988aa"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.MultiEdit"
+  },
+  "windows_mcp_Clipboard": {
+    "sha256": "4ae5cb18fb6b361dd5fbac1748e199e97a4a590c49363fc41e5112b88df69128",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.9663c56353771fde"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.mcp.144f0a2788b61173"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.mcp.ad35f4c041ddb0c0"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Clipboard"
+  },
+  "windows_mcp_Process": {
+    "sha256": "74e523b01073c8dd379ec7f7c242cd9bd35f037c901d076da96fdd69f3955070",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.f716e0a50f7938b1"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.mcp.144f0a2788b61173"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.mcp.b478e14776805b01"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "pid",
+          "description"
+        ],
+        "key": "schema.mcp.a86471832b3b3a98"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "sort_by",
+          "description"
+        ],
+        "key": "schema.mcp.5043abc7b34fe430"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.mcp.4e4c70cf92b20edb"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "force",
+          "description"
+        ],
+        "key": "schema.mcp.e3eacaa6fc07b085"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Process"
+  },
+  "windows_mcp_Notification": {
+    "sha256": "2b9ab20a0dd179b152d9e8d08eb80186b00301e95df3b6569baac70d104d19e8",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.047a4b4f89d4e4ec"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "title",
+          "description"
+        ],
+        "key": "schema.mcp.2ab17bd140f09395"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "message",
+          "description"
+        ],
+        "key": "schema.mcp.5f9dc4fdbad6c49d"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "app_id",
+          "description"
+        ],
+        "key": "schema.mcp.87e203061b5211ed"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Notification"
+  },
+  "windows_mcp_Registry": {
+    "sha256": "c38761dba5e35782128312d23df63447348956e715256fe79fb2b6d465109b3c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.mcp.2ed9430dd46c1b45"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.mcp.144f0a2788b61173"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.mcp.c3aba50ae827af3c"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.mcp.b478e14776805b01"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "value",
+          "description"
+        ],
+        "key": "schema.mcp.fb00a588dad5b7f9"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "type",
+          "description"
+        ],
+        "key": "schema.mcp.658caeeeb020ea99"
+      }
+    ],
+    "purpose": "schema.mcp.purpose.Registry"
+  }
+}

@@ -60,6 +60,7 @@ import context_envelope
 import desires
 import frame_epoch
 import frame_language
+import tool_language
 import frame_continuation
 import frame_dossiers
 import addressed_replies
@@ -9198,7 +9199,9 @@ def _hand_purpose(tool: dict) -> str:
     if known:
         return tool_text_en.pointer_purpose(name, known)
     if name in windows_mcp_tools.PURPOSES:
-        return windows_mcp_tools.PURPOSES[name]
+        localized = tool_language.purpose(tool)
+        if localized:
+            return localized
     text = " ".join(str(tool.get("description") or "").split())
     first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0] if text else ""
     return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
@@ -17644,7 +17647,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # в ЕДИНСТВЕННОМ сборщике списка (контракт A1), потому что иначе отпечаток набора,
     # тень кадра и то, что видит модель, разошлись бы между собой. Меняется только
     # пояснительный текст: имена, типы, enum и порядок остаются как были.
-    return tool_text_en.apply(tools)
+    return tool_language.apply(tool_text_en.apply(tools))
 
 
 def offered_tools_for(ctx: "ChannelContext") -> list:
@@ -17665,7 +17668,7 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     body = [t for t in natives if t.get("name") != "end_turn"]
     # Схемы `describe`/`call` — через ту же английскую накладку, что и остальные:
     # иначе две родные руки говорили бы по-русски посреди английского набора.
-    return body + tool_text_en.apply([DESCRIBE_TOOL, CALL_TOOL]) + closer
+    return body + tool_language.apply(tool_text_en.apply([DESCRIBE_TOOL, CALL_TOOL])) + closer
 
 
 def reply_hand_offered(ctx: "ChannelContext", *, no_tools: bool = False,
