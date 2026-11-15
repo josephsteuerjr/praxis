@@ -2375,6 +2375,7 @@ def _source_update_turn(source_id: str, *, speaker: str, origin_text: str) -> st
     return _turn_in_window(source_id, speaker=speaker, origin_text=origin_text)
 
 
+@_frame_pinned
 def _update_report_due() -> None:
     """Испытание или итог обновления на сервере — записка в окно и ход агента (27.09).
 
@@ -2415,16 +2416,10 @@ def _update_report_due() -> None:
         return
     if same and time.time() < float(mark.get("retry_at") or 0.0):
         return
-    note = updates.report_note(receipt, owner=_speaker or "владелец")
+    note = updates.report_note(receipt, owner=_speaker or None,agent=_agent)
     if inspect:
         goals = "\n".join(f"- {g['id']}: {g['title']}" for g in request["goals"])
-        note += (f"\nПросьба осмотра {request['id']}. Проверь фактическую реализацию этих целей и названных багов:\n{goals}\n"
-                 "Рукой update_inspection(action=status) перечитай просьбу; затем report с итогом и следом по каждому пункту. "
-                 "Приёмка передана тебе: самостоятельно проверь пользовательский путь доступными инструментами, "
-                 "включая headless-проверки, и представь результат владельцу как доказательство. "
-                 "Не проси владельца провести проверку или снова разрешить уже порученную приёмку. "
-                 "Чего не смог проверить, обозначь unverified с причиной. Расскажи владельцу итог рукой reply. "
-                 "Завершение хода или молчание не закрывает просьбу осмотра.")
+        note += (_frame_word('native.updates.inspection', '\nПросьба осмотра {p0}. Проверь фактическую реализацию этих целей и названных багов:\n{p1}\nРукой update_inspection(action=status) перечитай просьбу; затем report с итогом и следом по каждому пункту. Приёмка передана тебе: самостоятельно проверь пользовательский путь доступными инструментами, включая headless-проверки, и представь результат владельцу как доказательство. Не проси владельца провести проверку или снова разрешить уже порученную приёмку. Чего не смог проверить, обозначь unverified с причиной. Расскажи владельцу итог рукой reply. Завершение хода или молчание не закрывает просьбу осмотра.', p0=f"{request['id']}", p1=f'{goals}'))
     now = _now()
     source_id = f"update-{plan_id or int(now.timestamp())}-{state}"
     if not (same and mark.get("noted")):

@@ -6,6 +6,7 @@ agent and transport stack. Only production function bodies are executed here.
 from __future__ import annotations
 
 import ast
+import contextlib
 from contextlib import contextmanager
 import importlib.util
 import json
@@ -30,9 +31,10 @@ from localharness.package_notice import read, write
 def load_runner():
     path = ROOT / "desk/localharness/runner.py"
     source = ast.parse(path.read_text(encoding="utf-8"))
-    names = {"_forge_maintenance_tick", "_start_forge_maintenance", "_resume_due", "_update_report_due"}
+    names = {"_frame_word", "_frame_pinned", "_forge_maintenance_tick", "_start_forge_maintenance", "_resume_due", "_update_report_due"}
     functions = [row for row in source.body if isinstance(row, ast.FunctionDef) and row.name in names]
-    namespace = {"Path": Path, "log": logging.getLogger("runner-test"), "time": time}
+    namespace = {"Path": Path, "log": logging.getLogger("runner-test"), "time": time,
+                 "contextlib":contextlib,"_agent":None}
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
     return namespace, source
 

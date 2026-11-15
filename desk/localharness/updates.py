@@ -11,6 +11,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Callable
+from contextlib import nullcontext
+from functools import wraps
 
 import package_notice
 
@@ -98,55 +100,84 @@ def _control():
     return control
 
 
-def receipt_line(receipt: dict) -> str:
+
+def _language(agent):
+    return (getattr(agent,'frame_language',None)
+            if getattr(agent,'FRAME_TEXT_BOUNDARIES_API',0)==1 else None)
+
+
+def _words(agent,key,legacy,**values):
+    language=_language(agent)
+    return language.text(key,**values) if language else legacy.format_map(values)
+
+
+def _pinned_to(agent,function):
+    @wraps(function)
+    def call(*args,**kwargs):
+        language=_language(agent)
+        with language.pin() if language else nullcontext():return function(*args,**kwargs)
+    return call
+
+
+def _pinned(function):
+    @wraps(function)
+    def call(*args,**kwargs):return _pinned_to(kwargs.get('agent'),function)(*args,**kwargs)
+    return call
+
+
+def _confirmation_label(agent,code):
+    if code not in CONFIRMED_BY:return code
+    return _words(agent,'native.updates.confirmation.'+code,CONFIRMED_BY[code])
+
+
+@_pinned
+def receipt_line(receipt: dict, *, agent=None) -> str:
     """Одна строка о последнем плане — для руки, окна-записки и отчёта."""
     state = str(receipt.get("state") or "")
-    words = {"checking": "исполнитель сверяет план", "awaiting": "ждёт «да» человека",
-             "confirmed": "«да» получено, начинается", "running": "идёт обновление",
-             "trial": "испытание: новая версия поднята, ждёт слова агента",
-             "refused": "план не принят", "declined": "человек ответил «нет»",
-             "expired": "план истёк без ответа", "superseded": "план заменён новым",
-             "done": "обновление прошло", "rolled_back": "не прошло — откачено",
-             "failed": "не прошло"}.get(state, state or "?")
+    words = {"checking": _words(agent, 'native.updates.1c828f25493b', 'исполнитель сверяет план'), "awaiting": _words(agent, 'native.updates.177703a6f6b1', 'ждёт «да» человека'),
+             "confirmed": _words(agent, 'native.updates.0f80211f4aa6', '«да» получено, начинается'), "running": _words(agent, 'native.updates.36ae10a82cea', 'идёт обновление'),
+             "trial": _words(agent, 'native.updates.52570a7a7cd7', 'испытание: новая версия поднята, ждёт слова агента'),
+             "refused": _words(agent, 'native.updates.376ec3f93f4d', 'план не принят'), "declined": _words(agent, 'native.updates.7f72dbc56c4e', 'человек ответил «нет»'),
+             "expired": _words(agent, 'native.updates.e91219ff5f60', 'план истёк без ответа'), "superseded": _words(agent, 'native.updates.e72fa1f46117', 'план заменён новым'),
+             "done": _words(agent, 'native.updates.ac89821e5248', 'обновление прошло'), "rolled_back": _words(agent, 'native.updates.4976d750c137', 'не прошло — откачено'),
+             "failed": _words(agent, 'native.updates.9f1050f48cb7', 'не прошло')}.get(state, state or "?")
     span = ""
     if receipt.get("from_version") or receipt.get("to_version"):
         span = f" ({receipt.get('from_version') or '?'} → {receipt.get('to_version') or '?'})"
     detail = str(receipt.get("note") or receipt.get("step") or "")
     plain = str(receipt.get("summary") or "")
-    line = f"Последний план {receipt.get('id') or '?'}: {words}{span}. {detail}".strip()
-    return line + (f"\nКоротко для владельца: {plain}" if plain and plain != detail else "")
+    line = _words(agent, 'native.updates.4f715a2ed263', 'Последний план {p0}: {p1}{p2}. {p3}', p0=f"{receipt.get('id') or '?'}", p1=f'{words}', p2=f'{span}', p3=f'{detail}').strip()
+    return line + (_words(agent, 'native.updates.f0e1027ea270', '\nКоротко для владельца: {p0}', p0=f'{plain}') if plain and plain != detail else "")
 
 
-def status_text(state: dict, *, desktop: bool = False) -> str:
+@_pinned
+def status_text(state: dict, *, desktop: bool = False, agent=None) -> str:
     up = state.get("updater") or {}
     receipt = state.get("receipt") or {}
     lines = []
     if desktop:
-        lines.append("Обновление на этом компьютере ставит владелец кнопкой в окне (Настройки → "
-                     "Обновление); предложить ему можно словами.")
+        lines.append(_words(agent, 'native.updates.273830d8ab50', 'Обновление на этом компьютере ставит владелец кнопкой в окне (Настройки → Обновление); предложить ему можно словами.'))
         if up.get("alive") and up.get("busy"):
-            lines.append(f"Установщик сейчас: {up['busy']}.")
+            lines.append(_words(agent, 'native.updates.4bcee3de1f1c', 'Установщик сейчас: {p0}.', p0=f"{up['busy']}"))
     elif up.get("ok"):
         latest = (up.get("latest") or {}).get("version") or ""
-        lines.append(f"Исполнитель обновлений на связи. Стоит {up.get('current') or '?'}; "
-                     f"последняя в выпусках — {latest or 'ещё не проверял'}"
-                     + (" — новее, можно планировать." if up.get("newer") else "."))
+        lines.append(_words(agent, 'native.updates.009c68f3e9d6', 'Исполнитель обновлений на связи. Стоит {p0}; последняя в выпусках — {p1}', p0=f"{up.get('current') or '?'}", p1=f"{latest or _words(agent, 'native.updates.1219571733c1', 'ещё не проверял')}")
+                     + (_words(agent, 'native.updates.51508d0105e8', ' — новее, можно планировать.') if up.get("newer") else "."))
         if up.get("busy"):
-            lines.append(f"Сейчас он занят: {up['busy']}.")
+            lines.append(_words(agent, 'native.updates.27a73752858c', 'Сейчас он занят: {p0}.', p0=f"{up['busy']}"))
     else:
-        lines.append("Обновить сейчас нельзя: " + str(up.get("why") or "исполнителя нет"))
+        lines.append(_words(agent, 'native.updates.e36ac7a6a200', 'Обновить сейчас нельзя: ') + str(up.get("why") or _words(agent, 'native.updates.e85f329f5c00', 'исполнителя нет')))
     if receipt:
-        lines.append(receipt_line(receipt))
+        lines.append(receipt_line(receipt,agent=agent))
         if receipt.get("state") == "awaiting":
-            lines.append("Согласиться может только владелец: кнопкой «Обновить» в окне (Система → "
-                         "Обновление) или словами тебе — тогда action=confirm с его словами дословно.")
+            lines.append(_words(agent, 'native.updates.dc4befe34d3e', 'Согласиться может только владелец: кнопкой «Обновить» в окне (Система → Обновление) или словами тебе — тогда action=confirm с его словами дословно.'))
         elif receipt.get("state") == "trial":
-            lines.append("Это запись прежнего испытания. Новый установщик закроет её автоматически; ожидание проверки агентом отменено.")
+            lines.append(_words(agent, 'native.updates.7d03ee8b29f9', 'Это запись прежнего испытания. Новый установщик закроет её автоматически; ожидание проверки агентом отменено.'))
     return "\n".join(lines)
 
 
 def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[], str], *,
-              desktop: bool = False):
+              desktop: bool = False, agent=None):
     tree = Path(tree)
 
     def update_request(action: str = "status", version: str = "latest", backup: str = "full",
@@ -154,7 +185,7 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
         try:
             if desktop:
                 if action in ('accept','reject'):
-                    return 'Автоматической приёмки приложения больше нет. Обновление не ждёт слова агента. Если нашёл проблему, сообщи владельцу обычным текстом.'
+                    return _words(agent, 'native.updates.f6c04e316dee', 'Автоматической приёмки приложения больше нет. Обновление не ждёт слова агента. Если нашёл проблему, сообщи владельцу обычным текстом.')
                 import json
                 from localharness.desktop_update_request import request
                 return json.dumps(request(tree,action,version=version,source_mode=source_mode,reason=reason,
@@ -163,61 +194,50 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
             action = str(action or "status").strip().lower()
             state = control.update_state(tree)
             if action == "status":
-                return status_text(state, desktop=desktop)
+                return status_text(state, desktop=desktop,agent=agent)
             if desktop and action in ("plan", "confirm", "decline"):
-                return ("На этом компьютере обновление ставит владелец кнопкой в окне (Настройки → "
-                        "Обновление). Предложи ему словами, если считаешь, что пора.")
+                return (_words(agent, 'native.updates.37e06069222e', 'На этом компьютере обновление ставит владелец кнопкой в окне (Настройки → Обновление). Предложи ему словами, если считаешь, что пора.'))
             if action == "plan":
                 words = " ".join(str(owner_words or "").split())
                 if words and not owner_spoke():
-                    return ("Не передаю: этот ход начал не владелец своими словами, а «да» на "
-                            "обновление — решение владельца. Положи план без owner_words — согласие "
-                            "придёт кнопкой «Обновить» в окне или словами тебе.")
+                    return (_words(agent, 'native.updates.882110ae9332', 'Не передаю: этот ход начал не владелец своими словами, а «да» на обновление — решение владельца. Положи план без owner_words — согласие придёт кнопкой «Обновить» в окне или словами тебе.'))
                 got = control.update_plan(tree, version=str(version or "latest"),
                                           backup=str(backup or "full"), reason=str(reason or ""),
                                           by="agent", chat=chat_of(),
                                           consent="owner-words" if words else "",
                                           consent_words=words)
                 if not got.get("ok"):
-                    return "План не положен: " + str(got.get("note") or "")
+                    return _words(agent, 'native.updates.673b75bd6afb', 'План не положен: ') + str(got.get("note") or "")
                 if words:
-                    return ("Обновление начинается — с «да» владельца. Исполнитель проверит выпуск и "
-                            "начнёт сам; на несколько минут ты пропадёшь. Скажи владельцу это простыми "
-                            "словами; поднявшись, получишь известие о новой версии.")
-                return (str(got["note"]) + ". Скажи владельцу простыми словами, что просишь "
-                        "обновиться и зачем. Согласится — кнопкой «Обновить» в окне или словами тебе "
-                        "(тогда action=confirm с его словами).")
+                    return (_words(agent, 'native.updates.1727be305287', 'Обновление начинается — с «да» владельца. Исполнитель проверит выпуск и начнёт сам; на несколько минут ты пропадёшь. Скажи владельцу это простыми словами; поднявшись, получишь известие о новой версии.'))
+                return (str(got["note"]) + _words(agent, 'native.updates.58ded101449e', '. Скажи владельцу простыми словами, что просишь обновиться и зачем. Согласится — кнопкой «Обновить» в окне или словами тебе (тогда action=confirm с его словами).'))
             receipt = state.get("receipt") or {}
             if action in ("accept", "reject"):
-                return "Автоматической приёмки приложения больше нет. Обновление не ждёт слова агента. Если нашёл проблему, сообщи владельцу обычным текстом."
+                return _words(agent, 'native.updates.f6c04e316dee', 'Автоматической приёмки приложения больше нет. Обновление не ждёт слова агента. Если нашёл проблему, сообщи владельцу обычным текстом.')
             if action in ("confirm", "decline"):
                 if receipt.get("state") != "awaiting":
-                    return ("Подтверждать нечего: " + (receipt_line(receipt) if receipt
-                                                       else "планов не было"))
+                    return (_words(agent, 'native.updates.6e0d65f9e4f4', 'Подтверждать нечего: ') + (receipt_line(receipt,agent=agent) if receipt
+                                                       else _words(agent, 'native.updates.7cba69f73349', 'планов не было')))
                 if action == "decline":
                     got = control.update_confirm(tree, receipt.get("id", ""), receipt.get("nonce", ""),
                                                  "no", by="agent", words=str(reason or ""))
                     return str(got.get("note") or "")
                 if not owner_spoke():
-                    return ("Не передаю: этот ход начал не владелец своими словами. «Да» на "
-                            "обновление — его решение: пусть скажет его тебе сам или нажмёт "
-                            "«Подтвердить» в окне.")
+                    return (_words(agent, 'native.updates.5a2dda5f6883', 'Не передаю: этот ход начал не владелец своими словами. «Да» на обновление — его решение: пусть скажет его тебе сам или нажмёт «Подтвердить» в окне.'))
                 words = " ".join(str(owner_words or "").split())
                 if len(words) < 2:
-                    return ("Нужны слова владельца дословно (owner_words) — они ложатся в "
-                            "расписку рядом с его «да».")
+                    return (_words(agent, 'native.updates.ef2ccbf47240', 'Нужны слова владельца дословно (owner_words) — они ложатся в расписку рядом с его «да».'))
                 got = control.update_confirm(tree, receipt.get("id", ""), receipt.get("nonce", ""),
                                              "yes", by="owner-words", words=words)
                 if not got.get("ok"):
-                    return "Не передалось: " + str(got.get("note") or "")
-                return (str(got["note"]) + ". Скажи владельцу, что начинается и что ты на "
-                        "несколько минут пропадёшь; поднявшись, получишь известие о новой версии.")
-            return "update_request: action бывает status, plan, confirm или decline"
+                    return _words(agent, 'native.updates.f6bac65de1f8', 'Не передалось: ') + str(got.get("note") or "")
+                return (str(got["note"]) + _words(agent, 'native.updates.567784fe643d', '. Скажи владельцу, что начинается и что ты на несколько минут пропадёшь; поднявшись, получишь известие о новой версии.'))
+            return _words(agent, 'native.updates.1ab88d057af9', 'update_request: action бывает status, plan, confirm или decline')
         except Exception as exc:                      # рука не роняет ход
             log.exception("update_request упал")
-            return f"update_request: не вышло — {type(exc).__name__}: {exc}"
+            return _words(agent, 'native.updates.5d89c98d0fec', 'update_request: не вышло — {p0}: {p1}', p0=f'{type(exc).__name__}', p1=f'{exc}')
 
-    return update_request
+    return _pinned_to(agent,update_request)
 
 
 def install(agent_mod, tree: Path, cfg: dict | None = None, *,
@@ -243,7 +263,7 @@ def install(agent_mod, tree: Path, cfg: dict | None = None, *,
         return f"{title} ({chat})" if title and chat else (title or chat)
 
     if impl.get(TOOL_NAME) is None:
-        impl[TOOL_NAME] = make_hand(Path(tree), owner_spoke, chat_of, desktop=desktop)
+        impl[TOOL_NAME] = make_hand(Path(tree), owner_spoke, chat_of, desktop=desktop,agent=agent_mod)
         if not any(isinstance(t, dict) and t.get("name") == TOOL_NAME for t in tools):
             tools.append(dict(TOOL_DESK if desktop else TOOL))
         purposes = getattr(agent_mod, "HAND_PURPOSE", None)
@@ -328,90 +348,80 @@ def _checks_line(title: str, rows) -> str:
                              f"{row.get('note') or ''}" for row in rows)
 
 
-def _code_lines(receipt: dict) -> list[str]:
+@_pinned
+def _code_lines(receipt: dict, *, agent=None) -> list[str]:
     """Что стало с правками агента в его коде — словами для записки."""
     code = receipt.get("agent_code") or {}
     if not code:
         return []
     if not code.get("mounted"):
-        return ["Твой код в этом контейнере жил не на диске сервера — если в нём были твои "
-                "правки, при обновлении они не переехали."] if code.get("note") else []
+        return [_words(agent, 'native.updates.7e6471282d4a', 'Твой код в этом контейнере жил не на диске сервера — если в нём были твои правки, при обновлении они не переехали.')] if code.get("note") else []
     if code.get("no_base"):
-        return [f"Сравнить твой код с чистой прежней версией было не с чем ({code['no_base']}) — "
-                f"твой прежний код целиком лежит в {code.get('folder') or 'workspace'}/old-code/; "
-                "сравни его с новым сам и перенеси своё."]
+        return [_words(agent, 'native.updates.d85a7a671d6d', 'Сравнить твой код с чистой прежней версией было не с чем ({p0}) — твой прежний код целиком лежит в {p1}/old-code/; сравни его с новым сам и перенеси своё.', p0=f"{code['no_base']}", p1=f"{code.get('folder') or 'workspace'}")]
     if not code.get("edited"):
-        return ["Своих правок в коде у тебя не было — переносить было нечего."]
-    lines = [f"Твои правки кода ({len(code['edited'])}): перенесено {len(code.get('carried') or [])}, "
-             f"слито с выпуском {len(code.get('merged') or [])}, не легло "
-             f"{len(code.get('conflicts') or [])}."]
+        return [_words(agent, 'native.updates.ba080942c9e8', 'Своих правок в коде у тебя не было — переносить было нечего.')]
+    lines = [_words(agent, 'native.updates.128087f06ee8', 'Твои правки кода ({p0}): перенесено {p1}, слито с выпуском {p2}, не легло {p3}.', p0=f"{len(code['edited'])}", p1=f"{len(code.get('carried') or [])}", p2=f"{len(code.get('merged') or [])}", p3=f"{len(code.get('conflicts') or [])}")]
     if code.get("conflicts"):
-        lines.append("Не легло (в новой версии стоит вариант выпуска): " + "; ".join(
+        lines.append(_words(agent, 'native.updates.170cc02ce3ab', 'Не легло (в новой версии стоит вариант выпуска): ') + "; ".join(
             f"{row.get('path')} — {row.get('why')}" for row in code["conflicts"][:10]
-            if isinstance(row, dict)) + f". Стороны и объяснение — {code.get('folder')}/README.md.")
+            if isinstance(row, dict)) + _words(agent, 'native.updates.a9d14eb780ad', '. Стороны и объяснение — {p0}/README.md.', p0=f"{code.get('folder')}"))
     if code.get("materials_error"):
         lines.append(code["materials_error"])
     return lines
 
 
-def trial_note(receipt: dict, *, owner: str = "владелец") -> str:
+@_pinned
+def trial_note(receipt: dict, *, owner: str = "владелец", agent=None) -> str:
     """Записка испытания — словами владельца (04.10): одна строка, без простыни.
 
     Было пятнадцать строк чек-листа, и агент (Йоно, сервер Дмитрия) читал их
     вместо дела. Что проверять и как ответить, рука знает из своего описания —
     записка будит, а не инструктирует.
     """
-    return ("Системное сообщение: проверь обновление "
-            f"{receipt.get('from_version') or '?'} -> {receipt.get('to_version') or '?'} "
-            "на работоспособность и совместимость со своими правками.")
+    return (_words(agent, 'native.updates.eb5741147762', 'Системное сообщение: проверь обновление {p0} -> {p1} на работоспособность и совместимость со своими правками.', p0=f"{receipt.get('from_version') or '?'}", p1=f"{receipt.get('to_version') or '?'}"))
 
 
-def report_note(receipt: dict, *, owner: str = "владелец") -> str:
+@_pinned
+def report_note(receipt: dict, *, owner: str | None = None, agent=None) -> str:
     """Записка агенту: испытание (проверить себя) или итог (рассказать владельцу)."""
+    if owner is None:owner=_words(agent,'native.updates.owner','владелец')
     state = str(receipt.get("state") or "")
     if receipt.get('kind')=='package':
-        version=(f"Hélène обновлена с {receipt['from_version']} до {receipt.get('to_version') or '?'}" if receipt.get('from_version')
-                 else f"В этой установке работает Hélène {receipt.get('to_version') or '?'}; прежняя версия здесь не записана")
-        return (f"Системное сообщение: {version}. "
-                "Осмотри новую версию: проверь доступные руки, память и совместимость со своими правками. "
-                "Коротко расскажи владельцу, что проверил и какие проблемы нашёл. "
-                "Это обновление системного пакета: автоматического испытания и отката здесь нет, решение об изменении пакета принимает владелец.")
+        version=(_words(agent, 'native.updates.581c62b42f98', 'Hélène обновлена с {p0} до {p1}', p0=f"{receipt['from_version']}", p1=f"{receipt.get('to_version') or '?'}") if receipt.get('from_version')
+                 else _words(agent, 'native.updates.778da321ac7b', 'В этой установке работает Hélène {p0}; прежняя версия здесь не записана', p0=f"{receipt.get('to_version') or '?'}"))
+        return (_words(agent, 'native.updates.036179868fd3', 'Системное сообщение: {p0}. Осмотри новую версию: проверь доступные руки, память и совместимость со своими правками. Коротко расскажи владельцу, что проверил и какие проблемы нашёл. Это обновление системного пакета: автоматического испытания и отката здесь нет, решение об изменении пакета принимает владелец.', p0=f'{version}'))
     if state == "trial":
-        return trial_note(receipt, owner=owner)
-    head = {"done": "Обновление прошло", "rolled_back": "Обновление не прошло и откачено",
-            "failed": "Обновление не прошло"}.get(state, "Обновление закончилось")
+        return trial_note(receipt, owner=owner,agent=agent)
+    head = {"done": _words(agent, 'native.updates.15d6718b600d', 'Обновление прошло'), "rolled_back": _words(agent, 'native.updates.bba1e965c145', 'Обновление не прошло и откачено'),
+            "failed": _words(agent, 'native.updates.582f5ab61e6b', 'Обновление не прошло')}.get(state, _words(agent, 'native.updates.cad67be4ec64', 'Обновление закончилось'))
     plain = str(receipt.get("summary") or "")
-    lines = [f"[Hélène · обновление] {head}: {receipt.get('from_version') or '?'} → "
-             f"{receipt.get('to_version') or '?'}.",
-             f"Коротко для владельца: {plain}" if plain else "",
-             "Подробно: " + str(receipt.get("note") or "") if plain else str(receipt.get("note") or ""),
-             _checks_line(f"Проверки {receipt.get('to_version') or 'новой версии'}: ",
+    lines = [_words(agent, 'native.updates.0981e96433cc', '[Hélène · обновление] {p0}: {p1} → {p2}.', p0=f'{head}', p1=f"{receipt.get('from_version') or '?'}", p2=f"{receipt.get('to_version') or '?'}"),
+             _words(agent, 'native.updates.1b72116244e1', 'Коротко для владельца: {p0}', p0=f'{plain}') if plain else "",
+             _words(agent, 'native.updates.2bc061d0d9ba', 'Подробно: ') + str(receipt.get("note") or "") if plain else str(receipt.get("note") or ""),
+             _checks_line(_words(agent, 'native.updates.5bbcc74110aa', 'Проверки {p0}: ', p0=f"{receipt.get('to_version') or _words(agent, 'native.updates.41b20eafb43a', 'новой версии')}"),
                           receipt.get("checks"))]
     trial = receipt.get("trial") or {}
     verdict = trial.get("verdict") or {}
     if verdict.get("verdict") == "timeout":
-        lines.append("На испытании ответа до срока не было — новая версия оставлена "
-                    "работать, откат не принудительный (04.10, слово владельца).")
+        lines.append(_words(agent, 'native.updates.46934808ebeb', 'На испытании ответа до срока не было — новая версия оставлена работать, откат не принудительный (04.10, слово владельца).'))
     elif verdict.get("verdict"):
-        who = "ты" if verdict.get("by") == "agent" else "владелец"
-        lines.append(f"Слово на испытании: {who} — «{verdict.get('verdict')}»"
+        who = _words(agent, 'native.updates.bca5722b5743', 'ты') if verdict.get("by") == "agent" else _words(agent, 'native.updates.ff608915fa75', 'владелец')
+        lines.append(_words(agent, 'native.updates.1883407b6ae6', 'Слово на испытании: {p0} — «{p1}»', p0=f'{who}', p1=f"{verdict.get('verdict')}")
                      + (f": {verdict.get('words')}" if verdict.get("words") else ""))
     rollback = receipt.get("rollback") or {}
     if rollback.get("notes"):
-        lines.append("Откат: " + "; ".join(str(n) for n in rollback["notes"]) + "; "
-                     + ("прежняя версия поднята и прошла проверки" if rollback.get("ok")
-                        else "прежняя версия проверки НЕ прошла"))
+        lines.append(_words(agent, 'native.updates.12b269cfa8ee', 'Откат: ') + "; ".join(str(n) for n in rollback["notes"]) + "; "
+                     + (_words(agent, 'native.updates.db52eac1d420', 'прежняя версия поднята и прошла проверки') if rollback.get("ok")
+                        else _words(agent, 'native.updates.55e9580f2dda', 'прежняя версия проверки НЕ прошла')))
     if state == "done":
-        lines += _code_lines(receipt)
-        lines.append("Осмотри новую версию: проверь доступные руки, память и совместимость со своими правками. Обновление не ждёт твоей приёмки; о проблемах сообщи владельцу.")
+        lines += _code_lines(receipt,agent=agent)
+        lines.append(_words(agent, 'native.updates.e02fa9aff734', 'Осмотри новую версию: проверь доступные руки, память и совместимость со своими правками. Обновление не ждёт твоей приёмки; о проблемах сообщи владельцу.'))
     chat = str((receipt.get("plan") or {}).get("chat") or "")
     confirmed = receipt.get("confirmed") or {}
     if confirmed.get("by"):
-        who = CONFIRMED_BY.get(str(confirmed.get("by")), str(confirmed.get("by")))
-        lines.append(f"«Да» дал {who}"
+        who = _confirmation_label(agent,str(confirmed.get("by")))
+        lines.append(_words(agent, 'native.updates.88bf1499aa61', '«Да» дал {p0}', p0=f'{who}')
                      + (f" — «{confirmed.get('words')}»" if confirmed.get("words") else ""))
-    where = f" — план был положен из «{chat}», туда и напиши" if chat else ""
-    lines.append(f"Владелец — {owner}: расскажи об итоге коротко и простыми словами{where}; "
-                 "технические подробности — только если о них спросят. Если не прошло — назови "
-                 "причину и что стоит сейчас; чинить ничего не надо.")
+    where = _words(agent, 'native.updates.d8e302ab93a3', ' — план был положен из «{p0}», туда и напиши', p0=f'{chat}') if chat else ""
+    lines.append(_words(agent, 'native.updates.8487457612e1', 'Владелец — {p0}: расскажи об итоге коротко и простыми словами{p1}; технические подробности — только если о них спросят. Если не прошло — назови причину и что стоит сейчас; чинить ничего не надо.', p0=f'{owner}', p1=f'{where}'))
     return "\n".join(line for line in lines if line)
