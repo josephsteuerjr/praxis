@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import frame_language
 from typing import Callable
 
 log = logging.getLogger("praxis-hands")
@@ -109,6 +110,7 @@ def _digest_of(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+@frame_language.pinned
 def version_conflict(expected: str, current: str | None) -> str:
     """Текст отказа, если ожидаемая версия не совпала; '' — можно править.
 
@@ -118,27 +120,26 @@ def version_conflict(expected: str, current: str | None) -> str:
     if not wanted:
         return ""
     if len(wanted) not in (16, 64) or not re.fullmatch(r"[0-9a-f]+", wanted):
-        return "expected_sha256: нужен полный 64-hex хеш или legacy 16-hex prefix."
+        return frame_language.text('edit.shared.0')
     if wanted == (current or "")[:len(wanted)]:
         return ""
-    return (f"Конфликт версии: ожидался sha256={wanted}, сейчас {current or 'файла нет'}. "
-            "Перечитай файл и наложи правку на актуальную версию.")
+    return (frame_language.text('edit.shared.1', v1=f'{wanted}', v3=f"{current or frame_language.text('edit.shared.2')}"))
 
 
+@frame_language.pinned
 def replace_once(raw: bytes, old: str, new: str, *, all: bool = False) -> tuple[bytes | None, str]:
     """`old` → `new` ровно в одном месте. -> (новые байты, '') либо (None, текст отказа).
 
     Файл обязан быть валидным UTF-8: иначе замена молча подменила бы или потеряла чужие
     байты. Переводы строк не нормализуются — всё вне `old` остаётся побайтно."""
     if not isinstance(all, bool):
-        return None, "all must be a boolean; no bytes changed."
+        return None, frame_language.text('edit.shared.3')
     if not isinstance(old, str) or not old or not isinstance(new, str):
-        return None, "Пустой old — так не правлю (для нового файла есть edit(action=write))."
+        return None, frame_language.text('edit.shared.4')
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        return None, (f"Файл не в UTF-8 (байт {exc.start}) — точечная правка потеряла бы его байты. "
-                      "Нужна полная перезапись или патч.")
+        return None, (frame_language.text('edit.shared.5', v1=f'{exc.start}'))
     # Count overlapping occurrences too: 'aa' in 'aaa' is ambiguous, not unique.
     count, cursor = 0, 0
     while True:
@@ -148,26 +149,22 @@ def replace_once(raw: bytes, old: str, new: str, *, all: bool = False) -> tuple[
         count += 1
         cursor = index + 1
     if count == 0:
-        hint = (" В файле переводы строк CRLF, а в old — LF."
+        hint = (frame_language.text('edit.shared.6')
                 if "\r\n" in text and "\n" in old and "\r\n" not in old else "")
-        return None, ("Вхождение не найдено (0 совпадений). Проверь точный текст через fs_read "
-                      "(task_id выбирает Forge): пробелы/табуляция/кавычки должны совпадать "
-                      "байт в байт." + hint)
+        return None, (frame_language.text('edit.shared.7') + hint)
     if all and count != text.count(old):
-        return None, "Overlapping matches are ambiguous even with all=true; widen old."
+        return None, frame_language.text('edit.shared.8')
     if count > 1 and not all:
         positions, cursor = [], 0
         for _ in range(min(count, 5)):
             index = text.index(old, cursor)
-            positions.append(f"строка {text[:index].count(chr(10)) + 1}")
+            positions.append(frame_language.text('edit.shared.9', v1=f'{text[:index].count(chr(10)) + 1}'))
             cursor = index + 1
-        return None, (f"Неоднозначно: {count} совпадений (первые: {', '.join(positions)}). Расширь "
-                      "old несколькими строками контекста вокруг нужного места, чтобы вхождение "
-                      "стало уникальным.")
+        return None, (frame_language.text('edit.shared.10', v1=f'{count}', v3=f"{', '.join(positions)}"))
     try:
         return text.replace(old, new, -1 if all else 1).encode("utf-8"), ""
     except UnicodeEncodeError:
-        return None, "new содержит символы, которые не кодируются в UTF-8."
+        return None, frame_language.text('edit.shared.11')
 
 
 def _open_temp(directory: Path, fresh: bool) -> tuple[int, str]:
@@ -199,6 +196,7 @@ def _copy_attributes(temp: str, target: Path) -> None:
             log.debug("владельца %s сохранить не удалось", target, exc_info=True)
 
 
+@frame_language.pinned
 def publish(target: Path, data: bytes, previous: str | None,
             recheck: Callable[[], str] | None = None) -> dict:
     """Опубликовать полные байты одного файла и подтвердить их чтением результата.
@@ -223,10 +221,10 @@ def publish(target: Path, data: bytes, previous: str | None,
             _copy_attributes(temp, target)
         refusal = recheck() if recheck else ""
         if refusal:
-            return outcome("refused", f"Не пишу: {refusal}.", previous)
+            return outcome("refused", frame_language.text('edit.shared.12', v1=f'{refusal}'), previous)
         _, current = snapshot(target)
         if current != previous:
-            return outcome("refused", "Не пишу: файл изменился до записи (conflict); перечитай его.",
+            return outcome("refused", frame_language.text('edit.shared.13'),
                            current)
         attempted = True
         if previous is None:
@@ -235,20 +233,18 @@ def publish(target: Path, data: bytes, previous: str | None,
                 os.link(temp, target)
             except FileExistsError:
                 attempted = False
-                return outcome("refused", "Не пишу: файл появился до записи (conflict); перечитай его.")
+                return outcome("refused", frame_language.text('edit.shared.14'))
         else:
             os.replace(temp, target)
             temp = None
         observed = _digest_of(target)
         if observed != hashlib.sha256(data).hexdigest():
-            return outcome("in_doubt", "Исход неизвестен: записанное не совпало с намеченным; "
-                                       "перечитай файл, не повторяй слепо.", previous, observed)
-        return outcome("confirmed", "Записано и подтверждено чтением.", previous, observed)
+            return outcome("in_doubt", frame_language.text('edit.shared.15'), previous, observed)
+        return outcome("confirmed", frame_language.text('edit.shared.16'), previous, observed)
     except OSError as exc:
         if attempted:
-            return outcome("in_doubt", f"Исход неизвестен: {type(exc).__name__}; перечитай файл, "
-                                       "не повторяй слепо.", previous)
-        return outcome("refused", f"Не пишу: {type(exc).__name__}; файл не тронут.", previous)
+            return outcome("in_doubt", frame_language.text('edit.shared.17', v1=f'{type(exc).__name__}'), previous)
+        return outcome("refused", frame_language.text('edit.shared.18', v1=f'{type(exc).__name__}'), previous)
     finally:
         if temp is not None:
             try:
@@ -259,6 +255,7 @@ def publish(target: Path, data: bytes, previous: str | None,
                 log.warning("остался временный файл записи: %s", temp)
 
 
+@frame_language.pinned
 def after_release_failure(result: dict, exc: BaseException) -> dict:
     """Операция отработала, а замок не отпустился: что отвечать.
 
@@ -267,8 +264,7 @@ def after_release_failure(result: dict, exc: BaseException) -> dict:
     log.warning("замок не отпустился после операции: %s", exc, exc_info=exc)
     if result["status"] == "refused":
         return result
-    return outcome("in_doubt", f"Исход неизвестен: замок не отпустился после записи ({type(exc).__name__}); "
-                               "перечитай файл, не повторяй слепо.",
+    return outcome("in_doubt", frame_language.text('edit.shared.19', v1=f'{type(exc).__name__}'),
                    result["before_sha256"], result["after_sha256"])
 
 

@@ -4,6 +4,7 @@ import json
 import re
 import edit_batch
 import hands
+import frame_language
 
 DESCRIPTION = (
     'YOUR EDITING HAND. Without task_id, paths are in your home: workspace/soul/memory; '
@@ -44,10 +45,11 @@ def refusal(message, files=None):
     return edit_batch.refused(files,message) if files is not None else hands.outcome('refused',message)
 
 
+@frame_language.pinned
 def remote_result(value):
     """Preserve backend evidence; never infer 'untouched' from an unfamiliar string."""
     if not isinstance(value,dict):
-        return hands.outcome('in_doubt','Remote edit returned no structured outcome; reread before retry.')
+        return hands.outcome('in_doubt',frame_language.text('edit.shared.41'))
     terminal=value.get('type') not in {'accepted','progress','cancelled'}
     if value.get('ok') is True and terminal and not value.get('after_error'):
         status='ok'
@@ -58,8 +60,8 @@ def remote_result(value):
     else:
         status='in_doubt'
     message=str(value.get('error') or value.get('text') or
-                ('Remote executor reports success; no local readback guarantee.' if status=='ok'
-                 else 'Remote outcome is unknown; reread before retry.'))
+                (frame_language.text('edit.shared.42') if status=='ok'
+                 else frame_language.text('edit.shared.43')))
     result=hands.outcome(status,message)
     result.update(backend_result=value)
     if status=='ok' and type(value.get('replacements')) is int and value['replacements']>=0:
@@ -70,26 +72,27 @@ def remote_result(value):
     return result
 
 
+@frame_language.pinned
 def edit_result(action='replace', path='', content='', old='', new='', patch='', expected_sha256='',
                 files=None, mode='snapshot', task_id='', proposal_id='', overwrite=False, force=False,
                 _parent_request_path='', _script_context=None, all=False):
     import workshop
     action=str(action or '').strip().lower()
     if action not in {'replace','write','patch','batch'}:
-        return refusal('action must be replace, write, patch or batch.',files)
+        return refusal(frame_language.text('edit.shared.44'),files)
     if not isinstance(all, bool) or (all and action!='replace'):
-        return refusal('all must be a boolean and belongs to replace; batch puts all in each edit.',files)
+        return refusal(frame_language.text('edit.shared.45'),files)
     if action=='batch' and files is None:
-        return refusal('batch requires files.',[])
+        return refusal(frame_language.text('edit.shared.46'),[])
     if action!='batch' and files is not None:
-        return refusal('files requires action=batch.',files)
+        return refusal(frame_language.text('edit.shared.47'),files)
     if action=='batch' and (path or content or old or new or patch or expected_sha256):
-        return refusal('batch uses files and mode, without single-file arguments.',files)
+        return refusal(frame_language.text('edit.shared.48'),files)
     if action!='batch' and mode!='snapshot':
-        return refusal('mode applies only to batch.',files)
+        return refusal(frame_language.text('edit.shared.49'),files)
     if task_id:
         if proposal_id or overwrite or force:
-            return refusal('proposal_id/overwrite/force belong to home edits; Forge write is explicit full content.',files)
+            return refusal(frame_language.text('edit.shared.50'),files)
         import forge
         reply=forge.edit(task_id,action,path=path,content=content,old=old,new=new,patch=patch,
                          expected_sha256=expected_sha256,files=files,mode=mode,all=all,
@@ -107,9 +110,9 @@ def edit_result(action='replace', path='', content='', old='', new='', patch='',
         if count and result['status']=='confirmed':result['replacements']=int(count[1])
         return result
     if _script_context is not None or _parent_request_path:
-        return refusal('A verified command/worker context requires its Forge task.',files)
+        return refusal(frame_language.text('edit.shared.51'),files)
     if action=='patch':
-        return refusal('patch requires task_id. For home files use versioned replace/batch or open a Forge task.')
+        return refusal(frame_language.text('edit.shared.52'))
     if action=='write':
         return _receipted('write',path,workshop.fs_write_result(path,content,proposal_id,overwrite,force,expected_sha256))
     if action=='replace':

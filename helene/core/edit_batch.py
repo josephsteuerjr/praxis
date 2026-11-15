@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import hands
+import frame_language
 
 FILES_SCHEMA = {
     'type': 'array', 'minItems': 1,
@@ -38,33 +39,34 @@ def replacements(raw: bytes, edits, mode: str = 'snapshot'):
     return data, error
 
 
+@frame_language.pinned
 def replacement_plan(raw: bytes, edits, mode: str = 'snapshot'):
     if not isinstance(mode, str) or mode not in {'snapshot', 'sequential'}:
-        return None, 'mode must be snapshot or sequential.', 0
+        return None, frame_language.text('edit.shared.20'), 0
     if not isinstance(edits, list) or not edits:
-        return None, 'edits must be a nonempty list.', 0
+        return None, frame_language.text('edit.shared.21'), 0
     try:
         text = raw.decode('utf-8')
     except UnicodeDecodeError:
-        return None, 'File is not UTF-8; no bytes changed.', 0
+        return None, frame_language.text('edit.shared.22'), 0
     spans, count = [], 0
     for index, edit in enumerate(edits):
         if (not isinstance(edit, dict) or not {'old', 'new'} <= set(edit)
                 or set(edit) - {'old', 'new', 'all'} or not isinstance(edit.get('all', False), bool)):
-            return None, f'edit {index}: expected old, new and optional boolean all.', 0
+            return None, frame_language.text('edit.shared.23', v1=f'{index}'), 0
         old, new = edit['old'], edit['new']
         if not isinstance(old, str) or not old or not isinstance(new, str):
-            return None, f'edit {index}: old must be nonempty text and new must be text.', 0
+            return None, frame_language.text('edit.shared.24', v1=f'{index}'), 0
         start = text.find(old)
         # str.count misses overlapping occurrences, e.g. aa in aaa.
         if start < 0 or (not edit.get('all', False) and text.find(old, start + 1) >= 0):
-            return None, f'edit {index}: old must occur exactly once unless all=true; reread and widen the context.', 0
+            return None, frame_language.text('edit.shared.25', v1=f'{index}'), 0
         matches = []
         while start >= 0:
             matches.append((start, start + len(old), new))
             start = text.find(old, start + 1) if edit.get('all', False) else -1
         if any(a[1] > b[0] for a, b in zip(matches, matches[1:])):
-            return None, f'edit {index}: overlapping matches are ambiguous even with all=true.', 0
+            return None, frame_language.text('edit.shared.26', v1=f'{index}'), 0
         count += len(matches)
         if mode == 'sequential':
             for start, end, replacement in reversed(matches):
@@ -74,15 +76,16 @@ def replacement_plan(raw: bytes, edits, mode: str = 'snapshot'):
     if mode == 'snapshot':
         spans.sort()
         if any(a[1] > b[0] for a, b in zip(spans, spans[1:])):
-            return None, 'Overlapping replacements in the original snapshot; no bytes changed.', 0
+            return None, frame_language.text('edit.shared.27'), 0
         for start, end, new in reversed(spans):
             text = text[:start] + new + text[end:]
     try:
         return text.encode('utf-8'), '', count
     except UnicodeEncodeError:
-        return None, 'Replacement is not encodable as UTF-8.', 0
+        return None, frame_language.text('edit.shared.28'), 0
 
 
+@frame_language.pinned
 def result(rows, message=''):
     states = {r['status'] for r in rows}
     status = ('in_doubt' if 'in_doubt' in states else
@@ -92,12 +95,14 @@ def result(rows, message=''):
             'before_sha256': None, 'after_sha256': None}
 
 
+@frame_language.pinned
 def refused(files, reason):
     rows = [dict(path=f.get('path', ''), **hands.outcome('refused', reason))
             for f in files if isinstance(f, dict)] if isinstance(files, list) else []
     return result(rows, reason)
 
 
+@frame_language.pinned
 def uncertain(value, reason):
     rows = [dict(r) for r in value['files']]
     for r in rows:
@@ -110,10 +115,11 @@ def render(value):
     return 'batch: ' + json.dumps(value, ensure_ascii=False)
 
 
+@frame_language.pinned
 def apply(files, resolve, mode='snapshot'):
     """resolve(path) -> (canonical target, refusal). No locks acquired here."""
     if not isinstance(files, list) or not files:
-        return refused(files, 'files must be a nonempty list.')
+        return refused(files, frame_language.text('edit.shared.29'))
     plans, rows, seen = [], [], set()
     for item in files:
         reason, before, data, target, count = '', None, None, None, 0
@@ -121,7 +127,7 @@ def apply(files, resolve, mode='snapshot'):
         if (not isinstance(item, dict) or set(item) != {'path', 'expected_sha256', 'edits'}
                 or not isinstance(path, str) or not path
                 or not isinstance(item.get('expected_sha256'), str) or not item['expected_sha256']):
-            reason = 'Each file requires path, expected_sha256 and edits, with no extra fields.'
+            reason = frame_language.text('edit.shared.30')
         else:
             try:
                 target, reason = resolve(path)
@@ -129,37 +135,37 @@ def apply(files, resolve, mode='snapshot'):
                     target = Path(target)
                     key = os.path.normcase(str(target.resolve()))
                     if key in seen:
-                        reason = 'Duplicate resolved file path; combine its edits in one entry.'
+                        reason = frame_language.text('edit.shared.31')
                     seen.add(key)
                     raw, before = hands.snapshot(target)
                     reason = reason or hands.version_conflict(item['expected_sha256'], before)
                     if not reason:
                         if raw is None:
-                            reason = 'File does not exist; batch only edits existing files.'
+                            reason = frame_language.text('edit.shared.32')
                         else:
                             data, reason, count = replacement_plan(raw, item['edits'], mode)
                 else:
-                    reason = reason or 'Path refused.'
+                    reason = reason or frame_language.text('edit.shared.33')
             except (OSError, ValueError, RuntimeError) as exc:
-                reason = f'Preflight failed: {type(exc).__name__}.'
-        rows.append(dict(path=path, **hands.outcome('refused', reason or 'Not published.', before)))
+                reason = frame_language.text('edit.shared.34', v1=f'{type(exc).__name__}')
+        rows.append(dict(path=path, **hands.outcome('refused', reason or frame_language.text('edit.shared.35'), before)))
         plans.append((target, data, before, path, reason, count))
     if any(p[4] for p in plans):
-        return result(rows, 'Preflight refused; no files written.')
+        return result(rows, frame_language.text('edit.shared.36'))
     for i, (target, data, before, path, _, count) in enumerate(plans):
         def recheck():
             again, reason = resolve(path)
-            return reason or ('' if again == target else 'Path changed after preflight.')
+            return reason or ('' if again == target else frame_language.text('edit.shared.37'))
         try:
             value = hands.publish(target, data, before, recheck=recheck)
         except Exception as exc:
             # The publisher may already have acted. Preserve all earlier receipts.
-            value = hands.outcome('in_doubt', f'Publisher raised {type(exc).__name__}; reread before retry.', before)
+            value = hands.outcome('in_doubt', frame_language.text('edit.shared.38', v1=f'{type(exc).__name__}'), before)
         rows[i].update(value)
         if value['status'] == 'confirmed':
             rows[i]['replacements'] = count
         if value['status'] != 'confirmed':
             for remaining in rows[i+1:]:
-                remaining['message'] = 'Not attempted after an earlier publication failed.'
+                remaining['message'] = frame_language.text('edit.shared.39')
             break
-    return result(rows, 'Per-file results; no automatic rollback.')
+    return result(rows, frame_language.text('edit.shared.40'))
