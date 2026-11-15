@@ -1384,6 +1384,7 @@ def _room_title(chat_id: str) -> str:
     return label if label != peer else ""
 
 
+@_frame_pinned
 def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
     if _tree is None: return [], []
     archive_root=(Path(_tree)/'memory/groups').resolve()
@@ -1433,13 +1434,13 @@ def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
                     continue
             except (OSError, ValueError, TypeError):
                 continue
-            heard='[Транскрипт голосового]: '+str(receipt.get('transcript') or '')
-            notes.append(f"{row.get('sender_name') or 'Собеседник'} (голосовое, сообщение {row.get('source_message_id') or '?'}): {heard}")
+            heard=_frame_word('native.runner.media.1436', '[Транскрипт голосового]: ')+str(receipt.get('transcript') or '')
+            notes.append(_frame_word('native.runner.media.1437', '{p0} (голосовое, сообщение {p1}): {p2}', p0=f"{row.get('sender_name') or _frame_word('native.runner.media.person', 'Собеседник')}", p1=f"{row.get('source_message_id') or '?'}", p2=f'{heard}'))
             continue
         rel=row.get('media_preview_path')
         if index not in eligible:
             if not rel and (row.get('media_path') or row.get('media_error')):
-                notes.append(f"[Медиа из Telegram: {row.get('media_name') or 'вложение'}. Превью для зрения недоступно; не описывай содержимое по догадке.]")
+                notes.append(_frame_word('native.runner.media.1442', '[Медиа из Telegram: {p0}. Превью для зрения недоступно; не описывай содержимое по догадке.]', p0=f"{row.get('media_name') or _frame_word('native.runner.media.attachment', 'вложение')}"))
             continue
         remaining-=1
         # Index membership, not dict equality: identical archive rows still
@@ -1461,7 +1462,7 @@ def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
         if not samples and rel:
             path=(Path(_tree)/str(rel)).resolve()
             if owned(path,row) and path.is_file(): samples=[(path,None)]
-        caption=f"{row.get('sender_name') or 'Собеседник'}, сообщение {row.get('source_message_id') or '?'}: {row.get('text') or ''}"
+        caption=_frame_word('native.runner.media.1464', '{p0}, сообщение {p1}: {p2}', p0=f"{row.get('sender_name') or _frame_word('native.runner.media.person', 'Собеседник')}", p1=f"{row.get('source_message_id') or '?'}", p2=f"{row.get('text') or ''}")
         samples=samples[:budget]
         for path,stamp in samples:
             if len(refs) >= cap:
@@ -1469,17 +1470,17 @@ def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
             try:
                 refs.append(spool.ingest_path(path,kind='photo',chat_id=chat_id,
                     message_id=str(row.get('source_message_id') or ''),scope=scope,move=False,
-                    caption=caption+(f' [кадр {stamp:.3f} с]' if stamp is not None else '')))
+                    caption=caption+(_frame_word('native.runner.media.1472', ' [кадр {p0} с]', p0=f'{stamp:.3f}') if stamp is not None else '')))
             except Exception:
-                notes.append('[Изображение из Telegram не удалось передать в зрение; не описывай его по догадке.]')
+                notes.append(_frame_word('native.runner.media.1474', '[Изображение из Telegram не удалось передать в зрение; не описывай его по догадке.]'))
         if sampled:
-            notes.append(f"[Медиа: {row.get('media_name') or 'анимация'}; файл: {row.get('media_path')}. Выборочные кадры: "
-                         + ', '.join(f'{stamp:.3f} с' for _,stamp in samples)
-                         + '. Это не все кадры; не додумывай движение между ними.]')
+            notes.append(_frame_word('native.runner.media.1476', '[Медиа: {p0}; файл: {p1}. Выборочные кадры: ', p0=f"{row.get('media_name') or _frame_word('native.runner.media.animation', 'анимация')}", p1=f"{row.get('media_path')}")
+                         + ', '.join(_frame_word('native.runner.media.1477', '{p0} с', p0=f'{stamp:.3f}') for _,stamp in samples)
+                         + _frame_word('native.runner.media.1478', '. Это не все кадры; не додумывай движение между ними.]'))
         elif motion or row.get('media_kind')=='sticker_tgs':
-            notes.append(f"[Медиа: {row.get('media_name') or 'анимация'}; файл: {row.get('media_path')}. "
-                         + ('Доступно только отдельное превью, не вся анимация.' if samples else
-                            'Кадры для зрения недоступны; не описывай содержимое по догадке.') + ']')
+            notes.append(_frame_word('native.runner.media.1480', '[Медиа: {p0}; файл: {p1}. ', p0=f"{row.get('media_name') or _frame_word('native.runner.media.animation', 'анимация')}", p1=f"{row.get('media_path')}")
+                         + (_frame_word('native.runner.media.1481', 'Доступно только отдельное превью, не вся анимация.') if samples else
+                            _frame_word('native.runner.media.1482', 'Кадры для зрения недоступны; не описывай содержимое по догадке.')) + ']')
     return refs,notes
 
 

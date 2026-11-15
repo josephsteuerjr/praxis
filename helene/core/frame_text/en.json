@@ -2577,5 +2577,20 @@
   "native.runner.window_orient": "This is the owner’s Hélène window. Words reach the owner only through reply; text without that tool and an end_turn note are notes to yourself, rather than a reply.",
   "native.runner.no_git_orient": "Git and this home’s repository are not both confirmed ready; automatic commits and the Git recovery path are unavailable here. Before editing, check available backups; their existence and successful restoration are not guaranteed.",
   "native.runner.birth_note": "This is your first launch {where}. You are {agent}; your owner is {owner}, and {owner} is speaking with you in this window.\n\nYour home is {home}: soul/ holds your constitution and skills, memory/ holds memory, and workspace/ is the working folder where shell starts. Current tool descriptions and home-map locate your code and application. An inherited description of another host does not establish this host’s layout.\n\nSee home-map and КАК-УСТРОЕН-HELENE.md for details. Greet {owner} in two or three sentences: who you are and what you can do here; ask where to begin.",
-  "native.runner.birth_prefix": "This is your first launch"
+  "native.runner.birth_prefix": "This is your first launch",
+  "native.runner.media.person": "Interlocutor",
+  "native.runner.media.attachment": "attachment",
+  "native.runner.media.animation": "animation",
+  "native.runner.media.1464": "{p0}, message {p1}: {p2}",
+  "native.runner.media.1436": "[Voice transcript]: ",
+  "native.runner.media.1437": "{p0} (voice message {p1}): {p2}",
+  "native.runner.media.1442": "[Telegram media: {p0}. No visual preview is available; do not guess its contents.]",
+  "native.runner.media.1478": ". These are not all frames; do not infer motion between them.]",
+  "native.runner.media.1474": "[The Telegram image could not be supplied to vision; do not guess its contents.]",
+  "native.runner.media.1476": "[Media: {p0}; file: {p1}. Sampled frames: ",
+  "native.runner.media.1480": "[Media: {p0}; file: {p1}. ",
+  "native.runner.media.1477": "{p0}s",
+  "native.runner.media.1481": "Only a single preview is available, rather than the full animation.",
+  "native.runner.media.1482": "Visual frames are unavailable; do not guess its contents.",
+  "native.runner.media.1472": " [frame at {p0}s]"
 }

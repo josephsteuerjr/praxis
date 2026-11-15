@@ -2577,5 +2577,20 @@
   "native.runner.window_orient": "这是所有者的 Hélène 窗口。只有通过 reply，话语才会送达所有者；未调用该工具的文本及 end_turn 备注属于自我记录，而非回复。",
   "native.runner.no_git_orient": "尚未确认 Git 和此主目录的仓库均已就绪；此处无法使用自动提交和 Git 恢复路径。编辑前请检查可用备份；不保证备份存在或能成功恢复。",
   "native.runner.birth_note": "这是你的首次启动，{where}。你是 {agent}，你的所有者是 {owner}，{owner} 正在此窗口与你交谈。\n\n你的主目录为 {home}：soul/ 存放宪章和技能，memory/ 存放记忆，workspace/ 是 shell 的起始工作目录。当前工具说明和 home-map 标明代码与应用程序的路径。继承自其他主机的说明不能证明本机具有相同布局。\n\n详情见 home-map 和 КАК-УСТРОЕН-HELENE.md。用两三句话向 {owner} 问好：你是谁、在这里能做什么，并询问从哪里开始。",
-  "native.runner.birth_prefix": "这是你的首次启动"
+  "native.runner.birth_prefix": "这是你的首次启动",
+  "native.runner.media.person": "交谈者",
+  "native.runner.media.attachment": "附件",
+  "native.runner.media.animation": "动画",
+  "native.runner.media.1464": "{p0}，消息 {p1}：{p2}",
+  "native.runner.media.1436": "[语音转写]：",
+  "native.runner.media.1437": "{p0}（语音消息 {p1}）：{p2}",
+  "native.runner.media.1442": "[Telegram 媒体：{p0}。视觉预览不可用；不要猜测其内容。]",
+  "native.runner.media.1478": "。这些并非全部画面；不要推测它们之间的运动。]",
+  "native.runner.media.1474": "[Telegram 图像无法传递给视觉模块；不要猜测其内容。]",
+  "native.runner.media.1476": "[媒体：{p0}；文件：{p1}。抽样画面：",
+  "native.runner.media.1480": "[媒体：{p0}；文件：{p1}。",
+  "native.runner.media.1477": "{p0} 秒",
+  "native.runner.media.1481": "仅有单张预览，不能查看完整动画。",
+  "native.runner.media.1482": "视觉画面不可用；不要猜测其内容。",
+  "native.runner.media.1472": " [第 {p0} 秒的画面]"
 }

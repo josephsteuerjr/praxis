@@ -1,5 +1,7 @@
 """Actual native runner suppliers with source bytes, typed receipts and legacy cores."""
 import copy
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,7 @@ DESK=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(DESK),str(DESK/'localharness')]
 import agent
 import frame_language as fl
+import media
 import runner
 from localharness.transport import Desk
 
@@ -109,3 +112,52 @@ class NativeRunnerFrame(unittest.TestCase):
             self.assertEqual(runner._frame_word('unknown','Literal {value}',value=RAW),'Literal '+RAW)
             self.assertEqual(runner._birth_prefixes(),runner._BIRTH_PREFIX)
             self.assertTrue(runner._alarm_note({'goal':RAW}).startswith('Сработал твой будильник'))
+
+    def test_verified_historical_voice_caption_uses16_axes_without_asr_or_archive_rewrite(self):
+        folder=self.root/'memory/telegram-media';folder.mkdir(parents=True)
+        audio=folder/'voice.ogg';audio.write_bytes(b'fixture audio bytes')
+        archive=self.root/'memory/groups/-77.jsonl';archive.parent.mkdir(parents=True)
+        row={'media_kind':'audio','media_path':'memory/telegram-media/voice.ogg','sender_name':RAW,'source_message_id':'9'}
+        archive.write_text(json.dumps(row,ensure_ascii=False)+'\n',encoding='utf-8');before=archive.read_bytes()
+        receipt={'status':'ready','sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),'transcript':RAW}
+        fake=SimpleNamespace(FRAME_TEXT_BOUNDARIES_API=1,frame_language=fl,_media_spool=lambda:SimpleNamespace(max_turn_media=4))
+        ctx=SimpleNamespace(owner=True,is_dm=False,scope='group',chat_id='-77');by_frame={}
+        with patch.object(runner,'_agent',fake),patch.object(runner,'_tree',self.root), \
+             patch.object(runner.voice_admission,'state',return_value=receipt), \
+             patch.object(agent.media_audio,'transcribe',side_effect=AssertionError('historical ASR')) as asr:
+            for ui in LANGS:
+                for frame in LANGS:
+                    self.choose(ui,frame);refs,notes=runner._telegram_media_refs('-77',ctx)
+                    self.assertEqual(refs,[]);self.assertEqual(len(notes),1)
+                    self.assertEqual(notes[0].count(RAW),2);self.assertIn('9',notes[0])
+                    self.assertEqual(by_frame.setdefault(frame,notes),notes)
+                    self.assertEqual(archive.read_bytes(),before)
+            asr.assert_not_called()
+        self.assertEqual(len({tuple(v) for v in by_frame.values()}),4)
+        with patch.object(runner,'_agent',fake),patch.object(runner,'_tree',self.root), \
+             patch.object(runner.voice_admission,'state',return_value={**receipt,'sha256':'0'*64}):
+            self.assertEqual(runner._telegram_media_refs('-77',ctx),([],[]))
+
+    def test_actual_sampled_media_keeps_group_scope_bytes_and_literal_caption(self):
+        png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZioAAAAASUVORK5CYII=')
+        folder=self.root/'memory/telegram-media';folder.mkdir(parents=True)
+        source=folder/'original.mp4';source.write_bytes(b'fixture original')
+        image=folder/'preview.png';image.write_bytes(png)
+        archive=self.root/'memory/groups/-77.jsonl';archive.parent.mkdir(parents=True)
+        row={'media_kind':'video','media_path':'memory/telegram-media/original.mp4','media_preview_path':'memory/telegram-media/preview.png',
+             'media_name':'анимация','sender_name':RAW,'text':RAW,'source_message_id':'42'}
+        archive.write_text(json.dumps(row,ensure_ascii=False)+'\n',encoding='utf-8');before=archive.read_bytes()
+        spool=media.MediaSpool(self.root/'spool')
+        fake=SimpleNamespace(FRAME_TEXT_BOUNDARIES_API=1,frame_language=fl,_media_spool=lambda:spool)
+        ctx=SimpleNamespace(owner=True,is_dm=False,scope='group',chat_id='-77')
+        for frame in LANGS:
+            self.choose('fr',frame)
+            with patch.object(runner,'_agent',fake),patch.object(runner,'_tree',self.root), \
+                 patch('telegram_media.vision_frames',return_value=[(image,0.25),(image,0.5)]):
+                refs,notes=runner._telegram_media_refs('-77',ctx)
+            self.assertEqual(len(refs),2);self.assertIn('анимация',notes[0])
+            self.assertIn('0.250',notes[0]);self.assertIn('0.500',notes[0])
+            for ref in refs:
+                self.assertEqual(ref.scope,'group');self.assertEqual(ref.message_id,'42')
+                self.assertEqual(Path(ref.path).read_bytes(),png);self.assertIn(RAW,ref.caption)
+            self.assertEqual(archive.read_bytes(),before);self.assertEqual(source.read_bytes(),b'fixture original')

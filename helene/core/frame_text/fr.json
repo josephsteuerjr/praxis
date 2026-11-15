@@ -2577,5 +2577,20 @@
   "native.runner.window_orient": "Ceci est la fenêtre Hélène du propriétaire. Les paroles lui parviennent uniquement via reply ; le texte sans cet outil et une note end_turn sont des notes pour toi-même, plutôt qu’une réponse.",
   "native.runner.no_git_orient": "Git et le dépôt de ce dossier ne sont pas tous deux confirmés prêts ; les commits automatiques et la récupération par Git sont indisponibles ici. Avant toute modification, vérifier les sauvegardes disponibles ; leur existence et leur restauration ne sont pas garanties.",
   "native.runner.birth_note": "Voici ton premier démarrage {where}. Tu es {agent} ; ton propriétaire est {owner}, et {owner} te parle dans cette fenêtre.\n\nTon dossier personnel est {home} : soul/ contient ta constitution et tes compétences, memory/ ta mémoire, et workspace/ est le dossier de travail où shell démarre. Les descriptions actuelles des outils et home-map indiquent les chemins du code et de l’application. Une description héritée d’un autre hôte n’établit pas l’organisation de celui-ci.\n\nLes détails sont dans home-map et КАК-УСТРОЕН-HELENE.md. Salue {owner} en deux ou trois phrases : qui tu es et ce que tu peux faire ici ; demande par quoi commencer.",
-  "native.runner.birth_prefix": "Voici ton premier démarrage"
+  "native.runner.birth_prefix": "Voici ton premier démarrage",
+  "native.runner.media.person": "Interlocuteur",
+  "native.runner.media.attachment": "pièce jointe",
+  "native.runner.media.animation": "animation",
+  "native.runner.media.1464": "{p0}, message {p1} : {p2}",
+  "native.runner.media.1436": "[Transcription vocale] : ",
+  "native.runner.media.1437": "{p0} (message vocal {p1}) : {p2}",
+  "native.runner.media.1442": "[Média Telegram : {p0}. Aucun aperçu visuel disponible ; ne pas en deviner le contenu.]",
+  "native.runner.media.1478": ". Ce ne sont pas toutes les images ; ne pas déduire de mouvement entre elles.]",
+  "native.runner.media.1474": "[L’image Telegram n’a pas pu être transmise à la vision ; ne pas en deviner le contenu.]",
+  "native.runner.media.1476": "[Média : {p0} ; fichier : {p1}. Images échantillonnées : ",
+  "native.runner.media.1480": "[Média : {p0} ; fichier : {p1}. ",
+  "native.runner.media.1477": "{p0} s",
+  "native.runner.media.1481": "Seul un aperçu isolé est disponible, plutôt que l’animation complète.",
+  "native.runner.media.1482": "Les images sont indisponibles pour la vision ; ne pas en deviner le contenu.",
+  "native.runner.media.1472": " [image à {p0} s]"
 }
