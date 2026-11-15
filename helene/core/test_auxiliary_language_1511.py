@@ -16,6 +16,22 @@ from test_state_language_1511 import RAW
 
 
 class AuxiliaryCalls(unittest.TestCase):
+    def test_owned_identity_explanations_and_report_preserve_literals(self):
+        with patch.object(identity,'versions',return_value=[]), \
+             patch.object(identity,'read',return_value=RAW), \
+             patch.object(identity,'stress',return_value=[]), \
+             patch.object(identity,'recent_shifts',return_value=[]):
+            for language in frame_language.LANGUAGES:
+                with frame_language.use(language):
+                    self.assertIn(frame_language.text('identity.layer.self'),identity.describe())
+                    self.assertNotIn('Егора',identity.describe())
+                    error=identity.revise(RAW,'',reason='')['error']
+                    self.assertIn(RAW,error)
+                    if language!='ru':self.assertNotRegex(error.replace(RAW,''),'[А-Яа-яЁё]')
+        with frame_language.use('ru'):
+            self.assertEqual(frame_language.text('sleep.lesson_heuristic',minimum=sleep_module.lessons._MIN_LESSON_CHARS),
+                             sleep_module.lessons.HEURISTIC)
+
     def test_night_and_rem_actual_sends_follow_frame_not_interface(self):
         settings = {}
         for ui in frame_language.LANGUAGES:
@@ -109,6 +125,16 @@ class FormationBoundary(Pass19Base):
                         self.assertIn(event['id'],kw['messages'][0]['content'])
                     self.assertIn(RAW,calls[1][1]['messages'][0]['content'])
                     self.assertIn(RAW,calls[2][1]['messages'][0]['content'])
+                    report=(life.BASE/result['report']).read_text(encoding='utf-8')
+                    first=report.splitlines()[0]
+                    meta=json.loads(first.removeprefix('<!-- praxis-reflection-run: ').removesuffix(' -->'))
+                    self.assertEqual(meta['schema'],'praxis.life.reflection_run.v1')
+                    for key in ('id','depth','source_ids','stop_reason','passes','changes','coverage','usage'):
+                        self.assertEqual(meta[key],result['run'][key])
+                    self.assertIn(RAW,report)
+                    # The shared base fixture supplies a literal Russian usage string.
+                    # It is input data here, and must survive just like authored text.
+                    if language!='ru':self.assertNotRegex(report.replace(RAW,'').replace(meta['usage'],''),'[А-Яа-яЁё]')
 
 
 if __name__=='__main__':unittest.main()

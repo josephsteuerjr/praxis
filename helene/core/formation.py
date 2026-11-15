@@ -81,9 +81,12 @@ def _lease():
             pass
 
 
-def request(depth: str = "full", reason: str = "пульт") -> dict:
+@frame_language.pinned
+def request(depth: str = "full", reason: str | None = None) -> dict:
+    if reason is None:
+        reason = frame_language.text("owned.formation.554d92728e9a")
     depth = depth if depth in ("light", "full") else "full"
-    data = {"schema": 1, "depth": depth, "reason": str(reason or "пульт")[:300],
+    data = {"schema": 1, "depth": depth, "reason": str(reason or frame_language.text("owned.formation.554d92728e9a"))[:300],
             "requested_at": life._utc_iso()}
     _atomic(REQUEST_PATH, data)
     return data
@@ -416,6 +419,7 @@ def _write_claim(candidate: dict, verdict: dict, run_id: str) -> tuple[str, bool
     return cid, created
 
 
+@frame_language.pinned
 def _link_contradicting_claims(candidate: dict, claim_id: str, run_id: str) -> list[str]:
     """Записать ВЗАИМНОЕ противоречие, не назначая победителя.
 
@@ -466,8 +470,7 @@ def _link_contradicting_claims(candidate: dict, claim_id: str, run_id: str) -> l
         kept = str(meta.get("status") or "supported").lower()
         _write_claim(old_candidate, {
             "status": kept,
-            "reason": (f"противоречит утверждению {claim_id}; статус не менялся, "
-                       f"победителя не назначено — оба видимы"),
+            "reason": (frame_language.text('owned.formation.8fe9b4fe6616', v0=claim_id)),
             "evidence_ids": old_candidate["evidence_ids"],
         }, run_id)
         # Карточка ДОБАВЛЯЕТ видимость, ничего не отнимая. Она — запись, а не прогон:
@@ -478,13 +481,14 @@ def _link_contradicting_claims(candidate: dict, claim_id: str, run_id: str) -> l
             claim_conflicts.note(
                 subject=old_candidate["subject"], field=old_candidate.get("kind") or "",
                 old_id=old_id, new_id=claim_id,
-                reason="два утверждения несовместимы; статусы не менялись, разбирает она",
+                reason=frame_language.text('owned.formation.0a2273754c40'),
                 old_text=old_candidate.get("text") or "",
                 new_text=str(candidate.get("text") or ""))
         changed.append(old_id)
     return changed
 
 
+@frame_language.pinned
 def _apply_supported(candidate: dict, claim_id: str) -> list[str]:
     ops = []
     if candidate["kind"] == "person":
@@ -501,14 +505,15 @@ def _apply_supported(candidate: dict, claim_id: str) -> list[str]:
         if candidate.get("visibility") == "private":
             # graph.md/people links have no per-edge scope marker.  Keep a private
             # relation in its owner-only Claim instead of leaking it to group recall.
-            ops.append(f"private relation claim-only ← {claim_id}")
+            ops.append(frame_language.text('owned.formation.e60007132820', v0=claim_id))
         else:
             graph.add_edge(candidate["subject"], candidate["other"],
-                           candidate.get("relation") or "связаны", source=f"claim:{claim_id}")
+                           candidate.get("relation") or frame_language.text('owned.formation.d6507a00de25'), source=f"claim:{claim_id}")
             ops.append(f"graph {candidate['subject']} ↔ {candidate['other']} ← {claim_id}")
     return ops
 
 
+@frame_language.pinned
 def _write_patch(run_id: str, pass_no: int, operations: list[str], claim_ids: list[str],
                  sources: list[str]) -> str:
     pid = f"mpt-{run_id.removeprefix('rr-')}-p{pass_no}"
@@ -517,14 +522,13 @@ def _write_patch(run_id: str, pass_no: int, operations: list[str], claim_ids: li
             "pass": pass_no, "created_at": life._utc_iso(), "operations": operations,
             "claim_ids": claim_ids, "source_ids": sources,
             "path": path.relative_to(life.BASE).as_posix()}
-    body = (f"<!-- praxis-memory-patch: {json.dumps(meta, ensure_ascii=False, separators=(',', ':'))} -->\n"
-            f"# MemoryPatch {pid}\n\n## Операции\n" +
-            ("\n".join(f"- {x}" for x in operations) if operations else "- Ничего не применено.") +
-            "\n\n## Claims\n" + ("\n".join(f"- {x}" for x in claim_ids) if claim_ids else "- нет") +
-            "\n\n## Источники\n" + "\n".join(f"- {x}" for x in sources) + "\n")
+    body = (frame_language.text('owned.formation.20d7c6cfa831', v0=json.dumps(meta, ensure_ascii=False, separators=(',', ':')), v1=pid) +
+            ("\n".join(f"- {x}" for x in operations) if operations else frame_language.text('owned.formation.227fef98e7c5')) +
+            frame_language.text("formation.claims_heading") + ("\n".join(f"- {x}" for x in claim_ids) if claim_ids else frame_language.text('owned.formation.7d2e75ed2860')) +
+            frame_language.text('owned.formation.cdefdcb3a1d9') + "\n".join(f"- {x}" for x in sources) + "\n")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
-    life.append_event("memory_patch", text=f"{pid}: {len(operations)} операций",
+    life.append_event("memory_patch", text=frame_language.text('owned.formation.e9f36de25e36', v0=pid, v1=len(operations)),
                       source="formation", refs=sources + claim_ids,
                       meta={"patch_id": pid, "run_id": run_id, "pass": pass_no})
     return pid
@@ -538,18 +542,17 @@ def _write_report(run: dict) -> Path:
     meta.update(schema="praxis.life.reflection_run.v1", path=path.relative_to(life.BASE).as_posix())
     parts = [f"<!-- praxis-reflection-run: {json.dumps(meta, ensure_ascii=False, separators=(',', ':'))} -->",
              f"# ReflectionRun {run['id']}", "",
-             f"- depth: `{run['depth']}`", f"- passes: `{run['passes']}`",
-             f"- changes: `{run['changes']}`", f"- coverage: `{run['coverage']}`",
-             f"- stop: **{run['stop_reason']}**", f"- usage: {run['usage']}", "",
-             frame_language.text('owned.formation.79ed466ea999')] + [f"- {x}" for x in run["source_ids"]]
-    for p in run.get("pass_reports") or []:
-        parts += ["", frame_language.text('owned.formation.5754d4d69889', v0=p['pass'], v1=p['operation']),
-                  f"- entity: {p.get('entity') or '—'}",
-                  f"- evidence raised: {len(p.get('evidence') or [])}",
-                  f"- supported changes: {p.get('changes', 0)}",
-                  f"- contested/unsupported: {p.get('rejected', 0)}",
-                  f"- outcome: {p.get('outcome') or frame_language.text('owned.formation.4b48c003e54c')}",
-                  f"- patch: {p.get('patch_id') or frame_language.text('owned.formation.dc9337ff5b42')}"]
+             frame_language.text("formation.report.fields", depth=run["depth"], passes=run["passes"],
+                 changes=run["changes"], coverage=run["coverage"], stop=run["stop_reason"], usage=run["usage"]),
+             "", frame_language.text("owned.formation.79ed466ea999")]
+    parts += [f"- {x}" for x in run["source_ids"]]
+    for report in run.get("pass_reports") or []:
+        parts += ["", frame_language.text("formation.report.pass", number=report["pass"],
+            operation=report["operation"], entity=report.get("entity") or "—",
+            evidence=len(report.get("evidence") or []), changes=report.get("changes", 0),
+            rejected=report.get("rejected", 0),
+            outcome=report.get("outcome") or frame_language.text("owned.formation.4b48c003e54c"),
+            patch=report.get("patch_id") or frame_language.text("owned.formation.dc9337ff5b42"))]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
     return path
@@ -610,9 +613,8 @@ def run(depth: str = "full", *, force: bool = False, reason: str | None = None) 
                 name = frame_language.text('owned.formation.b4a24634c9ac')
             covered.add(name)
             operation = operations[(pass_no - 1) % len(operations)]
-            dig_user = (f"# OPERATION\n{operation}\n\n# ENTITY\n{name}\n\n"
-                        f"# SOURCES\n{source_text}\n\n"
-                        f"# CURRENT CANDIDATES\n{json.dumps(claims, ensure_ascii=False)}")
+            dig_user = frame_language.text("formation.dig_input", operation=operation, entity=name,
+                                           sources=source_text, candidates=json.dumps(claims, ensure_ascii=False))
             dig = _ask(_system("dig"), dig_user, max_tokens=2200)
             if not dig:
                 model_failed = True
@@ -620,8 +622,8 @@ def run(depth: str = "full", *, force: bool = False, reason: str | None = None) 
                 break
             # Candidate identity and its evidence set were frozen by HARVEST. DIG may
             # produce questions/reflections, never new claim-producing material.
-            attack_user = (f"# CANDIDATES\n{json.dumps(claims, ensure_ascii=False)}\n\n"
-                           f"# SOURCES\n{source_text}")
+            attack_user = frame_language.text("formation.attack_input",
+                candidates=json.dumps(claims, ensure_ascii=False), sources=source_text)
             attack = _ask(_system("attack"), attack_user, max_tokens=1800)
             if not attack:
                 model_failed = True
@@ -648,7 +650,7 @@ def run(depth: str = "full", *, force: bool = False, reason: str | None = None) 
                     applied_keys.add(c["key"])
                     linked = _link_contradicting_claims(c, cid, run_id)
                     ops += _apply_supported(c, cid)
-                    ops += [f"claim {old_id} contradicts {cid}; both stay visible"
+                    ops += [frame_language.text("formation.conflict_operation", old=old_id, new=cid)
                             for old_id in linked]
                     changed_claims.append(c)
                 elif v.get("status") != "supported":

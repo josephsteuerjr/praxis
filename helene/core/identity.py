@@ -304,6 +304,7 @@ def version_text(name: str, version: int) -> str:
     return text
 
 
+@frame_language.pinned
 def _finish_self_shift(result: dict, before: "self_model.PromptSelf", *, reason: str,
                        confidence: str, refs, by: str, source: str) -> dict:
     """Attach the PASS 20 post-write visibility hooks to a SelfModel mutation."""
@@ -323,7 +324,7 @@ def _finish_self_shift(result: dict, before: "self_model.PromptSelf", *, reason:
     sha = _snapshot(f"identity: compact self r{version} — {reason[:80]}")
     event = _spine_event(
         "identity_shift",
-        f"compact self → r{version} ({'+' if grew >= 0 else ''}{grew} зн.): {reason[:200]}",
+        frame_language.text('owned.identity.b7ad48799c7c', v0=version, v1='+' if grew >= 0 else '', v2=grew, v3=reason[:200]),
         refs=effective_refs,
         meta={"file": "self", "version": version, "revision": version,
               "layer": LAYERS["self"].split(" — ")[0], "reason": reason[:300],
@@ -336,8 +337,8 @@ def _finish_self_shift(result: dict, before: "self_model.PromptSelf", *, reason:
               "restored_version": result.get("restored_version")},
         salience=2,
     )
-    _journal(f"ревизия compact self → r{version} ({by}, {confidence}): {reason[:160]}"
-             + (f" [коммит {sha}]" if sha else ""))
+    _journal(frame_language.text('owned.identity.0ab41af1fd86', v0=version, v1=by, v2=confidence, v3=reason[:160])
+             + (frame_language.text('owned.identity.1ca6dfa2d803', v0=sha) if sha else ""))
     _immune(sha, f"identity: compact self r{version}")
     state = _load_state()
     state["last_shift"] = {
@@ -357,6 +358,7 @@ def _finish_self_shift(result: dict, before: "self_model.PromptSelf", *, reason:
     return {**result, "version": version, "sha": sha, "event": event}
 
 
+@frame_language.pinned
 def revise(name: str, new_text: str, *, reason: str, confidence: str = "uncertain",
            refs=(), by: str = "praxis", source: str = "tool") -> dict:
     """Версионированная ревизия файла души. Применяется сразу; согласования нет.
@@ -365,28 +367,26 @@ def revise(name: str, new_text: str, *, reason: str, confidence: str = "uncertai
     дневник → immune-очередь. Возвращает {ok, version, sha, event} или {ok: False, error}."""
     key = _canon(name)
     if not key:
-        return {"ok": False, "error": f"не знаю файла души «{name}»: мои — SOUL, VOICE, self"}
+        return {"ok": False, "error": frame_language.text('owned.identity.633b794347a1', v0=name)}
     reason = (reason or "").strip()
     if not reason:
-        return {"ok": False, "error": "ревизия без причины не имеет провенанса — назови основание"}
+        return {"ok": False, "error": frame_language.text('owned.identity.ebfcb30c0a42')}
     try:
         memory_provenance.require_normative_provenance(source=source, refs=refs)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     text = (new_text or "").replace("\r\n", "\n").strip("\n")
     if len(text) < MIN_CHARS[key]:
-        return {"ok": False, "error": f"текст подозрительно короткий (<{MIN_CHARS[key]} зн.) — "
-                                      "это похоже на случайное стирание, не на ревизию"}
+        return {"ok": False, "error": frame_language.text('owned.identity.3db990c7bd14', v0=MIN_CHARS[key])}
     if len(text) > MAX_CHARS[key]:
-        return {"ok": False, "error": f"текст больше {MAX_CHARS[key]} зн.: душа целиком живёт в "
-                                      "промпте каждого хода — сначала сжать, потом ревизовать"}
+        return {"ok": False, "error": frame_language.text('owned.identity.91ea3e25fd29', v0=MAX_CHARS[key])}
     if key in {"SOUL", "VOICE"} and not text.lstrip().startswith("#"):
-        return {"ok": False, "error": "живой слой должен оставаться читаемым Markdown-документом с заголовком"}
+        return {"ok": False, "error": frame_language.text('owned.identity.ac672ab58ec2')}
     if key == "self":
         store = _self_store()
         before = store.current_prompt_info()
         if before.source == "current" and before.text.strip() == text.strip():
-            return {"ok": False, "error": "текст не изменился — нечего версионировать"}
+            return {"ok": False, "error": frame_language.text('owned.identity.2e520e3074d9')}
         try:
             if before.source == "current":
                 result = store.revise(
@@ -401,12 +401,12 @@ def revise(name: str, new_text: str, *, reason: str, confidence: str = "uncertai
                 )
         except (OSError, UnicodeError, ValueError, TimeoutError) as exc:
             log.warning("identity.revise: compact self write failed", exc_info=True)
-            return {"ok": False, "error": f"запись compact self не удалась: {type(exc).__name__}: {exc}"}
+            return {"ok": False, "error": frame_language.text('owned.identity.488789310aaa', v0=type(exc).__name__, v1=exc)}
         return _finish_self_shift(result, before, reason=reason, confidence=confidence,
                                   refs=refs, by=by, source=source)
     old = read(key)
     if old.strip() == text.strip():
-        return {"ok": False, "error": "текст не изменился — нечего версионировать"}
+        return {"ok": False, "error": frame_language.text('owned.identity.2e520e3074d9')}
 
     ver = _next_version(key)
     stem = FILES[key].removesuffix(".md")
@@ -420,35 +420,36 @@ def revise(name: str, new_text: str, *, reason: str, confidence: str = "uncertai
         _atomic_write(path_for(key), text + "\n")
     except Exception as e:
         log.warning("identity.revise: запись не удалась", exc_info=True)
-        return {"ok": False, "error": f"запись не удалась: {type(e).__name__}"}
+        return {"ok": False, "error": frame_language.text('owned.identity.927b4173d243', v0=type(e).__name__)}
 
     grew = len(text) - len(old)
     sha = _snapshot(f"identity: {key} v{ver} — {reason[:80]}")
     event = _spine_event(
         "identity_shift",
-        f"{key} → v{ver} ({'+' if grew >= 0 else ''}{grew} зн.): {reason[:200]}",
+        frame_language.text('owned.identity.42a7e885b1ad', v0=key, v1=ver, v2='+' if grew >= 0 else '', v3=grew, v4=reason[:200]),
         refs=refs,
         meta={"file": key, "version": ver, "layer": LAYERS[key].split(" — ")[0],
               "reason": reason[:300], "confidence": confidence, "by": by,
               "source": source, "sha": sha or "", "chars_before": len(old),
               "chars_after": len(text)},
         salience=3 if key == "SOUL" else 2)
-    _journal(f"ревизия {key} → v{ver} ({by}, {confidence}): {reason[:160]}"
-             + (f" [коммит {sha}]" if sha else ""))
+    _journal(frame_language.text('owned.identity.eea938fa9dda', v0=key, v1=ver, v2=by, v3=confidence, v4=reason[:160])
+             + (frame_language.text('owned.identity.1ca6dfa2d803', v0=sha) if sha else ""))
     _immune(sha, f"identity: {key} v{ver}")
     return {"ok": True, "version": ver, "sha": sha, "event": event}
 
 
+@frame_language.pinned
 def rollback(name: str, version: int, *, by: str = "praxis", reason: str = "",
              refs=()) -> dict:
     """Откат к архивной версии. История не теряется: текущий текст сам архивируется."""
     key = _canon(name)
     if not key:
-        return {"ok": False, "error": f"не знаю файла души «{name}»"}
+        return {"ok": False, "error": frame_language.text('owned.identity.3e99d945b4a4', v0=name)}
     if key == "self":
         store = _self_store()
         before = store.current_prompt_info()
-        why = (reason or "").strip() or "сдвиг оказался чужим или ложным"
+        why = (reason or "").strip() or frame_language.text('owned.identity.136b51616318')
         try:
             result = store.rollback(
                 version,
@@ -459,11 +460,11 @@ def rollback(name: str, version: int, *, by: str = "praxis", reason: str = "",
             )
         except (OSError, UnicodeError, ValueError, TimeoutError) as exc:
             log.warning("identity.rollback: compact self restore failed", exc_info=True)
-            return {"ok": False, "error": f"откат compact self не удался: {type(exc).__name__}: {exc}"}
+            return {"ok": False, "error": frame_language.text('owned.identity.a3de1095fb8b', v0=type(exc).__name__, v1=exc)}
         if not result.get("ok"):
             return result
         restored_version = int(result.get("restored_version"))
-        full_reason = f"откат к history/{restored_version:04d}: {why}"
+        full_reason = frame_language.text('owned.identity.c755343d6e13', v0=restored_version, v1=why)
         return _finish_self_shift(
             result,
             before,
@@ -475,9 +476,9 @@ def rollback(name: str, version: int, *, by: str = "praxis", reason: str = "",
         )
     old_text = version_text(key, version)
     if not old_text.strip():
-        return {"ok": False, "error": f"версии v{version} у {key} нет в архиве"}
-    why = (reason or "").strip() or "сдвиг оказался чужим или ложным"
-    return revise(key, old_text, reason=f"откат к v{int(version)}: {why}",
+        return {"ok": False, "error": frame_language.text('owned.identity.355d3f418c88', v0=version, v1=key)}
+    why = (reason or "").strip() or frame_language.text('owned.identity.136b51616318')
+    return revise(key, old_text, reason=frame_language.text('owned.identity.42d9e1ac256c', v0=int(version), v1=why),
                   confidence="observed", refs=refs, by=by, source="rollback")
 
 
@@ -887,32 +888,35 @@ def state_line(*, include_load: bool = True) -> str:
     return "; ".join(parts)
 
 
+@frame_language.pinned
+def _layer_description(key: str) -> str:
+    return frame_language.text("identity.layer."+key)
+
+
+@frame_language.pinned
 def describe() -> str:
     """Для тула manage_identity(status): слои, версии, нагрузка, последние сдвиги."""
-    lines = ["Мои слои пластичности (язык для понимания, не пороги в коде):"]
+    lines = [frame_language.text('owned.identity.7971904ad40a')]
     for key in FILES:
         vs = versions(key)
         cur = read(key)
         label = "self/CURRENT.md" if key == "self" else f"{key}.md"
-        lines.append(f"- {label} — {LAYERS[key]}; сейчас {len(cur)} зн., "
-                     f"архивных версий {len(vs)}"
-                     + (f" (последняя v{vs[-1]['version']} {vs[-1]['archived_at'][:10]})" if vs else ""))
-    lines.append(f"- {DISPOSITION_NOTE}")
+        lines.append(frame_language.text('owned.identity.20fc4865b967', v0=label, v1=_layer_description(key), v2=len(cur), v3=len(vs))
+                     + (frame_language.text('owned.identity.aebc6c6fd912', v0=vs[-1]['version'], v1=vs[-1]['archived_at'][:10]) if vs else ""))
+    lines.append("- " + frame_language.text("identity.disposition"))
     strains = stress()
     if strains:
-        lines.append("Нагрузка (14д, затухание): " + ", ".join(
+        lines.append(frame_language.text('owned.identity.f2317ef4a808') + ", ".join(
             f"{a['theme']} {a['score']} ({a['count']})" for a in strains[:5]))
     else:
-        lines.append("Нагрузка: журнал событий пуст или всё затухло.")
+        lines.append(frame_language.text('owned.identity.7cbcce52604f'))
     shifts = recent_shifts(4)
     if shifts:
-        lines.append("Последние сдвиги:")
+        lines.append(frame_language.text('owned.identity.0f2083ce345b'))
         for e in shifts:
             ts = str(e.get("ts") or "")[:16].replace("T", " ")
             lines.append(f"  · {ts} [{e.get('kind')}] {str(e.get('text') or '')[:120]}")
-    lines.append("Ревизия применяется сразу (версия+diff+причина, откат мой и Егора); "
-                 "ночью пересматриваю характер по прожитому. Действия revise/rollback/load "
-                 "делаю из owner-скоупа — в чужой комнате откажу (моя дисциплина).")
+    lines.append(frame_language.text('owned.identity.e05dd65c9df8'))
     return "\n".join(lines)
 
 

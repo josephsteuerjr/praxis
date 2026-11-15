@@ -90,6 +90,7 @@ def _names_of(slug: str) -> list[str]:
     return [n for n in ([title or slug] + people.aliases(slug)) if n.strip()]
 
 
+@frame_language.pinned
 def _pair_score(a: str, b: str) -> tuple[float, str]:
     """Похожесть двух досье по именам/алиасам. -> (score 0..1, почему)."""
     best, why = 0.0, ""
@@ -99,7 +100,7 @@ def _pair_score(a: str, b: str) -> tuple[float, str]:
             if not x or not y:
                 continue
             if x == y:
-                return 1.0, f"имя «{na}» совпадает"
+                return 1.0, frame_language.text('owned.sleep.fdd2314d5760', v0=na)
             # 01.08.2026: одно имя в двух написаниях детектор НЕ ВИДЕЛ вовсе —
             # «Егор Косырев» и «Yegor Kosyrev» давали ratio 0.00, и пара никогда не
             # попадала в предложения, хотя на живом дереве это было пять досье на
@@ -108,10 +109,10 @@ def _pair_score(a: str, b: str) -> tuple[float, str]:
             # стойка «молча не сливаю» не трогается.
             ka, kb = people.identity_key(na), people.identity_key(nb)
             if ka and ka == kb:
-                return 1.0, f"«{na}» и «{nb}» — одно имя в двух написаниях"
+                return 1.0, frame_language.text('owned.sleep.7240953b286e', v0=na, v1=nb)
             if len(x) >= 4 and len(y) >= 4 and (x.startswith(y) or y.startswith(x)):
                 if best < 0.8:
-                    best, why = 0.8, f"«{na}» / «{nb}» — префикс"
+                    best, why = 0.8, frame_language.text('owned.sleep.20a1e03f7567', v0=na, v1=nb)
                 continue
             r = difflib.SequenceMatcher(None, x, y).ratio()
             if r >= 0.85 and r > best:
@@ -218,6 +219,7 @@ def merge_dossiers(keep: str, absorb: str) -> bool:
 
 
 
+@frame_language.pinned
 def crystallisation_pass(limit: int = 2) -> int:
     """ПРЕДЛОЖИТЬ превратить записанный урок в навык. Ничего не создаёт. -> сколько предложено.
 
@@ -252,13 +254,7 @@ def crystallisation_pass(limit: int = 2) -> int:
             continue
         gist = " ".join(str(note.get("text") or "").split())[:220]
         _journal(
-            f"[урок] в заметке `{note['id']}` похоже на правило на будущее: «{gist}». "
-            f"Если это урок — сделай из него навык своими словами: "
-            f"write_skill(name=…, content=…, from_note=\"{note['id']}\"). Тогда он будет "
-            f"возвращаться в кадре сам, а цепочка «ошибка → навык → где он был доступен» "
-            f"откроется через manage_notes(action=\"chain\", note_id=<слаг навыка>). "
-            f"Не урок — manage_notes(action=\"decline\", note_id=\"{note['id']}\"), больше не предложу. "
-            f"Кандидатом сделала эвристика: {lessons.HEURISTIC} — с ней можно не согласиться.",
+            frame_language.text('owned.sleep.5d5c14fa95ad', v0=note['id'], v1=gist, v2=note['id'], v3=note['id'], v4=frame_language.text("sleep.lesson_heuristic", minimum=lessons._MIN_LESSON_CHARS)),
             salience=2)
         offered += 1
     if offered:
@@ -266,6 +262,7 @@ def crystallisation_pass(limit: int = 2) -> int:
     return offered
 
 
+@frame_language.pinned
 def svs_dossier_pass(*, allow_merge: bool = True) -> tuple[int, int]:
     """Фаза дублей досье. -> (слито, предложено dry-run).
 
@@ -282,20 +279,16 @@ def svs_dossier_pass(*, allow_merge: bool = True) -> tuple[int, int]:
             if merge_dossiers(c["keep"], c["absorb"]):
                 merged += 1
                 state.pop(key, None)
-                _journal(f"слила досье {c['keep']}.md ← {c['absorb']}.md ({c['why']}; "
-                         f"повторное совпадение, бэкап в memory/.trash/"
-                         f"{praxis_time.today():%Y%m%d}/).", salience=3)
+                _journal(frame_language.text('owned.sleep.a020fde22f84', v0=c['keep'], v1=c['absorb'], v2=c['why'], v3=praxis_time.today()), salience=3)
             continue
         if not prev:
             common, uniq = _common_and_unique(c["keep"], c["absorb"])
             next_step = (
-                "при повторном явном запуске compatibility helper солью с бэкапом."
+                frame_language.text('owned.sleep.0abfeb445f29')
                 if allow_merge else
-                "ночной scheduler сам не сольёт: изменение — через formation claim или явные руки."
+                frame_language.text('owned.sleep.d2c01a66262f')
             )
-            _journal(f"предлагаю слить {c['keep']}.md ← {c['absorb']}.md ({c['why']}): "
-                     f"общих фактов {common}, своих у {c['absorb']} — {uniq}. Если согласие есть — "
-                     f"сливай руками (fs-руки/add_alias); {next_step}", salience=2)
+            _journal(frame_language.text('owned.sleep.76d2daed123d', v0=c['keep'], v1=c['absorb'], v2=c['why'], v3=common, v4=c['absorb'], v5=uniq, v6=next_step), salience=2)
             proposed += 1
         state[key] = {"seen": (prev or {}).get("seen", 0) + 1,
                       "score": c["score"], "ts": time.time()}
