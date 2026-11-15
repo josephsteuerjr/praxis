@@ -1664,6 +1664,7 @@ def _seed_experiment_report() -> str:
             "История — в git (f6d16ebc, 6b9622f0); свежих следов после 03.08 нет.")
 
 
+@frame_language.pinned
 def tool_recall(query: str = "") -> str:
     """Hybrid internal recall: full memory regardless of the current audience.
 
@@ -1672,7 +1673,7 @@ def tool_recall(query: str = "") -> str:
 
     """
     if not (query or "").strip():
-        return "Пустой запрос."
+        return frame_language.text('memory.result.query_empty')
     try:
         try:
             hits = memory_index.search(query, k=12, scope="owner", semantic=True)
@@ -1712,24 +1713,22 @@ def tool_recall(query: str = "") -> str:
         kept.append(h)
     hits = kept[:6]
     foreign = sum(1 for h in hits if h.get("_foreign_room"))
-    hidden_note = (f"\n[{hidden} совпадений из других комнат скрыто в этом канале — "
-                   "спроси в личке или через group_context]" if hidden else "")
+    hidden_note = (frame_language.text('memory.result.hidden', count=hidden) if hidden else "")
     if foreign:
-        hidden_note += (f"\n[{foreign} совпадений из других комнат — внутреннее; здесь их "
-                        "не цитировать без права их субъекта]")
+        hidden_note += (frame_language.text('memory.result.foreign', count=foreign))
     if not hits:
-        return ("Ничего не вспомнилось." + hidden_note) if hidden_note else "Ничего не вспомнилось."
+        return frame_language.text('memory.result.no_recall') + hidden_note
     rows = []
     episodic = False
     archived_self = False
     unverified_dossier = False
     claim_receipt = False
     for h in hits:
-        label = h.get("path") or h.get("source") or "память"
+        label = h.get("path") or h.get("source") or frame_language.text('memory.result.memory')
         person_dossier = str(label).replace("\\", "/").startswith("memory/people/")
         if h.get("_foreign_room"):
             origin = _recall_room_label(h["_foreign_room"])
-            label = f"{origin} — внутреннее · {label}"
+            label = frame_language.text('memory.result.origin', origin=origin, label=label)
         source_type = str(h.get("source_type") or "")
         untrusted = source_type in {
             memory_provenance.UNTRUSTED_EPISODIC_KIND,
@@ -1747,9 +1746,9 @@ def tool_recall(query: str = "") -> str:
         prov = [str(x) for x in (h.get("provenance") or []) if str(x)]
         tail = f" ← {', '.join(prov[:4])}" if prov else ""
         trust = ((claim_label + " · ") if claim_label else
-                 "UNTRUSTED EPISODIC CUE · " if untrusted else
-                 "ARCHIVED NON-CURRENT SELF EVIDENCE · " if archived else
-                 "UNVERIFIED PERSON DOSSIER EVIDENCE · " if person_dossier else "")
+                 frame_language.text('memory.result.episodic_label') if untrusted else
+                 frame_language.text('memory.result.archived_label') if archived else
+                 frame_language.text('memory.result.dossier_label') if person_dossier else "")
         rows.append(f"[{trust}{label}] {h['text']}{tail}")
     out = "\n".join(rows)
     if episodic:
@@ -1757,18 +1756,15 @@ def tool_recall(query: str = "") -> str:
     if archived_self:
         out = "[TRUST CONTRACT] " + memory_provenance.archived_self_prompt_warning() + "\n" + out
     if unverified_dossier:
-        out = ("[TRUST CONTRACT] Existing people dossiers may contain legacy model-derived "
-               "claims. Treat unsourced lines as hypotheses; verify against the visible "
-               "conversation, a claim/run receipt, or explicit owner clarification.\n" + out)
+        out = (frame_language.text('memory.result.dossier_warning') + out)
     if claim_receipt:
         out = "[TRUST CONTRACT] " + memory_provenance.claim_prompt_warning() + "\n" + out
     # Graph prose may outlive a revoked relation claim; never enrich a canonical hit.
     related = []
     if related:
-        out += "\n[связи] " + "; ".join(related)
+        out += frame_language.text('memory.result.relations', relations='; '.join(related))
     if _active_scope() != "owner":
-        out = ("[INTERNAL MEMORY — видеть можно; чувствительные личные и кросс-чат факты "
-               "нельзя автоматически выдавать текущей аудитории]\n" + out)
+        out = (frame_language.text('memory.result.internal') + out)
     # 25.09: строка про другие комнаты печаталась ТОЛЬКО при пустой выдаче — при любом
     # другом совпадении скрытие было молчаливым. Теперь она едет всегда.
     return out + hidden_note
@@ -1846,6 +1842,7 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
     return _noted("ok", f"Запомнила про {person} ({vis}).{linked}", str(person or ""))
 
 
+@frame_language.pinned
 def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     path = JOURNAL_DIR / f"{_today()}.md"
     if not path.exists():
@@ -1865,11 +1862,11 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
         except Exception:
             log.debug("пометка решения владельца не легла в накопитель", exc_info=True)
             tool_report.note(outcome="partial")
-            return "Записано в дневник; пометить как решение владельца не вышло."
+            return frame_language.text('memory.result.journal_partial')
         tool_report.note(outcome="ok")
-        return "Записано в дневник; решение владельца увидят все живые окна."
+        return frame_language.text('memory.result.journal_decision')
     tool_report.note(outcome="ok")
-    return "Записано в дневник."
+    return frame_language.text('memory.result.journal_written')
 
 
 # Normal and resumed execution persist a 4000-character inline ResultRef view.
@@ -1877,6 +1874,7 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
 _MEMORY_COMPACT_READ_INLINE_CHARS = 4000
 
 
+@frame_language.pinned
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
                         tier: int | None = None, since: str = "", limit: int = 0, selection: str = "",
                         start_char: int = 0, expected_sha256: str = "") -> str:
@@ -1888,7 +1886,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
     tool_report.note(target=where)
     if op in {"prepare", "fold"}:
         if not where:
-            return _noted("refused", "Не вижу места: укажи place (chat_id).")
+            return _noted("refused", frame_language.text('memory.result.compact_place'))
         if op == "prepare":
             out = memory_life.prepare_authored_fold(where, limit=int(limit or 50), compact_id=compact_id)
         else:
@@ -1897,21 +1895,20 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
     if op == "list":
         if not where:
             tool_report.note(outcome="refused")
-            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
+            return frame_language.text('memory.result.compact_place')
         rows = memory_life.list_compacts(where, tier=tier, limit=int(limit or 20), since=since)
         tool_report.note(outcome="ok")
         if not rows:
-            return f"Свёрток у {where} не найдено."
-        lines = [f"Свёртки {where} (старые выше, {len(rows)} шт.):"]
+            return frame_language.text('memory.result.compact_none', place=where)
+        lines = [frame_language.text('memory.result.compact_title', place=where, count=len(rows))]
         for r in rows:
-            mark = " · обрубок" if r.get("degraded") else ""
-            lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
-                         f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
-        lines.append("read — целиком; rewrite — своя суть; prepare — точные источники, затем fold(selection,text).")
+            mark = frame_language.text('memory.result.degraded') if r.get("degraded") else ""
+            lines.append(frame_language.text('memory.result.compact_row', id=r['id'], tier=r['tier'], first=r['first_ts'][:16], last=r['last_ts'][:16], events=r['events'], chars=r['chars'], mark=mark, head=r['head']))
+        lines.append(frame_language.text('memory.result.compact_help'))
         return "\n".join(lines)
     if op == "read":
         if not compact_id:
-            return _noted("refused", "Для read нужен compact_id.")
+            return _noted("refused", frame_language.text('memory.result.compact_id'))
         if type(start_char) is not int or start_char < 0:
             return json.dumps({"ok": False, "reason": "invalid_start_char"})
         expected = str(expected_sha256 or "").strip().lower()
@@ -1919,22 +1916,22 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             return json.dumps({"ok": False, "reason": "invalid_expected_sha256"})
         if start_char and not expected:
             return json.dumps({"ok": False, "reason": "expected_sha256_required",
-                               "instruction": "Continue with sha256 from the first page."})
+                               "instruction": frame_language.text('memory.result.compact_hash_required')})
         out = memory_life.read_compact(compact_id, where or None)
         if not out.get("ok"):
             tool_report.note(outcome="refused")
-            return f"Свёртка {compact_id} не найдена ({out.get('reason')})."
+            return frame_language.text('memory.result.compact_missing', id=compact_id, reason=out.get('reason'))
         m = out["meta"]
         body = str(out.get("text") or "")
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
         if expected and expected != digest:
             return json.dumps({"ok": False, "reason": "version_conflict", "sha256": digest,
-                               "instruction": "Compact text changed; restart read at start_char=0."})
+                               "instruction": frame_language.text('memory.result.compact_conflict')})
         total = len(body)
         if start_char > total:
             return json.dumps({"ok": False, "reason": "start_char_out_of_range",
                                "total_chars": total})
-        header = (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n")
+        header = (frame_language.text('memory.result.compact_header', id=m['id'], tier=m['tier'], first=m['first_ts'], last=m['last_ts'], events=m['events']))
         end = min(total, start_char + _MEMORY_COMPACT_READ_INLINE_CHARS)
         while True:
             page = {"ok": True, "compact_id": m["id"], "sha256": digest,
@@ -1950,39 +1947,37 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
     if op == "rewrite":
         if not compact_id or not str(text or "").strip():
             tool_report.note(outcome="refused")
-            return "Для rewrite нужны compact_id и text — новая суть твоими словами."
+            return frame_language.text('memory.result.rewrite_args')
         out = memory_life.rewrite_compact_text(compact_id, text, chat_id=where or None)
         if not out.get("ok"):
             tool_report.note(outcome="refused")
-            return f"Не переписано {compact_id}: {out.get('reason')}."
+            return frame_language.text('memory.result.rewrite_failed', id=compact_id, reason=out.get('reason'))
         try:
             tool_report.note(outcome="ok")
             tool_journal(f"[память] свёртка {compact_id} переписана своими словами "
                          f"({out.get('chars')} знаков; прежний текст — {out.get('history')})", salience=2)
         except Exception:
             log.debug("журнал о переписанной свёртке не записался", exc_info=True)
-        return (f"Переписано {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
-                f"({out.get('history')}). Источники и границы те же.")
+        return (frame_language.text('memory.result.rewritten', id=compact_id, chars=out.get('chars'), history=out.get('history')))
     if op == "refold":
         tool_report.note(outcome="refused")
-        return "Фоновое сочинение выключено. prepare → прочитай источники → fold(selection,text); rewrite — своя новая суть существующей свёртки."
+        return frame_language.text('memory.result.refold_disabled')
     if op == "status":
         st = memory_life.refold_status()
         tool_report.note(outcome="ok")
         if not st.get("planned"):
-            return "Перевыпуск не запускался."
+            return frame_language.text('memory.result.refold_not_started')
         last = st.get("last") or {}
-        return (f"Перевыпуск {'идёт' if st.get('running') else 'закончен'}: {st.get('done')}/{st.get('planned')} "
-                f"переписано, {st.get('skipped')} пропущено (источники не текущие), {st.get('failed')} не вышло; "
-                f"последняя — {last.get('id')} ({'ok' if last.get('ok') else last.get('reason')}).")
+        return (frame_language.text('memory.result.refold_status', state=(frame_language.text('memory.result.refold_running') if st.get('running') else frame_language.text('memory.result.refold_finished')), done=st.get('done'), planned=st.get('planned'), skipped=st.get('skipped'), failed=st.get('failed'), id=last.get('id'), result=('ok' if last.get('ok') else last.get('reason'))))
     if op == "stop":
         st = memory_life.refold_stop()
         tool_report.note(outcome="ok")
-        return "Останавливаю перевыпуск после текущей свёртки." if st.get("running") else "Перевыпуск не идёт."
+        return frame_language.text('memory.result.refold_stopping') if st.get("running") else frame_language.text('memory.result.refold_inactive')
     tool_report.note(outcome="refused")
-    return "Не понимаю действие: list / read / rewrite / refold / status / stop."
+    return frame_language.text('memory.result.compact_action')
 
 
+@frame_language.pinned
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
                       scope: str = "", note_id: str = "",
                       status: str = "open", reason: str = "", limit: int = 20,
@@ -2003,11 +1998,11 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
         # Lessons can resolve a known skill without first loading its note. Both
         # paths must check the audience before entering that private source.
         if operation in {'chain', 'decline'} and not owner_audience:
-            return 'Заметка не найдена в этой аудитории.'
+            return frame_language.text('memory.result.note_audience_missing')
         if operation == "write":
             if not chat_id and not owner_audience:
                 tool_report.note(outcome="refused")
-                return 'Нет подтверждённой аудитории для заметки.'
+                return frame_language.text('memory.result.note_no_audience')
             reference = authored_notes.work_reference(work_ref or (f'run:{run_id}' if run_id else ''))
             validate_locked = None
             if (scope or "global") == "run" and current is not None:
@@ -2015,7 +2010,7 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
                     manifest = _runs().manifest(current.run_id)
                     if str(manifest.get("status") or "") in run_manager.TERMINAL_STATUSES:
                         raise ValueError(
-                            "завершённый run уже заморожен; запиши global/chat note или новый run"
+                            frame_language.text('memory.result.note_terminal')
                         )
             row = ledger.write(
                 text, kind=kind or "note", scope=scope or "global", run_id=run_id, chat_id=chat_id,
@@ -2023,23 +2018,23 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
                 validate_locked=validate_locked, work_ref=reference, audience=audience,
             )
             tool_report.note(outcome="ok")
-            return f"Записано: {row['kind']} `{row['id']}` ({row['scope']}, {row['status']})."
+            return frame_language.text('memory.result.note_written', kind=row['kind'], id=row['id'], scope=row['scope'], status=row['status'])
         if operation in {"read", "close"}:
             row = ledger.get(note_id)
             if row is None or not authored_notes.visible(row, owner=owner_audience, chat_id=chat_id, audience=audience):
                 tool_report.note(outcome="refused")
-                return "Заметка не найдена."
+                return frame_language.text('memory.result.note_missing')
             if row["scope"] == "chat" and row["chat_id"] != chat_id:
                 tool_report.note(outcome="refused")
-                return "Заметка относится к другому чату."
+                return frame_language.text('memory.result.note_other_chat')
             if row["scope"] == "run" and row["run_id"] != run_id:
                 tool_report.note(outcome="refused")
-                return "Заметка относится к другому run."
+                return frame_language.text('memory.result.note_other_run')
             if operation == "read":
                 return json.dumps(row, ensure_ascii=False, indent=2)
             row = ledger.close(note_id, reason=reason)
             tool_report.note(outcome="ok")
-            return f"Заметка `{row['id']}` закрыта."
+            return frame_language.text('memory.result.note_closed', id=row['id'])
         if operation == "list":
             rows = ledger.list(status=status, kind=kind if kind in authored_notes.KINDS else "",
                                scope=scope if scope in authored_notes.SCOPES else "", limit=100)
@@ -2051,7 +2046,7 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
             )][:max(1, min(100, int(limit)))]
             tool_report.note(outcome="ok")
             if not rows:
-                return "Заметок по этому фильтру нет."
+                return frame_language.text('memory.result.note_none')
             return "\n".join(
                 f"- `{row['id']}` [{row['kind']}/{row['scope']}/{row['status']}] "
                 f"{row['text'][:240]}" for row in rows
@@ -2065,13 +2060,13 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
         if operation == "decline":
             row = lessons.decline(note_id, reason=reason)
             tool_report.note(outcome="ok")
-            return (f"Не буду предлагать кристаллизацию заметки `{row['note_id']}` снова"
-                    + (f": {row['reason']}" if row.get("reason") else "."))
-        return _noted("refused", "manage_notes: action должен быть write, list, read, close, chain или decline.")
+            return (frame_language.text('memory.result.note_declined', id=row['note_id'], reason=(': '+str(row['reason'])) if row.get('reason') else '.'))
+        return _noted("refused", frame_language.text('memory.result.note_action'))
     except (TypeError, ValueError) as exc:
         return _noted("refused", f"manage_notes: {exc}")
 
 
+@frame_language.pinned
 def tool_update_self(note: str) -> str:
     """Record provenance-rich evidence about self without rewriting CURRENT implicitly."""
     current = run_context.current_run()
@@ -2093,10 +2088,9 @@ def tool_update_self(note: str) -> str:
         )
         _reindex(self_model.SelfModel(BASE).observations_path)
     except Exception as exc:
-        return f"Наблюдение о себе не записалось: {type(exc).__name__}: {exc}"
+        return frame_language.text('memory.result.self_error', error=type(exc).__name__, detail=exc)
     return (
-        f"Записано evidence о себе ({event.get('event_id')}); CURRENT не изменён. "
-        "Ночная ревизия взвесит наблюдение вместе с provenance, а legacy self.md останется цел."
+        frame_language.text('memory.result.self_recorded', id=event.get('event_id'))
     )
 
 
@@ -2123,28 +2117,28 @@ def _summarize_history(records: list[dict]) -> str:
         return ""
 
 
+@frame_language.pinned
 def tool_consolidate_context(note: str = "") -> str:
     """Свести старую часть доступной истории; устойчиво обрезать только её источник."""
     hist = _active_history()
     if not isinstance(hist, list) or len(hist) < 8:
-        return "Контекст ещё короткий — сводить рано."
+        return frame_language.text('memory.result.history_short')
     n = min(CONSOLIDATE_FOLD, len(hist) - 6)  # хвост оставляем живым
     if n <= 0:
-        return "Контекст ещё короткий — сводить рано."
+        return frame_language.text('memory.result.history_short')
     old = hist[:n]
     summary = (note or "").strip() or _summarize_history(old)
-    if summary:
-        tool_journal(f"[контекст] {summary}", salience=2)
+    if not str(summary or "").strip():
+        return _noted("refused", frame_language.text('memory.result.history_no_summary'))
+    tool_journal(f"[контекст] {summary}", salience=2)
     turn_history = _TURN_HISTORY.get()
     persistent = turn_history is None or _TURN_HISTORY_PERSISTENT.get()
     if persistent:
         del hist[:n]
         log.info("consolidate_context: сведено %d записей, осталось %d", n, len(hist))
-        return (f"Сведено {n} старых сообщений в дневник; источник истории укорочен "
-                f"(осталось {len(hist)}).")
+        return (frame_language.text('memory.result.history_trimmed', count=n, remaining=len(hist)))
     log.info("consolidate_context: записана сводка %d записей; источник — снимок", n)
-    return (f"Сведено {n} старых сообщений в дневник. Текущая ролевая история — снимок: "
-            "его мутация не освободила бы источник контекста, поэтому он не обрезан.")
+    return (frame_language.text('memory.result.history_snapshot', count=n))
 
 
 # --- §6: компактирование контекста субагентом (бегущая сводка, не её голос) - #

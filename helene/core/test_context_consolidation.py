@@ -136,7 +136,7 @@ class TestConsolidateTool(Base):
         out = agent.tool_consolidate_context("неважно")
         self.assertEqual(len(hist), 5, "короткую историю не трогаем")
         self.assertEqual(self._journal(), "")
-        self.assertIn("рано", out.lower())
+        self.assertIn("короткий", out.lower())
 
     def test_keeps_tail_alive(self):
         hist = self._hist(10)  # fold = min(12, 10-6)=4

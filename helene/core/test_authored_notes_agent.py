@@ -115,7 +115,7 @@ class AuthoredNotesAgentTests(unittest.TestCase):
         manager.transition(context.run_id, "done")
         with mock.patch.object(agent, "BASE", self.base), run_context.bind_run(context.with_status("done")):
             result = agent.tool_manage_notes("write", text="too late", scope="run")
-        self.assertIn("завершённый run уже заморожен", result)
+        self.assertIn("Завершённый run заморожен", result)
         self.assertEqual(authored_notes.AuthoredNoteLedger(self.base).metadata_for_run(context.run_id), [])
 
     def test_terminal_transition_wins_against_waiting_run_note_write(self):
@@ -143,7 +143,7 @@ class AuthoredNotesAgentTests(unittest.TestCase):
         thread.join(2)
 
         self.assertFalse(thread.is_alive())
-        self.assertIn("завершённый run уже заморожен", result[0])
+        self.assertIn("Завершённый run заморожен", result[0])
         self.assertEqual(ledger.metadata_for_run(context.run_id), [])
 
     def test_global_note_is_not_attached_to_unrelated_run_recap(self):
