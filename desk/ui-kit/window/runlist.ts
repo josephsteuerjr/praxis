@@ -1,10 +1,9 @@
 import { t as uiText } from "../../lang/lang";
 // Список прогонов с раскрывающимися шагами — общий для «Сейчас» и «Вейков».
-// Подпись хода — слово агента из chat-turns комнаты (без скобок кадра),
-// без него — первая строка цели прогона.
+// Подпись хода сохраняет исходный повод и автора; ответ доступен внутри хода.
 import { api, post } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
-import { isToday } from "../text";
+import { isToday, runTitle } from "../text";
 import { stepsHTML, type RunDetail } from "../steps";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, runIsLive, type Run } from "./state";
 
@@ -74,8 +73,7 @@ export function wordOf(runId: string): { out: string; note: string; who: string 
 
 /** The backend resolves the actual triggering message, including origin ids. */
 export function runLabel(r: Run): string {
-  const w = words.get(r.id);
-  const text = goalLabel(r.goal_head || "") || cleanLabel(w?.out || "") || noteLabel(w?.note || "");
+  const text = runTitle(r);
   return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
 }
 
@@ -89,7 +87,7 @@ export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
   const sub = [RUN_KIND[r.kind] || r.kind, roomTitle, who && who !== roomTitle ? who : ""].filter(Boolean).join(" · ");
   return `<div class="ev ${S.evOpen.has(r.id) ? "open" : ""}" data-ev="${esc(r.id)}">
     <button type="button" class="ev-head" aria-expanded="${S.evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}">
-      <span class="ev-title" title="${esc(r.goal_head || "")}">${esc(runLabel(r))}</span>
+      <span class="ev-title" title="${esc(runTitle(r))}">${esc(runLabel(r))}</span>
       <span class="ev-time">${isToday(r.created_at) ? "" : esc(day) + " "}${fmtTime(r.created_at)}</span>
       <span class="dot ${dot}"></span>
       <span class="ev-chevron" aria-hidden="true">›</span>

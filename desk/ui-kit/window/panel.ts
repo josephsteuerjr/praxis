@@ -21,7 +21,7 @@ import { resetRunHTML, bindRunReset } from './runlist';
 import { workActivity, observeActivity } from './work-activity';
 import './styles/work-activity.css';
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
-import { fmtK } from "../text";
+import { fmtK, runOriginText } from "../text";
 import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, toolSummary, toolTraceHTML, terminalLabel, textBox, modelProgressLabel, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
@@ -156,7 +156,7 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
   const rows: StepRow[] = [];
   const runId = d.id || "";
   const live = d.manifest?.status === "running";
-  const origin = clean(d.origin?.text || "");
+  const origin = clean(runOriginText(d.origin));
   if (origin) {
     rows.push({ key: "origin", cls: "st st-origin", html:
       uiText("ui.ui.kit.window.panel.f756532d1f", {p0: String(icon("origin")), p1: String(esc(clip(origin, 300)))}) +
@@ -330,7 +330,7 @@ function fillTurn(el: HTMLElement, r: TurnRow) {
 }
 
 function liveTurnCause(id: string, detail?: RunDetail): string {
-  return detail?.id === id ? clean(detail.origin?.text || "") : "";
+  return detail?.id === id ? clean(runOriginText(detail.origin)) : "";
 }
 
 function setMeta(el: HTMLElement, d: RunDetail) {

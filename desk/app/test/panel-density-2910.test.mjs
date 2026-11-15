@@ -5,14 +5,15 @@ import { stripTypeScriptTypes } from 'node:module';
 const kit = new URL('../../ui-kit/', import.meta.url);
 const mod = source => 'data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64');
 const text = mod(readFileSync(new URL('text.ts',kit),'utf8'));
+const {runOriginText} = await import(text);
 const dom = mod(readFileSync(new URL('dom.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
 const lens = mod(readFileSync(new URL('tool-lens.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
 const steps = await import(mod(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)).replace('"./dom"',JSON.stringify(dom)).replace('"./tool-lens"',JSON.stringify(lens))));
 const source=stripTypeScriptTypes(readFileSync(new URL('window/panel.ts',kit),'utf8'));
 const fn=source.slice(source.indexOf('function stepRows('),source.indexOf('\nfunction openLink('));
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
-const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','toolSummary','frameStripHTML','terminalLabel','textBox','subject',fn+';return stepRows;')(
-  s=>s,s=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,steps.toolSummary,()=>'',steps.terminalLabel,steps.textBox,steps.subject);
+const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','toolSummary','frameStripHTML','terminalLabel','textBox','subject','runOriginText',fn+';return stepRows;')(
+  s=>s,s=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,steps.toolSummary,()=>'',steps.terminalLabel,steps.textBox,steps.subject,runOriginText);
 const detail={id:'fixture',manifest:{status:'running'},iterations:[{call_id:'m',tools:[{
   call_id:'real',tool:'shell',args:{cmd:'echo <request>'},execution:{handler:'agent.tool_shell',status:'entered'},
   operations:[{kind:'process',argv:['bash','-lc','echo <actual>'],status:'returned',exit_code:0}],result:{head:'done'},

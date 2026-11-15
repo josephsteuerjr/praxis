@@ -71,6 +71,7 @@ export interface Run {
   chat_id?: string | number | null;
   chat_title?: string;
   goal_head?: string;
+  display_title?: unknown;
   created_at?: string;
   forge_task_id?: string;
 }

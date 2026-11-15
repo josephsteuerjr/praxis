@@ -1,5 +1,6 @@
 import { el } from './dom';
-import { fmtTime } from './text';
+import { fmtTime, runTitle } from './text';
+import { t as uiText } from '../lang/lang';
 import { forgePanel } from './window/views/forge-panel';
 import { mountActionSteps } from './window/panel';
 import { workActivity,type WorkActivity } from './window/work-activity';
@@ -8,7 +9,7 @@ import './window/views/forge-panel.css';
 import './window/styles/turns.css';
 import './window/styles/work-activity.css';
 
-type Run={id:string;kind?:string;operator?:boolean;status?:string;terminal_status?:string;created_at?:string;updated_at?:string;goal_head?:string};
+type Run={id:string;kind?:string;operator?:boolean;status?:string;terminal_status?:string;created_at?:string;updated_at?:string;goal_head?:string;display_title?:unknown};
 type Request=<T>(path:string,body?:unknown,signal?:AbortSignal)=>Promise<T>;
 type State={runner?:{alive?:boolean;busy?:boolean;run?:string}};
 const PAGE_SIZE=40;
@@ -25,28 +26,28 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   const history=options.history!==false;
   root.className='phone-actions';
   const work=el('section'),forge=el('section','turns-forge'),head=el('div','turns-head');
-  const title=el('span','turns-title','Предыдущие ходы'),count=el('span','turns-n');head.append(title,count);
+  const title=el('span','turns-title',uiText('phone.actions.history')),count=el('span','turns-n');head.append(title,count);
   const list=el('div','turns'),message=el('p','muted');list.setAttribute('role','list');message.setAttribute('role','status');
-  const current=el('section','phone-current'),currentList=el('div','turns'),currentMessage=el('p','muted','Читаю текущий ход…');
+  const current=el('section','phone-current'),currentList=el('div','turns'),currentMessage=el('p','muted',uiText('phone.actions.current_loading'));
   currentMessage.setAttribute('role','status');
-  current.append(el('h2','phone-current-heading','Сейчас идёт'),currentMessage,currentList);
+  current.append(el('h2','phone-current-heading',uiText('phone.actions.current')),currentMessage,currentList);
   const previous=document.createElement('details');previous.className='phone-history';
-  const more=document.createElement('button');more.type='button';more.className='btn phone-history-more';more.textContent='Ещё ходы';more.hidden=true;
+  const more=document.createElement('button');more.type='button';more.className='btn phone-history-more';more.textContent=uiText('phone.actions.more');more.hidden=true;
   more.addEventListener('click',()=>void loadOlder());
   const previousSummary=document.createElement('summary');previousSummary.append(title,document.createTextNode(' · '),count);previous.append(previousSummary,list,message,more);
   const agents=document.createElement('details');agents.className='phone-agents';
-  agents.append(el('summary','','Субагенты'),forge);
+  agents.append(el('summary','',uiText('phone.actions.agents')),forge);
   root.append(work);if(!options.agentsOnly)root.append(current);
   if(history&&!options.agentsOnly)root.append(previous);
   const operators=document.createElement('details');operators.className='phone-operators muted';
-  const operatorList=el('div','turns'),operatorMessage=el('p','muted'),operatorMore=el('button','btn','Ещё проверки');
+  const operatorList=el('div','turns'),operatorMessage=el('p','muted'),operatorMore=el('button','btn',uiText('phone.actions.more_checks'));
   operatorList.setAttribute('role','list');operatorMessage.setAttribute('role','status');operatorMore.type='button';operatorMore.hidden=true;
-  operators.append(el('summary','','Проверки оператора'),operatorList,operatorMessage,operatorMore);
+  operators.append(el('summary','',uiText('phone.actions.operators')),operatorList,operatorMessage,operatorMore);
   if(history&&!options.agentsOnly)root.append(operators);
   root.append(options.agentsOnly?forge:agents);
   const renderWork=workActivity(work,{reviewers:false});
   const teams=forgePanel(forge,async<T>(path:string,signal:AbortSignal,body?:unknown)=>{
-    if(body!==undefined)throw Error('Управление Forge с этого экрана недоступно');
+    if(body!==undefined)throw Error(uiText('phone.actions.forge_readonly'));
     const value=await request<T>(path.replace('/api/forge/','/api/phone/forge/'),undefined,signal);
     // `open` меняется сразу по щелчку, а `toggle` приходит позже: ответ между ними не должен
     // заполнить уже закрытый список. Остановка панели делает его ответ недействительным.
@@ -65,23 +66,23 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   async function loadOperators(older=false) {
     if(!active||operatorBusy||!operators.open)return;
     const captured=epoch,capturedScope=scope(),requestEpoch=++operatorEpoch;operatorBusy=true;operatorMore.disabled=true;
-    operatorMessage.textContent='Читаю проверки…';operatorController=new AbortController();
+    operatorMessage.textContent=uiText('phone.actions.checks_loading');operatorController=new AbortController();
     try {
       const page=await request<Run[]>(`/api/runs?audience=operator&limit=${PAGE_SIZE+1}${older?'&before='+encodeURIComponent(operatorBefore):''}`,undefined,operatorController.signal);
       if(!active||captured!==epoch||capturedScope!==scope()||!operators.open||requestEpoch!==operatorEpoch)return;
-      if(!Array.isArray(page)||page.some(r=>!r.operator||(older&&r.id>=operatorBefore)))throw Error('Некорректная страница проверок');
+      if(!Array.isArray(page)||page.some(r=>!r.operator||(older&&r.id>=operatorBefore)))throw Error(uiText('phone.actions.checks_invalid'));
       if(!older){operatorRows.clear();operatorList.replaceChildren()}
       const shown=page.slice(0,PAGE_SIZE);
       for(const run of shown){
         let row=operatorRows.get(run.id);
         if(!row){row=makeRow(run);operatorRows.set(run.id,row);operatorList.append(row.node)}
-        row.run=run;row.title.textContent=run.goal_head||'Проверка оператора';row.time.textContent=fmtTime(run.created_at||'');
+        row.run=run;row.title.textContent=runTitle(run)||uiText('run.title.operator_short');row.time.textContent=fmtTime(run.created_at||'');
         row.node.dataset.status=run.status==='failed'?'failed':'done';
         const controls=row.node.querySelector<HTMLElement>('.actions');if(controls)controls.hidden=true;
       }
       operatorBefore=shown.at(-1)?.id||operatorBefore;operatorMore.hidden=page.length<=PAGE_SIZE;
-      operatorMessage.textContent=operatorRows.size?'':'Проверок оператора пока нет.';
-    }catch{if(active&&captured===epoch&&operators.open&&requestEpoch===operatorEpoch){operatorMessage.textContent='Не удалось прочитать проверки. Открой раздел ещё раз для повтора.'}}
+      operatorMessage.textContent=operatorRows.size?'':uiText('phone.actions.checks_empty');
+    }catch{if(active&&captured===epoch&&operators.open&&requestEpoch===operatorEpoch){operatorMessage.textContent=uiText('phone.actions.checks_failed')}}
     finally{if(captured===epoch&&requestEpoch===operatorEpoch){operatorBusy=false;operatorMore.disabled=false}}
   }
   operators.addEventListener('toggle',event=>{if(event.target!==operators)return;if(operators.open)void loadOperators();else {operatorEpoch++;operatorBusy=false;operatorController?.abort()}});
@@ -98,7 +99,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
       if(!active||captured!==epoch||capturedScope!==scope()||!row.open||value.id!==row.run.id||requestVersion!==row.requestVersion)return;
       row.paint(value);row.version=row.run.updated_at||row.run.id;
       const iterations=value.iterations||[];
-      row.meta.textContent=`Шаги: ${iterations.length}`;
+      row.meta.textContent=uiText('phone.actions.steps',{count:String(iterations.length)});
     }catch(error){if(active&&captured===epoch&&!row.body.firstChild)row.body.textContent=error instanceof Error?error.message:String(error)}
   }
   function makeRow(run:Run) {
@@ -106,17 +107,17 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     const time=el('span','turn-time'),dot=el('span','turn-dot'),text=el('span','turn-text');
     const title=el('span','turn-title'),meta=el('span','turn-meta'),body=el('div','turn-body st-list');body.hidden=true;
     text.append(title,meta);head.append(time,dot,text);node.append(head,body);node.setAttribute('role','listitem');
-    const controls=el('div','actions'),cancel=el('button','chip','Сбросить задачу'),notice=el('p','muted');
-    cancel.type='button';cancel.title='Прервать выполняющийся шаг и его процессы; сохранить историю';
+    const controls=el('div','actions'),cancel=el('button','chip',uiText('phone.actions.reset')),notice=el('p','muted');
+    cancel.type='button';cancel.title=uiText('phone.actions.reset_hint');
     notice.setAttribute('role','status');controls.append(cancel);node.insertBefore(controls,body);node.insertBefore(notice,body);
     const row={node,head,title,time,meta,body,open:false,autoOpened:false,requestVersion:0,paint:mountActionSteps(body),version:undefined as string|undefined,run};
     cancel.addEventListener('click',async()=>{
       if(cancel.disabled)return;
-      const captured=epoch,capturedScope=scope();cancel.disabled=true;notice.textContent='Прерываю выполняющийся шаг…';
+      const captured=epoch,capturedScope=scope();cancel.disabled=true;notice.textContent=uiText('phone.actions.reset_wait');
       try {
         const result=await request<{ok:boolean;confirmed?:boolean;note?:string;receipt?:{status?:string}}>(`/api/run/${encodeURIComponent(row.run.id)}/cancel`,{});
         if(!active||captured!==epoch||capturedScope!==scope())return;
-        notice.textContent=result.note||'Результат сброса пока не подтверждён.';
+        notice.textContent=result.note||uiText('phone.actions.reset_unknown');
         if(!result.confirmed)cancel.disabled=false;
         else {
           const status=result.receipt?.status||'cancelled',id=row.run.id;
@@ -126,7 +127,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
           if(currentState.runner?.run===id)currentState={runner:{...currentState.runner,busy:false,run:''}};
           options.onReset?.(id,status);paint(lastRuns);
         }
-      } catch {if(active&&captured===epoch){notice.textContent='Результат не подтверждён. Обновите состояние перед повтором.';cancel.disabled=false}}
+      } catch {if(active&&captured===epoch){notice.textContent=uiText('phone.actions.reset_error');cancel.disabled=false}}
     });
     Object.assign(row,{cancel,controls});
     head.addEventListener('click',()=>{row.open=!row.open;node.classList.toggle('open',row.open);body.hidden=!row.open;head.setAttribute('aria-expanded',String(row.open));if(row.open)void detail(row,true)});
@@ -141,7 +142,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
       row.run=run;row.time.textContent=fmtTime(run.created_at||'');
       const controls=row.node.querySelector<HTMLElement>('.actions');
       if(controls)controls.hidden=['done','failed','cancelled'].includes(run.status||run.terminal_status||'');
-      row.title.textContent=describe?.(run)||run.goal_head||({chat_turn:'Сообщение',wake:'Пробуждение',task_window:'Работа'}[run.kind||'']||'Ход агента');
+      row.title.textContent=describe?.(run)||runTitle(run)||uiText(run.kind==='chat_turn'?'run.title.message':run.kind==='wake'?'run.title.wake':run.kind==='task_window'?'run.title.task':'run.title.turn');
       const live=run.id===liveRun;
       row.node.dataset.status=live?'live':run.status==='failed'||run.terminal_status==='failed'?'failed':run.status==='running'?'unknown':'done';
       const parent=live?currentList:list;if(row.node.parentElement!==parent)parent.append(row.node);
@@ -149,10 +150,10 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
       if(live&&!row.autoOpened){row.autoOpened=true;row.open=true;row.body.hidden=false;row.node.classList.add('open');row.head.setAttribute('aria-expanded','true')}
       if(row.open)void detail(row,live);
     }
-    count.textContent=String(historyCount)+(hasMore?'+':'');message.textContent=historyError||(historyCount?'':'Предыдущих ходов пока нет.');
-    more.hidden=!hasMore;more.disabled=olderBusy;more.textContent=olderBusy?'Читаю…':'Ещё ходы';
+    count.textContent=String(historyCount)+(hasMore?'+':'');message.textContent=historyError||(historyCount?'':uiText('phone.actions.empty'));
+    more.hidden=!hasMore;more.disabled=olderBusy;more.textContent=olderBusy?uiText('phone.actions.loading'):uiText('phone.actions.more');
     if(liveRun)resetMessage='';
-    currentMessage.textContent=liveRun?'':resetMessage||'Сейчас нет текущего хода';
+    currentMessage.textContent=liveRun?'':resetMessage||uiText('phone.actions.no_current');
   }
   function mergeRuns(incoming:Run[]) {
     const merged=new Map(lastRuns.map(run=>[run.id,run]));
@@ -166,9 +167,9 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     try {
       const page=await request<Run[]>(`/api/runs?limit=${PAGE_SIZE+1}&before=${encodeURIComponent(cursor)}`,undefined,olderController.signal);
       if(!active||captured!==epoch||capturedScope!==scope())return;
-      if(!Array.isArray(page)||page.some(run=>!run.id||run.id>=cursor))throw Error('Страница истории не совпала с выбранным продолжением');
+      if(!Array.isArray(page)||page.some(run=>!run.id||run.id>=cursor))throw Error(uiText('phone.actions.page_invalid'));
       const rows=page.slice(0,PAGE_SIZE);mergeRuns(rows);hasMore=page.length>PAGE_SIZE;before=rows.at(-1)?.id||cursor;
-    }catch(error){if(active&&captured===epoch&&capturedScope===scope())historyError='Не удалось прочитать продолжение. Нажми «Ещё ходы», чтобы повторить.'}
+    }catch(error){if(active&&captured===epoch&&capturedScope===scope())historyError=uiText('phone.actions.page_failed')}
     finally{if(captured===epoch){olderBusy=false;more.disabled=false;if(active&&capturedScope===scope())paint(lastRuns)}}
   }
   async function refresh() {
@@ -192,7 +193,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     }
     if(work.status==='fulfilled'){activity=work.value;renderWork(activity);teams.setReviewers(activity)}
     else {const stale={...activity,update:activity.update?{...activity.update,live:false,tests:activity.update.tests?{...activity.update.tests,live:false}:undefined}:undefined,reviewers:activity.reviewers?.map(row=>({...row,live:false}))};renderWork(stale);teams.setReviewers(stale)}
-    if(!options.agentsOnly){if(runs.status==='fulfilled')paint(lastRuns);else {message.textContent='Не удалось обновить ходы. Уже прочитанные записи сохранены.';currentMessage.textContent='Не удалось проверить текущий ход. Показаны последние прочитанные данные.';}}
+    if(!options.agentsOnly){if(runs.status==='fulfilled')paint(lastRuns);else {message.textContent=uiText('phone.actions.update_failed');currentMessage.textContent=uiText('phone.actions.current_failed');}}
     busy=false;if(active)timer=setTimeout(()=>void refresh(),2500);
   }
   return {

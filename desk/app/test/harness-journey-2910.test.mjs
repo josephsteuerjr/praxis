@@ -19,14 +19,15 @@ try {
   const kit=new URL('../../ui-kit/',import.meta.url);
   const moduleURL=source=>'data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64');
   const text=moduleURL(readFileSync(new URL('text.ts',kit),'utf8'));
+  const {runOriginText}=await import(text);
   const dom=moduleURL(readFileSync(new URL('dom.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
   const lens = moduleURL(readFileSync(new URL('tool-lens.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)));
   const steps=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(text)).replace('"./dom"',JSON.stringify(dom)).replace('"./tool-lens"',JSON.stringify(lens))));
   const source=stripTypeScriptTypes(readFileSync(new URL('window/panel.ts',kit),'utf8'));
   const fragment=source.slice(source.indexOf('function stepRows('),source.indexOf('\nfunction openLink('));
   const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
-  const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','toolSummary','frameStripHTML','terminalLabel','textBox','subject','openLink',
-    fragment+';return stepRows;')(s=>s,()=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,steps.toolSummary,()=>'',steps.terminalLabel,steps.textBox,steps.subject,()=>'');
+  const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','toolSummary','frameStripHTML','terminalLabel','textBox','subject','openLink','runOriginText',
+    fragment+';return stepRows;')(s=>s,()=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,steps.toolSummary,()=>'',steps.terminalLabel,steps.textBox,steps.subject,()=>'',runOriginText);
   const row=render(detail,false).find(row=>row.key==='tool:real-call');
   assert(row,'actual durable call reaches production side-panel renderer');
   assert.match(row.html,/data-trace-tab="execution"/);assert.match(row.html,/Вызов Python/);assert.match(row.html,/agent\.tool_shell\(/,'the Python hand is shown as the call the harness made');assert.match(row.html,/Процесс · exit 0/);

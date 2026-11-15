@@ -107,11 +107,15 @@ class RunDisplay(unittest.TestCase):
         for field, value in (("origin_chat_id", "456"), ("origin_message_ids", [10])):
             with self.subTest(field=field):
                 self.write(authority={**self.authority, field: value})
-                self.assertEqual(readers.run_detail(self.rid)["origin"], {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
+                origin = readers.run_detail(self.rid)["origin"]
+                self.assertEqual({k: origin[k] for k in ("text", "source")}, {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
+                self.assertEqual(origin["display_title"]["kind"], "origin_unavailable")
 
     def test_missing_snapshot_does_not_label_conversation_head_as_trigger(self):
         self.write(); (self.path / "context.md").unlink()
-        self.assertEqual(readers.run_detail(self.rid)["origin"], {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
+        origin = readers.run_detail(self.rid)["origin"]
+        self.assertEqual({k: origin[k] for k in ("text", "source")}, {"text":"Повод: сообщение #9 недоступно","source":"unavailable"})
+        self.assertEqual(origin["display_title"]["message_ids"], ["9"])
 
     def test_completed_turn_preserves_full_input_and_result(self):
         row = {"run_id": self.rid, "chat_id": "123", "in": "Current request " * 80, "out": "Complete response " * 100, "note": "Boundary note " * 30}

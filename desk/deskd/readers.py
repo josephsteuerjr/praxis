@@ -541,6 +541,7 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
                 continue
             terminal = manifest.get("terminal") or {}
             chat_id = context.get("delivery_chat_id") or context.get("origin_chat_id")
+            title_view = _run_title_projection(month / name, manifest) if with_titles else ("", None)
             out.append({
                 "id": name,
                 "created_at": manifest.get("created_at") or "",
@@ -552,7 +553,8 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
                 "chat_id": chat_id,
                 "chat_title": _title_for(chat_id, titles),
                 "forge_task_id": context.get("forge_task_id") or "",
-                "goal_head": _run_title(month / name, manifest) if with_titles else "",
+                "goal_head": title_view[0],
+                "display_title": title_view[1],
                 "operator": operator,
                 "terminal_status": terminal.get("status") or "",
                 "model_profile": context.get("model_profile") or "",
@@ -993,28 +995,50 @@ def _plain_title(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _run_title(path: Path, manifest: dict) -> str:
+def _run_title_projection(path: Path, manifest: dict) -> tuple[str, dict]:
+    """Legacy text plus owned caption parts; each client selects its own UI locale.
+
+    Parts disclose no additional message/name content beyond the old projection.
+    Canonical files and authored strings are never translated or rewritten.
+    """
     context = manifest.get("context") or {}
     principal = str(context.get("principal_id") or "")
     kind = str(context.get("kind") or "")
+    def recipe(variant: str, **values) -> dict:
+        return {"schema": "helene.run-title.v1", "kind": variant, **values}
     if _operator(context):
-        name = _plain_title(principal.partition(":")[2]) or "оператор"
-        return f"Проверка оператора ({name})"
+        name = _plain_title(principal.partition(":")[2])
+        return f"Проверка оператора ({name or 'оператор'})", recipe("operator", name=name[:140])
     if kind != "chat_turn" or principal == "praxis:self":
-        return {"wake": "Пробуждение", "task_window": "Работа над задачей",
-                "chat_turn": "Собственное событие"}.get(kind, kind or "Событие агента")
+        legacy = {"wake": "Пробуждение", "task_window": "Работа над задачей",
+                  "chat_turn": "Собственное событие"}.get(kind, kind or "Событие агента")
+        return legacy, recipe("event", event=kind[:140])
     origin = _run_origin(path, manifest)
     if origin["source"] != "snapshot":
         ids = context.get("origin_message_ids") or []
-        return ("Повод: сообщение " + ", ".join("#" + str(v) for v in ids) + " недоступно"
-                if ids else "Повод: сообщение не записано")
+        legacy = ("Повод: сообщение " + ", ".join("#" + str(v) for v in ids) + " недоступно"
+                  if ids else "Повод: сообщение не записано")
+        return legacy, recipe("origin_unavailable", message_ids=[str(v) for v in ids])
     words = _run_words(path.name)
     author = _plain_title(re.sub(r"\s*\(@[^)]*\)\s*$", "", words.get("who", "")))
     if not author:
-        author = _plain_title(_room_titles().get(principal, "")) or ("Участник #" + principal if principal else "Автор")
+        author = _plain_title(_room_titles().get(principal, ""))
+    author_kind = "name" if author else "participant" if principal else "author"
+    author_value = author or principal
+    legacy_author = author or ("Участник #" + principal if principal else "Автор")
     text = _plain_title(origin["text"])
     first = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
-    return f"{author}: {first}"[:140]
+    legacy = f"{legacy_author}: {first}"
+    # Preserve the old 140-codepoint exposure, including its fallback author prefix.
+    author_budget = 140 if author_kind == "name" else max(0, 140 - len("Участник #"))
+    return legacy[:140], recipe("conversation", author_kind=author_kind,
+        author=author_value[:author_budget], text=first[:max(0, 140 - len(legacy_author) - 2)],
+        truncated=len(legacy) > 140)
+
+
+def _run_title(path: Path, manifest: dict) -> str:
+    """Retain legacy API text; current UI renders the owned projection parts."""
+    return _run_title_projection(path, manifest)[0]
 
 
 @lru_cache(maxsize=512)
@@ -1260,7 +1284,8 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     words = _run_words(run_id)
     origin = _run_origin(path, manifest)
     if context.get("kind") == "chat_turn" and origin["source"] == "unknown":
-        origin = {"text": _run_title(path, manifest), "source": "unavailable"}
+        title_view = _run_title_projection(path, manifest)
+        origin = {"text": title_view[0], "source": "unavailable", "display_title": title_view[1]}
     if context.get("kind") != "chat_turn" and origin["source"] == "unknown":
         origin = {"text": str(context.get("goal") or ""), "source": "task_goal"}
     return {

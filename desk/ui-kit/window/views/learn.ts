@@ -32,6 +32,7 @@ import { voiceHelp } from "../voice-preferences";
 import { cfg } from "../api";
 import { api } from "../api";
 import { esc } from "../lib";
+import { runTitle } from "../../text";
 import { LOCAL_AGENT, S, foreignHarness, type Run, type View } from "../state";
 import { isMacPlatform } from "../../platform";
 import { copyText } from "../../dom";
@@ -500,7 +501,7 @@ async function fillDay(root: HTMLElement): Promise<void> {
         // В издании ход по будильнику — обычный chat_turn: отличить его в списке нечем, и
         // акцентная точка здесь была бы обещанием, которого окно не держит (ревью 26.09, W4 S8).
         const wake = !LOCAL_AGENT && r.kind === "wake";
-        const label = `${hhmm(at)} — ${wake ? uiText("ui.ui.kit.window.views.learn.0f3c3b6b95") : uiText("ui.ui.kit.window.views.learn.a4beab58fa")}${r.goal_head ? ": " + r.goal_head.slice(0, 90) : ""}`;
+        const label = `${hhmm(at)} — ${wake ? uiText("ui.ui.kit.window.views.learn.0f3c3b6b95") : uiText("ui.ui.kit.window.views.learn.a4beab58fa")}${runTitle(r) ? ": " + runTitle(r).slice(0, 90) : ""}`;
         return `<span class="lrn-day-dot${wake ? " is-wake" : ""}" style="left:${dayFraction(at) * 100}%" title="${esc(label)}"></span>`;
       })
       .join("");

@@ -12,7 +12,7 @@ import { t as uiText } from "../lang/lang";
 // отдаёт (КОНТРАКТ-B→A §4); на 403 честно говорит «телефону не отдаётся».
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
-import { esc, fmtDay, fmtTime, isToday, md } from "./text";
+import { esc, fmtDay, fmtTime, isToday, md, runTitle } from "./text";
 import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 import { RecentMap } from "./recent-map";
@@ -79,6 +79,7 @@ export interface Run {
   chat_id?: string | number | null;
   chat_title?: string;
   goal_head?: string;
+  display_title?: unknown;
   created_at?: string;
 }
 
@@ -373,8 +374,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   function runLabel(r: Run): string {
-    const w = words.get(r.id);
-    const text = clean(w?.out || "") || noteLabel(w?.note || "") || goalLabel(r.goal_head || "");
+    const text = runTitle(r);
     return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
   }
 

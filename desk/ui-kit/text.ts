@@ -7,6 +7,51 @@ export const esc = (s: unknown): string =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
   );
 
+const titleRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+const titleString = (value: unknown): string => typeof value === "string" ? value : "";
+const titlePoints = (value: string) => Array.from(value.slice(0, 280));
+
+/** Render only producer-owned parts. Authored text equal to a caption stays literal. */
+function titleRecipe(value: unknown): string {
+  const r = titleRecord(value);
+  if (!r || r.schema !== "helene.run-title.v1") return "";
+  let text = "";
+  if (r.kind === "operator") {
+    const name = titleString(r.name);
+    text = name ? uiText("run.title.operator", {name}) : uiText("run.title.operator_short");
+  } else if (r.kind === "event") {
+    const kind = titleString(r.event);
+    text = kind === "wake" ? uiText("run.title.wake")
+      : kind === "task_window" ? uiText("run.title.task")
+      : kind === "chat_turn" ? uiText("run.title.self_event")
+      : kind || uiText("run.title.agent_event");
+  } else if (r.kind === "origin_unavailable") {
+    if (!Array.isArray(r.message_ids) || r.message_ids.some(v => typeof v !== "string")) return "";
+    const ids = r.message_ids.map(v => "#" + v).join(", ");
+    text = ids ? uiText("run.title.missing_messages", {ids}) : uiText("run.title.missing_trigger");
+  } else if (r.kind === "conversation") {
+    if (!["name", "participant", "author"].includes(String(r.author_kind))) return "";
+    const value = titleString(r.author), body = titleString(r.text);
+    const author = r.author_kind === "name" ? value
+      : r.author_kind === "participant" ? uiText("run.title.participant", {id: value}) : uiText("run.title.author");
+    text = body ? uiText("run.title.conversation", {author, text: body}) : author;
+  } else return "";
+  const points = titlePoints(text);
+  return r.truncated || points.length > 140 ? points.slice(0,139).join("") + "…" : text;
+}
+
+/** A legacy backend without ownership metadata keeps its original string. */
+export function runTitle(value: unknown): string {
+  const r = titleRecord(value);
+  return r ? titleRecipe(r.display_title) || titleString(r.goal_head) : "";
+}
+
+export function runOriginText(value: unknown): string {
+  const r = titleRecord(value);
+  return r ? titleRecipe(r.display_title) || titleString(r.text) : "";
+}
+
 export function fmtTime(iso?: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);

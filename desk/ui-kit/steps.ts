@@ -1,7 +1,7 @@
 import { t as uiText, locale } from "../lang/lang";
 // Шаги одного прогона агента — одна разметка для окна (панель хода, урок на
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
-import { esc, fmtK, md } from "./text";
+import { esc, fmtK, md, runOriginText } from "./text";
 import { copyText } from "./dom";
 import { lensHTML, lensState, toolTarget, type ToolLens } from "./tool-lens";
 
@@ -20,7 +20,7 @@ const LEGACY_WINDOW_KEY = "pult";
 
 export interface RunDetail {
   id?: string;
-  origin?: { text: string; source: string };
+  origin?: { text: string; source: string; display_title?: unknown };
   outcome?: { text: string; note: string };
   manifest?: {
     status?: string;
@@ -553,7 +553,7 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       `<div class="ev-step ${t.failed ? "action-failed" : ""}"><b class="action-title">${esc(t.label)}</b>${details("terminal", [[uiText("ui.ui.kit.steps.442e7ad547"), term.reason || ""]])}${lesson("terminal")}</div>`,
     );
   }
-  const origin = readable(d.origin?.text || "", uiText("ui.ui.kit.steps.454699fd11"), "origin", d) || (d.origin?.source === "unknown" ? uiText("ui.ui.kit.steps.5b70d80713") : "");
+  const origin = readable(runOriginText(d.origin), uiText("ui.ui.kit.steps.454699fd11"), "origin", d) || (d.origin?.source === "unknown" ? uiText("ui.ui.kit.steps.5b70d80713") : "");
   const outcome = readable(d.outcome?.text || d.outcome?.note || "", uiText("ui.ui.kit.steps.4706e4a4a3"), "outcome");
   let actions = steps.join("") || `<div class="muted">${live ? uiText("ui.ui.kit.steps.60af385604") : uiText("ui.ui.kit.steps.28e6d08b30")}</div>`;
   if (opts.limit && steps.length > opts.limit) {
