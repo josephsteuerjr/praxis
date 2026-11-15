@@ -5,7 +5,10 @@ import {stripTypeScriptTypes} from 'node:module';
 const {t,setLocale}=await import(new URL('../../lang/lang.ts',import.meta.url));
 const contract=JSON.parse(readFileSync(new URL('../../ui-kit/contract.json',import.meta.url),'utf8'));
 function load(file,returned,extra={}){const source=readFileSync(new URL('../src/'+file,import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');return new Function('uiText',...Object.keys(extra),stripTypeScriptTypes(source).replace(/export /g,'')+';return '+returned+';')(t,...Object.values(extra));}
-const computer=load('computer.ts','{liveLine,TCC_ROWS,TCC_NOTE}',{contract,fmtTimeSec:value=>'AUTHORED timestamp '+value});
+const machineSource=readFileSync(new URL('../../ui-kit/machine-status.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+const machineFields=JSON.parse(readFileSync(new URL('../../resources/machine-display.json',import.meta.url),'utf8'));
+const {machineCaption}=new Function('fields','uiText',stripTypeScriptTypes(machineSource).replace(/export /g,'')+';return {machineCaption};')(machineFields,t);
+const computer=load('computer.ts','{liveLine,TCC_ROWS,TCC_NOTE}',{contract,machineCaption,fmtTimeSec:value=>'AUTHORED timestamp '+value});
 const permissions=load('remote-computer.ts','permissions');
 const extension=load('extensionscard.ts','{adaptNote,when}',{locale:()=>current});
 let current='ru';
@@ -22,6 +25,8 @@ for(const lang of ['ru','en','fr','zh']){
  assert.equal(unverified.ok,null);assert.equal(unavailable.ok,false);assert.equal(known.ok,true);
  assert.ok(unavailable.text.includes('AUTHORED hint 日本語'));assert.ok(known.text.includes('6060'));assert.ok(known.text.includes('41'));assert.ok(known.text.includes('AUTHORED token'));
  assert.equal(computer.liveLine({enabled:true,connected:false,reason:'AUTHORED error 日本語'},true).text,'AUTHORED error 日本語');
+ const display_reason={schema:'helene.machine-display.v1',key:'body.remote_unconfirmed',values:{}};
+ assert.equal(computer.liveLine({enabled:true,connected:false,reason:'RAW диагностическое',display_reason},true).text,t('machine.body.remote_unconfirmed'));
  const labels=permissions();assert.deepEqual(labels.map(row=>row[0]),['computer.read','computer.apps','computer.files','computer.process']);
  const note=extension.adaptNote(row,{api:'helene.ext/1',helene:'fixture'},undefined);
  for(const value of ['AUTHORED расширение 日本語','C:/AUTHORED_日本語','<script>inert</script>','helene.ext/0','helene.ext/1','extension.json'])assert.ok(note.includes(value));

@@ -26,6 +26,7 @@
 Дерево данных — из PRAXIS_DESK_TREE (кладёт оболочка) или из `tree` конфига.
 """
 from __future__ import annotations
+from localharness import machine_words
 
 import argparse
 import contextlib
@@ -2997,7 +2998,7 @@ def _sandbox_state() -> dict:
     except Exception:
         state = {"enabled": False, "container": False, "reason": "модуль недоступен",
                  "windows": "окна: спросить не у кого — модуль ограды не загрузился",
-                 "hands": []}
+                 "hands": [],"display_reason":machine_words.make("fence.unavailable"),"display_windows":machine_words.make("fence.body_unknown")}
     if _mode:
         state["mode"] = _mode.get("name")
         state["mode_title"] = _mode.get("title")

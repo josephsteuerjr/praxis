@@ -121,6 +121,7 @@ export interface ComputerState {
 /** Снимок харнесса о теле — `memory/.state/body.json` (localharness/body.py).
  *  Только то, что он прислал; пустой объект — снимка ещё нет. */
 export interface ComputerLive {
+  display_reason?: unknown;
   console?: boolean | null;
   session?: { kind?: string };
   checked_at?: string;

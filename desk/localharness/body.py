@@ -63,6 +63,7 @@ UI Automation); на darwin оно правится подстрочными з�
 называет причину отказа и говорит про тело, которое ещё не подключилось.
 """
 from __future__ import annotations
+from localharness import machine_words
 
 import atexit
 import ctypes
@@ -182,7 +183,7 @@ STATE: dict = {
     "identity": {},
     "checked_at": "",
     "logs": [],
-}
+ 'display_reason': machine_words.make('body.initial')}
 if ASKS_TCC:
     # Разрешения системы — из `desktop.status` тела (`tcc`, `hints`, `platform`);
     # None/пусто — ещё не спрашивали или тело их не отдаёт. На Windows этих
@@ -629,7 +630,7 @@ class Body:
         if pair is None:
             STATE.update({"available": False,
                           "reason": f"в поставке нет тела: рядом с программой не найдены "
-                                    f"{BRIDGE_EXE} и {BODY_EXE}"})
+                                    f"{BRIDGE_EXE} и {BODY_EXE}", 'display_reason': machine_words.make('body.absent',bridge=BRIDGE_EXE,body=BODY_EXE)})
             log.warning("тело: %s", STATE["reason"])
             return False
         bridge_exe, body_exe = pair
@@ -646,11 +647,13 @@ class Body:
                     (python_reads and not read_script.is_file()) or
                     (python_fs and not fs_script.is_file())):
                 STATE["reason"] = "Python CU executor is missing from this installation"
+                STATE['display_reason'] = machine_words.make('body.executor')
                 return False
         chosen = pick_port(port(self.cfg))
         if chosen is None:
             STATE["reason"] = (f"порты {port(self.cfg)}…{port(self.cfg) + PORT_SPAN} заняты — "
                                f"мосту негде слушать; смени computer.port в helene.json")
+            STATE['display_reason'] = machine_words.make('body.ports',first=port(self.cfg),last=port(self.cfg)+PORT_SPAN)
             log.warning("тело: %s", STATE["reason"])
             return False
         if chosen != port(self.cfg):
@@ -711,7 +714,7 @@ class Body:
                       "reason": (f"мост 127.0.0.1:{self.port}; тело подключится, когда откроется "
                                  f"окно Helene — движок поднят службой, и рабочего стола у него нет"
                                  if self.service else
-                                 f"мост 127.0.0.1:{self.port}, тело подключается")})
+                                 f"мост 127.0.0.1:{self.port}, тело подключается"), 'display_reason': machine_words.make('body.service_wait' if self.service else 'body.connecting',port=self.port)})
         try:
             for child in self.children:
                 child.spawn(self.job)
@@ -804,6 +807,7 @@ class Body:
                                     "лог %s", child.name, code, pause, child.log_path)
                         STATE["connected"] = None
                         STATE["reason"] = f"{child.name} упал (код {code}), перезапуск"
+                        STATE['display_reason'] = machine_words.make('body.child_exit',child=machine_words.make('body.bridge_name' if child is self.children[0] else 'body.body_name'),code=code if code is not None else '—')
                         continue
                     if self.stopping.is_set():return
                     if now >= child.retry_at:
@@ -840,6 +844,7 @@ class Body:
             STATE["connected"] = True
             STATE["reason"] = (f"тело живо: мост 127.0.0.1:{self.port}, сессия "
                                f"{identity.get('session_id')}, {identity.get('kind')}")
+            STATE['display_reason'] = machine_words.make('body.connected',port=self.port,session=str(identity.get('session_id')),kind=str(identity.get('kind')))
             if ASKS_TCC:
                 self.probe_desktop(timeout=timeout)
         else:
@@ -848,6 +853,7 @@ class Body:
             bridge_alive = self.children[0].alive() if self.children else False
             STATE["reason"] = ("мост не отвечает" if not bridge_alive else
                                "мост есть, тело ещё не подключилось") + f" ({why})"
+            STATE['display_reason'] = machine_words.make('body.body_wait' if bridge_alive else 'body.bridge_down',detail=str(result.get('error') or result.get('code')) if result.get('error') or result.get('code') else machine_words.make('body.no_response'))
         return ok
 
     def probe_desktop(self, *, timeout: float = 4.0) -> dict:
@@ -907,7 +913,7 @@ class Body:
         if failures:
             raise RuntimeError('Body child stop unconfirmed: '+'; '.join(failures))
         STATE.update({"connected": None, "bridge_pid": 0, "body_pid": 0,
-                      "reason": "остановлено вместе с движком"})
+                      "reason": "остановлено вместе с движком", 'display_reason': machine_words.make('body.stopped')})
         try:
             self._write_state()
         except Exception:
@@ -1103,7 +1109,7 @@ class RemoteBody:
             if not row or not isinstance(selected, str) or not re.fullmatch(r'[a-f0-9]{32}', selected):
                 _TOKENS['device'] = ''
                 STATE.update(enabled=False, connected=False, scopes=[], device='', remote=True,
-                             platform='windows', reason='Владелец ещё не выбрал Windows-компьютер')
+                             platform='windows', reason='Владелец ещё не выбрал Windows-компьютер', display_reason=machine_words.make('body.remote_unselected'))
                 return False
             actual = row.get('identity') or {}
             selected_scopes = row.get('scopes') or []
@@ -1113,12 +1119,12 @@ class RemoteBody:
             STATE.update(enabled=True, available=True, remote=True, device=selected, scopes=effective,
                          platform='windows', remote_name=row.get('name'), connected=bool(row.get('connected')),
                          reason=('Windows-компьютер подключён' if row.get('connected') else 'Выбранный Windows-компьютер не в сети'),
-                         checked_at=_now())
+                         checked_at=_now(), display_reason=machine_words.make('body.remote_connected' if row.get('connected') else 'body.remote_offline'))
             return True
         except Exception as error:
             _TOKENS['device'] = ''
             STATE.update(enabled=False, connected=False, scopes=[], remote=True, platform='windows',
-                         reason='Канал удалённого компьютера недоступен (' + type(error).__name__ + ')')
+                         reason='Канал удалённого компьютера недоступен (' + type(error).__name__ + ')', display_reason=machine_words.make('body.remote_unavailable',detail=type(error).__name__))
             return False
         finally:
             self.last_metadata = time.monotonic()
@@ -1138,7 +1144,7 @@ class RemoteBody:
         if result.get('ok'):
             STATE['identity'] = result.get('result') or result
             return True
-        STATE.update(connected=False, reason='Windows-тело не подтвердило связь')
+        STATE.update(connected=False, reason='Windows-тело не подтвердило связь', display_reason=machine_words.make('body.remote_unconfirmed'))
         return False
 
     def watch(self):
@@ -1149,7 +1155,7 @@ class RemoteBody:
     def stop(self):
         self.stopping.set()
         _TOKENS.clear()
-        STATE.update(connected=False, reason='Серверный контроллер остановлен')
+        STATE.update(connected=False, reason='Серверный контроллер остановлен', display_reason=machine_words.make('body.remote_stopped'))
 
 
 def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | RemoteBody | None":
@@ -1167,7 +1173,7 @@ def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | RemoteBody | No
         # тревожим — это состав платформы, а не сбой. Снимок не пишем: секции
         # тела для окна нет вовсе, и слова о платформе на экран не едут.
         STATE.update({"available": False, "reason": "тела в этой сборке нет",
-                      "connected": None, "bridge_pid": 0, "body_pid": 0})
+                      "connected": None, "bridge_pid": 0, "body_pid": 0, 'display_reason': machine_words.make('body.platform_absent')})
         log.info("тело: в этой сборке его нет — тул computer откажет словами")
         return None
     pair = _exe_pair(Path(install_root))
@@ -1176,12 +1182,14 @@ def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | RemoteBody | No
         STATE["reason"] = ("выключено владельцем: Настройки → «Управление компьютером»"
                            if pair is not None else
                            f"выключено; и тела в поставке нет ({BRIDGE_EXE}, {BODY_EXE})")
+        STATE['display_reason'] = machine_words.make('body.disabled') if pair is not None else machine_words.make('body.disabled_absent',detail=machine_words.make('body.absent',bridge=BRIDGE_EXE,body=BODY_EXE))
         log.info("тело: %s", STATE["reason"])
         _write_static_state(Path(tree))
         return None
     if not STATE["scopes"]:
         STATE["reason"] = ("включено, но ни одного права не выдано — рука откажет; "
                            "галочки в Настройках → «Управление компьютером»")
+        STATE['display_reason'] = machine_words.make('body.no_scopes')
         log.warning("тело: %s", STATE["reason"])
     body = Body(Path(install_root), Path(tree), cfg)
     if not body.start():
@@ -1231,6 +1239,25 @@ def windows_truth() -> str:
     rights = ", ".join(STATE.get("scopes") or []) or "ни одного права"
     return (f"окна: тело поднято кодом агента снаружи ограды (мост 127.0.0.1:{STATE.get('port')}, "
             f"{STATE.get('reason')}); права владельца: {rights}{tcc_words()}")
+
+
+def windows_display():
+    """A language-independent projection of the same live facts as windows_truth."""
+    reason=STATE.get('display_reason') or str(STATE.get('reason') or '')
+    rights=', '.join(STATE.get('scopes') or []) or machine_words.make('body.rights_none')
+    if STATE.get('remote'):
+        return machine_words.make('body.remote_summary',name=str(STATE.get('remote_name') or STATE.get('device') or '—'),reason=reason,rights=rights)
+    if not HAS_BODY:return ''
+    if not STATE.get('enabled'):
+        return machine_words.make('body.disabled') if STATE.get('available') else machine_words.make('body.disabled_absent',detail=machine_words.make('body.absent',bridge=BRIDGE_EXE,body=BODY_EXE))
+    if not STATE.get('available'):return machine_words.make('body.absent',bridge=BRIDGE_EXE,body=BODY_EXE)
+    missing=[]
+    tcc=STATE.get('tcc')
+    if isinstance(tcc,dict):
+        for key,word in [('screen_recording','body.screen'),('accessibility','body.accessibility')]:
+            if not tcc.get(key):missing.append(machine_words.make(word))
+    return machine_words.make('body.local_summary',port=STATE.get('port') or '—',reason=reason,rights=rights,
+        tcc=machine_words.make('body.tcc',missing=machine_words.join(*missing)) if missing else '')
 
 
 def tcc_words() -> str:
@@ -1609,14 +1636,14 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         if not STATE.get("available") or _BODY is None:
             logs = ", ".join(STATE.get("logs") or []) or _body_word(agent_mod,"no_logs","нет")
             return _body_refusal(agent_mod,"not_started",
-                "Опция включена, но тело не поднялось: {reason}. Логи: {logs}",reason=STATE.get('reason'),logs=logs)
+                "Опция включена, но тело не поднялось: {reason}. Логи: {logs}",reason=machine_words.frame(agent_mod,STATE.get('display_reason'),STATE.get('reason')),logs=logs)
         if STATE.get("connected") is not True and action != "status":
             # Быстрая проба перед отказом: тело подключается секунды, а сторож
             # ходит раз в 3–15 с.
             if not _BODY.probe(timeout=3.0):
                 return _body_refusal(agent_mod,"not_connected",
                     "Тело ещё не подключилось к мосту: {reason}. Мост pid {bridge}, тело pid {body}; логи: {logs}. Повтори через несколько секунд или спроси `action=status`.",
-                    reason=STATE.get('reason'),bridge=STATE.get('bridge_pid') or '—',
+                    reason=machine_words.frame(agent_mod,STATE.get('display_reason'),STATE.get('reason')),bridge=STATE.get('bridge_pid') or '—',
                     body=STATE.get('body_pid') or '—',logs=", ".join(STATE.get("logs") or []))
         out = original(*args, **kwargs)
         if action == "status" and isinstance(out, str) and sys.platform == "win32":

@@ -1,0 +1,113 @@
+{
+  "join": [
+    "parts"
+  ],
+  "body.initial": [],
+  "body.absent": [
+    "body",
+    "bridge"
+  ],
+  "body.executor": [],
+  "body.ports": [
+    "first",
+    "last"
+  ],
+  "body.service_wait": [
+    "port"
+  ],
+  "body.connecting": [
+    "port"
+  ],
+  "body.bridge_name": [],
+  "body.body_name": [],
+  "body.child_exit": [
+    "child",
+    "code"
+  ],
+  "body.connected": [
+    "kind",
+    "port",
+    "session"
+  ],
+  "body.bridge_down": [
+    "detail"
+  ],
+  "body.body_wait": [
+    "detail"
+  ],
+  "body.no_response": [],
+  "body.stopped": [],
+  "body.remote_unselected": [],
+  "body.remote_connected": [],
+  "body.remote_offline": [],
+  "body.remote_unavailable": [
+    "detail"
+  ],
+  "body.remote_unconfirmed": [],
+  "body.remote_stopped": [],
+  "body.platform_absent": [],
+  "body.disabled": [],
+  "body.disabled_absent": [
+    "detail"
+  ],
+  "body.no_scopes": [],
+  "body.rights_none": [],
+  "body.remote_summary": [
+    "name",
+    "reason",
+    "rights"
+  ],
+  "body.local_summary": [
+    "port",
+    "reason",
+    "rights",
+    "tcc"
+  ],
+  "body.tcc": [
+    "missing"
+  ],
+  "body.screen": [],
+  "body.accessibility": [],
+  "fence.disabled": [],
+  "fence.open": [],
+  "fence.active": [
+    "mechanism",
+    "network"
+  ],
+  "fence.yes": [],
+  "fence.no": [],
+  "fence.launch_failed": [
+    "detail"
+  ],
+  "fence.command_failed": [
+    "detail"
+  ],
+  "fence.unavailable": [],
+  "fence.body_unknown": [],
+  "touch.commands": [],
+  "touch.files_commands": [],
+  "touch.tasks": [],
+  "touch.files": [],
+  "touch.computer": [],
+  "touch.host": [],
+  "why.path": [],
+  "why.container": [
+    "mechanism"
+  ],
+  "why.mcp": [],
+  "why.computer": [],
+  "why.host": [],
+  "why.forge": [],
+  "why.bare": [
+    "modules"
+  ],
+  "why.unloaded": [
+    "modules"
+  ],
+  "why.outside": [],
+  "why.unknown": [],
+  "caveat.proposal": [],
+  "caveat.python": [],
+  "caveat.edit": [],
+  "caveat.files": []
+}

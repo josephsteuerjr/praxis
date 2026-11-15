@@ -14,6 +14,7 @@ import type { AgentState } from "../state";
 import type { FoldState } from "../../memory-fold";
 import { inspectionHTML } from "./inspection-status";
 import { computerOverview } from "./system-status";
+import { machineCaption } from "../../machine-status";
 
 /** Запись леджера ретенции (GET /api/retention). */
 interface RetentionEntry {
@@ -153,6 +154,8 @@ interface HandFence {
   touches: string;
   fence: "path" | "container" | "outside" | "unknown";
   why: string;
+  display_touches?: unknown;
+  display_why?: unknown;
 }
 
 interface Anatomy {
@@ -171,6 +174,7 @@ interface Anatomy {
   // чего в ограде нет. Пусто = старый харнесс рядом с новым окном.
   sandbox?: {
     enabled?: boolean; container?: boolean; reason?: string; windows?: string;
+    display_reason?: unknown; display_windows?: unknown;
     hands?: HandFence[];
   };
   // Тело руки `computer` (localharness/body.py): включено ли владельцем, есть
@@ -247,7 +251,7 @@ function fenceHTML(hands: HandFence[] | undefined, sandboxOn: boolean): string {
   const outside = hands.filter((h) => h.fence === "outside");
   const stale = hands.filter((h) => h.fence === "unknown");
   const row = (h: HandFence) =>
-    `<tr><td><code>${esc(h.name)}</code></td><td class="muted">${esc(h.touches)}</td><td class="muted">${esc(h.why)}</td></tr>`;
+    `<tr><td><code>${esc(h.name)}</code></td><td class="muted">${esc(machineCaption(h,'touches'))}</td><td class="muted">${esc(machineCaption(h,'why'))}</td></tr>`;
   const table = (rows: HandFence[]) =>
     uiText("ui.ui.kit.window.views.anatomy.ca47b19f9a", {p0: String(rows.map(row).join(""))});
   return uiText("ui.ui.kit.window.views.anatomy.7160c65a6e", {p0: String(inside.length), p1: String(outside.length), p2: String(inside.length ? uiText("ui.ui.kit.window.views.anatomy.a52bcb4808", {p0: String(table(inside))}) : ""), p3: String(outside.length ? uiText("ui.ui.kit.window.views.anatomy.a5ab2e861e", {p0: String(table(outside))}) : ""), p4: String(stale.length ? uiText("ui.ui.kit.window.views.anatomy.d9e14cd775", {p0: String(stale.map((h) => `<code>${esc(h.name)}</code>`).join(", "))}) : ""), p5: String(sandboxOn ? "" : uiText("ui.ui.kit.window.views.anatomy.e1e31ba56f"))});
@@ -362,7 +366,7 @@ export async function render(container: HTMLElement): Promise<void> {
     ? uiText("ui.ui.kit.window.views.anatomy.cf0988a744", {p0: String(esc(!a.computer.enabled ? uiText("ui.ui.kit.window.views.anatomy.2427553fe6") : !a.computer.available ? uiText("ui.ui.kit.window.views.anatomy.7b484487f2") : a.computer.connected === true ? uiText("ui.ui.kit.window.views.anatomy.701e65cfe0", {p0: String(a.computer.port)}) : a.computer.connected === false ? uiText("ui.ui.kit.window.views.anatomy.c8df8e2991") : uiText("ui.ui.kit.window.views.anatomy.d6f0b5d003"))), p1: String(a.computer.enabled && a.computer.scopes ? uiText("ui.ui.kit.window.views.anatomy.d5ab66e480", {p0: String(esc(a.computer.scopes.join(", ") || uiText("ui.ui.kit.window.views.anatomy.dc9337ff5b")))}) : "")})
     : "";
   const meta = tools.length
-    ? uiText("ui.ui.kit.window.views.anatomy.2419f72576", {p0: String(esc(a.model?.model || "?")), p1: String(modeName), p2: String(tools.length), p3: String(esc(fmtTime(a.written_at))), p4: String(esc((a.transports || []).join(" + "))), p5: String(esc(a.sandbox ? (a.sandbox.container ? uiText("ui.ui.kit.window.views.anatomy.1004c7a083") : a.sandbox.enabled ? uiText("ui.ui.kit.window.views.anatomy.ad8e4e4415") : uiText("ui.ui.kit.window.views.anatomy.36735a542b")) : "?")), p6: String(a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""), p7: String(outsideCount ? uiText("ui.ui.kit.window.views.anatomy.92ca0350d4", {p0: String(outsideCount)}) : ""), p8: String(a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""), p9: String(body), p10: String(esc(a.model?.framework || "?"))})
+    ? uiText("ui.ui.kit.window.views.anatomy.2419f72576", {p0: String(esc(a.model?.model || "?")), p1: String(modeName), p2: String(tools.length), p3: String(esc(fmtTime(a.written_at))), p4: String(esc((a.transports || []).join(" + "))), p5: String(esc(a.sandbox ? (a.sandbox.container ? uiText("ui.ui.kit.window.views.anatomy.1004c7a083") : a.sandbox.enabled ? uiText("ui.ui.kit.window.views.anatomy.ad8e4e4415") : uiText("ui.ui.kit.window.views.anatomy.36735a542b")) : "?")), p6: String(machineCaption(a.sandbox,'reason') ? " · " + esc(machineCaption(a.sandbox,'reason')) : ""), p7: String(outsideCount ? uiText("ui.ui.kit.window.views.anatomy.92ca0350d4", {p0: String(outsideCount)}) : ""), p8: String(machineCaption(a.sandbox,'windows') ? " · " + esc(machineCaption(a.sandbox,'windows')) : ""), p9: String(body), p10: String(esc(a.model?.framework || "?"))})
     : uiText("ui.ui.kit.window.views.anatomy.27c9758de4");
   container.innerHTML = uiText("ui.ui.kit.window.views.anatomy.9193355332", {p0: String(overview), p1: String(meta), p2: String(materials), p3: String(modeBox), p4: String(fenceBox), p5: String(spend), p6: String(intro), p7: String(cutsBox), p8: String(layers), p9: String(tools.length ? uiText("ui.ui.kit.window.views.anatomy.42bd082ad4", {p0: String(tools.length)}) : ""), p10: String(a.skills_index ? uiText("ui.ui.kit.window.views.anatomy.883413271d", {p0: String(md(a.skills_index))}) : uiText("ui.ui.kit.window.views.anatomy.f9d6ae8eb8")), p11: String(Object.keys(a.knobs || {}).length ? uiText("ui.ui.kit.window.views.anatomy.91aa1afded", {p0: String(Object.entries(a.knobs!).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join(""))}) : "")});
   // Управление и журналы — отдельным читателем: он ходит в свои ручки и живёт

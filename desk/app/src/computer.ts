@@ -32,6 +32,7 @@ import contract from "../../ui-kit/contract.json";
 import { button, toggle as switchRow } from "../../ui-kit/dom";
 import type { ComputerLive, ComputerOption, ModeState } from "../../ui-kit/window/mode";
 import { modeMetadata } from '../../ui-kit/window/mode-owned';
+import { machineCaption } from '../../ui-kit/machine-status';
 
 /** Что ЛЕЖИТ в файле — по нему и пишем обратно. */
 export interface StoredComputer {
@@ -96,7 +97,7 @@ export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, ma
     const pending = enabledNow ? uiText("ui.app.src.computer.961a7b4df7") : "";
     return { text: uiText("ui.app.src.computer.b06efdab80", {p0: String(have), p1: String(pending)}), ok: null };
   }
-  if (live.available === false) return { text: uiText("ui.app.src.computer.24a38cbcb5", {p0: String(live.reason || uiText("ui.app.src.computer.11e209b450", {p0: String(bodyNames(mac, " / "))}))}), ok: false };
+  if (live.available === false) return { text: uiText("ui.app.src.computer.24a38cbcb5", {p0: String(machineCaption(live,'reason') || uiText("ui.app.src.computer.11e209b450", {p0: String(bodyNames(mac, " / "))}))}), ok: false };
   if (live.connected === true) {
     if (live.platform === "linux" && live.console === false) {
       return { text: uiText("ui.app.src.computer.b23853f545", {p0: String((live.hints || []).join(' ')), p1: String(at)}), ok: false };
@@ -108,8 +109,8 @@ export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, ma
     const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? uiText("ui.app.src.computer.02e323576f", {p0: String(id.session_id)}) : "", id.integrity].filter(Boolean).join(", ");
     return { text: uiText("ui.app.src.computer.1a24fbb915", {p0: String(live.port || "?"), p1: String(who ? ` (${who})` : ""), p2: String(at)}), ok: true };
   }
-  if (live.connected === false) return { text: `${live.reason || uiText("ui.app.src.computer.a51665ae00")}${at}`, ok: false };
-  return { text: `${live.reason || uiText("ui.app.src.computer.2a323bd1f1")}${at}`, ok: null };
+  if (live.connected === false) return { text: `${machineCaption(live,'reason') || uiText("ui.app.src.computer.a51665ae00")}${at}`, ok: false };
+  return { text: `${machineCaption(live,'reason') || uiText("ui.app.src.computer.2a323bd1f1")}${at}`, ok: null };
 }
 
 /**

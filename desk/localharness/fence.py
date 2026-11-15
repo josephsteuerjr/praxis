@@ -48,6 +48,7 @@
 копились бы вечно, по одному на каждую папку установки.
 """
 from __future__ import annotations
+from localharness import machine_words
 
 import ctypes
 import hashlib
@@ -106,7 +107,7 @@ def windows_truth() -> str:
 
 STATE: dict = {"enabled": False, "container": False, "reason": "выключена", "roots": [],
                "writable_roots": [], "mounts": [], "denied_mounts": [],
-               "mount_requests": [], "windows": WINDOWS_UNKNOWN}
+               "mount_requests": [], "windows": WINDOWS_UNKNOWN, 'display_reason': machine_words.make('fence.disabled')}
 
 
 # --------------------------------------------------------------------------- #
@@ -1544,6 +1545,7 @@ class _SubprocessShim:
             # оставался «shell в AppContainer», хотя команда шла без ограды.
             STATE["container"] = False
             STATE["reason"] = f"контейнер не запустил команду: {exc}; shell без ограды"
+            STATE['display_reason'] = machine_words.make('fence.command_failed',detail=str(exc))
             log.warning("песочница не запустила команду (%s) — выполняю без ограды", exc)
             return self._plain(args, *pargs, **kwargs)
         if timed_out:
@@ -1845,7 +1847,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                   "mode": mode_name,
                   "reason": ("" if enabled else
                              (f"режим «{mode_title}» — ограда не ставится"
-                              if mode_title else "выключена в настройках"))})
+                              if mode_title else "выключена в настройках")), 'display_reason': '' if enabled else machine_words.make('fence.disabled')})
 
     # 1. shell — в контейнер (а шим — всегда, см. его докстринг).
     container = None
@@ -1856,6 +1858,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                 container.prepare()
                 STATE["reason"] = (f"shell в AppContainer {container.sid_text}, "
                                    f"сеть {'есть' if network else 'нет'}")
+                STATE['display_reason'] = machine_words.make('fence.active',mechanism='AppContainer '+container.sid_text,network=machine_words.make('fence.yes' if network else 'fence.no'))
             else:
                 # Ограда на POSIX — тот же контракт, другой механизм: на macOS
                 # seatbelt (`fence_macos`), на Linux bubblewrap (`fence_posix`).
@@ -1870,6 +1873,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                     secrets=secret_paths(install_root, tree))
                 container.prepare()
                 STATE["reason"] = container.describe()
+                STATE['display_reason'] = machine_words.make('fence.active',mechanism=container_word(),network=machine_words.make('fence.yes' if network else 'fence.no'))
                 # Куда пишет shell — в снимок устройства (иначе анатомия говорит
                 # «shell пишет никуда»). На Windows это делает `Container._grant`.
                 roots = getattr(container, "writable_roots", None)
@@ -1880,6 +1884,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
         except Exception as exc:
             container = None
             STATE["reason"] = f"контейнер не поднялся: {exc}; shell без ограды"
+            STATE['display_reason'] = machine_words.make('fence.launch_failed',detail=str(exc))
             log.warning("песочница: %s", STATE["reason"])
     else:
         log.info("песочница: %s", STATE["reason"])
@@ -1922,6 +1927,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
         _open_everything(agent_mod, tree, install_root)
         STATE["reason"] = (STATE["reason"] + "; файловые руки и shell видят всё, "
                            "что доступно учётке владельца, монтирование не нужно")
+        STATE['display_reason'] = machine_words.join(STATE.get('display_reason') or STATE.get('reason') or '',machine_words.make('fence.open'))
     # Рука окон (`computer`) — не наша: её подключает `body.install` ПОСЛЕ ограды,
     # тело живёт снаружи контейнера. Здесь только строка правды в анатомию.
     STATE["windows"] = windows_truth()
@@ -2033,7 +2039,13 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
 
 
 def state() -> dict:
-    return dict(STATE)
+    picture=dict(STATE)
+    try:
+        import body as _body
+        picture['display_windows']=_body.windows_display()
+    except Exception:
+        picture['display_windows']=machine_words.make('fence.body_unknown')
+    return picture
 
 
 # ─── что ограда накрывает, а что нет ────────────────────────────────────────────
@@ -2135,6 +2147,8 @@ HAND_CAVEATS: dict[str, str] = {
 }
 
 
+_DISPLAY_TOUCHES={'shell': 'touch.commands', 'run_command': 'touch.commands', 'python': 'touch.commands', 'project': 'touch.files_commands', 'proposal': 'touch.files_commands', 'coding_run': 'touch.commands', 'coding_process': 'touch.commands', 'coding_agent': 'touch.commands', 'coding_verify': 'touch.commands', 'coding_swarm': 'touch.commands', 'coding_checkpoint': 'touch.commands', 'coding_session': 'touch.files_commands', 'coding_control': 'touch.tasks', 'coding_review': 'touch.files_commands', 'coding_inspect': 'touch.files', 'coding_learn': 'touch.files', 'fs_read': 'touch.files', 'fs_ls': 'touch.files', 'fs_search': 'touch.files', 'code_query': 'touch.files', 'edit': 'touch.files', 'computer': 'touch.computer', 'host_ctl': 'touch.host'}
+
 def hands_report(agent_mod) -> list[dict]:
     """Правда о каждой руке, которая трогает машину: в ограде она или нет.
 
@@ -2172,30 +2186,40 @@ def hands_report(agent_mod) -> list[dict]:
         bare = [m for m in live if not _shim_in(m)]
         if getattr(fn, "_helene_fenced", False):
             fence_kind, why = "path", "проверка пути"
+            display_why=machine_words.make("why.path")
         elif live and not bare:
             if container_up:
                 fence_kind, why = "container", f"команда уходит в {container_word()}"
+                display_why=machine_words.make("why.container",mechanism=container_word())
             else:
                 fence_kind, why = "outside", STATE.get("reason") or "контейнер не поднялся"
+                display_why=STATE.get("display_reason") or why
         elif mcp:
             fence_kind, why = "outside", "Windows MCP работает вне ограды: права дают галочки Управления компьютером"
+            display_why=machine_words.make("why.mcp")
         elif name in OUTSIDE_BY_DESIGN:
             fence_kind, why = "outside", OUTSIDE_BY_DESIGN[name]
+            display_why=machine_words.make("why."+(name if name in ("computer","host_ctl") else "forge").replace("host_ctl","host"))
         elif bare:
             # Называем ИМЕННО тот модуль, который остался снаружи: по общему
             # «не огорожена» нельзя понять, чинится это ручкой в настройках или
             # правкой продукта.
             fence_kind = "outside"
             why = f"команду исполняет {', '.join(bare)} — шима ограды там нет"
+            display_why=machine_words.make("why.bare",modules=", ".join(bare))
         elif modules:
             fence_kind = "outside"
             why = f"модуль {', '.join(modules)} не загружен — исполнять команду нечем"
+            display_why=machine_words.make("why.unloaded",modules=", ".join(modules))
         else:
             fence_kind, why = "outside", "ограда до этой руки не достаёт"
+            display_why=machine_words.make("why.outside")
         caveat = HAND_CAVEATS.get(name)
         if caveat:
             why = f"{why}; {caveat}"
-        rows.append({"name": name, "touches": touches, "fence": fence_kind, "why": why})
+            display_why=machine_words.join(display_why,machine_words.make("caveat."+(name if name in ("proposal","python","edit") else "files")))
+        rows.append({"name": name, "touches": touches, "fence": fence_kind, "why": why,
+                     "display_touches":machine_words.make("touch.computer" if mcp else _DISPLAY_TOUCHES[name]),"display_why":display_why})
     known = set(MACHINE_HANDS)
     try:
         import body as _body_mod
@@ -2211,7 +2235,8 @@ def hands_report(agent_mod) -> list[dict]:
         # Имя, которого в живом наборе рук больше нет. Это наша ложь о
         # несуществующем — говорим о ней вслух, а не вычёркиваем молча.
         rows.append({"name": name, "touches": MACHINE_HANDS[name][0],
-                     "fence": "unknown", "why": "руки с таким именем в наборе нет"})
+                     "fence": "unknown", "why": "руки с таким именем в наборе нет",
+                     "display_touches":machine_words.make(_DISPLAY_TOUCHES[name]),"display_why":machine_words.make("why.unknown")})
     return rows
 
 
