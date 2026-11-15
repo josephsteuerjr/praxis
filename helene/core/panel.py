@@ -17,6 +17,8 @@ git-история с диффами. Всё вычисляется из АКТ�
 from __future__ import annotations
 
 import praxis_time
+import frame_language
+import interface_language
 import ast
 import datetime as _dt
 import hashlib
@@ -904,6 +906,7 @@ def task_cancel(task_id: str) -> dict:
     return {"ok": bool(_tasks.cancel(str(task_id)))}
 
 
+@interface_language.localized
 def rooms_list() -> dict:
     """Раздел «Комнаты» — явный режим, ЧЕЙ он, причина, TTL и disclosure по каждой.
     Источники: allowlist ∪ файлы профилей (мертвецы без allowlist тоже видны).
@@ -947,6 +950,7 @@ def rooms_list() -> dict:
     return {"items": items}
 
 
+@frame_language.pinned
 def room_set(chat_id: str, action: str) -> dict:
     """Кнопки Егора в разделе «Комнаты»: raise (на ступень вверх) | lower | freeze |
     unfreeze (= raise) | disclosure (toggle standard/open).
@@ -963,41 +967,38 @@ def room_set(chat_id: str, action: str) -> dict:
     import rooms as _rooms
     cid = str(chat_id).strip()
     if not cid:
-        return {"error": "нет chat_id"}
+        return {"error": interface_language.text('room.caption.panel_missing')}
     action = (action or "").strip().lower()
     if action in ("raise", "unfreeze"):
         was = _rooms.effective_mode(cid)
         mode = _rooms.owner_raise(cid)
         if mode != was:
-            _journal_panel(f"Егор поднял режим комнаты {cid}: {was} → {mode}")
+            _journal_panel(frame_language.text('room.caption.journal_raised', id=cid, before=was, after=mode))
         return {"ok": True, "mode": mode}
     if action == "lower":
         cur = _rooms.effective_mode(cid)
         nxt = {"normal": "quiet", "observer": "quiet", "quiet": "frozen"}.get(cur)
         if not nxt:
             return {"ok": True, "mode": cur}
-        mode = _rooms.set_mode(cid, nxt, reason="Егор опустил", set_by="owner")
-        _journal_panel(f"Егор опустил режим комнаты {cid}: {cur} → {mode} "
-                       f"(снимется режимом «обычно»)")
+        mode = _rooms.set_mode(cid, nxt, reason=frame_language.text('room.caption.owner_lower'), set_by="owner")
+        _journal_panel(frame_language.text('room.caption.journal_lowered', id=cid, before=cur, after=mode))
         return {"ok": True, "mode": mode}
     if action == "freeze":
         cur = _rooms.effective_mode(cid)
-        mode = _rooms.set_mode(cid, "frozen", reason="Егор заморозил", set_by="owner")
+        mode = _rooms.set_mode(cid, "frozen", reason=frame_language.text('room.caption.owner_freeze'), set_by="owner")
         if mode != cur:
-            _journal_panel(f"Егор заморозил комнату {cid} (было {cur}; снимется само)")
+            _journal_panel(frame_language.text('room.caption.journal_frozen', id=cid, before=cur))
         return {"ok": True, "mode": mode}
     if action == "disclosure":
         nv = "open" if _rooms.disclosure_of(cid) != "open" else "standard"
-        ok, note = _rooms.set_disclosure(cid, nv, set_by="owner")
+        with interface_language.use():
+            ok, note = _rooms.set_disclosure(cid, nv, set_by="owner")
         if not ok:
             return {"error": note}
         _journal_panel(
-            f"Егор переключил раскрытие комнаты {cid}: disclosure {nv}"
-            + (" — здесь к моей визитке идёт проверяемая фактура о себе; возвращаю в "
-               "standard автоматически" if nv == "open"
-               else " — фактура из моей визитки здесь убрана; открыть могу тем же рычагом"))
+            frame_language.text('room.caption.journal_disclosure', id=cid, level=nv))
         return {"ok": True, "disclosure": nv, "set_by": "owner", "note": note}
-    return {"error": f"нет действия {action}"}
+    return {"error": interface_language.text('room.caption.panel_action', action=action)}
 
 
 def server_state() -> dict:

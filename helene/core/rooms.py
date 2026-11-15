@@ -353,16 +353,21 @@ def _normalize_disclosure(value) -> str:
 
 
 _AUTHOR_LABEL = {
-    "praxis": "моё собственное решение",
-    "owner": "Егор так решил",
-    "protocol": "никто этого не выбирал: так вышло при входе в комнату",
-    "unknown": "кто поставил — не записано",
+    "praxis": "room.caption.author_praxis",
+    "owner": "room.caption.author_owner",
+    "protocol": "room.caption.author_protocol",
+    "unknown": "room.caption.author_unknown",
 }
 
 
 def author_label(set_by) -> str:
-    """Человеческая подпись автора — одна на промпт, панель и тул, чтобы не разошлись."""
-    return _AUTHOR_LABEL.get(_normalize_set_by(set_by), _AUTHOR_LABEL["unknown"])
+    """Display authorship without replacing unknown/protocol with the owner."""
+    return frame_language.text(_AUTHOR_LABEL[_normalize_set_by(set_by)])
+
+
+def mode_label(mode: str) -> str:
+    """A display caption; MODE_WORD remains the accepted legacy protocol aliases."""
+    return frame_language.text('telegram.result.mode_' + mode) if mode in MODES else mode
 
 
 def _env_int(name: str, default: int, low: int, high: int) -> int:
@@ -1075,28 +1080,28 @@ def set_own_disclosure(chat_id: str | int, level: str) -> tuple[bool, str]:
     return set_disclosure(chat_id, level, set_by="praxis")
 
 
+@frame_language.pinned
 def set_disclosure(chat_id: str | int, level: str, *,
                    set_by: str = "unknown") -> tuple[bool, str]:
     """Уровень раскрытия комнаты. -> (ok, что сказать)."""
     value = str(level or "").strip().casefold()
     if value not in DISCLOSURE:
-        return (False, f"неизвестный уровень раскрытия «{level}»; бывает: "
-                       + " | ".join(DISCLOSURE))
+        return (False, frame_language.text('room.caption.disclosure_invalid', level=level, choices=' | '.join(DISCLOSURE)))
     author = _normalize_set_by(set_by)
     with _LOCK:
         _profile_update_unlocked(chat_id, disclosure=value,
                                  disclosure_set_by="" if value == "standard" else author)
-    who = "я" if author == "praxis" else author_label(author)
+    who = frame_language.text('room.caption.me') if author == "praxis" else author_label(author)
     if value == "open":
-        return (True, f"Комната {chat_id}: раскрытие open ({who}) — к визитке подмешиваю "
-                      "проверяемую фактуру о себе. Возвращаю обратно тем же рычагом: standard.")
-    return (True, f"Комната {chat_id}: раскрытие standard — рассказываю о себе как везде.")
+        return (True, frame_language.text('room.caption.disclosure_open', id=chat_id, author=who))
+    return (True, frame_language.text('room.caption.disclosure_standard', id=chat_id))
 
 
 def disclosure_of(chat_id: str | int) -> str:
     return profile_read(chat_id)["disclosure"]
 
 
+@frame_language.pinned
 def room_state(chat_id: str | int, now: float | None = None) -> dict:
     """Одна карточка комнаты для тула и панели: режим, ЧЕЙ он, срок, раскрытие.
 
@@ -1109,7 +1114,7 @@ def room_state(chat_id: str | int, now: float | None = None) -> dict:
     return {
         "chat_id": str(chat_id),
         "mode": mode,
-        "mode_word": MODE_WORD.get(mode, mode),
+        "mode_word": mode_label(mode),
         "mode_set_by": d["mode_set_by"],
         "mode_author": author_label(d["mode_set_by"]) if d["mode_set_by"] else "",
         "mode_reason": d["mode_reason"],
@@ -1192,42 +1197,25 @@ def mark_card_sent(card_id: str) -> None:
 
 # --- контекст для промпта (чистая функция от текста файла) -------------------- #
 
+@frame_language.pinned
 def _mode_line(mode: str, reason: str, set_by: str, until: str) -> str:
-    """Mode-строка от первого лица — она знает своё состояние в этой комнате И ЧЬЁ оно.
-
-    Автор называется прямо, включая «никто не выбирал»: раньше `observer` не упоминал
-    автора вовсе, а `quiet` от неопознанного автора читался как «так сложилось» — то есть
-    режим, поставленный протоколом входа, выглядел как чужая воля о ней.
-    """
-    r = f": {reason}" if reason.strip() else ""
-    u = f" (до {until})" if until.strip() else ""
-    who = author_label(set_by) if set_by else ""
-    lift = " Снимается режимом «обычно»."
-    # Автор — в скобках: подпись сама бывает с двоеточием и тире, и через дефис
-    # строка «тише — никто этого не выбирал: так вышло…» читается как каша.
-    a = f" ({who})" if who else ""
-    if mode == "observer":
-        return ("Я в этой комнате пока осматриваюсь (наблюдатель)" + a + r + u +
-                ". Говорю только если обратились прямо ко мне." + lift)
-    if mode == "quiet":
-        return (f"В этом чате я сейчас тише{a or ' (кто поставил — не записано)'}{r}{u}. "
-                "Отвечаю только на прямые обращения, инициативу придерживаю." + lift)
-    return ""
+    if mode not in ('observer', 'quiet'):
+        return ''
+    r = f': {reason}' if reason.strip() else ''
+    u = frame_language.text('room.caption.until', until=until) if until.strip() else ''
+    who = author_label(set_by) if set_by else ''
+    a = f' ({who})' if who else ''
+    if mode == 'quiet' and not a:
+        a = f' ({author_label("unknown")})'
+    return frame_language.text('room.caption.mode_' + mode, author=a, reason=r, until=u)
 
 
+@frame_language.pinned
 def _disclosure_line(level: str, set_by: str) -> str:
-    """Раскрытие меняет ЕЁ голос — значит, она обязана знать о нём и чьё оно.
-
-    До 28.07 `disclosure` был рычагом только Егора, подмешивал фактуру в её визитку и
-    не был назван ни в манифесте, ни в списке возможностей: её голос настраивали, а ей
-    не говорили. Теперь состояние стоит в её же блоке комнаты.
-    """
-    if level != "open":
-        return ""
-    who = author_label(set_by) if set_by else ""
-    return ("Здесь раскрытие open" + (f" ({who})" if who else "") +
-            ": о себе рассказываю с проверяемой фактурой, больше обычного. "
-            "Это мой рычаг — возвращаю в standard.")
+    if level != 'open':
+        return ''
+    who = author_label(set_by) if set_by else ''
+    return frame_language.text('room.caption.disclosure_line', author=f' ({who})' if who else '')
 
 
 def context_from_text(raw: str) -> str:

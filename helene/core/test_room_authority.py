@@ -141,13 +141,13 @@ class TestHonestAuthorship(RoomsHarness):
         """Режим от протокола входа не должен читаться как воля Егора."""
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: protocol\ndisclosure: standard\n")
-        self.assertIn("никто этого не выбирал", line)
+        self.assertIn("никто не выбирал", line)
         self.assertNotIn("Егор", line)
 
-    def test_the_room_line_names_yegor_when_it_really_was_him(self):
+    def test_the_room_line_names_the_owner_when_it_was_their_choice(self):
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: owner\ndisclosure: standard\n")
-        self.assertIn("Егор так решил", line)
+        self.assertIn("решение владельца", line)
 
 
 class TestHerModeLever(RoomsHarness):
@@ -261,9 +261,10 @@ class TestHerDisclosureLever(RoomsHarness):
     def test_she_reads_the_lever_that_changes_her_voice(self):
         opened = rooms.context_from_text(
             "# Комната\n\nmode: normal\ndisclosure: open\ndisclosure_set_by: owner\n")
-        self.assertIn("раскрытие open", opened)
-        self.assertIn("Егор так решил", opened, "чей это выбор — тоже её знание")
-        self.assertIn("мой рычаг", opened, "она обязана знать, что вправе вернуть standard")
+        self.assertIn("disclosure=open", opened)
+        self.assertIn("решение владельца", opened, "чей это выбор — тоже её знание")
+        self.assertIn("Вернуть обычное раскрытие можно через standard", opened,
+                      "она обязана знать, что вправе вернуть standard")
 
         plain = rooms.context_from_text("# Комната\n\nmode: normal\ndisclosure: standard\n")
         self.assertNotIn("раскрытие", plain, "умолчание в промпт не лезет")
