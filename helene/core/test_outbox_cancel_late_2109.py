@@ -213,7 +213,7 @@ class LateAcceptanceReturnsToHer(_RunScaffold):
         self.assertTrue(ok)
         journal.assert_called_once()
         text = journal.call_args.args[0]
-        self.assertIn("поздняя приёмка", text)
+        self.assertIn("Позднее подтверждение", text)
         self.assertIn("archive-part.txt", text)
         self.assertIn("4444", text)
         self.assertEqual(journal.call_args.kwargs.get("salience"), 2)
@@ -259,7 +259,7 @@ class LateAcceptanceReturnsToHer(_RunScaffold):
         with mock.patch.object(agent, "tool_journal", journal):
             asyncio.run(runner._reconcile_direct_outbox_entry(accepted))
         journal.assert_called_once()
-        self.assertIn("поздняя приёмка", journal.call_args.args[0])
+        self.assertIn("Позднее подтверждение", journal.call_args.args[0])
 
     def test_open_call_of_a_live_run_is_not_announced(self):
         # Тик outbox между приёмкой и результатом рамки: ход жив, вызов открыт,

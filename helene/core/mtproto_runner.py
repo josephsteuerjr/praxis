@@ -186,10 +186,11 @@ _LOOP: asyncio.AbstractEventLoop | None = None
 _TELEGRAM_DISPATCHER: telegram_registry.TelegramAccountDispatcher | None = None
 
 
+@frame_language.pinned
 def _main_loop() -> asyncio.AbstractEventLoop:
     """Луп, на котором реально живёт Telethon. Для sync-обёрток тулов (воркер-треды)."""
     if _LOOP is None:
-        raise RuntimeError("луп Telethon ещё не захвачен (main() не стартовал)")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._main_loop.192'))
     return _LOOP
 
 
@@ -1940,6 +1941,7 @@ def _addressed_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
     )
 
 
+@frame_language.pinned
 def _note_address_overwritten(chat_id: str, old: GroupWake, new: GroupWake) -> None:
     """Канарейка: одно обращение вытеснило другое, ещё не отработанное.
 
@@ -1958,8 +1960,7 @@ def _note_address_overwritten(chat_id: str, old: GroupWake, new: GroupWake) -> N
             meta["owner_lost"] = "1"
         perception.note_skip(
             "group_wake", "отложила", chat_id=chat_id,
-            detail=(f"обращение #{old.message_id} ({old.kind}, {old.speaker or '?'}) "
-                    f"вытеснено #{new.message_id} до прохода"),
+            detail=(frame_language.text('helper.mtproto_runner._note_address_overwritten.1961', p0=f'{old.message_id}', p1=f'{old.kind}', p2=f"{old.speaker or '?'}", p3=f'{new.message_id}')),
             meta=meta,
         )
     except Exception:
@@ -3194,6 +3195,7 @@ def _resolve_room_mode(peer_id, chat_id, *, where: str) -> tuple[str, bool]:
         return "frozen", True
 
 
+@frame_language.pinned
 def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str,
                          resolution_failed: bool = False) -> None:
     profile = {}
@@ -3216,8 +3218,8 @@ def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str,
         klass = "запретил_егор"
     else:
         klass = "не_увидела"
-    detail = ("режим комнаты не прочитан — тракт закрыт" if resolution_failed
-              else f"режим {effective}")
+    detail = (frame_language.text('helper.mtproto_runner._note_room_mode_skip.3219') if resolution_failed
+              else frame_language.text('helper.mtproto_runner._note_room_mode_skip.3220', p0=f'{effective}'))
     perception.note_skip(
         stage, klass, chat_id=chat_id,
         detail=detail,
@@ -3959,6 +3961,7 @@ def _telegram_text_random_id(delivery_key: str) -> int:
     return value or 1
 
 
+@frame_language.pinned
 async def _send_message_idempotent(entity, message: str, *, delivery_key: str,
                                    reply_to=None, random_id: int | None = None):
     """Telethon ``send_message`` with a caller-owned stable MTProto random id.
@@ -3970,7 +3973,7 @@ async def _send_message_idempotent(entity, message: str, *, delivery_key: str,
     random_id = (_telegram_text_random_id(delivery_key)
                  if random_id is None else int(random_id))
     if random_id == 0:
-        raise ValueError("Telegram random_id must be non-zero")
+        raise ValueError(frame_language.text('helper.mtproto_runner._send_message_idempotent.3973'))
     response_parser = inspect.getattr_static(type(client), "_get_response_message", None)
     if not (hasattr(client, "_parse_message_text")
             and response_parser is not None
@@ -3984,7 +3987,7 @@ async def _send_message_idempotent(entity, message: str, *, delivery_key: str,
     input_entity = await client.get_input_entity(entity)
     parsed, formatting_entities = await client._parse_message_text(str(message), ())
     if not parsed:
-        raise ValueError("Telegram message cannot be empty")
+        raise ValueError(frame_language.text('helper.mtproto_runner._send_message_idempotent.3987'))
     parsed, formatting_entities = _apply_blockquote_markers(
         parsed, formatting_entities)
     input_reply = (tl_types.InputReplyToMessage(reply_to_msg_id=int(reply_to))
@@ -4008,10 +4011,11 @@ async def _send_message_idempotent(entity, message: str, *, delivery_key: str,
         else:
             sent = client._get_response_message(request, response, input_entity)
     if sent is None:
-        raise RuntimeError("Telegram accepted no identifiable message")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._send_message_idempotent.4011'))
     return sent, random_id
 
 
+@frame_language.pinned
 async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply_to=None,
                                 random_id: int | None = None,
                                 visible_filename: str | None = None):
@@ -4023,7 +4027,7 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
     random_id = (_telegram_media_random_id(item.queue_id)
                  if random_id is None else int(random_id))
     if random_id == 0:
-        raise ValueError("Telegram random_id must be non-zero")
+        raise ValueError(frame_language.text('helper.mtproto_runner._send_file_idempotent.4026'))
     force_document = item.kind == "document"
     if not (hasattr(client, "_file_to_media") and hasattr(client, "_parse_message_text")
             and hasattr(client, "_get_response_message")
@@ -4063,7 +4067,7 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
         str(item.path), **conversion_kwargs,
     )
     if not input_media:
-        raise TypeError(f"cannot convert outbound media {item.path}")
+        raise TypeError(frame_language.text('helper.mtproto_runner._send_file_idempotent.4066', p0=f'{item.path}'))
     caption, formatting_entities = await client._parse_message_text(
         item.caption[:900], ())
     input_reply = (types.InputReplyToMessage(reply_to_msg_id=int(reply_to))
@@ -4080,6 +4084,7 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
     return client._get_response_message(request, response, input_entity), random_id
 
 
+@frame_language.pinned
 def _direct_tool_execution(expected_tool: str | tuple) -> dict[str, object]:
     """Require the durable tool identity which owns a direct Telegram mutation.
 
@@ -4092,14 +4097,14 @@ def _direct_tool_execution(expected_tool: str | tuple) -> dict[str, object]:
     execution = agent.current_tool_execution()
     if not isinstance(execution, dict):
         raise agent.DurableExecutionError(
-            f"{label} requires a durable run/call identity"
+            frame_language.text('helper.mtproto_runner._direct_tool_execution.4095', p0=f'{label}')
         )
     run_id = str(execution.get("run_id") or "").strip()
     call_id = str(execution.get("call_id") or "").strip()
     tool = str(execution.get("tool") or "").strip()
     if not run_id or not call_id or tool not in expected:
         raise agent.DurableExecutionError(
-            f"{label} has no matching durable run/call identity"
+            frame_language.text('helper.mtproto_runner._direct_tool_execution.4102', p0=f'{label}')
         )
     result = dict(execution)
     result["run_id"] = run_id
@@ -4117,12 +4122,13 @@ def _direct_tool_key(execution: dict[str, object]) -> str:
     )
 
 
+@frame_language.pinned
 def _one_sent_message_id(sent) -> int:
     rows = list(sent) if isinstance(sent, (list, tuple)) else [sent]
     ids = [int(getattr(row, "id")) for row in rows
            if getattr(row, "id", None) is not None]
     if len(ids) != 1 or ids[0] <= 0:
-        raise RuntimeError("Telegram accepted no unique message id")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._one_sent_message_id.4125'))
     return ids[0]
 
 
@@ -4211,16 +4217,16 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
                     "direct Telegram tool entry has no exact pre-network run proof "
                     "and its run is terminal — the proof can never appear")
             raise agent.DurableExecutionError(
-                "direct Telegram tool entry has no exact pre-network run proof")
+                frame_language.text('helper.mtproto_runner._send_direct_outbox_entry.4214'))
     if entry.get("kind") == "file" and not await asyncio.to_thread(
             _direct_outbox().ready, str(entry["key"])):
         raise agent.DurableSideEffectPending(
-            str(entry["key"]), "attachment pause / retry deadline not reached")
+            str(entry["key"]), frame_language.text('helper.mtproto_runner._send_direct_outbox_entry.4218'))
     peer_id = int(entry["peer_id"])
     if entity is None:
         entity = await _resolve_entity(peer_id)
     if entity is None:
-        raise RuntimeError(f"Telegram peer is unavailable: {peer_id}")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._send_direct_outbox_entry.4223', p0=f'{peer_id}'))
     reply_to = entry.get("reply_to")
     if reply_to is None:
         reply_to = entry.get("topic_id")
@@ -4261,7 +4267,7 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
             visible_filename=str(payload.get("visible_filename") or "document.bin"),
         )
     else:
-        raise RuntimeError(f"unsupported Telegram outbox kind: {entry.get('kind')}")
+        raise RuntimeError(frame_language.text('helper.mtproto_runner._send_direct_outbox_entry.4264', p0=f"{entry.get('kind')}"))
     message_id = _one_sent_message_id(sent)
     return await asyncio.to_thread(
         _direct_outbox().mark_accepted,
@@ -4497,6 +4503,7 @@ def _late_acceptance_verdict(entry: dict) -> str:
     return "late"
 
 
+@frame_language.pinned
 async def _announce_late_acceptance(entry: dict) -> None:
     """Поздняя приёмка Telegram обязана вернуться к ней — а не только в Пульт.
 
@@ -4530,8 +4537,7 @@ async def _announce_late_acceptance(entry: dict) -> None:
     chat = str(entry.get("peer_id") or "?")
     try:
         agent.tool_journal(
-            f"поздняя приёмка: файл {filename} ушёл в {chat}, "
-            f"message_id {message_id} — ход считал его упавшим",
+            frame_language.text('helper.mtproto_runner._announce_late_acceptance.4533', p0=f'{filename}', p1=f'{chat}', p2=f'{message_id}'),
             salience=2)
     except Exception:
         log.warning("журнал о поздней приёмке не записался [%s]", key, exc_info=True)
@@ -5830,6 +5836,7 @@ def _clear_pulse_retry() -> None:
     _PULSE_RETRY_AT = 0.0
 
 
+@frame_language.pinned
 async def _note_one_mind_defer(stage: str, goal: str) -> None:
     """Make one continuous one-mind deferral visible without counting scheduler retries.
 
@@ -5849,7 +5856,7 @@ async def _note_one_mind_defer(stage: str, goal: str) -> None:
         await asyncio.to_thread(
             lambda: perception.note_skip(
                 f"one_mind:{stage}", "отложила",
-                detail=f"занята живым ходом, вернусь как освободится: {normalized_goal}"))
+                detail=frame_language.text('helper.mtproto_runner._note_one_mind_defer.5852', p0=f'{normalized_goal}')))
     except Exception:
         log.debug("skip отложенного пробуждения не записался", exc_info=True)
         return
@@ -6008,6 +6015,7 @@ async def _room_participants_search(q: str, limit: int = 5) -> list[str]:
     return out[:limit]
 
 
+@frame_language.pinned
 def _recent_senders_hits(q: str, limit: int = 5) -> list[str]:
     """PASS 16.2: поиск по кэшу недавних отправителей (имя/подстрока или точный id).
     Публично видимые отправители её же чатов — не глобальный поиск и не приватка."""
@@ -6019,7 +6027,7 @@ def _recent_senders_hits(q: str, limit: int = 5) -> list[str]:
         for ts, nm, sid in reversed(list(ring)):
             if ql in (nm or "").lower() or ql == str(sid):
                 age = max(0, int((now - ts) / 60))
-                out.append(f"{nm} (id={sid}) — писал(а) в {cid} ~{age}м назад")
+                out.append(frame_language.text('helper.mtproto_runner._recent_senders_hits.6022', p0=f'{nm}', p1=f'{sid}', p2=f'{cid}', p3=f'{age}'))
                 break
     return out[:limit]
 
@@ -6183,6 +6191,7 @@ def _start_dialog_warmup() -> asyncio.Task:
     return _dialog_warmup_task
 
 
+@frame_language.pinned
 async def _ensure_dialog_cache() -> None:
     """Тёплый кэш → мгновенно. Холодный → ждать прогрев СВОИМ бюджетом (DIALOG_WARMUP_WAIT_SEC);
     прогрев ещё не запускался (ранний вызов) — запустить здесь же. Не успел — честный TimeoutError
@@ -6196,13 +6205,12 @@ async def _ensure_dialog_cache() -> None:
         await asyncio.wait_for(asyncio.shield(task), timeout=DIALOG_WARMUP_WAIT_SEC)
     except asyncio.TimeoutError:
         raise TimeoutError(
-            f"кэш диалогов ещё греется (ожидание {DIALOG_WARMUP_WAIT_SEC:.0f}с) — "
-            "резолв по имени пока недоступен, по id/@username работает") from None
+            frame_language.text('helper.mtproto_runner._ensure_dialog_cache.6199', p0=f'{DIALOG_WARMUP_WAIT_SEC:.0f}')) from None
     waited = time.time() - t0
     if waited > 1:
         log.info("холодный резолв по имени ждал прогрева кэша %.1fс", waited)
     if _dialog_name_cache is None:  # прогрев завершился, но упал, ничего не собрав
-        raise TimeoutError("скан диалогов не удался — резолв по имени пока недоступен")
+        raise TimeoutError(frame_language.text('helper.mtproto_runner._ensure_dialog_cache.6205'))
 
 
 class ResolveDenied(Exception):
@@ -7579,10 +7587,10 @@ def _sync_read_chat(chat_ref, limit: int = 30) -> str:
         route = _route_from_reference(chat_ref)
         ent = await _resolve_entity(route.peer_id)
         if ent is None:
-            return "(не найден такой чат)"
+            return frame_language.text('helper.mtproto_runner._coro.7582')
         kwargs = {"reply_to": route.topic_id} if route.topic_id is not None else {}
         msgs = await client.get_messages(ent, limit=int(limit), **kwargs)
-        return "\n".join(_format_messages(reversed(list(msgs)))) or "(пусто)"
+        return "\n".join(_format_messages(reversed(list(msgs)))) or frame_language.text('helper.mtproto_runner._coro.7585')
     return _threadsafe_result(_coro, 40)
 
 
@@ -7595,13 +7603,14 @@ def _sync_fetch_context(chat_id, limit: int = LAST_N) -> str:
         if ent is None:
             ent = await _resolve_entity(route.peer_id)
         if ent is None:
-            return "(нет такого чата)"
+            return frame_language.text('helper.mtproto_runner._coro.7598')
         kwargs = {"reply_to": route.topic_id} if route.topic_id is not None else {}
         msgs = await client.get_messages(ent, limit=int(limit), **kwargs)
-        return "\n".join(_format_messages(reversed(list(msgs)))) or "(пусто)"
+        return "\n".join(_format_messages(reversed(list(msgs)))) or frame_language.text('helper.mtproto_runner._coro.7601')
     return _threadsafe_result(_coro, 40)
 
 
+@frame_language.pinned
 def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
     """Apply accepted-send bookkeeping exactly once per durable outbox key."""
 
@@ -7615,7 +7624,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
     contact_id = target_user_id if target_user_id is not None else peer_id
     raw_accepted_at = entry.get("updated_at")
     if isinstance(raw_accepted_at, bool):
-        raise agent.DurableExecutionError("direct outbox acceptance time is malformed")
+        raise agent.DurableExecutionError(frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7618'))
     if isinstance(raw_accepted_at, (int, float)):
         accepted_at = float(raw_accepted_at)
     elif isinstance(raw_accepted_at, str):
@@ -7626,17 +7635,17 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
             )
         except ValueError as exc:
             raise agent.DurableExecutionError(
-                "direct outbox acceptance time is malformed"
+                frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7629')
             ) from exc
         if parsed.tzinfo is None:
             raise agent.DurableExecutionError(
-                "direct outbox acceptance time has no timezone"
+                frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7633')
             )
         accepted_at = parsed.timestamp()
     else:
-        raise agent.DurableExecutionError("direct outbox acceptance time is missing")
+        raise agent.DurableExecutionError(frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7637'))
     if not (0 < accepted_at < float("inf")):
-        raise agent.DurableExecutionError("direct outbox acceptance time is out of range")
+        raise agent.DurableExecutionError(frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7639'))
     # ⚑ ОТВЕТ СОБЕСЕДНИКУ — НЕ ИНИЦИАТИВНАЯ ОТПРАВКА, И УЧЁТ У НЕГО ДРУГОЙ.
     #
     # Проектор один на все прямые отправки, и он таким и остаётся: второй развёл бы швы
@@ -7762,7 +7771,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
                 # outcome), иначе записка заговорит двумя языками и ни `said_recently`,
                 # ни дайджест комнат её больше не узнают.
                 agent.notes.append(
-                    convo, f"сказано (голос): «{said[:agent.notes.SAID_GIST_CHARS]}»")
+                    convo, frame_language.text('helper.mtproto_runner._project_direct_outbox_acceptance.7765', p0=f'{said[:agent.notes.SAID_GIST_CHARS]}'))
             except Exception:
                 log.exception("заметка о прямой отправке не записалась [%s]", peer_id)
         if said and not is_dm and message_id is not None and _group_archive_enabled():
@@ -8278,7 +8287,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         elif OWNER_ID:
             target = OWNER_ID
         else:
-            return route, None, "(нет текущего Telegram-чата или адресата)"
+            return route, None, frame_language.text('helper.mtproto_runner._resolve.8281')
         return route, target, ""
 
     route, target, denied = _threadsafe_result(_resolve, DIALOG_WARMUP_WAIT_SEC + 30)
@@ -8344,7 +8353,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
                 != wanted_kind
                 or bool(payload.get("voice_note")) != wanted_voice):
             raise telegram_outbox.TelegramOutboxConflict(
-                "durable send_file key already owns another intent"
+                frame_language.text('helper.mtproto_runner._sync_send_file.8347')
             )
     else:
         entry = outbox.prepare_file(
@@ -8434,10 +8443,11 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     return _direct_outbox_result(entry, label=label)
 
 
+@frame_language.pinned
 def _scheduled_outbox_identity(t: dict, purpose: str) -> tuple[str, str, str]:
     task_id = str(t.get("id") or "").strip()
     if not task_id:
-        raise ValueError("scheduled task has no id")
+        raise ValueError(frame_language.text('helper.mtproto_runner._scheduled_outbox_identity.8440'))
     occurrence = str(t.get("when") or t.get("created") or "asap")
     digest = hashlib.sha256(
         json.dumps(
@@ -8785,6 +8795,7 @@ def _last_incoming(convo: str, name: str) -> str:
     return ""
 
 
+@frame_language.pinned
 async def _absence_once() -> None:
     """PASS 12.1: пока владелец в отсутствии — ЕЁ голос простаивающим важным сообщениям.
 
@@ -8818,8 +8829,7 @@ async def _absence_once() -> None:
             await asyncio.to_thread(
                 lambda: perception.note_skip(
                     "one_mind_absence", "мой_ритм",
-                    detail="кому-то стоило ответить в отсутствие Егора, но я занята "
-                           "живым ходом — вернусь на следующем тике"))
+                    detail=frame_language.text('helper.mtproto_runner._absence_once.8821')))
         except Exception:
             log.debug("skip отложенного отсутствия не записался", exc_info=True)
         return
@@ -8839,9 +8849,7 @@ async def _absence_once() -> None:
                 continue
             ctx = agent.ChannelContext(chat_id=str(chat_id), is_dm=True, owner=False, known=True, title=name)
             guard_context = (
-                "Autonomous absence reply. Owner is away; enforce only cross-person/cross-chat "
-                "private disclosure at this non-owner DM boundary. Do not edit or judge Praxis's speech.\n\n"
-                f"Conversation:\n{(convo or '')[-1500:]}\n\nSchedule note:\n{(note or '')[:600]}"
+                frame_language.text('helper.mtproto_runner._absence_once.8842', p0=f"{(convo or '')[-1500:]}", p1=f"{(note or '')[:600]}")
             )
             reply = await asyncio.to_thread(agent.guard_outbound_reply, reply, convo, ctx=ctx,
                                             orient=guard_context)
@@ -8861,7 +8869,7 @@ async def _absence_once() -> None:
             await asyncio.to_thread(unanswered.resolve, str(chat_id))
             _buf_push(str(chat_id), f"Praxis: {reply}", author="Praxis", is_dm=True)
             try:
-                agent.tool_journal(f"[отсутствие] отвечено {name} (#{n} за окно): «{reply[:120]}»", salience=2)
+                agent.tool_journal(frame_language.text('helper.mtproto_runner._absence_once.8864', p0=f'{name}', p1=f'{n}', p2=f'{reply[:120]}'), salience=2)
             except Exception:
                 log.debug("отсутствие: журнал не записался", exc_info=True)
             log.info("ОТСУТСТВИЕ [%s] %s -> %r", chat_id, name, reply[:80])
@@ -9001,6 +9009,7 @@ async def _early_control_watch() -> None:
         await asyncio.sleep(3.0)
 
 
+@frame_language.pinned
 async def _desk_interrupt_once() -> None:
     """Тик часов: просьба Пульта прервать ход (memory/.control/interrupt.json)."""
     request = selfdev.interrupt_requested()
@@ -9019,8 +9028,7 @@ async def _desk_interrupt_once() -> None:
                     request.get("by") or "desk", time.time() - asked)
         try:
             agent.tool_journal(
-                f"[прервано] просьба владельца остановить ход пролежала непрочитанной "
-                f"{int(time.time() - asked)} с и погашена: часы не читали управление",
+                frame_language.text('helper.mtproto_runner._desk_interrupt_once.9022', p0=f'{int(time.time() - asked)}'),
                 salience=2)
         except Exception:
             log.debug("журнал о протухшей просьбе не записался", exc_info=True)
@@ -9039,9 +9047,8 @@ async def _desk_interrupt_once() -> None:
     try:
         waiting = len(result.get("waiting") or [])
         agent.tool_journal(
-            f"[прервано] живой ход остановлен с Пульта ({result['by']}): прогонов "
-            f"{len(result['cancelled'])}"
-            + (f"; ещё {waiting} встали на паузу с незакрытым вызовом" if waiting else ""),
+            frame_language.text('helper.mtproto_runner._desk_interrupt_once.9042', p0=f"{result['by']}", p1=f"{len(result['cancelled'])}")
+            + (frame_language.text('helper.mtproto_runner._desk_interrupt_once.9044', p0=f'{waiting}') if waiting else ""),
             salience=2)
     except Exception:
         log.debug("журнал о прерывании не записался", exc_info=True)
@@ -9502,6 +9509,7 @@ async def _followups_once() -> None:
         )
 
 
+@frame_language.pinned
 async def _run_social_pulse(pulse_id: str) -> None:
     ok = False
     outcome: bool | None = False
@@ -9549,7 +9557,7 @@ async def _run_social_pulse(pulse_id: str) -> None:
             if outcome is None:
                 await asyncio.to_thread(
                     social_pulse.defer, pulse_id,
-                    detail="task window deferred while another authored turn was active",
+                    detail=frame_language.text('helper.mtproto_runner._run_social_pulse.9552'),
                 )
                 # Её ЕДИНСТВЕННОЕ регулярное автономное пробуждение. `defer` вернул
                 # durable claim, но часы уже перевзвели срок на период вперёд — без
@@ -9563,7 +9571,7 @@ async def _run_social_pulse(pulse_id: str) -> None:
         if outcome is not None:
             await asyncio.to_thread(
                 social_pulse.finish, pulse_id, ok=ok,
-                detail="hourly social scan completed" if ok else "task window failed",
+                detail=frame_language.text('helper.mtproto_runner._run_social_pulse.9566') if ok else frame_language.text('helper.mtproto_runner._run_social_pulse.9566.2'),
                 mailbox_hashes=mailbox_hashes,
             )
 
@@ -9581,6 +9589,7 @@ def _in_sleep_window(now: float | None = None) -> bool:
         return False
 
 
+@frame_language.pinned
 async def _social_pulse_once() -> None:
     """Start the hourly social run without blocking buffers/schedule/follow-up clocks."""
     global _SOCIAL_PULSE_TASK
@@ -9606,8 +9615,7 @@ async def _social_pulse_once() -> None:
             await asyncio.to_thread(
                 lambda: perception.note_skip(
                     "sleep_window", "мой_ритм",
-                    detail=f"окно сна {os.getenv('PRAXIS_SLEEP_WINDOW', '4-6')}: "
-                           "автономное пробуждение не открываю"))
+                    detail=frame_language.text('helper.mtproto_runner._social_pulse_once.9609', p0=f"{os.getenv('PRAXIS_SLEEP_WINDOW', '4-6')}")))
         except Exception:
             log.debug("skip окна сна не записался", exc_info=True)
         return
@@ -9789,6 +9797,7 @@ def _backfill_transport_online() -> bool:
         return True
 
 
+@frame_language.pinned
 async def _group_context_backfill_once() -> None:
     """Advance at most one configured room through this process' live client.
 
@@ -9834,9 +9843,9 @@ async def _group_context_backfill_once() -> None:
         # Не «пропустила», а физически нечем: и резолв, и выкачка истории идут в Telethon.
         # Молчать тут нельзя — именно это молчание и делало из обрыва 15 минут пустоты.
         await _note_backfill_defer(
-            "связь закрыта моим же окном — предысторию комнат не пополняю, вернусь после"
+            frame_language.text('helper.mtproto_runner._group_context_backfill_once.9837')
             if _EXPECT_DISCONNECT.is_set() else
-            "связи нет — предысторию комнат не пополняю, вернусь как подключусь")
+            frame_language.text('helper.mtproto_runner._group_context_backfill_once.9839'))
         return
 
     all_rooms = rooms.list_rooms()
@@ -9879,23 +9888,18 @@ async def _group_context_backfill_once() -> None:
                      len(order), len(all_rooms), len(beyond), len(all_rooms),
                      ", ".join(beyond))
             await _note_backfill_defer(
-                f"кап {BACKFILL_ROOMS_PER_TICK} комнат за тик: {len(beyond)} комнат вне "
-                f"окна обхода в этот тик; окно едет по кругу, каждая входит в него не "
-                f"позже чем через {len(all_rooms)} тиков (~{len(all_rooms)} мин)")
+                frame_language.text('helper.mtproto_runner._announce.9882', p0=f'{BACKFILL_ROOMS_PER_TICK}', p1=f'{len(beyond)}', p2=f'{len(all_rooms)}', p3=f'{len(all_rooms)}'))
         if deferred:
             log.info("group backfill: резолвила %d комнат из %d за тик, %s ждут "
                      "следующего (кап резолвов %d)", resolves, len(order),
                      ", ".join(deferred), BACKFILL_RESOLVES_PER_TICK)
             await _note_backfill_defer(
-                f"кап {BACKFILL_RESOLVES_PER_TICK} резолвов за тик: "
-                f"{len(deferred)} комнат ждут следующего тика (~минуту), среди них "
-                f"{', '.join(sorted(deferred)[:5])}")
+                frame_language.text('helper.mtproto_runner._announce.9890', p0=f'{BACKFILL_RESOLVES_PER_TICK}', p1=f'{len(deferred)}', p2=f"{', '.join(sorted(deferred)[:5])}"))
         if held:
             log.info("group backfill: %d комнат ещё под отсрочкой после промаха резолва: %s",
                      len(held), ", ".join(held))
             await _note_backfill_defer(
-                f"{len(held)} комнат под отсрочкой после промаха резолва, среди них "
-                f"{', '.join(sorted(held)[:5])}; срок каждой назван в её же записи")
+                frame_language.text('helper.mtproto_runner._announce.9897', p0=f'{len(held)}', p1=f"{', '.join(sorted(held)[:5])}"))
         # В логе порядок обхода (он крутится с курсора и это полезно видеть), а ей —
         # ОТСОРТИРОВАННЫЙ список: perception схлопывает одинаковые detail в окне 10 минут,
         # а от вращения курсора та же самая пятёрка каждый тик перетасовывалась бы и
@@ -9928,8 +9932,7 @@ async def _group_context_backfill_once() -> None:
                          "вернусь к этой комнате не раньше чем через %.0f мин, остальные "
                          "иду дальше", peer_id, n, ttl / 60)
                 await _note_backfill_defer(
-                    f"не резолвится (промах {n} подряд при живой связи), предысторию не "
-                    f"пополняю, вернусь не раньше чем через {ttl / 60:.0f} мин",
+                    frame_language.text('helper.mtproto_runner._group_context_backfill_once.9931', p0=f'{n}', p1=f'{ttl / 60:.0f}'),
                     chat_id=peer_id)
                 continue
             _backfill_resolve_misses.pop(str(peer_id), None)
