@@ -21,7 +21,9 @@ REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','
             'shell','fs_read','edit','fs_search','fs_ls','send_file','web_read','web_find',
             'send_email','check_email','mail_read','mail_draft_reply','task_control',
             'manage_room','manage_notes','memory_compact','manage_loop','recent_turns','manage_appetite',
-            'remind_self','telegram_account','manage_desire','update_profile','react','read_log','server_status','manage_service')
+            'remind_self','telegram_account','manage_desire','update_profile','react','read_log','server_status','manage_service',
+            'coding_session','coding_inspect','coding_run','coding_process','coding_checkpoint',
+            'coding_verify','coding_swarm','coding_learn','coding_control')
 
 
 def stock():

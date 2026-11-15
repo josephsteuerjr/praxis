@@ -5278,5 +5278,857 @@
       }
     ],
     "purpose": "schema.tool.purpose.manage_service"
+  },
+  "coding_session": {
+    "sha256": "efed0b9e71c179b40e993eceb2cb98473a16d4150cb6f661e5c9328c58a82e3c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.d63dba0344b5f2c2",
+        "present": true,
+        "source": "Control a durable coding task. start binds a goal to an exact directory and normally creates an isolated git worktree; target may be self or ANY directory visible to this runtime. status/list survive restarts. finish assembles the evidence and, for self-code, submits the existing proposal after your own diff review. The task root is an address/concurrency boundary, not a policy limit. abandon closes a task WITHOUT integrating anything — the way out when the root is unreachable and finish has nothing to survey; it needs `review` as the reason and never touches a branch or worktree."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.975341f94bff546e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.0f81aff6a9128ad8",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "goal",
+          "description"
+        ],
+        "key": "schema.tool.6245111e0d404267",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "target",
+          "description"
+        ],
+        "key": "schema.tool.5e2deea9d25d0eae",
+        "present": true,
+        "source": "self or a directory path; host = absolute Linux path, windows = absolute Windows path"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "isolation",
+          "description"
+        ],
+        "key": "schema.tool.bfb81b3c3d796e81",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "priority",
+          "description"
+        ],
+        "key": "schema.tool.63a6488711df7f24",
+        "present": true,
+        "source": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "success_criteria",
+          "description"
+        ],
+        "key": "schema.tool.d5009a96303a443a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "verify_commands",
+          "description"
+        ],
+        "key": "schema.tool.8abc1c61e6a157da",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_active_workers",
+          "description"
+        ],
+        "key": "schema.tool.28858f998d964b48",
+        "present": true,
+        "source": "Positive active-slot policy shared by this task and every nested agent; default 8. Not a total tree size."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "scope",
+          "description"
+        ],
+        "key": "schema.tool.6ebb8bc7da18e2a4",
+        "present": true,
+        "source": "self = my own code repository (the default). host and windows are not available in this edition: the computer tool is the path to this machine. All scopes stay in the same canonical Forge."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "title",
+          "description"
+        ],
+        "key": "schema.tool.10e7c101dbaf693e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "review",
+          "description"
+        ],
+        "key": "schema.tool.91b997d2d514f93d",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "checked",
+          "description"
+        ],
+        "key": "schema.tool.c00b90ee6e8cf9d2",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "submit",
+          "description"
+        ],
+        "key": "schema.tool.c93e9af10c0569ae",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reviewer",
+          "description"
+        ],
+        "key": "schema.tool.978fb90cf2c1487b",
+        "present": true,
+        "source": "finish: optional exact critic evidence; empty retains any existing task critic, never gates ordinary finish"
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_session"
+  },
+  "coding_inspect": {
+    "sha256": "5efdeb1c3a837a5ff67235c0e57475eabd4528b9831e27f816eaac3750c70f50",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.6dcbbbfe02b294c4",
+        "present": true,
+        "source": "Inspect durable task state and code facts: orientation/model/overview map the place; review/symbols/references/diagnostics/impact/checks examine code and verification; definition/callers/callees share code_query evidence, coverage and snapshot cursors; observations show Windows evidence, mailbox shows worker messages. diff/history give exact evidence. Task file reads/listings/searches use fs_read/fs_ls/fs_search with task_id. watching/watch/unwatch observe another repository HEAD (address in query); a change wakes you with a fact."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.e3fa72c85e316a0b",
+        "present": true,
+        "source": "Forge task identifier."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.ada7f606b98cb415",
+        "present": true,
+        "source": "Observation to retrieve."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.0e27a8566f30db74",
+        "present": true,
+        "source": "Path within task, where applicable."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.ea24ce2fdd7106a9",
+        "present": true,
+        "source": "Symbol, lesson query or repository address for watching."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "module",
+          "description"
+        ],
+        "key": "schema.tool.2e289ca2c77cfe24",
+        "present": true,
+        "source": "Target defining module for semantic evidence."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.a6c09aa66528379b",
+        "present": true,
+        "source": "Semantic rows per page, default 40, max 200."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cursor",
+          "description"
+        ],
+        "key": "schema.tool.f902e834691f8ff3",
+        "present": true,
+        "source": "Semantic snapshot:offset continuation; changed files refuse."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "end",
+          "description"
+        ],
+        "key": "schema.tool.93312c4104fb437c",
+        "present": true,
+        "source": "Result count for history, lessons, observations or mailbox; zero uses their defaults."
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_inspect"
+  },
+  "coding_run": {
+    "sha256": "3762913a61cd1d3bb54b8a1a63ac23569d27eda26129cd7f28c3e707d689e5a2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.9042535de1e005d4",
+        "present": true,
+        "source": "Run an arbitrary foreground command at any cwd inside the coding task. Build/test/lint/probe freely; full output becomes durable evidence and the reply is capped. timeout=0 means unbounded. For watchers/servers use coding_process. command is a shell string; for one program with exact arguments use run_command(argv=[...], task_id=...). On Linux local foreground runs, h.read/h.edit/h.write inherit this task and verified command custody; they can edit under their own running command while other writers and Stop still block. Python scripts here can import praxis_hands as h (h.read, h.edit, h.write, h.search): the same version check and write lock as edit; refusals raise. Edit files that way, not with str.replace."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "command",
+          "description"
+        ],
+        "key": "schema.tool.a8aa7c1ff2ab6dba",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.25c4cdc8151c1b94",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.tool.cc223aa837abff4a",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_run"
+  },
+  "coding_process": {
+    "sha256": "a770a540f72a9fde7d5357eaa7af3fbce580c78beeb16f8e968192050fe4b690",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.4846a2a7212d0b1b",
+        "present": true,
+        "source": "Long-running process supervisor: start returns immediately, preserves the full log and survives the Telegram turn; poll/stop/list later. Use for dev servers, watchers, long tests and experiments. timeout=0 is unbounded. start takes either command (a shell string: pipes, redirects, globs) or argv (one exact program and arguments, no shell, like run_command), never both; argv on remote host or Windows tasks is refused before sending."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.00e191f33c956080",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "process_id",
+          "description"
+        ],
+        "key": "schema.tool.4b3513f77e83df04",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "command",
+          "description"
+        ],
+        "key": "schema.tool.e7548579a1fc2fe0",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "argv",
+          "description"
+        ],
+        "key": "schema.tool.0fdcbed5c0738960",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.72ff2ea85d820420",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.3cb995366bd80d81",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.tool.cc223aa837abff4a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "tail",
+          "description"
+        ],
+        "key": "schema.tool.a365dc7c2772a797",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_process"
+  },
+  "coding_checkpoint": {
+    "sha256": "fcfccc61dc7ff39856fa894e70e5ed6ab68a22bb339d81358e3d15af682752e4",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.debcf03959991eea",
+        "present": true,
+        "source": "Commit the current isolated working tree as a recoverable integration checkpoint."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "message",
+          "description"
+        ],
+        "key": "schema.tool.2fd942bc78394277",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_checkpoint"
+  },
+  "coding_verify": {
+    "sha256": "f42698981e37d002a0dde65791d94f79f64406622a9645c01c9c5c95de699762",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.599d692a095bf0f2",
+        "present": true,
+        "source": "PASS 23.1 test intelligence. plan derives targeted checks plus the authoritative gate from the real diff and impact map. start runs a durable matrix outside the Telegram turn; poll returns per-check exit/duration/full logs; custom commands are one per line."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.a9981667c5abe628",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "verification_id",
+          "description"
+        ],
+        "key": "schema.tool.601fa58a59267c6a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "commands",
+          "description"
+        ],
+        "key": "schema.tool.0d1fc42c651183dd",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "full",
+          "description"
+        ],
+        "key": "schema.tool.e0ed96c407a9ccc5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_parallel",
+          "description"
+        ],
+        "key": "schema.tool.7eae364c0dfee0d3",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout",
+          "description"
+        ],
+        "key": "schema.tool.0ad189568c5ac1fd",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "tail",
+          "description"
+        ],
+        "key": "schema.tool.1b1ab499ab532180",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_verify"
+  },
+  "coding_swarm": {
+    "sha256": "13d7eef36d8ef2a0731ba05adbfb86d145c2a3714711d95682e1c14897fc2ecf",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.adde711558452c03",
+        "present": true,
+        "source": "Durable dependency graph, exact-result acceptance and rework. plan nodes include phase/success_criteria; dependencies require the exact accepted result revision. For action=checkpoint put a JSON object with next_action/unresolved_reviews in plan (message accepts the same object for compatibility). rework needs node_id, current result_sha256 and concrete correction message. Ownership is advisory."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": true,
+        "source": "Durable Forge task identity."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.af455293361ad85a",
+        "present": true,
+        "source": "Requested typed operation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "plan",
+          "description"
+        ],
+        "key": "schema.tool.e3780b0cc898af5b",
+        "present": true,
+        "source": "DAG JSON, or checkpoint JSON with next_action/current_candidate/checks/unresolved_reviews."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "node_id",
+          "description"
+        ],
+        "key": "schema.tool.8092d16fd67f729a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "result_sha256",
+          "description"
+        ],
+        "key": "schema.tool.881597affa48ac2e",
+        "present": true,
+        "source": "SHA-256 of the exact observed result.json bytes, not a Git or subject hash."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "kind",
+          "description"
+        ],
+        "key": "schema.tool.2400697cf63cda1f",
+        "present": true,
+        "source": "Record type to page: immutable payload or exact result/request JSON."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "message",
+          "description"
+        ],
+        "key": "schema.tool.848988a74db7a24a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "files",
+          "description"
+        ],
+        "key": "schema.tool.3b8f2805c883e9ce",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_parallel",
+          "description"
+        ],
+        "key": "schema.tool.fd9c763752f1fedf",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_swarm"
+  },
+  "coding_learn": {
+    "sha256": "b81887376732da46a491cd27270099a51d68a981f949efdc8d4216b8ac7e2d11",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.d55e9186e7a2be65",
+        "present": true,
+        "source": "Recall or record an evidence-backed engineering lesson for this task. finish records one automatically from changed files, commands and verification; record lets Praxis state the exact repair/regression that should change the next similar run."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.b8b032848d06cd08",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.83f9820ba1e9a31e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "lesson",
+          "description"
+        ],
+        "key": "schema.tool.4b40742b2795de8f",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "regression",
+          "description"
+        ],
+        "key": "schema.tool.48d4aad7691a551b",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_learn"
+  },
+  "coding_control": {
+    "sha256": "03a031367459b927299dc793cd6db5b63df232560411cb07ad50bba51b5fc0e5",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.b3435ddd7d3c46ca",
+        "present": true,
+        "source": "Control a task or selected agent subtree. Stop proves exact Windows Job extinction when a durable binding exists; historical results remain unchanged. Resume needs current generation and proven old-writer exit and creates a new identity. Legacy Windows unknown custody: prepare_recovery records a pre-reboot witness, only after independently confirming this is the original execution host (host_binding=verified-local-execution-host, reason required); it never reboots. After the owner restarts that computer, recover verifies a changed boot on the same host and releases only custody. Missing PID, unlocked journal and elapsed time are not proof. summary_in_flight remains unsafe to replay."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.66667cfd4cfb5b50",
+        "present": true,
+        "source": "Durable Forge task identity."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.376bedb569957ff8",
+        "present": true,
+        "source": "Requested typed operation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "agent_id",
+          "description"
+        ],
+        "key": "schema.tool.2859d71edab67d2c",
+        "present": true,
+        "source": "Selected participant identity; empty selects the task."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_generation",
+          "description"
+        ],
+        "key": "schema.tool.7090e60fbff2fb5a",
+        "present": true,
+        "source": "Generation observed in the latest participant progress; stale control is refused."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "host_binding",
+          "description"
+        ],
+        "key": "schema.tool.d50eb41e4b351052",
+        "present": true,
+        "source": "For prepare_recovery only: explicit independent confirmation that the legacy work ran on this exact local Windows computer. Never infer this from absent PIDs or a copied task directory."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.1be81526fcc1c47a",
+        "present": true,
+        "source": "Concrete reason for legacy custody recovery; required for prepare_recovery."
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_control"
   }
 }
