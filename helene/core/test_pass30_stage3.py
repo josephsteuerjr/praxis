@@ -109,7 +109,7 @@ class DirectFileVerbsCase(unittest.TestCase):
             out = agent.tool_computer("write", path="C:\\W\\big.bin",
                                       content="x" * (agent._COMPUTER_WRITE_CAP + 1))
         call.assert_not_called()
-        self.assertIn("artifact", out)
+        self.assertEqual(agent.frame_language.text('computer.result.write_cap',cap=agent._COMPUTER_WRITE_CAP), out)
 
     def test_write_replace_are_sovereign_only_for_trusted_grants(self):
         import agent
@@ -118,7 +118,7 @@ class DirectFileVerbsCase(unittest.TestCase):
                 mock.patch.object(agent.body_client, "call") as call:
             for verb in ("write", "replace"):
                 out = agent.tool_computer(verb, path="C:\\W\\a.txt", content="x", old="a")
-                self.assertIn("только владелец", out, verb)
+                self.assertEqual(agent.frame_language.text('computer.result.sovereign_write'), out, verb)
         call.assert_not_called()
 
     def test_read_numbers_lines_and_reports_hash_and_window(self):
@@ -206,18 +206,17 @@ class DirectFileVerbsCase(unittest.TestCase):
 
 
 class WcodeSoftDeprecationCase(unittest.TestCase):
-    def test_windows_start_keeps_canonical_first_line_and_appends_warning(self):
+    def test_windows_start_keeps_producer_text_and_appends_localized_warning(self):
         import agent
-        canonical = "coding-задача wcode-abc123: цель\norientation"
+        canonical = agent.forge.TaskStartReply("coding-задача wcode-abc123: цель\norientation", "wcode-abc123")
         with mock.patch.object(agent.forge, "start_windows", return_value=canonical), \
                 mock.patch.object(agent, "tool_journal") as journal, \
                 mock.patch.object(agent, "_active_chat", return_value="123"):
             out = agent.tool_coding_session("start", goal="цель", target="C:\\Work",
                                             scope="windows")
         self.assertTrue(out.startswith("coding-задача wcode-abc123: цель"),
-                        "первая строка канонична — её парсят журнальный гейт и тесты PASS 24")
-        self.assertIn("deprecated", out)
-        self.assertIn("computer.*", out)
+                        "producer text is retained; success is carried by its task_id")
+        self.assertTrue(out.endswith(agent.frame_language.text('run.result.legacy')))
         journal.assert_called_once()
 
     def test_windows_start_failure_gets_no_warning_and_no_journal(self):
@@ -228,11 +227,11 @@ class WcodeSoftDeprecationCase(unittest.TestCase):
                 mock.patch.object(agent, "_active_chat", return_value="123"):
             out = agent.tool_coding_session("start", goal="цель", target="C:\\Work",
                                             scope="windows")
-        self.assertNotIn("deprecated", out)
+        self.assertFalse(out.endswith(agent.frame_language.text('run.result.legacy')))
         journal.assert_not_called()
 
     def test_forge_start_windows_output_is_untouched(self):
-        """Депрекация живёт на агент-уровне; forge-текст цел для позиционных парсеров."""
+        """The legacy notice belongs to the agent, separate from the Forge receipt."""
         import inspect as pyinspect
         import forge
         source = pyinspect.getsource(forge.start_windows)

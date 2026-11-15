@@ -185,7 +185,8 @@ class BatchTests(unittest.TestCase):
         tools={t['name']:t for t in agent.catalog_tools_for(ctx) if t.get('name')}
         for t in (tools['edit'],forge_worker.EDIT_TOOL):
             self.assertIn('files',t['input_schema']['properties'])
-            for word in ('snapshot','sequential','partial','rollback'): self.assertIn(word,t['description'])
+            for word in ('snapshot','sequential','partial'): self.assertIn(word,t['description'])
+            self.assertIn('Автоотката нет' if t is tools['edit'] else 'rollback',t['description'])
         self.assertIn('partial',tool_report.OUTCOMES)
         for word in ('snapshot','sequential','partial','h.edit(files='):
             self.assertIn(word,agent._hands_contract_text())

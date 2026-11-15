@@ -75,7 +75,7 @@ class RoutingCase(unittest.TestCase):
                                    return_value={"ok": True, "text": "HOST ROOT: /etc\ngit: none",
                                                  "head": "abc123", "git_root": "/etc"}):
                 out = forge.start_host("inspect host", "/etc")
-            task_id = out.split(":", 1)[0].replace("coding-задача ", "")
+            task_id = out.task_id
             task = forge.get(task_id)
             self.assertEqual(task["scope"], "host")
             self.assertEqual(task["backend"], "praxis.host.v2")
@@ -117,13 +117,18 @@ class RoutingCase(unittest.TestCase):
                  mock.patch.object(forge.serverd_client, "workspace_inspect_result",
                                    return_value={"ok": True, "text": "HOST ROOT: /srv/project"}):
                 out = forge.start_host("host work", "/srv/project")
-            task_id = out.split(":", 1)[0].replace("coding-задача ", "")
+            task_id = out.task_id
             operation_ids = iter(('op-sync123', 'op-detached123'))
             def remote_call(action, params, **kwargs):
                 if action == 'op.start': return {'ok': True, 'id': next(operation_ids)}
                 self.assertEqual(action, 'op.poll')
                 self.assertIn(params['operation_id'], ('op-sync123', 'op-detached123'))
-                return {'ok': True, 'status': 'done', 'code': 0}
+                # Current broker custody requires an exact-operation tree settlement.
+                receipt = {'settled': True, 'nonce': 'fixture-only', 'exit_code': 0}
+                digest = __import__('hashlib').sha256(__import__('json').dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                return {'ok': True, 'id': params['operation_id'], 'status': 'done', 'code': 0,
+                        'tree_exit': {'contract': 'command-tree-v1', 'operation_id': params['operation_id'],
+                                      'settled': True, 'receipt': receipt, 'receipt_sha256': digest}}
             with mock.patch.object(forge.serverd_client, "workspace_inspect",
                                    return_value="root file"), \
                  mock.patch.object(forge.serverd_client, "workspace_edit",

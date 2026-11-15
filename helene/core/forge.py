@@ -582,6 +582,7 @@ def _git_text(root: Path, *args: str, timeout: int = 30) -> str:
     return text if r.returncode == 0 else f"[git exit {r.returncode}] {text[:1000]}"
 
 
+@frame_language.pinned
 def _resolve_target(target: str) -> tuple[Path | None, str]:
     raw = str(target or "self").strip()
     if raw.lower() in {"self", "praxis", "."}:
@@ -592,12 +593,13 @@ def _resolve_target(target: str) -> tuple[Path | None, str]:
     try:
         p = p.resolve()
     except OSError as exc:
-        return None, f"путь не разобрался: {exc}"
+        return None, frame_language.text('forge.io.0', v1=f'{exc}')
     if not p.is_dir():
-        return None, f"нет директории {p}"
+        return None, frame_language.text('forge.io.1', v1=f'{p}')
     return p, str(p)
 
 
+@frame_language.pinned
 def _inside(root: Path, path: str = "") -> tuple[Path | None, str]:
     """Resolve a task-relative path.  Containment prevents cross-task races, not access:
     Praxis can open another task rooted anywhere visible to the runtime."""
@@ -608,7 +610,7 @@ def _inside(root: Path, path: str = "") -> tuple[Path | None, str]:
         candidate = candidate.resolve()
         candidate.relative_to(root.resolve())
     except (OSError, ValueError) as exc:
-        return None, f"путь вышел из корня задачи {root}: {exc}"
+        return None, frame_language.text('forge.io.2', v1=f'{root}', v3=f'{exc}')
     return candidate, ""
 
 
@@ -630,15 +632,16 @@ def _cap(text: str, limit: int = 16000) -> str:
     return text[:head] + frame_language.text('forge.support.0', v1=f'{len(text) - head - tail}') + text[-tail:]
 
 
+@frame_language.pinned
 def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
     task = get(task_id)
     if not task:
-        return None, None, f"нет coding-задачи {task_id}"
+        return None, None, frame_language.text('forge.io.3', v1=f'{task_id}')
     try:
         raw_root = str(task["root"])
         root = Path(raw_root) if task.get("scope") in {"host", "windows"} else Path(raw_root).resolve()
     except (KeyError, OSError):
-        return task, None, "у задачи потерян корень"
+        return task, None, frame_language.text('forge.io.4')
     if task.get("scope") in {"host", "windows"}:
         return task, root, ""
     if not root.is_dir():
@@ -2236,6 +2239,15 @@ def _worker_slots(value: int) -> int:
     return slots
 
 
+class TaskStartReply(str):
+    """Successful durable task creation; display text is never parsed for admission."""
+    def __new__(cls, text, task_id):
+        value = super().__new__(cls, text)
+        value.task_id = task_id
+        return value
+
+
+@frame_language.pinned
 def start(goal: str, target: str = "self", isolation: str = "auto",
           priority: str = "normal", origin_chat: str = "",
           success_criteria: list[str] | None = None,
@@ -2244,14 +2256,14 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     """Open a durable coding task and return its factual orientation."""
     goal = str(goal or "").strip()
     if not goal:
-        return "Нужна цель coding-задачи."
+        return frame_language.text('forge.io.5')
     try:
         slots = _worker_slots(max_active_workers)
     except (ValueError, TypeError) as exc:
-        return f"Coding-задача не открыта: {exc}"
+        return frame_language.text('forge.io.6', v1=f'{exc}')
     source, label = _resolve_target(target)
     if source is None:
-        return f"Coding-задача не открыта: {label}"
+        return frame_language.text('forge.io.7', v1=f'{label}')
     isolation = str(isolation or "auto").strip().lower()
     if isolation not in {"auto", "worktree", "direct"}:
         return "isolation: auto | worktree | direct"
@@ -2270,7 +2282,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     if is_self and isolation != "direct":
         proposal = selfdev.begin(goal)
         if not proposal.get("ok"):
-            return f"Coding-задача не открыта: {proposal.get('msg') or 'proposal worktree не создался'}"
+            return frame_language.text('forge.io.8', v1=f"{proposal.get('msg') or frame_language.text('forge.io.9')}")
         proposal_id = str(proposal["id"])
         root = Path(proposal["path"]).resolve()
         branch = f"proposal/{proposal_id}"
@@ -2298,9 +2310,9 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
                     r = _run(["git", "-C", str(git), "worktree", "add", "-b", branch,
                               str(wt), "HEAD"], timeout=60)
                 except Exception as exc:
-                    return f"worktree не создался: {type(exc).__name__}: {exc}"
+                    return frame_language.text('forge.io.10', v1=f'{type(exc).__name__}', v3=f'{exc}')
                 if r.returncode != 0:
-                    return f"worktree не создался: {((r.stderr or r.stdout)[:500]).strip()}"
+                    return frame_language.text('forge.io.11', v1=f'{(r.stderr or r.stdout)[:500].strip()}')
                 candidate = (wt / subdir).resolve()
                 if candidate.is_dir():
                     root, cleanup, isolation = candidate, "git-worktree", "git-worktree"
@@ -2314,9 +2326,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
                     _run(["git", "-C", str(git), "branch", "-D", branch], timeout=30)
                     branch, isolation = "", "direct"
                     isolation_note = (
-                        f"изоляция worktree не состоялась: чекаут HEAD создан, но «{subdir.as_posix()}» "
-                        f"в нём не появился, а причину заранее опознать не удалось. Worktree убран, "
-                        f"работаю прямо в источнике — правок в живом каталоге откатывать нечем.")
+                        frame_language.text('forge.io.12', v1=f'{subdir.as_posix()}'))
         else:
             isolation = "direct"
     else:
@@ -2349,27 +2359,28 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     _arm_upstreams(task)
     orientation = _orientation_text(task)
     (_task_dir(task_id) / "orientation.txt").write_text(orientation + "\n", encoding="utf-8")
-    return orientation
+    return TaskStartReply(orientation, task_id)
 
 
+@frame_language.pinned
 def start_host(goal: str, target: str, priority: str = "normal",
                origin_chat: str = "", max_active_workers: int = DEFAULT_WORKERS) -> str:
     """Open a canonical Forge task whose execution backend is the root broker."""
     goal = str(goal or "").strip()
     target = str(target or "").strip()
     if not goal:
-        return "Нужна цель coding-задачи."
+        return frame_language.text('forge.io.13')
     try:
         slots = _worker_slots(max_active_workers)
     except (ValueError, TypeError) as exc:
-        return f"Не открыла coding-задачу: {exc}"
+        return frame_language.text('forge.io.14', v1=f'{exc}')
     if not target or not Path(target).is_absolute():
-        return "Для host-задачи нужен абсолютный путь хоста."
+        return frame_language.text('forge.io.15')
     if not serverd_client.available():
-        return "Host-задача не открыта: serverd broker не смонтирован."
+        return frame_language.text('forge.io.16')
     probe = serverd_client.workspace_inspect_result(target, "orientation")
     if not probe.get("ok"):
-        return f"Host-задача не открыта: [serverd] {probe.get('error')}"
+        return frame_language.text('forge.io.17', v1=f"{probe.get('error')}")
     orientation = str(probe.get("text") or "")
     task_id = _id("hcode")
     task = {
@@ -2391,9 +2402,10 @@ def start_host(goal: str, target: str, priority: str = "normal",
     _arm_upstreams(task)
     orientation += _upstream_note(task)
     (_task_dir(task_id) / "orientation.txt").write_text(orientation + "\n", encoding="utf-8")
-    return f"coding-задача {task_id}: {goal}\n{orientation}"
+    return TaskStartReply(frame_language.text('forge.io.18', v1=f'{task_id}', v3=f'{goal}', v5=f'{orientation}'), task_id)
 
 
+@frame_language.pinned
 def start_windows(goal: str, target: str, priority: str = "normal",
                   origin_chat: str = "", max_active_workers: int = DEFAULT_WORKERS) -> str:
     """Open a canonical Forge task whose execution backend is a Windows body."""
@@ -2402,18 +2414,18 @@ def start_windows(goal: str, target: str, priority: str = "normal",
     goal = str(goal or "").strip()
     target = str(target or "").strip()
     if not goal:
-        return "Нужна цель coding-задачи."
+        return frame_language.text('forge.io.19')
     try:
         slots = _worker_slots(max_active_workers)
     except (ValueError, TypeError) as exc:
-        return f"Не открыла coding-задачу: {exc}"
+        return frame_language.text('forge.io.20', v1=f'{exc}')
     if not target or not PureWindowsPath(target).is_absolute():
-        return "Для Windows-задачи нужен абсолютный Windows-путь."
+        return frame_language.text('forge.io.21')
     if not body_client.available():
-        return "Windows-задача не открыта: body controller не настроен."
+        return frame_language.text('forge.io.22')
     probe = body_client.workspace_inspect_result(target, "orientation")
     if not probe.get("ok"):
-        return f"Windows-задача не открыта: [windows-body] {probe.get('error')}"
+        return frame_language.text('forge.io.23', v1=f"{probe.get('error')}")
     orientation = str(probe.get("text") or "")
     task_id = _id("wcode")
     task = {
@@ -2434,7 +2446,7 @@ def start_windows(goal: str, target: str, priority: str = "normal",
     _arm_upstreams(task)
     orientation += _upstream_note(task)
     (_task_dir(task_id) / "orientation.txt").write_text(orientation + "\n", encoding="utf-8")
-    return f"coding-задача {task_id}: {goal}\n{orientation}"
+    return TaskStartReply(frame_language.text('forge.io.24', v1=f'{task_id}', v3=f'{goal}', v5=f'{orientation}'), task_id)
 
 
 def _remote_client(task: dict):
@@ -2455,6 +2467,7 @@ def _remote_observations(task: dict):
     yield
 
 
+@frame_language.pinned
 def list_tasks(limit: int = 12) -> str:
     rows = []
     if TASKS_DIR.is_dir():
@@ -2464,13 +2477,14 @@ def list_tasks(limit: int = 12) -> str:
                 rows.append(task)
     rows.sort(key=lambda x: x.get("updated", ""), reverse=True)
     if not rows:
-        return "Coding-задач пока нет."
+        return frame_language.text('forge.io.25')
     return "\n".join(
         f"{t.get('id')} [{t.get('status')}] {t.get('goal')} · {t.get('root')}"
         for t in rows[:max(1, min(int(limit or 12), 50))]
     )
 
 
+@frame_language.pinned
 def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
                start_char: int, expected_sha256: str, display_path: str = "") -> str:
     """Return an exact, source-bound UTF-8 slice that fits the worker's result budget.
@@ -2482,23 +2496,20 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
     digest = hashlib.sha256(raw).hexdigest()
     expected = str(expected_sha256 or "").strip().lower()
     if expected and expected != digest:
-        return InspectReply(f"Конфликт версии: ожидался sha256={expected}, сейчас {digest}. "
-                            "Перечитай файл с start=1, start_char=0; не смешивай страницы разных версий.",
+        return InspectReply(frame_language.text('forge.io.26', v1=f'{expected}', v3=f'{digest}'),
                             "refused")
     try:
         lines = raw.decode("utf-8").splitlines(keepends=True)
     except UnicodeDecodeError:
-        return InspectReply(f"{display_path or path.relative_to(root)}: paging requires valid UTF-8; "
-                            f"{len(raw)} bytes, sha256={digest}. No lossy page was delivered.", "refused")
+        return InspectReply(frame_language.text('forge.io.27', v0=f'{display_path or path.relative_to(root)}', v2=f'{len(raw)}', v4=f'{digest}'), "refused")
     s = max(1, int(start or 1))
     offset = int(start_char or 0)
     if offset < 0 or (offset and not expected):
-        return InspectReply("Для продолжения внутри строки нужны start_char >= 0 и expected_sha256 "
-                            "полной версии файла.", "refused")
+        return InspectReply(frame_language.text('forge.io.28'), "refused")
     if s <= len(lines) and offset > len(lines[s - 1]):
-        return InspectReply(f"start_char={offset} вне строки {s} ({len(lines[s - 1])} символов).", "refused")
+        return InspectReply(frame_language.text('forge.io.29', v1=f'{offset}', v3=f'{s}', v5=f'{len(lines[s - 1])}'), "refused")
     if s > len(lines) and offset:
-        return InspectReply(f"start_char={offset} вне файла ({len(lines)} строк).", "refused")
+        return InspectReply(frame_language.text('forge.io.30', v1=f'{offset}', v3=f'{len(lines)}'), "refused")
     if s <= len(lines) and offset == len(lines[s - 1]):
         s, offset = s + 1, 0
     stop = min(len(lines), int(end or len(lines)))
@@ -2514,7 +2525,7 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
 
     if s > stop:
         page = make_page("", s, 0)
-        return page if len(page) <= 8000 else "read page metadata exceeds 8000 characters; use a shorter path."
+        return page if len(page) <= 8000 else frame_language.text('forge.io.31')
     # Bound candidate material before JSON escaping; binary search handles control
     # characters (and quoted/backslash-heavy source) whose wire size is larger.
     chunks = []
@@ -2549,7 +2560,7 @@ def _read_page(path: Path, root: Path, raw: bytes, *, start: int, end: int,
         else:
             high = mid - 1
     if not best or (candidate and not json.loads(best)["text"]):
-        return "read page metadata exceeds 8000 characters; use a shorter path."
+        return frame_language.text('forge.io.32')
     return best
 
 
@@ -2571,6 +2582,7 @@ def noted(out, default: str = ""):
     return out
 
 
+@frame_language.pinned
 def inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
             glob: str = "**/*", start: int = 1, end: int = 0,
             start_char: int = 0, expected_sha256: str = "", module: str = "", limit: int = 40, cursor: str = "") -> str:
@@ -2578,6 +2590,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
     return out if isinstance(out, InspectReply) else InspectReply(out, "ok")
 
 
+@frame_language.pinned
 def _inspect(task_id: str, action: str = "status", path: str = "", query: str = "",
              glob: str = "**/*", start: int = 1, end: int = 0,
              start_char: int = 0, expected_sha256: str = "", module: str = "", limit: int = 40, cursor: str = "") -> str:
@@ -2621,30 +2634,28 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
                     _task_dir(task_id), lambda aid: snapshots.get(aid, {"status": "lost"}))
         git = _git_root(root) if root is not None and remote is None else None
         if err:
-            git_block = "недоступен (нет рабочего дерева)"
+            git_block = frame_language.text('forge.io.33')
         elif remote is not None:
             with _remote_observations(task):
                 git_block = remote.workspace_inspect(str(root), "status")
         else:
-            git_block = ((_git_text(git, "status", "--short", "--branch") or "чисто")
-                         if git else "нет")
+            git_block = ((_git_text(git, "status", "--short", "--branch") or frame_language.text('forge.io.34'))
+                         if git else frame_language.text('forge.io.35'))
         return _cap("\n".join([
             f"{task_id} [{task.get('status')}] {task.get('goal')}",
-            "coordination: " + json.dumps(_coordinator_state(task), ensure_ascii=False),
-            f"root: {task.get('root')}; isolation: {task.get('isolation')}",
-            *([f"⚠ Рабочее дерево недоступно: {err}"] if err else []),
-            f"agents: {_unit_counts(agents)}; processes: {_unit_counts(jobs)}; "
-            f"verification: {_unit_counts(checks)}",
-            f"worker slots: {sum(r.get('status') in (_LIVE_UNIT_STATES | {'unknown'}) for r in agents)}"
-            f"/{task.get('max_active_workers', DEFAULT_WORKERS)}; shared-root writers=1; verification parallel default=4/max=8; tree:",
+            frame_language.text('forge.io.53') + json.dumps(_coordinator_state(task), ensure_ascii=False),
+            frame_language.text('forge.io.51', v1=f"{task.get('root')}", v3=f"{task.get('isolation')}"),
+            *([frame_language.text('forge.io.36', v1=f'{err}')] if err else []),
+            frame_language.text('forge.io.52', v1=f'{_unit_counts(agents)}', v3=f'{_unit_counts(jobs)}', v5=f'{_unit_counts(checks)}'),
+            frame_language.text('forge.io.37', v1=f"{sum((r.get('status') in _LIVE_UNIT_STATES | {'unknown'} for r in agents))}", v3=f"{task.get('max_active_workers', DEFAULT_WORKERS)}"),
             *(f"- {r['id']} [{r.get('status')}] parent={r.get('parent_unit_id') or '-'} "
               f"result_sha256={r.get('result_sha256') or '-'} "
               f"dispositions={','.join(d.get('disposition', '') for d in r.get('dispositions', [])) or '-'} "
               f"stop={str((r.get('stop_receipt') or {}).get('state') or '-')[:100]}"
               for r in agents[:100]),
-            (forge_swarm.summary(swarm_plan) if swarm_plan else "swarm: нет плана"),
-            ((f"{task.get('scope')} backend:\n") if remote is not None else "git:\n") + git_block,
-            "recent events:\n" + "\n".join(
+            (forge_swarm.summary(swarm_plan) if swarm_plan else frame_language.text('forge.io.38')),
+            ((frame_language.text('forge.io.54', v0=f"{task.get('scope')}")) if remote is not None else "git:\n") + git_block,
+            frame_language.text('forge.io.39') + "\n".join(
                 f"- {e.get('at')} {e.get('kind')}: {e.get('summary') or e.get('command') or e.get('path') or ''}"
                 for e in _events(task_id, 12)
             ),
@@ -2665,8 +2676,7 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
         # supports the local revision/cursor protocol. Never silently downgrade
         # an exact continuation into an unguarded remote read.
         if start_char or expected_sha256:
-            return InspectReply("Remote Forge backend does not support paged reads: "
-                                "start_char/expected_sha256 are unavailable. No read was performed.",
+            return InspectReply(frame_language.text('forge.io.40'),
                                 "refused")
         with _remote_observations(task):
             # The remote backend answers in its own words; its success is not claimed here.
@@ -2677,11 +2687,11 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
     if action == "diff":
         git = _git_root(root)
         if not git:
-            return InspectReply("У этой задачи нет git — diff недоступен.", "refused")
+            return InspectReply(frame_language.text('forge.io.41'), "refused")
         base = task.get("base_commit") or "HEAD"
         status = _git_text(git, "status", "--short")
         diff = _git_text(git, "diff", "--stat", str(base)) + "\n" + _git_text(git, "diff", str(base))
-        return _cap((status + "\n" + diff).strip() or "Изменений нет.", 30000)
+        return _cap((status + "\n" + diff).strip() or frame_language.text('forge.io.42'), 30000)
     if action == "model":
         return json.dumps(forge_intelligence.project_model(root), ensure_ascii=False, indent=2)
     if action == "overview":
@@ -2695,7 +2705,7 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
                                ensure_ascii=False, indent=2), 30000)
     if action == "references":
         if not query:
-            return InspectReply("Для references нужен query с именем символа.", "refused")
+            return InspectReply(frame_language.text('forge.io.43'), "refused")
         return _cap(json.dumps(forge_intelligence.references(root, query, path=path),
                                ensure_ascii=False, indent=2), 30000)
     if action == "diagnostics":
@@ -2715,10 +2725,10 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
     assert p is not None
     if action == "read":
         if not p.is_file():
-            return InspectReply(f"Нет файла {p.relative_to(root)}.", "refused")
+            return InspectReply(frame_language.text('forge.io.44', v1=f'{p.relative_to(root)}'), "refused")
         raw = p.read_bytes()
         if b"\x00" in raw[:4096]:
-            return f"{p.relative_to(root)}: бинарный файл, {len(raw)} байт, sha256={hashlib.sha256(raw).hexdigest()[:16]}"
+            return frame_language.text('forge.io.45', v0=f'{p.relative_to(root)}', v2=f'{len(raw)}', v4=f'{hashlib.sha256(raw).hexdigest()[:16]}')
         if start_char or expected_sha256:
             return _read_page(p, root, raw, start=start, end=end,
                               start_char=start_char, expected_sha256=expected_sha256)
@@ -2726,7 +2736,7 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
         s = max(1, int(start or 1))
         e = min(len(lines), int(end or (s + 499)))
         body = "\n".join(f"{i:>5}\t{lines[i-1]}" for i in range(s, e + 1))
-        tail = f"\n… {len(lines)} строк; дальше start={e+1}" if e < len(lines) else ""
+        tail = frame_language.text('forge.io.46', v1=f'{len(lines)}', v3=f'{e + 1}') if e < len(lines) else ""
         legacy = f"{p.relative_to(root)} · sha256={hashlib.sha256(raw).hexdigest()[:16]}\n{body}{tail}"
         if len(legacy) <= 8000:
             return legacy
@@ -2734,15 +2744,15 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
                           start_char=0, expected_sha256="")
     if action == "list":
         if not p.is_dir():
-            return InspectReply(f"Нет директории {p.relative_to(root)}.", "refused")
+            return InspectReply(frame_language.text('forge.io.47', v1=f'{p.relative_to(root)}'), "refused")
         entries = []
         for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:400]:
             mark = "/" if child.is_dir() else f" · {child.stat().st_size}B"
             entries.append(child.name + mark)
-        return "\n".join(entries) or "(пусто)"
+        return "\n".join(entries) or frame_language.text('forge.io.48')
     if action == "search":
         if not query:
-            return InspectReply("Для search нужен query.", "refused")
+            return InspectReply(frame_language.text('forge.io.49'), "refused")
         import run_context
         import forge_search_step
         request = {'root':str(root), 'path':str(p), 'query':query,
@@ -2754,7 +2764,7 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
             value = search_execution.call([sys.executable, '-I', '-S', '-B',
                 str(Path(__file__).with_name('forge_search_step.py'))], request)
             if value is None:
-                return InspectReply('Поиск не вернул подтверждённого ответа; исполнитель не перезапускался.', 'unknown')
+                return InspectReply(frame_language.text('forge.io.50'), 'unknown')
         else:
             value = forge_search_step.execute(request, runner=_run)
         content = value['content']

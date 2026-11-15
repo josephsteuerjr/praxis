@@ -44,8 +44,7 @@ class DurableStatusTest(unittest.TestCase):
              patch.object(forge, '_remote_client', side_effect=AssertionError('remote probe')), \
              patch.object(forge.forge_swarm, 'refresh', side_effect=AssertionError('swarm write')):
             out = forge.inspect(self.task_id, 'status')
-        for text in ('[done]', 'durable goal', 'durable receipt', 'agents: done 1',
-                     'processes: done 1', 'verification: done 1', '⚠', 'недоступно'):
+        for text in ('[done]', 'durable goal', 'durable receipt', forge.frame_language.text('forge.io.52',v1='done 1',v3='done 1',v5='done 1'), '⚠', 'недоступно'):
             self.assertIn(text, out)
         self.assertNotIn('abandon', out)
         self.assertFalse(self.root.exists())
@@ -81,7 +80,7 @@ class DurableStatusTest(unittest.TestCase):
 
     def test_unknown_task_still_fails(self):
         for action in ('status', 'history'):
-            self.assertIn('нет coding-задачи', forge.inspect('code-absent', action))
+            self.assertEqual(forge.frame_language.text('forge.io.3',v1='code-absent'), forge.inspect('code-absent', action))
 
     def test_public_session_and_inspect_routes(self):
         # Execute the actual thin API wrappers without importing the full agent runtime.

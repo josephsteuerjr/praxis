@@ -4575,26 +4575,23 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         if str(scope or "").strip().lower() == "host":
             out = forge.start_host(goal, target, priority=priority, origin_chat=origin,
                                    max_active_workers=max_active_workers)
-            if out.startswith("coding-задача hcode-"):
-                tool_journal(f"[serverd] host-задача (root): {goal[:180]}", salience=2)
+            if getattr(out, "task_id", "").startswith("hcode-"):
+                tool_journal(frame_language.text('forge.start.host', goal=goal[:180]), salience=2)
             return out
         if str(scope or "").strip().lower() == "windows":
             out = forge.start_windows(goal, target, priority=priority, origin_chat=origin,
                                       max_active_workers=max_active_workers)
-            if out.startswith("coding-задача wcode-"):
-                tool_journal(f"[windows-body] Windows-задача: {goal[:180]}", salience=2)
-                # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
-                # первой строки (её парсит журнальный гейт выше и позиционные тесты).
-                out += (
-                    frame_language.text('run.result.legacy')
-                )
+            if getattr(out, "task_id", "").startswith("wcode-"):
+                tool_journal(frame_language.text('forge.start.windows', goal=goal[:180]), salience=2)
+                # The legacy warning is display text; task admission comes from the producer ID.
+                out = forge.TaskStartReply(out + frame_language.text('run.result.legacy'), out.task_id)
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
                           origin_chat=origin,
                           success_criteria=success_criteria, verify_commands=verify_commands,
                           max_active_workers=max_active_workers)
-        if out.startswith("coding-задача "):
-            tool_journal(f"[forge] открыта coding-задача: {goal[:180]}", salience=2)
+        if getattr(out, "task_id", "").startswith("code-"):
+            tool_journal(frame_language.text('forge.start.local', goal=goal[:180]), salience=2)
         return out
     if action in {"stop", "pause", "resume"}:
         return json.dumps(forge.control(task_id, action), ensure_ascii=False)

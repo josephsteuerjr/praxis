@@ -57,7 +57,7 @@ class ObservationContract(unittest.TestCase):
              mock.patch.object(forge.forge_swarm, 'refresh', side_effect=AssertionError('graph write')):
             status = forge.inspect(self.task_id, 'status')
             history = json.loads(forge.inspect(self.task_id, 'history', end=1))
-        for part in ('[done]', 'agent-parent', 'coordination:', 'durable contract', 'недоступно'):
+        for part in ('[done]', 'agent-parent', forge.frame_language.text('forge.io.53'), 'durable contract', 'недоступно'):
             self.assertIn(part, status)
         self.assertNotIn('abandon', status)
         self.assertEqual(history[0]['summary'], 'exact durable event')
@@ -72,8 +72,7 @@ class ObservationContract(unittest.TestCase):
                 for cursor in ({'start_char': 1}, {'expected_sha256': 'a' * 64}):
                     with self.subTest(scope=scope, cursor=cursor):
                         out = forge.inspect(self.task_id, 'read', path='long.txt', **cursor)
-                        self.assertIn('does not support paged reads', out)
-                        self.assertIn('No read was performed', out)
+                        self.assertEqual(forge.frame_language.text('forge.io.40'), out)
 
     def test_host_legacy_reader_preserves_actual_broker_arguments(self):
         self.put(self.folder / 'task.json', {**self.task, 'scope': 'host'})
