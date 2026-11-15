@@ -33,6 +33,7 @@ TopicCreate и TopicEdit, но нет ToggleForum; факт виден толь�
 """
 
 from __future__ import annotations
+import frame_language
 
 import contextlib
 import datetime as _dt
@@ -328,6 +329,7 @@ def writing_of(peer_id) -> dict:
     return dict(rec) if isinstance(rec, dict) else {}
 
 
+@frame_language.pinned
 def writing_line(peer_id) -> str:
     """Фраза для её ориентации. Пусто — сказать нечего, и молчание тут честно.
 
@@ -341,13 +343,8 @@ def writing_line(peer_id) -> str:
     linked, title = rec.get("linked_chat_id"), rec.get("linked_title")
     if linked:
         where = (str(title) + " [" + str(linked) + "]") if title else str(linked)
-        return ("Это ВЕЩАТЕЛЬНЫЙ КАНАЛ: читать я тут могу, писать в него — нет. Ответы на "
-                "его посты живут в связанном обсуждении: " + where + ". Хочешь ответить — "
-                "адресуй туда явно; отправка в сам канал вернётся отказом, и человек "
-                "ответа не увидит.")
-    return ("Это ВЕЩАТЕЛЬНЫЙ КАНАЛ: читать я тут могу, писать в него — нет. Какое "
-            "обсуждение с ним связано, я пока не знаю — значит и куда уйдёт ответ, "
-            "сказать не могу. Спроси у Егора адрес, а не отправляй наугад.")
+        return (frame_language.text('helper.telegram_routes.writing_line.344') + where + frame_language.text('helper.telegram_routes.writing_line.345'))
+    return (frame_language.text('helper.telegram_routes.writing_line.348'))
 
 
 def current(peer_id) -> dict:
@@ -510,7 +507,7 @@ def observe_topics(peer_id, topics: dict, *, source: str = "get_forum_topics",
         data.setdefault("peer_id", str(peer_id))
         data.setdefault("epochs", [])
         if not _save(peer_id, data):
-            raise OSError(f"реестр маршрутов [{peer_id}]: durable-каталог тем не записался")
+            raise OSError(frame_language.text('helper.telegram_routes.observe_topics.513', p0=f'{peer_id}'))
     return written
 
 
@@ -758,6 +755,7 @@ def read_scope(peer_id, topic_id=None) -> ReadScope:
     return ReadScope(False, frozenset(members), word, place)
 
 
+@frame_language.pinned
 def orientation_line(peer_id, topic_id, selector: str, forum_status: str) -> str:
     """Как назвать ей эту ветку — по свидетельству, а не по умолчанию.
 
@@ -773,9 +771,7 @@ def orientation_line(peer_id, topic_id, selector: str, forum_status: str) -> str
     Функция живёт здесь, а не в раннере, ровно чтобы её можно было проверить поведением,
     а не грепом по исходнику: греп ломался на переносе строки трижды подряд.
     """
-    head = (f"peer_id={peer_id}, top_msg_id={topic_id}, selector={selector}. "
-            "Use that selector with Telegram read/send tools when addressing this "
-            "exact thread.")
+    head = (frame_language.text('helper.telegram_routes.orientation_line.776', p0=f'{peer_id}', p1=f'{topic_id}', p2=f'{selector}'))
     if forum_status == TRUE:
         # ⚠ Здесь безусловно утверждалась изоляция «от любой другой темы группы». В
         # General форума это ложь ровно там, где мы сами склеиваем: General и наши
@@ -784,35 +780,21 @@ def orientation_line(peer_id, topic_id, selector: str, forum_status: str) -> str
         scope = read_scope(peer_id, topic_id)
         if scope.members is not None and len(scope.members) > 1:
             if scope.place == room_of(peer_id) or topic_of(scope.place) is None:
-                return (f"General of a Telegram forum: {head} General is ONE conversation: "
-                        "this thread and the neighbouring reply chains of General are the "
-                        "same place, and you are seeing part of it — read the rest with "
-                        "group_context before concluding that anything was silent. The "
-                        "group's real forum topics ARE separate places and are not merged "
-                        "into it.")
-            return (f"Telegram forum topic: {head} The topic is isolated from every other "
-                    "topic in the same group; reply chains inside it are part of it, not "
-                    "separate places.")
-        return (f"Telegram forum topic: {head} This turn, its buffer and reply map "
-                "are isolated from every other topic in the same group.")
+                return (frame_language.text('helper.telegram_routes.orientation_line.787', p0=f'{head}'))
+            return (frame_language.text('helper.telegram_routes.orientation_line.793', p0=f'{head}'))
+        return (frame_language.text('helper.telegram_routes.orientation_line.796', p0=f'{head}'))
     if forum_status == FALSE:
-        return (f"Reply thread inside ONE ordinary room: {head} This is NOT a Telegram "
-                "forum topic — the room is not a forum, and this thread is not a "
-                "separate room. Your buffer and reply map are scoped to the thread, so "
-                "you are seeing PART of a room: read the rest with group_context before "
-                "concluding that anything was silent.")
-    return (f"Thread of unverified kind: {head} Whether this room is a Telegram forum "
-            "has not been observed yet, so treat this thread's isolation as "
-            "unconfirmed — it may be one branch of a single ordinary room.")
+        return (frame_language.text('helper.telegram_routes.orientation_line.799', p0=f'{head}'))
+    return (frame_language.text('helper.telegram_routes.orientation_line.804', p0=f'{head}'))
 
 
+@frame_language.pinned
 def describe(peer_id) -> str:
     """Короткая человеческая строка — для панели и отчётов."""
     epochs = read(peer_id)["epochs"]
     if not epochs:
-        return "о природе комнаты ничего не известно"
+        return frame_language.text('helper.telegram_routes.describe.813')
     last = epochs[-1]
-    word = {TRUE: "форум", FALSE: "обычная супергруппа", UNKNOWN: "неизвестно"}.get(
-        str(last.get("forum_status")), "неизвестно")
-    return (f"{word} (эпоха {last.get('epoch')}, по свидетельству "
-            f"{last.get('evidence')}, наблюдений {last.get('observations')})")
+    word = {TRUE: frame_language.text('helper.telegram_routes.describe.815'), FALSE: frame_language.text('helper.telegram_routes.describe.815.2'), UNKNOWN: frame_language.text('helper.telegram_routes.describe.815.3')}.get(
+        str(last.get("forum_status")), frame_language.text('helper.telegram_routes.describe.816'))
+    return (frame_language.text('helper.telegram_routes.describe.817', p0=f'{word}', p1=f"{last.get('epoch')}", p2=f"{last.get('evidence')}", p3=f"{last.get('observations')}"))

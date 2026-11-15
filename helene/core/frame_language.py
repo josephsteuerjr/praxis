@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import hashlib
+from inspect import iscoroutinefunction
 import json
 import os
 import re
@@ -86,6 +87,12 @@ def pin():
 
 
 def pinned(function):
+    if iscoroutinefunction(function):
+        @wraps(function)
+        async def invoke_async(*args, **kwargs):
+            with pin():
+                return await function(*args, **kwargs)
+        return invoke_async
     @wraps(function)
     def invoke(*args, **kwargs):
         with pin():

@@ -10,6 +10,7 @@ turn.  Every read is rooted in one explicit Telegram peer, so a topic selector c
 never drift into a neighbouring room.
 """
 from __future__ import annotations
+import frame_language
 
 import datetime as _dt
 import hashlib
@@ -61,7 +62,7 @@ _KEY_CACHE: dict[str, tuple[int, int, set[tuple]]] = {}
 def _peer(value: str | int) -> str:
     peer = str(value).strip()
     if not peer:
-        raise ValueError("peer_id is empty")
+        raise ValueError(frame_language.text('helper.group_context._peer.64'))
     return peer
 
 
@@ -71,9 +72,9 @@ def _positive(value, *, optional: bool = True) -> int | None:
     try:
         number = int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError("identifier must be a positive integer") from exc
+        raise ValueError(frame_language.text('helper.group_context._positive.74')) from exc
     if number <= 0:
-        raise ValueError("identifier must be a positive integer")
+        raise ValueError(frame_language.text('helper.group_context._positive.76'))
     return number
 
 
@@ -83,7 +84,7 @@ def _signed_identifier(value) -> int | None:
     try:
         number = int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError("sender identifier must be an integer") from exc
+        raise ValueError(frame_language.text('helper.group_context._signed_identifier.86')) from exc
     return number or None
 
 
@@ -664,17 +665,16 @@ def _projection_from_rows(peer_id: str | int) -> dict:
     return result
 
 
+@frame_language.pinned
 def _projection_markdown(projection: dict) -> str:
     rows = [
         "<!-- praxis-generated: group-context-map-v1 -->",
-        f"# Group context map: {projection['peer_id']}",
+        frame_language.text('helper.group_context._projection_markdown.670', p0=f"{projection['peer_id']}"),
         "",
         f"Messages: {projection.get('message_count', 0)}",
-        f"Edit revisions: {projection.get('revision_count', 0)}",
-        f"Topics in map: {len(projection.get('topics') or {})} of "
-        f"{projection.get('topic_count', len(projection.get('topics') or {}))}",
-        f"Participants in map: {len(projection.get('participants') or {})} of "
-        f"{projection.get('participant_count', len(projection.get('participants') or {}))}",
+        frame_language.text('helper.group_context._projection_markdown.673', p0=f"{projection.get('revision_count', 0)}"),
+        frame_language.text('helper.group_context._projection_markdown.674', p0=f"{len(projection.get('topics') or {})}", p1=f"{projection.get('topic_count', len(projection.get('topics') or {}))}"),
+        frame_language.text('helper.group_context._projection_markdown.676', p0=f"{len(projection.get('participants') or {})}", p1=f"{projection.get('participant_count', len(projection.get('participants') or {}))}"),
         "",
         "## Topics",
     ]
@@ -697,7 +697,7 @@ def _projection_markdown(projection: dict) -> str:
             f"participants={item.get('participant_count', len(item.get('participants') or []))}; "
             f"last={item.get('last_timestamp') or '-'}"
         )
-    rows.extend(("", "## Participants"))
+    rows.extend(("", frame_language.text('helper.group_context._projection_markdown.700')))
     participants = sorted(
         projection.get("participants", {}).values(),
         key=lambda item: (
@@ -894,6 +894,7 @@ def _real_title(value) -> str:
     return "" if _INVENTED_TITLE_RE.fullmatch(title) else title
 
 
+@frame_language.pinned
 def _format_message(row: dict, *, max_text: int = 1200,
                     thread_word: str = "topic", as_self: bool = False) -> str:
     """Одна строка архива.
@@ -942,7 +943,7 @@ def _format_message(row: dict, *, max_text: int = 1200,
         head = (f"[{topic_mark}; message #{row.get('message_id')}; "
                 f"{row.get('timestamp')}; deleted={row.get('deleted_at')}"
                 f"{deleted_by}{reply}")
-        return f"{head}] [message deleted in Telegram]"
+        return frame_language.text('helper.group_context._format_message.945', p0=f'{head}')
     text = str(row.get("text") or "")
     media = str(row.get("media") or "")
     body = " ".join(part for part in (media, text) if part).strip() or "[service event]"
@@ -955,8 +956,7 @@ def _format_message(row: dict, *, max_text: int = 1200,
         # «приняла первый вердикт» — второй лежал в отрезанной половине, и ничто
         # на неё не указывало. Полный текст всегда есть в архиве.
         body = (body[:cap]
-                + f"…[ОБРЕЗАНО: показано {cap} из {len(body)} символов; целиком — "
-                  f"group_context(action=\"message\", limit={row.get('message_id')})]")
+                + frame_language.text('helper.group_context._format_message.958', p0=f'{cap}', p1=f'{len(body)}', p2=f"{row.get('message_id')}"))
     if as_self:
         # Её слова — и только они. Ни один символ конверта не уезжает в роль
         # `assistant`: там он был образцом для подделки, а не координатой.
@@ -982,6 +982,7 @@ def context(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
         whole_room=whole_room, members=members, thread_word=thread_word))
 
 
+@frame_language.pinned
 def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
                  max_chars: int = 20_000, whole_room: bool = False,
                  members: frozenset | set | None = None,
@@ -1202,9 +1203,9 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
     rest_all = max(0, len(ordered) - shown)
     marks = []
     if rest_own:
-        marks.append(f"в этой ветке выше ещё {rest_own}")
+        marks.append(frame_language.text('helper.group_context.context_rows.1205', p0=f'{rest_own}'))
     if rest_all - rest_own > 0:
-        marks.append(f"в соседних ветках этого же места ещё {rest_all - rest_own}")
+        marks.append(frame_language.text('helper.group_context.context_rows.1207', p0=f'{rest_all - rest_own}'))
     if marks:
         # ⚠⚠ ЧИСЛА СТОЯТ В ХВОСТЕ, А НЕ В НУЛЕВОЙ СТРОКЕ, И ЭТО ПРО ДЕНЬГИ.
         #
@@ -1225,13 +1226,8 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
         # ⚑ НАЗВАННАЯ ЦЕНА: точные остатки теперь приезжают ПОСЛЕ ленты, а не на шве.
         # Строка обстановки, а не реплика (`self=False`), и адрес хода она не трогает:
         # кому отвечать, говорит отдельная строка кадра, а не «последнее сообщение».
-        seam_line = ("…[ЛЕНТА ОБРЕЗАНА: выше есть ещё сообщения. Сколько именно и что "
-                     "с этим делать — строкой в конце ленты.]")
-        rest_line = (f"…[ОБРЕЗ ЛЕНТЫ, точные числа: показано {shown} сообщений, "
-                     f"{'; '.join(marks)}. Упирается бюджет символов, не limit: "
-                     f"чтобы увидеть больше, поднимай context_summary_chars комнаты "
-                     f"(manage_room) или спрашивай узко — "
-                     f"group_context(action=\"search\", query=…)]")
+        seam_line = (frame_language.text('helper.group_context.context_rows.1228'))
+        rest_line = (frame_language.text('helper.group_context.context_rows.1230', p0=f'{shown}', p1=f"{'; '.join(marks)}"))
         lines.insert(0, {"self": False, "line": seam_line, "role_line": seam_line,
                          "service": True})
         lines.append({"self": False, "line": rest_line, "role_line": rest_line,
@@ -1369,6 +1365,7 @@ def epoch_life_signature(row: dict):
 EPOCH_DELETED_LATER = "[later deleted in Telegram]"
 
 
+@frame_language.pinned
 def epoch_occurrence_row(occurrence: dict, *, deleted_later: bool = False,
                          elsewhere: bool = False) -> dict:
     """Render exact stored bytes as evidence or a delivered dialogue turn.
@@ -1384,13 +1381,13 @@ def epoch_occurrence_row(occurrence: dict, *, deleted_later: bool = False,
     head = "[archive " + json.dumps(envelope, ensure_ascii=False, sort_keys=True,
                                    separators=(",", ":")) + "]"
     media, text = str(row.get("media") or ""), str(row.get("text") or "")
-    body = ("[message deleted in Telegram]" if row.get("kind") == "deletion"
+    body = (frame_language.text('helper.group_context.epoch_occurrence_row.1387') if row.get("kind") == "deletion"
             else media + ("\n" if media and text else "") + text)
     line = head + "\n" + body
     own = row.get("kind") == "message" and row.get("outgoing") is True
     deleted_later = bool(deleted_later and row.get("kind") == "message")
     if deleted_later:
-        line += "\n" + EPOCH_DELETED_LATER
+        line += "\n" + frame_language.text('helper.group_context.deleted_later')
         own = False
     elsewhere = bool(elsewhere and own)
     if elsewhere:
@@ -1406,6 +1403,7 @@ def epoch_occurrence_row(occurrence: dict, *, deleted_later: bool = False,
 
 
 
+@frame_language.pinned
 def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | None,
                whole_room: bool = False, members: frozenset | set | None = None,
                thread_word: str | None = None) -> list[dict]:
@@ -1462,8 +1460,7 @@ def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | Non
         })
     if not picked:
         return []
-    seam = (f"…[ЛЕНТА ЭПОХИ: всё сказанное здесь с сообщения #{since}, в порядке прихода; правки "
-            f"и удаления дописаны там, где пришли; что было раньше — в сводке эпохи выше]")
+    seam = (frame_language.text('helper.group_context.epoch_rows.1465', p0=f'{since}'))
     lines = [{"self": False, "line": seam, "role_line": seam, "service": True}]
     if wanted is not None:
         root_row = latest_message(peer_id, wanted)
@@ -1474,6 +1471,7 @@ def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | Non
     return lines + picked
 
 
+@frame_language.pinned
 def map_text(peer_id: str | int, *, current_topic: int | None = None,
              limit: int = 30, not_a_forum: bool = False,
              artifacts: frozenset | set | None = None) -> str:
@@ -1518,9 +1516,10 @@ def map_text(peer_id: str | int, *, current_topic: int | None = None,
         rows.append(f"- …ещё {total - len(rows)} веток этой комнаты не показано "
                     f"(карта отдаёт {len(rows)} самых свежих из {total}; "
                     f"нужную ищи через group_context(action=\"search\", query=…))")
-    return "\n".join(rows) or "(topics not archived yet)"
+    return "\n".join(rows) or frame_language.text('helper.group_context.map_text.1521')
 
 
+@frame_language.pinned
 def orientation_bundle(peer_id: str | int, *, current_topic: int | None,
                        query: str = "", cross_topics: str = "off",
                        max_chars: int = 10_000, not_a_forum: bool = False,
@@ -1538,9 +1537,9 @@ def orientation_bundle(peer_id: str | int, *, current_topic: int | None,
     if str(cross_topics or "off").casefold() != "map":
         return ""
     budget = max(1000, min(MAX_CONTEXT_CHARS, int(max_chars)))
-    head = ("Map of reply threads in this ONE room (aggregate only; no history merged):\n"
+    head = (frame_language.text('helper.group_context.orientation_bundle.1541')
             if not_a_forum else
-            "Cross-topic map (aggregate only; no topic history was merged):\n")
+            frame_language.text('helper.group_context.orientation_bundle.1543'))
     chunks = [head + map_text(peer_id, current_topic=current_topic,
                               not_a_forum=not_a_forum, artifacts=artifacts)]
     if query.strip():
@@ -1548,10 +1547,10 @@ def orientation_bundle(peer_id: str | int, *, current_topic: int | None,
                 if row.get("topic_id") != current_topic][:6]
         if hits:
             chunks.append(
-                ("Query-relevant excerpts from OTHER threads of this same room "
+                (frame_language.text('helper.group_context.orientation_bundle.1551')
                  if not_a_forum else
-                 "Query-relevant excerpts from OTHER topics ")
-                + "(marked; use group_context before relying on their wider context):\n"
+                 frame_language.text('helper.group_context.orientation_bundle.1553'))
+                + frame_language.text('helper.group_context.orientation_bundle.1554')
                 + "\n".join("[CROSS-TOPIC EXCERPT] " + _format_message(row, max_text=500)
                             for row in hits)
             )
@@ -1559,6 +1558,7 @@ def orientation_bundle(peer_id: str | int, *, current_topic: int | None,
     return value[:budget]
 
 
+@frame_language.pinned
 def describe(peer_id: str | int, *, action: str, topic_id: int | None = None,
              query: str = "", limit: int = 20, max_chars: int = 20_000,
              whole_room: bool = False, members: frozenset | set | None = None,
@@ -1582,19 +1582,20 @@ def describe(peer_id: str | int, *, action: str, topic_id: int | None = None,
     if action == "search":
         rows = search(peer_id, query, topic_id=topic_id, limit=limit)
         return "\n".join(_format_message(row, thread_word=thread_word) for row in rows) \
-            or "(nothing found in this group)"
+            or frame_language.text('helper.group_context.describe.1585')
     if action == "context":
         wide = bool(whole_room or members is not None)
         return context(peer_id, topic_id=topic_id, limit=limit, max_chars=max_chars,
                        whole_room=whole_room, members=members,
                        thread_word=thread_word) or (
-            "(this place has no archived messages yet)" if wide
-            else "(this exact topic has no archived messages yet)")
+            frame_language.text('helper.group_context.describe.1591') if wide
+            else frame_language.text('helper.group_context.describe.1592'))
     if action == "message":
         return message_text(peer_id, message_id=limit)
     return "action: topics | search | context | message"
 
 
+@frame_language.pinned
 def message_text(peer_id: str | int, *, message_id: int) -> str:
     """Одно сообщение из архива ЦЕЛИКОМ — то, что обещает маркер обрезки.
 
@@ -1610,7 +1611,7 @@ def message_text(peer_id: str | int, *, message_id: int) -> str:
         return f"message: {exc}"
     latest = latest_message(peer_id, wanted)
     if latest is None:
-        return f"(message #{wanted} is not in this group's archive)"
+        return frame_language.text('helper.group_context.message_text.1613', p0=f'{wanted}')
     return _format_message(latest, max_text=MAX_CONTEXT_CHARS)
 
 

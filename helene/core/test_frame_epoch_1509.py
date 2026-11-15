@@ -20,6 +20,7 @@
 Запуск: python praxis_test.py test_frame_epoch_1509 -v
 """
 from __future__ import annotations
+import frame_language
 
 import json
 import os
@@ -184,7 +185,7 @@ class EpochRows(unittest.TestCase):
             peer_id=self.PEER, message_id=4, timestamp="2026-09-15T00:04:00Z",
             sender_id=10, sender_name="Alice", topic_id=None))
         lines = self.lines(2)
-        self.assertTrue(lines[0].startswith("…[ЛЕНТА ЭПОХИ: всё сказанное здесь с сообщения #2"))
+        self.assertEqual(lines[0], frame_language.text('helper.group_context.epoch_rows.1465', p0='2'))
         body = lines[1:]
         self.assertEqual([int(line.split("message #")[1].split(";")[0]) for line in body],
                          [2, 3, 4, 5, 3, 4])
@@ -192,7 +193,7 @@ class EpochRows(unittest.TestCase):
         self.assertIn("msg 3", body[1])
         self.assertIn("edited=2026-09-15T00:07:00Z", body[4])
         self.assertIn("msg 3 v2", body[4])
-        self.assertIn("[message deleted in Telegram]", body[5])
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), body[5])
         # исходная строка #4 осталась как была: правка не переписала прошлое
         self.assertIn("msg 4", body[2])
         self.assertTrue(all(not row.get("service") for row in self.rows(2)[1:]))

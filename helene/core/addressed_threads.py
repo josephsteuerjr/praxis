@@ -15,6 +15,7 @@
 """
 
 from __future__ import annotations
+import frame_language
 
 import re
 import time
@@ -106,6 +107,7 @@ def _pending_followups(ids: set[str], peer: object) -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def collect(ctx=None) -> tuple[str, ...]:
     """Строки адресных нитей для snap['addressed_threads']. Пусто — значит пусто."""
     ids = _present_ids(ctx)
@@ -118,7 +120,7 @@ def collect(ctx=None) -> tuple[str, ...]:
     # 1) нити досье присутствующих (один проход по досье)
     for tg, slug in sorted(_slug_map(ids).items()):
         for loop in _loops_for(slug):
-            line = f"{tg} (досье): {loop[:MAX_CHARS]}"
+            line = frame_language.text('helper.addressed_threads.collect.121', p0=f'{tg}', p1=f'{loop[:MAX_CHARS]}')
             if line not in seen:
                 seen.add(line)
                 lines.append(line)
@@ -127,7 +129,7 @@ def collect(ctx=None) -> tuple[str, ...]:
     for item in _pending_followups(ids, peer):
         label = str(item.get("target_label") or item.get("target_user_id") or "?")
         excerpt = str(item.get("sent_excerpt") or "")[:80]
-        line = f"{label} (follow-up, без ответа): {excerpt}"
+        line = frame_language.text('helper.addressed_threads.collect.130', p0=f'{label}', p1=f'{excerpt}')
         if line not in seen:
             seen.add(line)
             lines.append(line)

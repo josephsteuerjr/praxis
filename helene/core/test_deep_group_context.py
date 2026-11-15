@@ -1,4 +1,5 @@
 from __future__ import annotations
+import frame_language
 
 import asyncio
 import datetime
@@ -321,7 +322,7 @@ class TestCanonicalArchive(TempGroupMemory):
         self.add("-1001", 22, 2, "shared mycelium idea", title="Elsewhere")
         value = group_context.orientation_bundle(
             "-1001", current_topic=11, query="mycelium", cross_topics="map")
-        self.assertIn("aggregate only", value)
+        self.assertIn(frame_language.text('helper.group_context.orientation_bundle.1543').strip(), value)
         self.assertIn("[CROSS-TOPIC EXCERPT]", value)
         self.assertIn("topic #22", value)
 
@@ -901,18 +902,18 @@ class TestDeletedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         rendered = group_context.context("-1001", topic_id=77, limit=10)
         self.assertIn("message #41", rendered)
         self.assertIn("deleted=2026-07-14T12:06:00Z", rendered)
-        self.assertIn("[message deleted in Telegram]", rendered)
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), rendered)
         self.assertNotIn("secret text", rendered)
         self.assertEqual(group_context.search("-1001", "secret"), [])
         full = group_context.message_text("-1001", message_id=41)
-        self.assertIn("[message deleted in Telegram]", full)
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), full)
         self.assertNotIn("secret text", full)
 
         # A later history backfill may append the old body after the tombstone.  Current
         # surfaces must still treat deletion as terminal instead of resurrecting it.
         self.add("-1001", 77, 41, "secret text resurrected", reply=77, title="Ideas")
         rendered = group_context.context("-1001", topic_id=77, limit=10)
-        self.assertIn("[message deleted in Telegram]", rendered)
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), rendered)
         self.assertNotIn("resurrected", rendered)
         self.assertIn("former sender=Alice", rendered)
         rows = group_context.context_rows("-1001", topic_id=77, limit=10)
@@ -930,10 +931,10 @@ class TestDeletedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
 
         first = group_context.context("-1001", topic_id=11, limit=10)
         second = group_context.context("-1001", topic_id=22, limit=10)
-        self.assertIn("[message deleted in Telegram]", first)
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), first)
         self.assertNotIn("first backfilled body", first)
         self.assertIn("independent topic body", second)
-        self.assertNotIn("[message deleted in Telegram]", second)
+        self.assertNotIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), second)
 
     async def test_admitted_deletion_archives_and_updates_live_context_without_wake(self):
         self.add("-1001", 77, 41, "soon removed", reply=77, title="Ideas")
@@ -1523,7 +1524,7 @@ class TestTruncationPromisesAreReal(TempGroupMemory):
         self.assertNotIn("ОБРЕЗАНО", full)
 
     def test_message_action_is_honest_about_a_missing_id(self):
-        self.assertIn("not in this group", group_context.describe(
+        self.assertIn(frame_language.text('helper.group_context.message_text.1613', p0='999'), group_context.describe(
             "-1001", action="message", limit=999))
 
     def test_feed_level_cut_is_marked_not_silent(self):

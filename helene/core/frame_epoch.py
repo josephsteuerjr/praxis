@@ -13,6 +13,7 @@ sliding window. Oversized/incomplete sources remain on disk with an explicit
 operational outcome; no model is called by this module and no compactor added.
 """
 from __future__ import annotations
+import frame_language
 
 import contextlib
 import contextvars
@@ -138,6 +139,7 @@ def _occurrence_age(row: dict, now: float) -> float | None:
     return now - at.timestamp()
 
 
+@frame_language.pinned
 def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
                  members=None, thread_word=None, summary_max_chars=7000):
     """Current canonical life baseline + append-only archive after bootstrap.

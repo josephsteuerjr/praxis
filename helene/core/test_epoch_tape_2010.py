@@ -3,6 +3,7 @@
 No model, network or process-spawning tests. Run with praxis_test.py.
 """
 from __future__ import annotations
+import frame_language
 import asyncio
 import copy
 import json
@@ -148,12 +149,12 @@ class EpochSources(unittest.TestCase):
         self.assertIn('unrecorded own words', marked[0]['line'])
         self.assertFalse(marked[0]['self'])
         self.assertEqual(marked[0]['role_line'], marked[0]['line'])
-        self.assertTrue(marked[0]['line'].endswith('\n' + gc.EPOCH_DELETED_LATER))
+        self.assertTrue(marked[0]['line'].endswith('\n' + frame_language.text('helper.group_context.deleted_later')))
         self.assertEqual(self_rows(bare), ['standing reply'])
         assistant, history, now = spoken(bare)
         self.assertNotIn('unrecorded own words', str(assistant))
         self.assertIn('standing reply', str(assistant))
-        self.assertIn(gc.EPOCH_DELETED_LATER, str(history) + str(now))
+        self.assertIn(frame_language.text('helper.group_context.deleted_later'), str(history) + str(now))
 
     def test_superseded_edit_original_retires_once_its_current_edit_is_represented(self):
         # AbstractDL 15.11.2026: every edited message left its pre-edit original as an
@@ -283,7 +284,7 @@ class EpochSources(unittest.TestCase):
         self.snapshot['hot'] = []
         # Without any current revision in the read the duplicates prove nothing.
         self.snapshot.update(current_event_ids=[], covered_event_ids=[], boundary='no-current')
-        self.assertIn('message deleted', self.text(self.prepare()))
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), self.text(self.prepare()))
         self.snapshot.update(current_event_ids=['del21a'], covered_event_ids=['del21a'],
                              boundary='duplicate-tombstone')
         selected = self.prepare()
@@ -392,7 +393,7 @@ class EpochSources(unittest.TestCase):
         self.assertEqual(second['n'], first['n'])
         self.assertEqual(second['rows'][:len(first['rows'])], first['rows'])
         self.assertIn('late edit', self.text(second))
-        self.assertIn('message deleted in Telegram', self.text(second))
+        self.assertIn(frame_language.text('helper.group_context.epoch_occurrence_row.1387'), self.text(second))
         self.assertEqual(self.prepare()['rows'], second['rows'])
         self.assertEqual(fe.load(ROOM)['blocks'][0][-1], 'E-a')
 
