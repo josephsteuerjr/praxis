@@ -32,6 +32,20 @@ def until(fn, seconds=5):
     raise AssertionError('Condition not observed')
 
 
+def command_parent_exited(root):
+    """Observe the fixture's command parent, not its still-owning Linux subreaper."""
+    marker = root/'parent-pid'
+    try:
+        pid = int(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    try:
+        state = (Path('/proc')/str(pid)/'stat').read_text().rsplit(')',1)[1].split()[0]
+    except FileNotFoundError:
+        return True
+    return state in {'Z', 'X'}
+
+
 class AtomicReceipts(unittest.TestCase):
     def test_concurrent_terminal_receipts_keep_independent_temporary_files(self):
         import forge
@@ -70,7 +84,10 @@ class CommandCustody(unittest.TestCase):
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(proc.stop_tree)
         until(lambda: (self.root/'ready').exists())
-        until(proc._leader_exited)
+        if proc.custody_identity()['kind'] == 'linux-subreaper-v1':
+            until(lambda: command_parent_exited(self.root))
+        else:
+            until(proc._leader_exited)
         return proc
 
     def test_successful_shell_exit_does_not_release_live_descendant(self):
@@ -91,10 +108,12 @@ class CommandCustody(unittest.TestCase):
     def test_lost_unreaped_child_authority_never_signals_a_pid(self):
         proc = self.spawn(10)
         with mock.patch.object(proc, '_leader_exited', side_effect=ChildProcessError('lost custody')), \
-             mock.patch('command_process.os.killpg') as signal_group:
+             mock.patch('command_process.os.killpg') as signal_group, \
+             mock.patch('command_process.os.kill') as signal_owner:
             stopped, note = proc.stop_tree()
             self.assertFalse(stopped)
             signal_group.assert_not_called()
+            signal_owner.assert_not_called()
 
     @unittest.skipIf(os.name == 'nt', 'POSIX census')
     def test_unknown_census_keeps_command_unsettled(self):
@@ -108,7 +127,8 @@ class CommandCustody(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'POSIX signal refusal')
     def test_signal_permission_denial_does_not_bless_a_live_group(self):
         proc=self.spawn(10)
-        with mock.patch('command_process.os.killpg',side_effect=PermissionError(1,'fixture denial')):
+        with mock.patch('command_process.os.killpg',side_effect=PermissionError(1,'fixture denial')), \
+             mock.patch('command_process.os.kill',side_effect=PermissionError(1,'fixture denial')):
             stopped,note=proc.stop_tree()
         self.assertFalse(stopped,note)
         self.assertIsNone(proc.poll())
@@ -209,7 +229,7 @@ sys.exit(forge_worker.run(p))
                     def exited():
                         state = forge._read_json(directory/'state.json', {}) or {}
                         pid = state.get('child_pid')
-                        return pid and (Path('/proc')/str(pid)/'stat').read_text().rsplit(')',1)[1].split()[0] == 'Z'
+                        return pid and command_parent_exited(root)
                     until(exited, seconds=max(0, admission_deadline-time.monotonic()))
                 else:
                     proc = next(iter(forge._RUNNERS.values()))

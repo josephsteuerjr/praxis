@@ -110,7 +110,7 @@ class EditionWorkshop(unittest.TestCase):
             "child_started_at": "born"}), encoding="utf-8")
         with mock.patch.object(forge, "_pid_alive", return_value=False), \
              mock.patch.object(forge, "_kill_tree", side_effect=[
-                 "не остановлен: child unknown", "остановлен", "остановлен"]), \
+                 "не остановлен: child unknown", forge.KillTreeReply("остановлен", status='stopped'), forge.KillTreeReply("остановлен", status='stopped')]), \
              mock.patch.object(forge, "_event"):
             first = forge.process(self.task_id, "stop", process_id=directory.name)
             self.assertIn("НЕ записан", first)

@@ -3889,12 +3889,26 @@ def _group_live_members(pgid: int) -> bool | None:
     return None if uncertain else False
 
 
+class KillTreeReply(str):
+    """Private current-producer evidence; display prose is never termination proof."""
+    def __new__(cls, message: str, *, status: str):
+        if status not in {"stopped", "already_exited", "unknown", "not_applicable"}:
+            raise ValueError("invalid private termination status")
+        value = str.__new__(cls, message)
+        value.termination = status
+        return value
+
+
+def _kill_tree_state(reply) -> str:
+    return reply.termination if isinstance(reply, KillTreeReply) else "unknown"
+
+
 def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     if not pid:
-        return "pid отсутствует"
+        return KillTreeReply("pid отсутствует", status='unknown')
     doubt = _kill_identity(pid, started_at, expect)
     if doubt:
-        return doubt
+        return KillTreeReply(doubt, status='unknown')
     # Окно между TERM и KILL — то же место, где номер может уйти другому: наш умер от
     # TERM, ядро отдало номер, и голое «жив?» отправило бы SIGKILL уже постороннему.
     born = started_at or _proc_started_at(pid)
@@ -3909,18 +3923,18 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
                                   errors="replace", timeout=15)
             rc = int(proc.returncode)
             if rc == 0:
-                return "остановлен"
+                return KillTreeReply("остановлен", status='stopped')
             if rc == 128:
-                return "уже завершён"
+                return KillTreeReply("уже завершён", status='already_exited')
             detail = (proc.stderr or proc.stdout or "").strip()[:120]
-            return f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": ")
+            return KillTreeReply(f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": "), status='unknown')
         else:
             os.killpg(pid, signal.SIGTERM)
             deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 group_live = _group_live_members(pid)
                 if group_live is False:
-                    return "остановлен"
+                    return KillTreeReply("остановлен", status='stopped')
                 # A transient unreadable /proc row is uncertainty, not a
                 # terminal verdict. Use the existing bounded census window.
                 time.sleep(.05)
@@ -3930,27 +3944,27 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
                 # its foreground descendants can ignore TERM.
                 fresh_doubt = _kill_identity(pid, born, expect)
                 if fresh_doubt:
-                    return f"не остановлен: группа не доказана перед KILL; {fresh_doubt}"
+                    return KillTreeReply(f"не остановлен: группа не доказана перед KILL; {fresh_doubt}", status='unknown')
                 os.killpg(pid, signal.SIGKILL)
                 deadline = time.monotonic() + 1.0
                 while time.monotonic() < deadline:
                     group_live = _group_live_members(pid)
                     if group_live is False:
-                        return "остановлен"
+                        return KillTreeReply("остановлен", status='stopped')
                     time.sleep(.05)
                 group_live = _group_live_members(pid)
                 if group_live is False:
-                    return "остановлен"
+                    return KillTreeReply("остановлен", status='stopped')
                 if group_live is None:
-                    return "не остановлен: состав группы после KILL неизвестен"
-                return "не остановлен: в группе после KILL остались живые процессы"
+                    return KillTreeReply("не остановлен: состав группы после KILL неизвестен", status='unknown')
+                return KillTreeReply("не остановлен: в группе после KILL остались живые процессы", status='unknown')
             if group_live is False:
-                return "остановлен"
-            return "не остановлен: состав группы после TERM неизвестен"
+                return KillTreeReply("остановлен", status='stopped')
+            return KillTreeReply("не остановлен: состав группы после TERM неизвестен", status='unknown')
     except ProcessLookupError:
-        return "уже завершён"
+        return KillTreeReply("уже завершён", status='already_exited')
     except Exception as exc:
-        return f"не остановлен: {type(exc).__name__}: {exc}"
+        return KillTreeReply(f"не остановлен: {type(exc).__name__}: {exc}", status='unknown')
 
 
 def process(task_id: str, action: str, process_id: str = "", command: str = "",
@@ -4140,10 +4154,10 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
             local = _RUNNERS.get(child_pid)
             if local is not None and int(state.get("supervisor_pid") or 0) == child_pid:
                 stopped, detail = _stop_foreground(local)
-                child_msg = "остановлен" if stopped else f"не остановлен: {detail}"
+                child_msg = KillTreeReply("остановлен" if stopped else f"не остановлен: {detail}", status="stopped" if stopped else "unknown")
             else:
                 child_msg = "не остановлен: исходная команда недоступна; дерево не подтверждено"
-            wrapper_msg = "supervisor завершён"  # foreground shell is the child above
+            wrapper_msg = KillTreeReply("supervisor завершён", status="not_applicable")  # foreground shell is the child above
         else:
             child_msg = (_kill_tree(child_pid, str(runtime.get("child_started_at") or ""),
                                     expect=str(state.get("command") or ""))
@@ -4157,10 +4171,10 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
                 except subprocess.TimeoutExpired:
                     pass
             wrapper_msg = (_kill_tree(supervisor_pid, supervisor_born, expect=str(d / "request.json"))
-                           if _pid_alive(supervisor_pid, supervisor_born) else "supervisor завершён")
+                           if _pid_alive(supervisor_pid, supervisor_born) else KillTreeReply("supervisor завершён", status="already_exited"))
         msg = f"command {child_msg}; {wrapper_msg}"
-        if child_msg not in {"остановлен", "уже завершён"} or wrapper_msg not in {
-                "остановлен", "уже завершён", "supervisor завершён"}:
+        if _kill_tree_state(child_msg) not in {"stopped", "already_exited"} or _kill_tree_state(wrapper_msg) not in {
+                "stopped", "already_exited", "not_applicable"}:
             _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
                                             "note": msg})
             _event(task_id, "process_stop_unconfirmed", process_id=process_id,
@@ -4950,12 +4964,12 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
             group_live = _group_live_members(pid) if pid and os.name != "nt" else None
             if pid and (_pid_alive(pid, born) or group_live is True):
                 stopped = _kill_tree(pid, born, expect=str(directory / "request.json"))
-                if stopped == "остановлен":
+                if _kill_tree_state(stopped) == "stopped":
                     remaining = (_group_live_members(pid) if os.name != "nt"
                                  else _pid_alive(pid, born))
                     if remaining is not False:
                         stopped = "unknown: stop acknowledged but group exit unproven"
-                stop_confirmed = stopped == "остановлен"
+                stop_confirmed = _kill_tree_state(stopped) == "stopped"
                 outcome += f"; supervisor group stop: {stopped}"
             elif pid and group_live is False:
                 stop_confirmed = True
@@ -4971,9 +4985,9 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                        if pid else "unknown: supervisor pid absent")
             # A successful signal/return code alone does not prove process exit.
             # Already gone without a result is LOST/UNKNOWN, not a clean stop.
-            if outcome == "остановлен" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
+            if _kill_tree_state(outcome) == "stopped" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
                 outcome = "unknown: stop acknowledged but supervisor remains alive"
-            if outcome == "остановлен":
+            if _kill_tree_state(outcome) == "stopped":
                 stop_confirmed = True
                 with _mutation_lock(task_id):
                     result_path = directory / "result.json"

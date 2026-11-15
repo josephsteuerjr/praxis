@@ -274,7 +274,7 @@ class AdmissionRaces(unittest.TestCase):
         windows.name = 'nt'
         def kill(*args, **kwargs):
             alive['worker'] = False
-            return 'остановлен'
+            return forge.KillTreeReply('остановлен', status='stopped')
         def stop_job(tid, action, process_id):
             calls.append(process_id)
             if len(calls) == 1:

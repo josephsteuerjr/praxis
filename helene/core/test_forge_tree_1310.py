@@ -66,8 +66,8 @@ class WorkerTree(unittest.TestCase):
         }), encoding="utf-8")
         with mock.patch.object(forge, "_pid_alive", return_value=False), \
              mock.patch.object(forge, "_kill_tree", side_effect=[
-                 "не остановлен: child group unknown", "остановлен",
-                 "остановлен"]), \
+                 "не остановлен: child group unknown", forge.KillTreeReply("остановлен", status='stopped'),
+                 forge.KillTreeReply("остановлен", status='stopped')]), \
              mock.patch.object(forge, "_event"):
             first = forge.process(self.task_id, "stop", process_id=unit.name)
             self.assertIn("терминальный статус НЕ записан", first)
@@ -95,7 +95,7 @@ class WorkerTree(unittest.TestCase):
         prior = {"status": "done", "code": 0, "log": "saved"}
         (unit / "result.json").write_text(json.dumps(prior), encoding="utf-8")
         with mock.patch.object(forge, "_pid_alive", return_value=False), \
-             mock.patch.object(forge, "_kill_tree", return_value="уже завершён"), \
+             mock.patch.object(forge, "_kill_tree", return_value=forge.KillTreeReply("уже завершён", status='already_exited')), \
              mock.patch.object(forge, "_event"):
             forge.process(self.task_id, "stop", process_id=unit.name)
         self.assertEqual(json.loads((unit / "result.json").read_text()), prior)
@@ -232,7 +232,7 @@ class WorkerTree(unittest.TestCase):
         b = self.unit("agent-bbbbbbbb", parent="agent-aaaaaaaa")
         c = self.unit("agent-cccccccc", parent="agent-bbbbbbbb")
         original = (a / "result.json").read_bytes()
-        with mock.patch.object(forge, "_kill_tree", side_effect=["не остановлен: uncertain", "остановлен"]), \
+        with mock.patch.object(forge, "_kill_tree", side_effect=["не остановлен: uncertain", forge.KillTreeReply("остановлен", status='stopped')]), \
              mock.patch.object(forge, "_pid_alive", return_value=False):
             message = self.call("stop", agent_id="agent-aaaaaaaa")
         self.assertIn("agent-cccccccc: не остановлен: uncertain", message)
@@ -259,7 +259,7 @@ class WorkerTree(unittest.TestCase):
 
     def test_stop_acknowledgement_with_live_pid_is_unknown_not_terminal(self):
         self.unit("agent-aaaaaaaa")
-        with mock.patch.object(forge, "_kill_tree", return_value="остановлен"), \
+        with mock.patch.object(forge, "_kill_tree", return_value=forge.KillTreeReply("остановлен", status='stopped')), \
              mock.patch.object(forge, "_pid_alive", return_value=True):
             answer = self.call("stop", agent_id="agent-aaaaaaaa")
         self.assertIn("unknown: stop acknowledged but supervisor remains alive", answer)
@@ -274,7 +274,7 @@ class WorkerTree(unittest.TestCase):
         live = [True]
         def stop(*args, **kwargs):
             live[0] = False
-            return 'остановлен'
+            return forge.KillTreeReply('остановлен', status='stopped')
         # Native Windows checks the supervisor before the settled-result branch
         # too; model actual alive->signal->exit facts, not a fixed call count.
         with mock.patch.object(forge, "_pid_alive", side_effect=lambda *a: live[0]), \
@@ -291,7 +291,7 @@ class WorkerTree(unittest.TestCase):
         original = (unit / "result.json").read_bytes()
         with mock.patch.object(forge, "_pid_alive", return_value=False), \
              mock.patch.object(forge, "_group_live_members", side_effect=[True, False]), \
-             mock.patch.object(forge, "_kill_tree", return_value="остановлен") as kill:
+             mock.patch.object(forge, "_kill_tree", return_value=forge.KillTreeReply("остановлен", status='stopped')) as kill:
             message = self.call("stop", agent_id="agent-aaaaaaaa")
         self.assertIn("supervisor group stop: остановлен", message)
         self.assertEqual((unit / "result.json").read_bytes(), original)
