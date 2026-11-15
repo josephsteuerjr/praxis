@@ -4049,5 +4049,7 @@
   "native.mcp.invalid_catalog": "Windows MCP a renvoyé un catalogue d’outils vide ou invalide.",
   "native.mcp.not_ready": "Windows MCP n’a pas confirmé sa disponibilité.",
   "native.mcp.exited": "Windows MCP s’est arrêté. Choisir Démarrer.",
-  "native.mcp.unsupported_platform": "Windows MCP exige Windows x64."
+  "native.mcp.unsupported_platform": "Windows MCP exige Windows x64.",
+  "native.mcp.remote_unavailable": "L’ordinateur Windows sélectionné est indisponible. Vérifie sa connexion associée et l’autorisation locale dans son application.",
+  "native.mcp.remote_refused": "Le propriétaire de l’ordinateur Windows sélectionné a refusé cet appel. Aucune action n’a été envoyée ; vérifie les autorisations locales de la connexion."
 }

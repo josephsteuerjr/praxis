@@ -4049,5 +4049,7 @@
   "native.mcp.invalid_catalog": "Windows MCP 返回的工具目录为空或无效。",
   "native.mcp.not_ready": "Windows MCP 未确认就绪。",
   "native.mcp.exited": "Windows MCP 已退出。请选择启动。",
-  "native.mcp.unsupported_platform": "Windows MCP 需要 Windows x64。"
+  "native.mcp.unsupported_platform": "Windows MCP 需要 Windows x64。",
+  "native.mcp.remote_unavailable": "选定的 Windows 计算机不可用。请在该计算机的应用中检查配对连接和本地权限。",
+  "native.mcp.remote_refused": "选定 Windows 计算机的所有者未允许此调用。操作未发送给执行端；请检查连接的本地权限。"
 }

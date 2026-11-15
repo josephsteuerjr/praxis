@@ -75,6 +75,11 @@ def probe_model(base_url, key="", framework="openai"):
 
 
 def invoke(owner, command, args):
+    if command in ('windows_mcp_remote_status','windows_mcp_remote_call'):
+        from .windows_mcp_remote import authorize_profile
+        from .windows_mcp_runtime import manager,component_status
+        admitted=authorize_profile(owner,args,call=command=='windows_mcp_remote_call')
+        return manager(owner).call(*admitted) if command=='windows_mcp_remote_call' else component_status(owner)
     if command in ('windows_mcp_status','windows_mcp_start','windows_mcp_call'):
         from .windows_mcp_runtime import manager, component_status
         if command == 'windows_mcp_status':return component_status(owner)

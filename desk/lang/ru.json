@@ -4049,5 +4049,7 @@
   "native.mcp.invalid_catalog": "Windows MCP вернул пустой или неверный каталог инструментов.",
   "native.mcp.not_ready": "Windows MCP не подтвердил готовность.",
   "native.mcp.exited": "Windows MCP завершился. Нажми «Запустить».",
-  "native.mcp.unsupported_platform": "Windows MCP доступен на Windows x64."
+  "native.mcp.unsupported_platform": "Windows MCP доступен на Windows x64.",
+  "native.mcp.remote_unavailable": "Выбранный Windows-компьютер недоступен. Проверь парное подключение и локальное разрешение в приложении на этом компьютере.",
+  "native.mcp.remote_refused": "Владелец выбранного Windows-компьютера не разрешил этот вызов. Действие не отправлено исполнителю; проверь локальные права подключения."
 }

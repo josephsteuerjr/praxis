@@ -20253,5 +20253,15 @@
     "en": "1dcacf38",
     "fr": "1dcacf38",
     "zh": "1dcacf38"
+  },
+  "native.mcp.remote_unavailable": {
+    "en": "d068ad96",
+    "fr": "d068ad96",
+    "zh": "d068ad96"
+  },
+  "native.mcp.remote_refused": {
+    "en": "73220ff9",
+    "fr": "73220ff9",
+    "zh": "73220ff9"
   }
 }

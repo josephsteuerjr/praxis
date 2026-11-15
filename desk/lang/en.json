@@ -4049,5 +4049,7 @@
   "native.mcp.invalid_catalog": "Windows MCP returned an empty or invalid tool catalog.",
   "native.mcp.not_ready": "Windows MCP did not confirm readiness.",
   "native.mcp.exited": "Windows MCP exited. Choose Start.",
-  "native.mcp.unsupported_platform": "Windows MCP requires Windows x64."
+  "native.mcp.unsupported_platform": "Windows MCP requires Windows x64.",
+  "native.mcp.remote_unavailable": "The selected Windows computer is unavailable. Check its paired connection and local permission in the app on that computer.",
+  "native.mcp.remote_refused": "The selected Windows computer’s owner did not permit this call. No action was dispatched; check the connection’s local permissions."
 }

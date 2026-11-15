@@ -3671,7 +3671,7 @@ def main() -> None:
         log.exception("рука computer не подключена к телу")
     try:
         from localharness import windows_mcp_access
-        windows_mcp_access.install(agent, tree, cfg, config_path, Path(__file__).resolve().parents[2])
+        windows_mcp_access.install(agent, tree, cfg, config_path, Path(__file__).resolve().parents[2],body_module=body)
     except Exception:
         log.exception("Windows MCP не подключён к сеансу приложения")
     # Рука shell — словами этого компьютера (1.2.3): описание дерева говорит «контейнер,

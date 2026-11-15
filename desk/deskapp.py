@@ -1733,11 +1733,18 @@ async def _r_remote_connect(c: Call):
     return Fail(400, 'Desktop WebSocket requires the dedicated HTTP upgrade')
 
 
+async def _r_remote_mcp(c: Call):
+    if c.role!='owner' or c.app is None:
+        raise web.HTTPForbidden(text='Only the owner can inspect paired Windows MCP')
+    return await c.app['_remote_computer'].mcp_status()
+
+
 ROUTES: tuple[Route, ...] = (
     Route('POST', _remote_computer.PREFIX + '/pair', _r_remote_pair),
     Route('POST', _remote_computer.PREFIX + '/select', _r_remote_select),
     Route('POST', _remote_computer.PREFIX + '/revoke', _r_remote_revoke),
     Route('GET', _remote_computer.PREFIX + '/state', _r_remote_snapshot),
+    Route('GET', _remote_computer.PREFIX + '/windows-mcp', _r_remote_mcp),
     Route('GET', _remote_computer.PREFIX + '/controller/state', _r_remote_snapshot),
     Route('GET', _remote_computer.PREFIX + '/connect/{device}', _r_remote_connect,
           http_handler=lambda request: request.app['_remote_computer'].connect(request)),
@@ -2506,7 +2513,7 @@ async def _remote_bridge(request):
     except (ValueError, TypeError) as error:
         return web.json_response({'ok': False, 'code': 'invalid_desktop_request', 'error': str(error)}, status=400)
     except PermissionError as error:
-        return web.json_response({'ok': False, 'code': 'owner_refused', 'error': str(error)}, status=403)
+        return web.json_response({'ok': False, 'code': 'owner_refused', 'error': str(error),'dispatched':False}, status=403)
     except (ConnectionError, asyncio.TimeoutError):
         return web.json_response({'ok': False, 'code': 'desktop_disconnected',
             'error': 'Selected Windows desktop disconnected; verify any started operation before retry'}, status=503)

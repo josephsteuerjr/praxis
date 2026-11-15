@@ -48,6 +48,7 @@ _MESSAGES = {
     'unconfirmed': set(), 'not_running': set(), 'start_exited': {'log'},
     'invalid_catalog': set(), 'not_ready': set(), 'exited': set(),
     'unsupported_platform': set(),
+    'remote_unavailable':set(), 'remote_refused':set(),
 }
 
 

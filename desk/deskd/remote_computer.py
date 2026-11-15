@@ -62,6 +62,10 @@ def body_route(method: str, path: str, device: str) -> str:
     if not DEVICE.fullmatch(device):
         raise ValueError('Invalid desktop identity')
     control = '/v1/controller/' + device
+    if method=='GET' and path==control+'/windows-mcp/status':
+        return 'mcp_status'
+    if method=='POST' and path==control+'/windows-mcp/call':
+        return 'mcp_call'
     if method == 'POST' and path == control + '/broker':
         return 'broker'
     if method == 'POST' and path == control + '/invoke':
@@ -239,16 +243,22 @@ class Relay:
         if not socket or device not in self.identities or time.monotonic() - self.last_seen.get(device, 0) >= 60:
             raise ConnectionError('Selected Windows desktop is offline')
         kind = body_route(method, path, device)
-        if kind in ('invoke', 'broker'):
+        if kind in ('invoke', 'broker','mcp_call'):
             payload = json.loads(body)
             if not isinstance(payload, dict): raise ValueError('Invalid native invocation')
-            cap = payload.get('capability')
-            if kind == 'invoke' and not isinstance(cap, str): raise ValueError('Missing native capability')
-            required = 'computer.process' if kind == 'broker' else scope_for(cap)
+            if kind=='mcp_call':
+                from localharness.windows_mcp_remote import required as mcp_required
+                required=mcp_required(payload)
+            else:
+                cap = payload.get('capability')
+                if kind == 'invoke' and not isinstance(cap, str): raise ValueError('Missing native capability')
+                scope = 'computer.process' if kind == 'broker' else scope_for(cap)
+                required={scope} if scope else set()
             row = next(r for r in data['devices'] if r['id'] == device)
             actual = self.identities[device]
-            if required and (required not in row['scopes'] or required not in actual['scopes']):
-                raise PermissionError('Desktop owner has not granted ' + required)
+            missing=required-(set(row['scopes']) & set(actual['scopes']))
+            if missing:
+                raise PermissionError('Desktop owner has not granted ' + ', '.join(sorted(missing)))
         if sum(owner == device for owner, _ in self.pending.values()) >= 16:
             raise ConnectionError('Desktop request queue is full')
         ident = uuid.uuid4().hex
@@ -277,6 +287,40 @@ class Relay:
             return status, raw, mime, returned
         finally:
             self.pending.pop(ident, None)
+
+    async def mcp_status(self):
+        """Read-only target metadata for owner UI, with no local-server fallback."""
+        from localharness.windows_mcp_remote import NAMES
+        snapshot=self.snapshot();device=snapshot['selected']
+        row=next((item for item in snapshot['devices'] if item['id']==device),None)
+        empty={'device_id':device,'component':None}
+        if not row:return dict(empty,state='unpaired')
+        if not row['connected']:return dict(empty,state='offline')
+        try:
+            status,raw,_,_=await self.rpc('GET','/v1/controller/'+device+'/windows-mcp/status',b'',
+                'application/json',timeout=5)
+            value=json.loads(raw)
+            if (status!=200 or not isinstance(value,dict) or value.get('host')!='windows'
+                    or value.get('device_id')!=device or self.load().get('selected')!=device):
+                return dict(empty,state='unknown')
+            component=value.get('result')
+            if (not isinstance(component,dict) or component.get('id')!='windows-mcp'
+                    or type(component.get('installed')) is not bool):
+                return dict(empty,state='unknown')
+            runtime=component.get('runtime') or {}
+            if not isinstance(runtime,dict) or type(runtime.get('running')) is not bool:
+                return dict(empty,state='unknown')
+            tools=runtime.get('tools',0)
+            if type(tools) is not int or not 0<=tools<=len(NAMES):
+                return dict(empty,state='unknown')
+            # Do not export local paths, progress logs, credentials or locale-
+            # dependent error prose as if owned by the server's UI language.
+            public={'id':'windows-mcp','installed':component.get('installed') is True,
+                'runtime':{'running':runtime.get('running') is True,'tools':tools,
+                           'state':runtime.get('state') if runtime.get('state') in ('running','starting','stopped','error') else 'unknown'}}
+            return dict(empty,state='confirmed',component=public)
+        except (OSError,ValueError,TypeError,ConnectionError,asyncio.TimeoutError):
+            return dict(empty,state='unknown')
 
     async def close(self, app=None):
         for socket in list(self.connections.values()):

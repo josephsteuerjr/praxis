@@ -133,7 +133,12 @@ class Publisher:
         if len(raw) > MAX_BODY:
             raise ValueError('Desktop request too large')
         required = None
-        if kind in ('invoke', 'broker'):
+        if kind=='mcp_call':
+            from localharness.windows_mcp_remote import required as mcp_required
+            required=mcp_required(json.loads(raw))
+            missing=required-set(current['scopes'])
+            if missing:raise PermissionError('Local owner has revoked '+', '.join(sorted(missing)))
+        elif kind in ('invoke', 'broker'):
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 raise ValueError('Invalid invocation')
@@ -172,7 +177,7 @@ class Publisher:
                     required = 'computer.files'
                 else:
                     required = self.permissions['artifacts'][sha]
-        if required and required not in current['scopes']:
+        if isinstance(required,str) and required not in current['scopes']:
             raise PermissionError('Local owner has revoked ' + required)
         return current, kind, raw, required
 
@@ -193,8 +198,25 @@ class Publisher:
     async def execute(self, request: dict, http: aiohttp.ClientSession) -> dict:
         ident = request.get('id')
         response = {'kind': 'response', 'id': ident, 'status': 403, 'content_type': 'application/json'}
+        mcp_dispatched=False
         try:
             current, kind, raw, required = self.authorize(request)
+            if kind in ('mcp_call','mcp_status'):
+                from localharness.windows_mcp_client import invoke
+                arguments={'device_id':current['id'],'base':current['base']}
+                if kind=='mcp_call':
+                    from localharness.windows_mcp_remote import invocation
+                    name,values=invocation(json.loads(raw))
+                    arguments.update(name=name,arguments=values)
+                remaining=min(120,max(.1,request['deadline']-time.time()))
+                mcp_dispatched=True
+                result=await asyncio.to_thread(invoke,self.install,
+                    'windows_mcp_remote_call' if kind=='mcp_call' else 'windows_mcp_remote_status',
+                    arguments,tree=self.data,timeout=remaining)
+                raw=json.dumps({'host':'windows','device_id':current['id'],'result':result},ensure_ascii=False,allow_nan=False).encode('utf-8')
+                if len(raw)>MAX_BODY:raise ValueError('Windows MCP response too large')
+                response.update(status=200,body=base64.b64encode(raw).decode('ascii'))
+                return response
             if self.body is None:
                 raise ConnectionError('Local desktop is not running')
             if kind == 'broker':
@@ -241,10 +263,10 @@ class Publisher:
                     self.record_artifacts(json.loads(raw), required)
                     self.save_permissions()
         except PermissionError as error:
-            raw = json.dumps({'ok': False, 'code': 'owner_refused', 'error': str(error)}).encode()
+            raw = json.dumps({'ok': False, 'code': 'owner_refused', 'error': str(error),'dispatched':mcp_dispatched}).encode()
         except Exception as error:
             response['status'] = 502
-            raw = json.dumps({'ok': False, 'code': 'desktop_unavailable', 'error': type(error).__name__}).encode()
+            raw = json.dumps({'ok': False, 'code': 'desktop_unavailable', 'error': type(error).__name__,'dispatched':mcp_dispatched}).encode()
         response['body'] = base64.b64encode(raw).decode('ascii')
         return response
 

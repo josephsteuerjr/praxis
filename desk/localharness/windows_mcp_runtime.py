@@ -134,10 +134,11 @@ class Manager:
                         clientInfo=dict(name='Helene', version='1')), timeout=2)
                     result = rpc(port, key, 'tools/list', timeout=5)
                     rows = result.get('tools', [])
-                    if not rows or any(not isinstance(t, dict) or not isinstance(t.get('inputSchema'), dict) for t in rows):
-                        raise words.Error(self.owner.root,'invalid_catalog')
+                    from .windows_mcp_remote import catalog
+                    try:admitted=catalog(rows)
+                    except ValueError:raise words.Error(self.owner.root,'invalid_catalog') from None
                     with self.lock:
-                        self.tools = {t['name']: t for t in rows}
+                        self.tools = admitted
                         self.state = 'running'
                     return
                 except (OSError, ValueError, RuntimeError) as exc:

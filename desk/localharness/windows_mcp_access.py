@@ -5,6 +5,8 @@ APPS = {'App', 'Click', 'Type', 'Scroll', 'Move', 'Shortcut', 'MultiSelect', 'Mu
 
 def rights(name, args):
     """Return scopes and whether this operation needs the sovereign file-write gate."""
+    if name=='ControlStatus' and args.get('release'):
+        return {'computer.apps'},False
     if name in READ:
         if name in ('Snapshot', 'Screenshot') and args.get('save_path'):
             return {'computer.read', 'computer.files'}, True
@@ -34,11 +36,12 @@ def refusal(config, name, args):
     return configured(config,'missing_scopes',scopes=', '.join(sorted(missing))) if missing else ''
 
 
-def install(agent, tree, config, config_path, program):
+def install(agent, tree, config, config_path, program, *, body_module=None):
     import windows_mcp_tools
     from . import windows_mcp_client
-    from .body import _LiveScopes
-    live = _LiveScopes(config_path, config)
+    if body_module is None:
+        from . import body as body_module
+    live = body_module._LiveScopes(config_path, config)
     def allowed(name, args):
         live.refresh()
         required, sovereign = rights(name, args)
@@ -49,4 +52,4 @@ def install(agent, tree, config, config_path, program):
         if sovereign and not agent._is_sovereign_actor():
             return {'code':'sovereign','values':{}}
         return ''
-    windows_mcp_tools.configure(lambda name, args: windows_mcp_client.call(program, tree, name, args), allowed)
+    windows_mcp_tools.configure(lambda name, args: windows_mcp_client.call(program, tree, name, args,body_module=body_module), allowed)
