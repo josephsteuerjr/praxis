@@ -727,6 +727,7 @@ def _task_tree_sha(root: Path) -> str:
     return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
 
 
+@frame_language.pinned
 def _dedup_against_green(task_id: str, tree_sha: str, checks: list[dict]) -> tuple[list[dict], list[str]]:
     """Убрать из новой матрицы команды, уже зелёные НА ЭТОМ ЖЕ дереве. -> (checks, notes).
 
@@ -769,8 +770,7 @@ def _dedup_against_green(task_id: str, tree_sha: str, checks: list[dict]) -> tup
         skipped["skip_status"] = "skipped_already_green"
         skipped["skip_reference"] = ref
         out.append(skipped)
-        notes.append(f"{row.get('id') or row.get('command')}: уже зелёная в {ref} "
-                     f"(tree {tree_sha[:10]}) — не запускаю, пишу расписку")
+        notes.append(frame_language.text("forge.execution.118", v0=f"{row.get('id') or row.get('command')}", v2=f"{ref}", v4=f"{tree_sha[:10]}"))
     return out, notes
 
 
@@ -3965,6 +3965,7 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
         return KillTreeReply(frame_language.text('forge.execution.62', v1=f'{type(exc).__name__}', v3=f'{exc}'), status='unknown')
 
 
+@frame_language.pinned
 def process(task_id: str, action: str, process_id: str = "", command: str = "",
             cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
             _parent_request_path: str = "", argv: list | None = None) -> str:
@@ -3974,9 +3975,9 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
         import command_execution
         reason = ""
         if action != "start":
-            reason = "argv applies only to start"
+            reason = frame_language.text('forge.execution.111')
         elif str(command or "").strip():
-            reason = "give command (a shell string) or argv (one exact program), not both"
+            reason = frame_language.text('forge.execution.112')
         else:
             try:
                 argv = command_execution.validate_argv(argv)
@@ -3984,22 +3985,23 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
                 reason = str(exc)
         if reason:
             tool_report.note(outcome="refused")
-            return f"Process refused before start: {reason}"
+            return frame_language.text('forge.execution.113', v1=f'{reason}')
     if action == "start":
         try:
             with _mutation_lock(task_id) as beat:
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
                 if reason:
-                    return f"Process refused: {reason}"
+                    return frame_language.text('forge.execution.114', v1=f'{reason}')
                 parent, _ = _worker_parent(task_id, _parent_request_path)
                 beat(lease_sec=120)
                 return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail,
                                          parent_unit_id=parent, argv=argv)
         except (TimeoutError, ValueError) as exc:
-            return f"Process refused: {exc}"
+            return frame_language.text('forge.execution.115', v1=f'{exc}')
     return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail)
 
 
+@frame_language.pinned
 def _process_unlocked(task_id: str, action: str, process_id: str = "", command: str = "",
             cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
             parent_unit_id: str = "", argv: list[str] | None = None) -> str:
@@ -4010,9 +4012,7 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
     action = str(action or "list").strip().lower()
     if argv is not None and _remote_client(task or {}) is not None:
         tool_report.note(outcome="refused", target=str(root))
-        return (f"Process refused before start: argv is unsupported for this "
-                f"{(task or {}).get('scope') or 'remote'} task; its backend takes only a shell "
-                "command string, so nothing was sent.")
+        return (frame_language.text('forge.execution.63', v1=f"{(task or {}).get('scope') or 'remote'}"))
     if action in {'poll','stop'} and process_id:
         directory = _unit_dir(task_id,'processes',process_id)
         import forge_recovery
@@ -4045,24 +4045,23 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
     if action == "list":
         rows = _units(task_id, "processes")
         return "\n".join(f"{r['id']} [{r.get('status')}] {r.get('name') or r.get('command')}"
-                          for r in rows[:30]) or "Процессов нет."
+                          for r in rows[:30]) or frame_language.text('forge.execution.65')
     if action == "start":
         command = shlex.join(argv) if argv is not None else str(command or "").strip()
         if not command:
-            return "Для start нужна command (shell-строка) или argv (точная программа)."
+            return frame_language.text('forge.execution.66')
         place, path_err = _inside(root, cwd)
         if path_err or place is None or not place.is_dir():
             if argv is not None:
                 tool_report.note(outcome="refused", target=str(root))
-            return path_err or f"Нет cwd {cwd}."
+            return path_err or frame_language.text('forge.execution.67', v1=f'{cwd}')
         typed = {}
         if argv is not None:
             import command_execution
             program = command_execution.resolve_program(argv[0], place)
             if program is None:
                 tool_report.note(outcome="refused", target=str(place))
-                return (f"Process refused before start: program not found: {argv[0]!r} (searched "
-                        "PATH; a name with a slash is relative to cwd and must be an executable file)")
+                return (frame_language.text('forge.execution.68', v1=f'{argv[0]!r}'))
             typed = {"argv": list(argv), "program": program}
         unit_id = _id("proc")
         d = _unit_dir(task_id, "processes", unit_id)
@@ -4079,7 +4078,7 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
             pid = _spawn_runner(REPO / "forge_process.py", req, d / "supervisor.log")
         except Exception as exc:
             _atomic_json(d / "result.json", {"status": "error", "error": f"{type(exc).__name__}: {exc}"})
-            return f"Процесс не стартовал: {type(exc).__name__}: {exc}"
+            return frame_language.text('forge.execution.69', v1=f'{type(exc).__name__}', v3=f'{exc}')
         # Метка рождения супервизора рядом с его номером: без неё «жив ли он»
         # отвечается по одному номеру, а номера в контейнере переиспользуются
         # первым же спавном (см. _unit_state).
@@ -4088,15 +4087,15 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         _atomic_json(req, request)
         _event(task_id, "process_started", process_id=unit_id, command=command,
                summary=f"{unit_id} pid={pid} {name or command[:80]}")
-        return f"Стартовал {unit_id} (pid {pid}) в {place}. Полный лог сохраняется; poll не блокирует ход."
+        return frame_language.text('forge.execution.71', v1=f'{unit_id}', v3=f'{pid}', v5=f'{place}')
     d = _unit_dir(task_id, "processes", process_id)
     if not d.is_dir():
-        return f"Нет процесса {process_id}."
+        return frame_language.text('forge.execution.72', v1=f'{process_id}')
     state = _unit_state(d)
     if action == "poll":
         log = _tail(d / "command.log", max(500, min(int(tail or 8000), 30000)))
         return _cap(json.dumps({k: v for k, v in state.items() if k not in {"command"}},
-                               ensure_ascii=False, indent=2) + "\n--- log ---\n" + (log or "(пока пусто)"), 32000)
+                               ensure_ascii=False, indent=2) + "\n--- log ---\n" + (log or frame_language.text('forge.execution.73')), 32000)
     if action == "stop":
         # A terminal result that predates this Stop wins. Do not mint an
         # unresolved receipt and then try to signal a reused PID (or a unit
@@ -4110,9 +4109,9 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         previous_stop = _read_json(d / "stop.json")
         if isinstance(prior, dict) and not (
                 isinstance(previous_stop, dict) and previous_stop.get("state") == "unresolved"):
-            return f"{process_id}: результат уже сохранён ({prior.get('status') or 'unknown'}); Stop не послан."
+            return frame_language.text('forge.execution.74', v0=f'{process_id}', v2=f"{prior.get('status') or 'unknown'}")
         _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
-                                        "note": "остановка начата; исход дерева не подтверждён"})
+                                        "note": frame_language.text('forge.execution.75')})
         request = _read_json(d / 'request.json', {}) or {}
         owner_is_here = int(request.get('supervisor_pid') or 0) in _RUNNERS
         if (request.get('command_custody') == 'group-v1'
@@ -4126,10 +4125,10 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
                 outcome = _read_json(d / 'result.json')
                 if isinstance(outcome, dict):
                     _atomic_json(d / 'stop.json', {'state':'settled', 'settled':_now(),
-                                                 'note':'private command group exited'})
-                    return f"{process_id}: остановлен; private command group exited"
+                                                 'note':frame_language.text('forge.execution.76')})
+                    return frame_language.text('forge.execution.77', v0=f'{process_id}')
                 time.sleep(.05)
-            return f"{process_id}: не остановлен; supervisor has not confirmed group exit"
+            return frame_language.text('forge.execution.78', v0=f'{process_id}')
         # A completion between the first read and the durable stop marker is
         # still natural completion: no signal has been sent. Resolve our own
         # marker before any PID lookup can misidentify its recycled number.
@@ -4137,8 +4136,8 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         if isinstance(raced_result, dict) and not (
                 isinstance(previous_stop, dict) and previous_stop.get("state") == "unresolved"):
             _atomic_json(d / "stop.json", {"state": "settled", "settled": _now(),
-                                            "note": "result saved before Stop signal"})
-            return f"{process_id}: результат уже сохранён ({raced_result.get('status') or 'unknown'}); Stop не послан."
+                                            "note": frame_language.text('forge.execution.79')})
+            return frame_language.text('forge.execution.80', v0=f'{process_id}', v2=f"{raced_result.get('status') or 'unknown'}")
         runtime = _read_json(d / "state.json", {}) or {}
         child_pid = int(runtime.get("child_pid") or 0)
         # Метки рождения пишет сам супервизор (forge_process.py); у команды доказательство
@@ -4152,14 +4151,14 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
             local = _RUNNERS.get(child_pid)
             if local is not None and int(state.get("supervisor_pid") or 0) == child_pid:
                 stopped, detail = _stop_foreground(local)
-                child_msg = KillTreeReply("остановлен" if stopped else f"не остановлен: {detail}", status="stopped" if stopped else "unknown")
+                child_msg = KillTreeReply(frame_language.text('forge.execution.81') if stopped else frame_language.text('forge.execution.82', v1=f'{detail}'), status="stopped" if stopped else "unknown")
             else:
-                child_msg = "не остановлен: исходная команда недоступна; дерево не подтверждено"
-            wrapper_msg = KillTreeReply("supervisor завершён", status="not_applicable")  # foreground shell is the child above
+                child_msg = frame_language.text('forge.execution.83')
+            wrapper_msg = KillTreeReply(frame_language.text('forge.execution.84'), status="not_applicable")  # foreground shell is the child above
         else:
             child_msg = (_kill_tree(child_pid, str(runtime.get("child_started_at") or ""),
                                     expect=str(state.get("command") or ""))
-                         if child_pid else "child pid ещё не появился")
+                         if child_pid else frame_language.text('forge.execution.85'))
             supervisor_pid = int(state.get("supervisor_pid") or 0)
             supervisor_born = str(state.get("supervisor_started_at") or "")
             local = _RUNNERS.get(supervisor_pid)
@@ -4169,15 +4168,15 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
                 except subprocess.TimeoutExpired:
                     pass
             wrapper_msg = (_kill_tree(supervisor_pid, supervisor_born, expect=str(d / "request.json"))
-                           if _pid_alive(supervisor_pid, supervisor_born) else KillTreeReply("supervisor завершён", status="already_exited"))
-        msg = f"command {child_msg}; {wrapper_msg}"
+                           if _pid_alive(supervisor_pid, supervisor_born) else KillTreeReply(frame_language.text('forge.execution.86'), status="already_exited"))
+        msg = frame_language.text('forge.execution.87', v1=f'{child_msg}', v3=f'{wrapper_msg}')
         if _kill_tree_state(child_msg) not in {"stopped", "already_exited"} or _kill_tree_state(wrapper_msg) not in {
                 "stopped", "already_exited", "not_applicable"}:
             _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
                                             "note": msg})
             _event(task_id, "process_stop_unconfirmed", process_id=process_id,
                    summary=f"{process_id}: {msg}")
-            return f"{process_id}: {msg} — терминальный статус НЕ записан."
+            return frame_language.text('forge.execution.88', v0=f'{process_id}', v2=f'{msg}')
         # Natural completion wins: a late Stop is not permission to erase it.
         # Missing child PID cannot prove that the supervisor never spawned one.
         prior = _read_json(d / "result.json")
@@ -4190,6 +4189,7 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
     return "action: start | poll | stop | list"
 
 
+@frame_language.pinned
 def verify(task_id: str, action: str = "plan", verification_id: str = "",
            commands: str = "", full: bool = False, max_parallel: int = 4,
            timeout: int = 900, tail: int = 12000, _parent_request_path: str = "") -> str:
@@ -4199,17 +4199,18 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
             with _mutation_lock(task_id) as beat:
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
                 if reason:
-                    return f"Verification refused: {reason}"
+                    return frame_language.text('forge.execution.116', v1=f'{reason}')
                 parent, _ = _worker_parent(task_id, _parent_request_path)
                 beat(lease_sec=60)
                 return _verify_unlocked(task_id, action, verification_id, commands, full,
                                         max_parallel, timeout, tail, parent_unit_id=parent)
         except (TimeoutError, ValueError) as exc:
-            return f"Verification refused: {exc}"
+            return frame_language.text('forge.execution.117', v1=f'{exc}')
     return _verify_unlocked(task_id, action, verification_id, commands, full,
                             max_parallel, timeout, tail)
 
 
+@frame_language.pinned
 def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = "",
            commands: str = "", full: bool = False, max_parallel: int = 4,
            timeout: int = 900, tail: int = 12000, parent_unit_id: str = "") -> str:
@@ -4230,7 +4231,7 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         return "\n".join(
             f"{row['id']} [{row.get('status')}] passed={row.get('passed', 0)} failed={row.get('failed', 0)}"
             for row in rows[:30]
-        ) or "Матриц проверки нет."
+        ) or frame_language.text('forge.execution.91')
     if action in {"plan", "start"}:
         if remote is not None:
             with _remote_observations(task):
@@ -4240,7 +4241,7 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
             try:
                 plan = json.loads(raw_plan)
             except ValueError:
-                return f"Remote verification plan не разобрался: {raw_plan[:2000]}"
+                return frame_language.text('forge.execution.92', v1=f'{raw_plan[:2000]}')
         else:
             plan = forge_intelligence.verification_plan(
                 root, str(task.get("base_commit") or ""), full=bool(full)
@@ -4255,7 +4256,7 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         if action == "plan":
             return _cap(json.dumps(plan, ensure_ascii=False, indent=2), 30000)
         if not plan.get("checks"):
-            return "Ни одной проверки не найдено; передай commands по одной на строку."
+            return frame_language.text('forge.execution.93')
         # 06.10, дедуп верификации (PR oro/forge-contract-0610): команды, уже зелёные на
         # ЭТОМ ЖЕ дереве, повторно не гоняются — supervisor пишет расписку skip. Место —
         # здесь, ДО спавна: решение видимо в запросе и событии, а не внутри чёрного ящика.
@@ -4283,7 +4284,7 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
             pid = _spawn_runner(REPO / "forge_verify.py", req, d / "supervisor.log")
         except Exception as exc:
             _atomic_json(d / "result.json", {"status": "error", "error": f"{type(exc).__name__}: {exc}"})
-            return f"Матрица не стартовала: {type(exc).__name__}: {exc}"
+            return frame_language.text('forge.execution.94', v1=f'{type(exc).__name__}', v3=f'{exc}')
         # Метка рождения супервизора рядом с его номером: без неё «жив ли он»
         # отвечается по одному номеру, а номера в контейнере переиспользуются
         # первым же спавном (см. _unit_state).
@@ -4292,19 +4293,17 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         _atomic_json(req, request)
         _event(task_id, "verification_started", verification_id=unit_id,
                summary=f"{unit_id}: {len(plan['checks'])} checks, parallel={request['max_parallel']}"
-                       + (f", dedup: {skipped_now} уже зелёные на tree {tree_sha[:10]}"
+                       + (frame_language.text('forge.execution.96', v1=f'{skipped_now}', v3=f'{tree_sha[:10]}')
                           if skipped_now else ""))
         for note in dedup_notes:
             _event(task_id, "verification_dedup", verification_id=unit_id, summary=note)
-        reply = (f"Стартовала матрица {unit_id}: {len(plan['checks'])} проверок, "
-                 f"parallel={request['max_parallel']}.")
+        reply = (frame_language.text('forge.execution.97', v1=f'{unit_id}', v3=f"{len(plan['checks'])}", v5=f"{request['max_parallel']}"))
         if skipped_now:
-            reply += (f" Из них {skipped_now} не запускаю повторно — уже зелёные на этом "
-                      f"дереве (tree {tree_sha[:10]}), статус будет skipped_already_green.")
-        return reply + " poll не блокирует ход."
+            reply += (frame_language.text('forge.execution.98', v1=f'{skipped_now}', v3=f'{tree_sha[:10]}'))
+        return reply + frame_language.text('forge.execution.99')
     d = _unit_dir(task_id, "verifications", verification_id)
     if not d.is_dir():
-        return f"Нет матрицы {verification_id}."
+        return frame_language.text('forge.execution.100', v1=f'{verification_id}')
     state = _unit_state(d)
     if action == "poll":
         result = _read_json(d / "result.json") or _read_json(d / "state.json", {}) or state
@@ -4327,8 +4326,8 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
                 {"done", "error", "failed", "stalled", "stopped", "passed", "passed_with_skips", "stale"}
                 and not (isinstance(prior_stop, dict) and prior_stop.get("state") == "unresolved")):
             _event(task_id, "verification_stopped", verification_id=verification_id,
-                   summary=f"{verification_id}: матрица уже завершилась; результат сохранён")
-            return f"{verification_id}: матрица уже завершилась — результат сохранён."
+                   summary=frame_language.text('forge.execution.101', v0=f'{verification_id}'))
+            return frame_language.text('forge.execution.102', v0=f'{verification_id}')
         marker = d / "stop-request.json"
         if not marker.is_file():
             _atomic_json(marker, {"requested_at": _now(), "reason": "verify.stop"})
@@ -4340,21 +4339,21 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         while time.monotonic() < deadline:
             refusal = _read_json(d / "stop.json")
             if isinstance(refusal, dict) and refusal.get("state") == "unresolved":
-                msg = str(refusal.get("note") or "исход группы неизвестен")
+                msg = str(refusal.get("note") or frame_language.text('forge.execution.103'))
                 _event(task_id, "verification_stop_failed", verification_id=verification_id,
                        summary=f"{verification_id}: {msg}")
-                return f"{verification_id}: {msg} — терминальный статус НЕ записан."
+                return frame_language.text('forge.execution.104', v0=f'{verification_id}', v2=f'{msg}')
             completed = _read_json(d / "result.json")
             if isinstance(completed, dict) and str(completed.get("status") or "") in {
                     "done", "error", "failed", "stalled", "stopped", "passed", "passed_with_skips", "stale"}:
                 _event(task_id, "verification_stopped", verification_id=verification_id,
-                       summary=f"{verification_id}: supervisor result {completed['status']}")
-                return f"{verification_id}: supervisor result {completed['status']} — результат сохранён."
+                       summary=frame_language.text('forge.execution.105', v0=f'{verification_id}', v2=f"{completed['status']}"))
+                return frame_language.text('forge.execution.106', v0=f'{verification_id}', v2=f"{completed['status']}")
             time.sleep(.1)
-        msg = "supervisor stop pending: child-group exit not yet confirmed"
+        msg = frame_language.text('forge.execution.107')
         _event(task_id, "verification_stop_failed", verification_id=verification_id,
                summary=f"{verification_id}: {msg}")
-        return f"{verification_id}: {msg} — терминальный статус НЕ записан."
+        return frame_language.text('forge.execution.108', v0=f'{verification_id}', v2=f'{msg}')
     return "action: plan | start | poll | stop | list"
 
 
