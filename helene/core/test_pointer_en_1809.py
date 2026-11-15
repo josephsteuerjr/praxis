@@ -13,7 +13,8 @@
   · текст указателя целиком английский: шапка, имена групп, назначения;
   · перевод не отстаёт молча — у каждой строки записан отпечаток русского оригинала;
   · рычаг `PRAXIS_TOOLS_POINTERS=off` возвращает прежний полный манифест;
-  · рычаг `PRAXIS_TOOLS_EN=off` возвращает её собственный русский текст.
+  · `PRAXIS_TOOLS_EN=off` снимает legacy-накладку непереведённых схем;
+    проверенные схемы следуют независимо выбранному языку кадра.
 
 Запуск: python praxis_test.py test_pointer_en_1809 -v
 """
@@ -94,12 +95,22 @@ class ThePointerSpeaksEnglish(unittest.TestCase):
     def test_the_english_lever_gives_her_own_words_back(self):
         text = pointer(OFF_EN)
         self.assertIn("My tools — pointer", text, "frame language is independent of schema language")
-        self.assertIn(agent.HAND_PURPOSE['my_capabilities'], text,
-                      "PRAXIS_TOOLS_EN=off restores original tool descriptions")
+        rule=agent.tool_language.registry().get('my_capabilities')
+        expected=(agent.frame_language.catalog('en')[rule['purpose']].format() if rule
+                  else agent.HAND_PURPOSE['my_capabilities'])
+        self.assertIn(expected,text,"legacy off restores only the pending-schema fallback")
+
+    def test_reviewed_schema_follows_frame_even_when_legacy_english_is_off(self):
+        with mock.patch.dict(os.environ,OFF_EN),agent.frame_language.use('fr'):
+            catalog={tool['name']:tool for tool in agent.catalog_tools_for(ctx())}
+            rule=agent.tool_language.registry()['manage_identity']
+            self.assertEqual(agent._hand_purpose(catalog['manage_identity']),
+                             agent.frame_language.text(rule['purpose']))
+            self.assertTrue(catalog['manage_identity']['description'].startswith('Autoécriture.'))
 
     def test_describe_and_call_are_english_too(self):
         """Две руки указателя едут в КАЖДОМ кадре: по-русски они рвут набор пополам."""
-        with mock.patch.dict(os.environ, ON):
+        with mock.patch.dict(os.environ, ON),agent.frame_language.use('en'):
             offered = {str(t.get("name") or ""): t for t in agent.offered_tools_for(ctx())}
         for name in ("describe", "call"):
             self.assertFalse(CYR.search(str(offered[name].get("description") or "")),

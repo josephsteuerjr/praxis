@@ -39,12 +39,15 @@ def room_ctx(owner: bool = True) -> agent.ChannelContext:
 # `tools` едут тридцать родных рук плюс `describe`/`call`, но `describe` показывает
 # схему ЛЮБОЙ руки каталога — значит по-английски обязаны быть все, а не предложенные.
 def raw_tools(ctx) -> list:
-    with mock.patch.dict(os.environ, OFF):
+    # Source before the independently selected Hélène frame projection. The
+    # legacy English lever controls only the pending-schema fallback now.
+    with mock.patch.dict(os.environ, OFF), \
+         mock.patch.object(agent.tool_language,'apply',side_effect=lambda tools,**kw:list(tools)):
         return agent.catalog_tools_for(ctx)
 
 
 def en_tools(ctx) -> list:
-    with mock.patch.dict(os.environ, ON):
+    with mock.patch.dict(os.environ, ON), agent.frame_language.use('en'):
         return agent.catalog_tools_for(ctx)
 
 

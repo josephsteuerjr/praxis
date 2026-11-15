@@ -16,13 +16,13 @@ RAW='AUTHORED Русский 日本語 {unknown} $&'
 
 def structural(value):
     if isinstance(value,dict):
-        return {key:structural(item) for key,item in value.items() if key!='description'}
+        return {key:structural(item) for key,item in value.items() if key!='description' or not isinstance(item,str)}
     if isinstance(value,list):return [structural(item) for item in value]
     return value
 
 
 class ToolLanguages(unittest.TestCase):
-    def test_stock_english_fallback_stays_exact_before_general_translations(self):
+    def test_pending_stock_english_fallback_stays_exact(self):
         names=('BASE_TOOLS','SHARED_CONTEXT_TOOLS','OWNER_TOOLS','WEB_READ_TOOL','WEB_FIND_TOOL',
                'SEND_EMAIL_TOOL','CHECK_EMAIL_TOOL','MAIL_READ_TOOL','MAIL_DRAFT_TOOL',
                'TASK_CONTROL_TOOL','DESCRIBE_TOOL','CALL_TOOL')
@@ -32,11 +32,12 @@ class ToolLanguages(unittest.TestCase):
             for tool in value if isinstance(value,list) else [value]:
                 if tool.get('input_schema'):stock[tool['name']]=tool
         self.assertEqual(set(stock),set(tool_language.sources()))
-        before=copy.deepcopy(list(stock.values()))
+        pending=[tool for name,tool in stock.items() if name not in tool_language.registry()]
+        before=copy.deepcopy(pending)
         with frame_language.use('en'):
-            self.assertEqual(tool_language.apply(list(stock.values()),fallback=tool_text_en.apply),
-                             tool_text_en.apply(list(stock.values())))
-        self.assertEqual(list(stock.values()),before)
+            self.assertEqual(tool_language.apply(pending,fallback=tool_text_en.apply),
+                             tool_text_en.apply(pending))
+        self.assertEqual(pending,before)
 
     def test_general_author_edit_is_preserved_before_legacy_overlay_can_erase_it(self):
         authored=copy.deepcopy(agent.DESCRIBE_TOOL);authored['description']=RAW
@@ -49,8 +50,8 @@ class ToolLanguages(unittest.TestCase):
         legacy.assert_not_called()
 
     def test_complete_native_catalog_has_fresh_reviewed_text_and_no_template_parameters(self):
-        self.assertEqual(tool_language.coverage(mcp.TOOLS),{'reviewed':21,'missing':[],'stale':[]})
-        self.assertEqual(sum(len(row['descriptions']) for row in tool_language.registry().values()),112)
+        self.assertEqual(tool_language.coverage(mcp.TOOLS,names=mcp.SCHEMAS),{'reviewed':21,'missing':[],'stale':[]})
+        self.assertEqual(sum(len(row['descriptions']) for name,row in tool_language.registry().items() if name in mcp.SCHEMAS),112)
         for rule in tool_language.registry().values():
             for entry in rule['descriptions']:
                 for language in frame_language.LANGUAGES:
@@ -95,7 +96,7 @@ class ToolLanguages(unittest.TestCase):
                 self.assertIsNone(tool_language.purpose(authored))
                 self.assertIsNone(tool_language.purpose(changed))
                 self.assertEqual(agent._hand_purpose(authored),RAW)
-        result=tool_language.coverage([authored,changed]+mcp.TOOLS[2:])
+        result=tool_language.coverage([authored,changed]+mcp.TOOLS[2:],names=mcp.SCHEMAS)
         self.assertEqual(result['stale'],[authored['name'],changed['name']])
         custom={'name':'authored_tool','description':RAW,'input_schema':{'type':'object'}}
         self.assertIs(tool_language.apply([custom])[0],custom)

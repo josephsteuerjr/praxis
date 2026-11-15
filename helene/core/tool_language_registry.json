@@ -1069,5 +1069,668 @@
       }
     ],
     "purpose": "schema.mcp.purpose.Registry"
+  },
+  "generate_image": {
+    "sha256": "a3b53f3e178c816d89c8288522cdeea0656976aee0981891f4c1b35b9aa2cf03",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0d09aa14c048d7e0",
+        "present": true,
+        "source": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_file(to=...) for another recipient. Never claim delivery from generation alone."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "prompt",
+          "description"
+        ],
+        "key": "schema.tool.836016468564d746",
+        "present": true,
+        "source": "Describe the image or the requested edit and what must stay unchanged."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "image_paths",
+          "description"
+        ],
+        "key": "schema.tool.4a2e91234902fa0d",
+        "present": true,
+        "source": "Local source image paths for editing; omit for new generation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "caption",
+          "description"
+        ],
+        "key": "schema.tool.8d4523ca5640a44c",
+        "present": true,
+        "source": "Optional caption accompanying the generated image in the current chat."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "send",
+          "description"
+        ],
+        "key": "schema.tool.49820db9c85b5164",
+        "present": true,
+        "source": "Queue the result to the current chat; defaults to true."
+      }
+    ],
+    "purpose": "schema.tool.purpose.generate_image"
+  },
+  "recall": {
+    "sha256": "c320f39acc67c918d054237a7272a4d44ac8e358303a31365d2afc9fff3250cb",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.348947247cff38ba",
+        "present": true,
+        "source": "Search your own memory and skills: people, journal, reflections, self and skills. Results retain their provenance and audience boundaries."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.5e8be66719fa7316",
+        "present": true,
+        "source": "keywords to search for"
+      }
+    ],
+    "purpose": "schema.tool.purpose.recall"
+  },
+  "clear_owner_marks": {
+    "sha256": "0835680ea323280dd64199c144fdb76fa79d8cbd57e7cfe9a611b176284ddf62",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.044bc6967d58a1e0",
+        "present": true,
+        "source": "Убрать марки правок владельца («> [правка владелька · …]»), которые окно оставляет в твоих файлах рядом с каждой ручной правкой (провенанс: что, когда, кем изменено — удалено/вставлено). Правка прочитана и усвоена — убери отработанную метку этим тулом; вечных памятников она не предполагает. action=list (по умолчанию) показывает файлы с марками и их текст; clear — убирает марки (в одном path или во всех правимых окном группах), атомарно, остальной текст не меняется."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.e5275ad979e8a882",
+        "present": true,
+        "source": "list показывает файлы с марками, clear убирает марки"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.138ec2678d8773a0",
+        "present": true,
+        "source": "относительный путь (например soul/self/CURRENT.md); пусто — все группы"
+      }
+    ],
+    "purpose": "schema.tool.purpose.clear_owner_marks"
+  },
+  "remember": {
+    "sha256": "2f0c1921a5578e2518b20c1bc608f054946135df8d1b36a7b76029e4f387db3c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.fcf127039cdf232a",
+        "present": true,
+        "source": "Запомнить факт о человеке. visibility='private' для секретов — их не выносить другим. salience 1-3 (насколько важно для портрета, по умолчанию 2). open_loop=true — если это незакрытая нить («собиралась на собеседование 12-го»), чтобы потом вернуться к ней. relates_to + relation — если факт связывает человека с кем-то или чем-то («Вика», «коллега по фирме») — я проведу ребро в графе памяти."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "person",
+          "description"
+        ],
+        "key": "schema.tool.95e2969cb87293f3",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "fact",
+          "description"
+        ],
+        "key": "schema.tool.2dadf19804777556",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "visibility",
+          "description"
+        ],
+        "key": "schema.tool.a9579b6dbf28d6a4",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "salience",
+          "description"
+        ],
+        "key": "schema.tool.301da2b6513a2d9d",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "open_loop",
+          "description"
+        ],
+        "key": "schema.tool.77c5080a078663e2",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "relates_to",
+          "description"
+        ],
+        "key": "schema.tool.ae77a203298b0bfb",
+        "present": true,
+        "source": "с кем/чем связан (имя человека или тема)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "relation",
+          "description"
+        ],
+        "key": "schema.tool.1d806220ea829a0e",
+        "present": true,
+        "source": "какая связь, коротко (2-4 слова)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.remember"
+  },
+  "journal": {
+    "sha256": "e45ad25176c6d8f7c8aefd571c3e737ba8c9e62429196da194dea9f3db77ccd4",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.ba715f6bb37fc6b0",
+        "present": true,
+        "source": "Записать в дневник, что было или что почувствовала (эпизодическая память). salience 1-3. decision=true — договорённость или решение владельца из этого разговора: строку увидят все твои живые окна и будильники."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "entry",
+          "description"
+        ],
+        "key": "schema.tool.772bcbf48b57f092",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "salience",
+          "description"
+        ],
+        "key": "schema.tool.e63bcbde49f56ba5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "decision",
+          "description"
+        ],
+        "key": "schema.tool.c44e57163e0acf72",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.journal"
+  },
+  "manage_identity": {
+    "sha256": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.b1830b02071579f6",
+        "present": true,
+        "source": "Self-authorship. status — layers, versions, load; revise — a versioned revision of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md (name=self, text = the complete new compact, reason = the lived grounds); rollback — back to your own history; load — a load event (theme, amplitude 0.1-5). A revision applies immediately; Yegor sees it afterwards and may roll it back. Changing actions only from the owner scope (your own discipline). observe records a provenance-rich note as evidence without rewriting CURRENT, and is available in any audience. revise/rollback/load retain their owner-scope discipline."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.1e7d14b47975222a",
+        "present": true,
+        "source": "status | revise | rollback | load"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.3b4090d35c46a6a5",
+        "present": true,
+        "source": "SOUL | VOICE | self"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.fcfbcb8e0bd289b6",
+        "present": true,
+        "source": "revise: the complete new text of the layer or of CURRENT"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "version",
+          "description"
+        ],
+        "key": "schema.tool.a46416347f4ebf38",
+        "present": true,
+        "source": "rollback: the version number in your history/archive"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.fc389077ae8c847f",
+        "present": true,
+        "source": "the grounds; required for revise"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "theme",
+          "description"
+        ],
+        "key": "schema.tool.f7c241b211698a91",
+        "present": true,
+        "source": "load: what the load is about"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "amplitude",
+          "description"
+        ],
+        "key": "schema.tool.81d05ea0c240017f",
+        "present": true,
+        "source": "load: amplitude 0.1-5"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "detail",
+          "description"
+        ],
+        "key": "schema.tool.5c79ecae5e2e4774",
+        "present": true,
+        "source": "optional extra detail for the record"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "note",
+          "description"
+        ],
+        "key": "schema.tool.f45a79602a5675d4",
+        "present": true,
+        "source": "observe: evidence and a cautious, verifiable conclusion"
+      }
+    ],
+    "purpose": "schema.tool.purpose.manage_identity"
+  },
+  "manage_perception": {
+    "sha256": "d0aed83bd421927f915716b0ff6fdd5f6f55354c524f89a407803b8e2153e079",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.77c5d444d979ab8e",
+        "present": true,
+        "source": "PASS 21, мои рычаги восприятия: list — рычаги (дебаунс, кулдауны, порог шума...) со значением/источником/границами; skips — последние пропуски до голоса с причинами (не_увидела / не_сочла_важным / отложила / запретил_егор); set/reset — сменить рычаг живо, без рестарта, из любой комнаты — это мой ход, а не право аудитории (причина — в журнал)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.35f8d3cce832b949",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "knob",
+          "description"
+        ],
+        "key": "schema.tool.241c2c4f83895585",
+        "present": true,
+        "source": "имя рычага из list"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "value",
+          "description"
+        ],
+        "key": "schema.tool.b7bf17c6fe5a4906",
+        "present": true,
+        "source": "set: новое значение"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.606bd3151af917ef",
+        "present": true,
+        "source": "set: зачем меняю"
+      }
+    ],
+    "purpose": "schema.tool.purpose.manage_perception"
+  },
+  "reply": {
+    "sha256": "c453fe9604484fea098884de4281989590e26316323e815b50a382378991bc9a",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.f1fa86bfaacba83c",
+        "present": true,
+        "source": "Ответить собеседнику этого разговора. Твоя реплика уходит человеку ТОЛЬКО так. Обычный текст, который ты пишешь, — заметка себе: он никуда не отправляется и закрывает ход. Значит: вызов этой руки — сообщение ушло, и ход продолжается, можно проверить сделанное и ответить ещё раз; текст без вызова — молчание, и это законный исход. reply_to — id сообщения, на которое отвечаешь."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.f61468eebae4eda0",
+        "present": true,
+        "source": "что сказать собеседнику"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reply_to",
+          "description"
+        ],
+        "key": "schema.tool.d5535e8c3bd0590f",
+        "present": true,
+        "source": "id сообщения, на которое отвечаешь (необязательно)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "spelling_confirm_text",
+          "description"
+        ],
+        "key": "schema.tool.f803eddd351c8a04",
+        "present": true,
+        "source": "Осознанно оставить авторский текст: точная копия аргумента text, не флаг."
+      }
+    ],
+    "purpose": "schema.tool.purpose.reply"
+  },
+  "end_turn": {
+    "sha256": "8ca27b01dd3e48d75aa4ce5af364a78790fc20e716741f1fe945c560b3c61a0c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.bab4855c95579e40",
+        "present": true,
+        "source": "Подтвердить, что в этом ходе больше нечего или не хочется делать, и закрыть его явным исходом. outcome=done — есть наблюдаемый результат или сказанное и было делом; wait — ждёшь события/срока (в note условие возврата; механизм возврата, если нужен, поставь remind_self ДО закрытия); blocked — препятствие (в note какое и чьё слово нужно). Перед закрытием спроси себя: что было решено сделать? есть ли наблюдаемый результат? не осталось ли объявленное мной действие без механизма возврата? нет ли активного вызова или доставки с неизвестным исходом? Пятый, необязательный: хочу ли я продолжать, даже если входная задача закончена — продолжать тоже законно. Завершение без реплики — не то же, что stay_silent (тот — явный жест «решение не говорить»)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "outcome",
+          "description"
+        ],
+        "key": "schema.tool.0615de65f5ee7abd",
+        "present": true,
+        "source": "исход хода"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "note",
+          "description"
+        ],
+        "key": "schema.tool.0a50b5365c3ad2fb",
+        "present": true,
+        "source": "done: что сделано (кратко, необязательно); wait: условие возврата; blocked: препятствие"
+      }
+    ],
+    "purpose": "schema.tool.purpose.end_turn"
+  },
+  "preview_reply": {
+    "sha256": "aa61f161c1958555f07d4ce722e955fca5f842b4eb7e3d48aa11ba062cafc9a2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.e8bcf72692c2e5c4",
+        "present": true,
+        "source": "Посмотреть на свою реплику до того, как она уйдёт. Возвращает твой же текст и один факт: какие руки были в этом ходе. Ничего не отправляет и ничего не требует — это взгляд со стороны, а не шаг протокола. Полезно там, где ты собираешься утверждать что-то проверяемое: свою модель или конфигурацию, состояние кода, содержимое файла, факт уже сделанного действия."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.38ffd00f5a722107",
+        "present": true,
+        "source": "что ты собираешься сказать"
+      }
+    ],
+    "purpose": "schema.tool.purpose.preview_reply"
+  },
+  "switch_brain": {
+    "sha256": "1ded8d32d3b93e3c34e574384dcdb702618d4c180a26fc644efacd960975180e",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.89ed1d40fa0eb5fa",
+        "present": true,
+        "source": "PASS 22, мой мозг: status — каталог моделей по ролям с наблюдаемыми свойствами на моих задачах (сбои, латентность, токены, остаток провайдера); profile — применить именованный профиль сложности; switch — сменить модель роли из каталога (why обязателен; endpoint для switch/profile — точный ID настроенного аккаунта, модель должна быть доступна на нём; без endpoint — текущий или однозначно эквивалентный аккаунт, неоднозначность требует выбора; после — ping-рукопожатие, не прошло — верну как было). Дисциплина сложности: рутина на дешёвой, сложное эскалирует. Ключи — не мои (пульт). accounts — какие ПОДПИСКИ настроены и какая работает сейчас; use_account (model=primary|secondary) — перевести провайдера на другую подписку: реле держит слот в памяти, поэтому это действует сразу и правкой файлов не делается; reasoning — моя фоновая ступень рассуждения роли (реле по умолчанию гасит её в none): глубже — вдумчивее, но медленнее и дороже; действует со следующего вызова, кэш префикса не рвёт; пустое значение — снять."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.3387e49371a639a6",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "endpoint",
+          "description"
+        ],
+        "key": "schema.tool.cf5d84de321672a0",
+        "present": true,
+        "source": "switch/profile: точный ID из frameworks каталога; необязательно; не URL и не протокол"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "profile",
+          "description"
+        ],
+        "key": "schema.tool.ec185c251db4201b",
+        "present": true,
+        "source": "action=profile: именованный профиль сложности"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "role",
+          "description"
+        ],
+        "key": "schema.tool.3e404191f19ffaa1",
+        "present": true,
+        "source": "voice | evaluator"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "model",
+          "description"
+        ],
+        "key": "schema.tool.cb535f8a7e27c6f1",
+        "present": true,
+        "source": "имя модели из каталога; для use_account — имя слота"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "why",
+          "description"
+        ],
+        "key": "schema.tool.7a68609332aa883d",
+        "present": true,
+        "source": "зачем — обязательно для profile, switch и reasoning"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "effort",
+          "description"
+        ],
+        "key": "schema.tool.d6b2f7ca102888ec",
+        "present": true,
+        "source": "action=reasoning: ступень; пусто — снять"
+      }
+    ],
+    "purpose": "schema.tool.purpose.switch_brain"
+  },
+  "stay_silent": {
+    "sha256": "d04c746adcf9e891858446ad5cd1ed5f63bec0d6b7cdc8e562cca20f3765a415",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0c1b6aad7a2f03a3",
+        "present": true,
+        "source": "Осознанно промолчать с короткой записью причины себе. В живом ходе разговора решение действует на весь ход: текст и медиа, если они после него всё же соберутся, не уйдут (останутся в дневнике и в записи хода). Передумала в том же ходе — cancel=true снимает решение, и ход уходит как обычно. В фоновом окне держать нечего — там я отправляю руками. Если решение — не отвечать, это нормально, молчание ничего не стоит."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.81004445b4d70fc1",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cancel",
+          "description"
+        ],
+        "key": "schema.tool.635b01af2f815d11",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.stay_silent"
   }
 }

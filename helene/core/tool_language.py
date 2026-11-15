@@ -86,9 +86,10 @@ def known(tool: dict) -> bool:
     return bool(source and fingerprint(tool) in (source['raw'],source['english']))
 
 
-def coverage(tools: list) -> dict:
+def coverage(tools: list, *, names=None) -> dict:
     by_name = {tool.get('name'):tool for tool in tools if isinstance(tool,dict)}
-    missing = [name for name in registry() if name not in by_name]
-    stale = [name for name,rule in registry().items()
+    selected={name:rule for name,rule in registry().items() if names is None or name in names}
+    missing = [name for name in selected if name not in by_name]
+    stale = [name for name,rule in selected.items()
              if name in by_name and fingerprint(by_name[name]) != rule['sha256']]
-    return {'reviewed':len(registry()),'missing':missing,'stale':stale}
+    return {'reviewed':len(selected),'missing':missing,'stale':stale}
