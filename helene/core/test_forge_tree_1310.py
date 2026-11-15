@@ -167,7 +167,7 @@ class WorkerTree(unittest.TestCase):
             answer = self.call("spawn", agent_id="agent-bbbbbbbb", brief="child",
                                role="scout", spawned_by="agent-evil000",
                                _parent_request_path=str(a / "request.json"))
-            self.assertIn("Порождён agent-bbbbbbbb", answer)
+            self.assertIn(forge.frame_language.text('forge.workers.84', v1='agent-bbbbbbbb', v3='scout', v5='71'), answer)
             request = json.loads((self.dir / "agents/agent-bbbbbbbb/request.json").read_text())
             self.assertEqual(request["parent_unit_id"], "agent-aaaaaaaa")
             self.assertEqual(request["spawned_by"], "agent-evil000")
@@ -175,14 +175,14 @@ class WorkerTree(unittest.TestCase):
             self.assertIn(forge.frame_language.text('forge.workers.20', v1='2', v3='2'), denied)
             bad = self.call("spawn", brief="bad", role="worker",
                             _parent_request_path=str(self.root / "request.json"))
-            self.assertIn("Worker identity refused", bad)
+            self.assertIn(forge.frame_language.text('forge.workers.61', v1=forge.frame_language.text('forge.workers.5')), bad)
 
     def test_read_oriented_parent_cannot_escalate_child(self):
         a = self.unit("agent-aaaaaaaa", role="scout")
         with mock.patch.object(forge, "_spawn_runner") as spawn:
             answer = self.call("spawn", brief="write", role="worker",
                                _parent_request_path=str(a / "request.json"))
-        self.assertIn("role refused", answer)
+        self.assertIn(forge.frame_language.text('forge.workers.68'), answer)
         spawn.assert_not_called()
 
     def test_swarm_node_identity_conflict_blocks_duplicate_spawn(self):
@@ -194,7 +194,7 @@ class WorkerTree(unittest.TestCase):
         with mock.patch.object(forge, "_spawn_runner") as spawn:
             answer = self.call("spawn", agent_id="agent-bbbbbbbb", brief="same node",
                                node_id="one", role="scout")
-        self.assertEqual(answer, "Spawn refused: swarm reservation identity changed.")
+        self.assertEqual(answer, forge.frame_language.text('forge.workers.72'))
         spawn.assert_not_called()
         self.assertEqual((a / 'request.json').read_bytes(), before)
         self.assertFalse((self.dir / 'agents/agent-bbbbbbbb').exists())
@@ -221,10 +221,10 @@ class WorkerTree(unittest.TestCase):
         self.assertEqual(json.loads(self.call("disposition", **{**kwargs, 'disposition': 'irrelevant'})), revised)
         self.assertEqual(len(list(b.glob('disposition-*.json'))), 2)
         self.assertEqual((b / 'result.json').read_bytes(), original)
-        self.assertIn("identity changed", self.call("disposition", **{
+        self.assertIn(forge.frame_language.text('forge.workers.96', v1=digest), self.call("disposition", **{
             **kwargs, "result_sha256": "0" * 64}))
         c = self.unit("agent-cccccccc")
-        self.assertIn("Worker cannot inspect or control", self.call("disposition", **{
+        self.assertIn(forge.frame_language.text('forge.workers.87'), self.call("disposition", **{
             **kwargs, "_parent_request_path": str(c / "request.json")}))
 
     def test_stop_fences_descendants_preserves_settled_and_keeps_uncertain_unknown(self):
@@ -317,7 +317,7 @@ class WorkerTree(unittest.TestCase):
         partial_hash = forge._result_identity(unit / "result.json")
         rejected = self.call("disposition", agent_id="agent-aaaaaaaa",
                              disposition="integrated", result_sha256=partial_hash)
-        self.assertIn("not terminal", rejected)
+        self.assertIn(forge.frame_language.text('forge.workers.97'), rejected)
         self.assertFalse(list(unit.glob("disposition-*.json")))
         self.assertTrue(forge_worker._publish_result(
             unit / "request.json", self.task_id, {"status": "done", "result": "final"}))

@@ -101,7 +101,7 @@ class DesktopRecovery(unittest.TestCase):
         self.recover('processes','proc-old')
         with mock.patch.object(forge,'_launch_agent_unlocked',return_value=333) as launch:
             reply=forge.agent(self.tid,'spawn',agent_id=request['id'],brief='new independent fixture work')
-        self.assertIn('Порождён',reply)
+        self.assertIn(forge.frame_language.text('forge.workers.84', v1=request['id'], v3='worker', v5='333'),reply)
         launch.assert_called_once()
 
     def test_selected_stop_retains_recovered_owned_jobs_without_signalling(self):

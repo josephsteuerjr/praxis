@@ -70,7 +70,7 @@ class Coordination(unittest.TestCase):
         self.assertEqual(forge_swarm.ready_nodes(current), [])
         raw = (d / "result.json").read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
-        self.assertIn("identity", forge.agent(self.tid, "disposition", agent_id=d.name,
+        self.assertIn(forge.frame_language.text('forge.workers.96', v1=digest), forge.agent(self.tid, "disposition", agent_id=d.name,
             result_sha256="0" * 64, disposition="integrated"))
         for choice in ("deferred", "integrated"):
             answer = json.loads(forge.agent(self.tid, "disposition", agent_id=d.name,
@@ -87,11 +87,11 @@ class Coordination(unittest.TestCase):
     def test_shared_writer_queues_once_and_readers_remain_parallel(self):
         first = self.unit()
         queued = forge.agent(self.tid, "spawn", brief="second writer", agent_id="agent-bbbbbbbb")
-        self.assertIn("Queued agent-bbbbbbbb", queued)
+        self.assertIn(forge.frame_language.text('forge.workers.81', v1='agent-bbbbbbbb', v3='worker', v5=forge.frame_language.text('forge.workers.21')+first.name), queued)
         self.assertIn(forge.frame_language.text('forge.workers.21'), queued)
         self.assertEqual(forge._unit_state(self.directory / "agents/agent-bbbbbbbb")["status"], "queued")
         self.assertIn("уже существует", forge.agent(self.tid, "spawn", brief="duplicate", agent_id="agent-bbbbbbbb"))
-        self.assertIn("Порождён", forge.agent(self.tid, "spawn", brief="read", role="reviewer", agent_id="agent-cccccccc"))
+        self.assertIn(forge.frame_language.text('forge.workers.84', v1='agent-cccccccc', v3='reviewer', v5='781'), forge.agent(self.tid, "spawn", brief="read", role="reviewer", agent_id="agent-cccccccc"))
         self.assertEqual(self.spawn.call_count, 1)
         forge._atomic_json(first / "result.json", {"status": "done"})
         self.assertEqual(forge.tick_queued(self.tid), [])
@@ -204,7 +204,7 @@ class Coordination(unittest.TestCase):
         self.assertIn(forge.frame_language.text('forge.workers.8', v1='pause'), forge.agent(self.tid, "spawn", brief="paused"))
         self.assertEqual(forge.control(self.tid, "resume")["status"], "resumed")
         parent = self.unit(role="scout")
-        self.assertIn("read-oriented", forge.agent(self.tid, "spawn", brief="edit", role="worker",
+        self.assertIn(forge.frame_language.text('forge.workers.68'), forge.agent(self.tid, "spawn", brief="edit", role="worker",
             _parent_request_path=str(parent / "request.json")))
         forge._atomic_json(parent / "stop.json", {"state": "pending"})
         self.assertIn(forge.frame_language.text('forge.workers.13', v1=parent.name), forge.agent(self.tid, "spawn", brief="child", role="scout",
@@ -510,8 +510,8 @@ class Coordination(unittest.TestCase):
             self.assertEqual(forge.source_update_task(*args), task)
             with self.assertRaises(ValueError):
                 forge.source_update_task(other, str(self.root), "a" * 64, "c" * 64, str(script))
-            self.assertIn("Порождён", forge.agent(other, "spawn", brief="merge", agent_id="agent-dddddddd"))
-            self.assertIn("sole root", forge.agent(other, "spawn", brief="again"))
+            self.assertIn(forge.frame_language.text('forge.workers.84', v1='agent-dddddddd', v3='worker', v5='781'), forge.agent(other, "spawn", brief="merge", agent_id="agent-dddddddd"))
+            self.assertIn(forge.frame_language.text('forge.workers.74'), forge.agent(other, "spawn", brief="again"))
             self.assertIn(forge.frame_language.text('forge.workers.9'), forge.process(other, "start", command="echo forbidden"))
             self.assertEqual(self.spawn.call_args.args[0], script)
 

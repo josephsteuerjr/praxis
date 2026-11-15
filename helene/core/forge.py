@@ -5114,6 +5114,7 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     return value
 
 
+@frame_language.pinned
 def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
           role: str = "worker", max_iters: int = 0, tail: int = 10000,
           node_id: str = "", owns: list[str] | None = None,
@@ -5130,7 +5131,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
     try:
         parent_id, parent_request = _worker_parent(task_id, _parent_request_path)
     except (ValueError, OSError) as exc:
-        return f"Worker identity refused: {exc}"
+        return frame_language.text('forge.workers.61', v1=f'{exc}')
     if action == "list":
         rows = _worker_tree(task_id)
         if parent_id:
@@ -5138,29 +5139,29 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     and r["id"] != parent_id]
         return "\n".join(f"{r['id']} [{r.get('status')}] parent={r.get('parent_unit_id') or '-'} "
                          f"sha256={r.get('result_sha256') or '-'} {r.get('role')}: {r.get('brief')}"
-                          for r in rows[:30]) or "Субагентов нет."
+                          for r in rows[:30]) or frame_language.text('forge.workers.63')
     if action == "tick":
         if parent_id:
-            return "Only the coordinator drains the task queue."
+            return frame_language.text('forge.workers.64')
         return json.dumps(tick_queued(task_id), ensure_ascii=False)
     if action == "spawn":
         role = str(role or "worker").strip().lower()
         if task.get("self_review") and (role != "reviewer" or parent_id):
-            return "Self-review admits root read-only critics only."
+            return frame_language.text('forge.workers.65')
         if task.get("source_update") and (role != "worker" or parent_id):
-            return "Source-update admits one isolated root worker only."
+            return frame_language.text('forge.workers.66')
         if role not in {"scout", "worker", "reviewer"}:
             return "role: scout | worker | reviewer"
         if parent_id and parent_request.get("role") != "worker" and role == "worker":
-            return "Worker role refused: a read-oriented parent cannot create an editing worker."
+            return frame_language.text('forge.workers.68')
         brief = str(brief or "").strip()
         if not brief:
-            return "Для субагента нужен brief."
+            return frame_language.text('forge.workers.69')
         # Явный agent_id — резервация swarm-узла: узел сохраняет устойчивую
         # идентичность между резервацией и спавном (восстановление после рестарта).
         unit_id = str(agent_id or "").strip() or _id("agent")
         if not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", unit_id):
-            return "Invalid agent_id."
+            return frame_language.text('forge.workers.70')
         d = _unit_dir(task_id, "agents", unit_id)
         try:
             # Same durable task mutex for root/DAG/nested workers and stop fences. The
@@ -5168,7 +5169,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
             with _mutation_lock(task_id) as beat:
                 reason = _admission_reason(task_id, _parent_request_path)
                 if reason:
-                    return f"Spawn refused: {reason}"
+                    return frame_language.text('forge.workers.71', v1=f'{reason}')
                 task = get(task_id) or task
                 _worker_script(task)
                 if node_id and not parent_id:
@@ -5178,19 +5179,18 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     node = nodes.get(node_id)
                     if (not node or node.get("agent_id") != unit_id
                             or node.get("status") not in {"starting", "lost"}):
-                        return "Spawn refused: swarm reservation identity changed."
+                        return frame_language.text('forge.workers.72')
                     reason = forge_swarm.dependency_reason(node, nodes)
                     if reason:
-                        return f"Spawn refused: {reason}"
+                        return frame_language.text('forge.workers.73', v1=f'{reason}')
                 if task.get("source_update") and list((_task_dir(task_id) / "agents").glob("*/request.json")):
-                    return "Source-update already has its sole root unit; correction requires a new task."
+                    return frame_language.text('forge.workers.74')
                 if d.exists():
-                    return (f"Юнит {unit_id} уже существует (status={_unit_state(d).get('status')}); "
-                            "повторный spawn отклонён — это была бы вторая копия того же юнита.")
+                    return (frame_language.text('forge.workers.75', v1=f'{unit_id}', v3=f"{_unit_state(d).get('status')}"))
                 if not re.fullmatch(r"agent-[0-9a-f]{8}", unit_id):
                     # An old non-minted ID is still readable/duplicate-protected;
                     # only a NEW worker must carry Forge's current identity form.
-                    return "agent_id must be a Forge-minted agent id."
+                    return frame_language.text('forge.workers.76')
                 if node_id and not parent_id:
                     for existing in (_task_dir(task_id) / "agents").glob("*/request.json"):
                         prior_node = _read_json(existing, {}) or {}
@@ -5200,7 +5200,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                             node = next((n for n in history.get("nodes", []) if n.get("id") == node_id), {})
                             old_ids = {n.get("agent_id") for n in node.get("attempts", [])}
                             if not previous_unit_id or existing.parent.name not in old_ids:
-                                return f"Swarm node {node_id} already has unit {existing.parent.name}; no duplicate spawn."
+                                return frame_language.text('forge.workers.77', v1=f'{node_id}', v3=f'{existing.parent.name}')
                 if parent_id:
                     # Read the durable request again under the same lock as stop; no stale
                     # in-memory copy can resurrect a fenced ancestor after the stop returns.
@@ -5210,12 +5210,12 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                         seen.add(current)
                         ancestor = _unit_dir(task_id, "agents", current)
                         if (ancestor / "stop.json").exists():
-                            return f"Spawn refused: ancestor {current} is stop-fenced."
+                            return frame_language.text('forge.workers.78', v1=f'{current}')
                         if (ancestor / "result.json").exists():
-                            return f"Spawn refused: ancestor {current} is terminal."
+                            return frame_language.text('forge.workers.79', v1=f'{current}')
                         current = _parent_of(task_id, current)
                     if current:
-                        return "Spawn refused: corrupt/cyclic worker ancestry."
+                        return frame_language.text('forge.workers.80')
                 request = {
                     "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
                     "run_context": (None if task.get("self_review") or task.get("source_update") else
@@ -5242,42 +5242,41 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     request.update(status="queued", queued_reason=reason)
                     _atomic_json(req, request)
                     _event(task_id, "agent_queued", agent_id=unit_id, summary=reason)
-                    return f"Queued {unit_id} ({role}): {reason}. Durable request retained; no process started."
+                    return frame_language.text('forge.workers.81', v1=f'{unit_id}', v3=f'{role}', v5=f'{reason}')
                 _atomic_json(req, request)
                 try:
                     pid = _launch_agent_unlocked(task_id, d, request, beat)
                 except Exception as exc:
-                    return f"Субагент не стартовал: {type(exc).__name__}: {exc}"
+                    return frame_language.text('forge.workers.82', v1=f'{type(exc).__name__}', v3=f'{exc}')
         except (TimeoutError, ValueError, ImportError, OSError) as exc:
-            return f"Spawn refused: {exc}"
+            return frame_language.text('forge.workers.83', v1=f'{exc}')
         _event(task_id, "agent_spawned", agent_id=unit_id, role=role,
                summary=f"{unit_id} {role}: {brief[:120]}")
-        return (f"Порождён {unit_id} ({role}, pid {pid}). Он работает отдельным процессом и свежим "
-                "контекстом; можно сразу породить других, затем poll/list.")
+        return (frame_language.text('forge.workers.84', v1=f'{unit_id}', v3=f'{role}', v5=f'{pid}'))
     d = _unit_dir(task_id, "agents", agent_id)
     if not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", agent_id):
-        return "Invalid agent_id."
+        return frame_language.text('forge.workers.85')
     if not d.is_dir():
-        return f"Нет субагента {agent_id}."
+        return frame_language.text('forge.workers.86', v1=f'{agent_id}')
     if parent_id and (agent_id == parent_id or not _in_subtree(task_id, parent_id, agent_id)):
-        return "Worker cannot inspect or control itself, an ancestor, or a sibling."
+        return frame_language.text('forge.workers.87')
     if action in {'payload','events'}:
         import forge_runtime
         if (action == 'payload' and kind == 'result' and payload_sha256 and result_sha256
                 and payload_sha256 != result_sha256):
-            return json.dumps({'ok':False,'error':'Conflicting payload_sha256 and result_sha256; use one exact result hash.'})
+            return json.dumps({'ok':False,'error':frame_language.text('forge.workers.88')})
         digest = payload_sha256 or (result_sha256 if kind == 'result' else '')
         try:
             value=(forge_runtime.read_record(d,digest,kind,offset,limit) if action=='payload'
                    else forge_runtime.read_events(d,after_seq,limit))
         except (ValueError, OSError) as exc:
             return json.dumps({'ok':False,'error':str(exc),'action':action,
-                               'next_action':'Poll the selected worker, then read with payload_sha256 and the returned page cursor.'},ensure_ascii=False)
+                               'next_action':frame_language.text('forge.workers.89')},ensure_ascii=False)
         return json.dumps(value,ensure_ascii=False)
     state = _unit_state(d)
     if action in {"pause", "resume"}:
         if parent_id:
-            return "Only the coordinator can resume or pause a selected unit."
+            return frame_language.text('forge.workers.90')
         return json.dumps(control(task_id, action, agent_id=agent_id), ensure_ascii=False)
     if action == "poll":
         log = _tail(d / "supervisor.log", max(500, min(int(tail or 10000), 30000)))
@@ -5294,22 +5293,22 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                            "dispositions": [r.get("dispositions") for r in _worker_tree(task_id)
                                             if r["id"] == agent_id][0]},
                           ensure_ascii=False, indent=2)
-        return _cap(body + "\n--- worker log ---\n" + (log or "(пока пусто)"), 40000)
+        return _cap(body + "\n--- worker log ---\n" + (log or frame_language.text('forge.workers.92')), 40000)
     if action == "disposition":
         if parent_id and _parent_of(task_id, agent_id) != parent_id:
-            return "Disposition refused: this result belongs to another immediate parent."
+            return frame_language.text('forge.workers.93')
         if disposition not in {"integrated", "irrelevant", "deferred"}:
             return "disposition: integrated | irrelevant | deferred"
         if not re.fullmatch(r"[0-9a-f]{64}", result_sha256 or ""):
-            return "Disposition requires the full SHA-256 from poll."
+            return frame_language.text('forge.workers.95')
         try:
             with _mutation_lock(task_id):
                 observed = _result_identity(d / "result.json")
                 if not observed or observed != result_sha256:
-                    return f"Disposition refused: result identity changed/missing (current={observed or '-'})"
+                    return frame_language.text('forge.workers.96', v1=f"{observed or '-'}")
                 value = _read_json(d / "result.json")
                 if not isinstance(value, dict) or value.get("status") not in _TERMINAL_AGENT_STATES:
-                    return "Disposition refused: result is not terminal; poll the settled worker first."
+                    return frame_language.text('forge.workers.97')
                 receipt = {"at": _now(), "parent_unit_id": parent_id,
                            "child_unit_id": agent_id, "result_sha256": observed,
                            "disposition": disposition}
@@ -5327,7 +5326,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                        parent_unit_id=parent_id, disposition=disposition, result_sha256=observed)
                 return json.dumps(receipt, ensure_ascii=False)
         except TimeoutError as exc:
-            return f"Disposition not recorded: {exc}"
+            return frame_language.text('forge.workers.98', v1=f'{exc}')
     if action == "wait":
         return _wait_worker_child(task_id, _parent_request_path, agent_id)
     if action == "stop":
@@ -5335,6 +5334,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
     return "action: spawn | poll | stop | pause | resume | tick | disposition | list"
 
 
+@frame_language.pinned
 def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "",
           kind: str = "finding", message: str = "", files: list[str] | None = None,
           max_parallel: int = 8, result_sha256: str = "") -> str:
@@ -5355,13 +5355,13 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
             value = json.loads(plan or message or "{}")
             if plan and message and message.lstrip().startswith('{'):
                 if json.loads(message) != value:
-                    raise ValueError("conflicting checkpoint objects in plan and message")
+                    raise ValueError(frame_language.text('forge.workers.100'))
             if not isinstance(value, dict) or not str(value.get("next_action") or "").strip():
-                raise ValueError("coordinator checkpoint needs an object with next_action")
+                raise ValueError(frame_language.text('forge.workers.101'))
             with _mutation_lock(task_id):
                 reason = _admission_reason(task_id)
                 if reason:
-                    return f"Checkpoint refused: {reason}"
+                    return frame_language.text('forge.workers.102', v1=f'{reason}')
                 previous = _read_json(directory / "coordinator-checkpoint.json", {}) or {}
                 revision = int(previous.get("revision") or 0) + 1
                 value.update(task_id=task_id, goal=task.get("goal"),
@@ -5371,26 +5371,26 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
                 _atomic_json(directory / "coordinator-checkpoint.json", value)
             return json.dumps(value, ensure_ascii=False)
         except (ValueError, TimeoutError) as exc:
-            return f"Coordinator checkpoint refused: {exc}"
+            return frame_language.text('forge.workers.103', v1=f'{exc}')
     if action == "rework":
         try:
             with _mutation_lock(task_id):
                 reason = _admission_reason(task_id)
                 if reason:
-                    return f"Rework refused: {reason}"
+                    return frame_language.text('forge.workers.104', v1=f'{reason}')
                 forge_swarm.refresh(directory, agent_state)
                 return forge_swarm.summary(forge_swarm.rework(directory, node_id, message, result_sha256))
         except (ValueError, TimeoutError) as exc:
-            return f"Rework refused: {exc}"
+            return frame_language.text('forge.workers.105', v1=f'{exc}')
     if action == "plan":
         try:
             with _mutation_lock(task_id):
                 reason = _admission_reason(task_id)
                 if reason:
-                    return f"Plan refused: {reason}"
+                    return frame_language.text('forge.workers.106', v1=f'{reason}')
                 created = forge_swarm.create(directory, plan, max_parallel=max_parallel)
         except ValueError as exc:
-            return f"Swarm-план не принят: {exc}"
+            return frame_language.text('forge.workers.107', v1=f'{exc}')
         _event(task_id, "swarm_planned", summary=f"{len(created.get('nodes') or [])} nodes")
         return forge_swarm.summary(created)
     if action == "signal":
@@ -5398,7 +5398,7 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
             row = forge_swarm.signal(directory, node_id=node_id, kind=kind, message=message,
                                      files=files or [])
         except ValueError as exc:
-            return f"Сигнал не записан: {exc}"
+            return frame_language.text('forge.workers.108', v1=f'{exc}')
         _event(task_id, "swarm_signal", node_id=node_id, signal_kind=kind,
                summary=f"{kind}: {(message or ','.join(files or []))[:160]}")
         return json.dumps(row, ensure_ascii=False, indent=2)
@@ -5408,10 +5408,10 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
         with _mutation_lock(task_id):
             reason = _admission_reason(task_id)
             if reason:
-                return f"Swarm start refused: {reason}"
+                return frame_language.text('forge.workers.109', v1=f'{reason}')
             current = forge_swarm.refresh(directory, agent_state)
             if not current:
-                return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
+                return frame_language.text('forge.workers.110')
             # Both halves of the reservation/crash recovery window are read and
             # committed in ONE task transaction, like status refresh and rework.
             before = json.dumps(current, sort_keys=True)
@@ -5443,12 +5443,12 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
                 for node in pending_nodes:
                     candidates = recovered.get(str(node["id"]), [])
                     if len(candidates) > 1:
-                        node.update(status="blocked_identity", error=f"ambiguous unit identities: {[u for u, _ in candidates]}")
+                        node.update(status="blocked_identity", error=frame_language.text('forge.workers.111', v1=f'{[u for u, _ in candidates]}'))
                     elif candidates:
                         unit, req = candidates[0]
                         node.update(agent_id=unit, reserved_agent_id=unit, status="starting",
                                     started=req.get("created") or _now())
-                        launched.append(f"{node['id']}↔{unit} (восстановлен)")
+                        launched.append(frame_language.text('forge.workers.112', v0=f"{node['id']}", v2=f'{unit}'))
             ready = forge_swarm.ready_nodes(current)
             by_id = {n["id"]: n for n in current.get("nodes", [])}
             for node in ready:
@@ -5480,7 +5480,7 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
                 launched.append(f"{node['id']}→{reserved}")
                 if node.get("owns"):
                     forge_swarm.signal(directory, node_id=node["id"], agent_id=reserved,
-                                       kind="claim", message="advisory ownership", files=node["owns"])
+                                       kind="claim", message=frame_language.text('forge.workers.113'), files=node["owns"])
         with _mutation_lock(task_id):
             current = forge_swarm.refresh(directory, agent_state)
         _event(task_id, "swarm_tick", summary=", ".join(launched) or "no ready nodes")
@@ -5488,7 +5488,7 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
     with _mutation_lock(task_id):
         current = forge_swarm.refresh(directory, agent_state)
     if not current:
-        return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
+        return frame_language.text('forge.workers.114')
     if action == "status":
         return forge_swarm.summary(current, forge_swarm.mailbox(directory, 40))
     if action == "mailbox":
