@@ -24,7 +24,7 @@ REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','
             'remind_self','telegram_account','manage_desire','update_profile','react','read_log','server_status','manage_service',
             'coding_session','coding_inspect','coding_run','coding_process','coding_checkpoint',
             'coding_verify','coding_swarm','coding_learn','coding_control',
-            'coding_agent','coding_review','host_ctl')
+            'coding_agent','coding_review','host_ctl','computer')
 
 
 def stock():

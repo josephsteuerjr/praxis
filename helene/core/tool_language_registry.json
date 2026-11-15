@@ -6733,5 +6733,646 @@
       }
     ],
     "purpose": "schema.tool.purpose.host_ctl"
+  },
+  "computer": {
+    "sha256": "fdf90c7b2ce90428c843e8983b9024e7442cefbd757fa4248863996d69cfdacf",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.36cd539a48dc8ca9",
+        "present": true,
+        "source": "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. status/inventory/list/stat are eyes; send exports an exact local path and sends the verified file to the CURRENT chat; run/poll/stop manage PowerShell processes. run returns an operation_id immediately; timeout_ms for run is the process lifetime from process start, rounded UP to a whole second by Body, not the RPC wait. Omit it or use 0 for no deadline. Poll the SAME operation to its final state; a deadline ends as timed_out, an explicit stop as cancelled. Body terminates its owned process tree; inspect job_note for a containment failure and verify cleanup. Never restart a command just because a call timed out or the outcome is unknown. desktop_status/windows/read_window/activate/input/screenshot/observe/clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). find_elements looks for elements by the SAME selector without touching anything: automation_id, role, name, name_contains or value_contains, and it answers with every match (element_limit caps how many are shown), each named the way you would name it to act on it. timeout_ms here means HOW LONG TO WAIT FOR IT TO APPEAR — that is how you wait for a dialog to be drawn instead of sleeping and hoping. It also says whether the whole window was read: \"not found\" and \"I did not finish looking\" are different answers. act_element does something TO A NAMED ELEMENT instead of to a point on screen: name it with automation_id (exact), role, name or name_contains and say element_action=invoke|set_value|toggle|expand|collapse|select|scroll_into_view|focus. It goes through UI Automation patterns, so no pixels are involved: DPI, a window that moved and a list that scrolled stop being your problem, and set_value types INTO THE FIELD rather than into whatever has focus. It WAITS for the element up to timeout_ms, so no sleep before it. Several matches are REFUSED with the candidates listed — narrow the selector or say nth; a selector field that is present but blank is refused too, because dropping it would quietly widen the search. Every act_element needs your own idempotency_key: reuse the SAME key when you are retrying the SAME intent (a torn turn must not press the button twice) and mint a new one for a new intent. An element without the needed pattern is refused with the patterns it does have, never silently clicked at coordinates. ok:true means the pattern was invoked and the element re-read (element_after) — whether that achieved your goal is yours to judge. read_window returns the UI Automation control tree of a window as text (role, name, value, automation id, rect and centre x,y of every node) — your primary eyes on a window, cheaper than a screenshot and the only eyes when the voice model is text-only; pass hwnd from windows (omit for the foreground window), shape=tree|flat, text_contains to filter, max_nodes/max_depth to bound; the receipt names every limit and what stayed unread. Prefer the typed type_text/hotkey/key/move/click/scroll actions; input accepts one ordered mixed events batch, including mouse_down/mouse_up and drag (press→move→release). After activating a window do not assume the caret is free: many controls (WinForms TextBox) select all text when focus arrives with the window, and type_text would REPLACE it — click once into the field or press End before typing; Escape keeps the selection, and a second click right after the first is a double-click that selects a word. For scroll, use signed steps or direction=up/down/left/right; the server converts one step to one Win32 notch. Wheel targets the pointer: pass x/y inside the window, or expected_foreground to target its centre automatically. Get hwnd from windows before activate. Set expected_foreground and expected_pid for input whenever the target is known so a focus change fails closed. screenshot captures and sends a verified PNG to the current chat; observe attaches those same verified pixels to the next model step for an actual screenshot→act→observe loop ONLY when the voice model accepts images — a text-only model (GLM-5.3) gets a reference and no pixels, so it must not describe the screen from observe and should read_window instead; observe with path=<file> attaches an IMAGE FILE from the computer's disk (PNG/JPEG/WebP/GIF, ≤8MB) to your next step — direct eyes on extracted frames, no courier through chats. read/hash/write/replace are DIRECT file verbs on the PC disk and the primary coding path on Windows (no wcode proxy task needed; receipts bind to your current run automatically): read returns numbered lines start..end with sha256; write is fs.write_atomic (content ≤1.5MB — bigger goes the artifact route; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses them); replace swaps EXACTLY ONE occurrence of old; expected_sha256 does compare-and-swap on both, backup=true keeps a backup. write/replace are sovereign-only (owner or Praxis self) — a trusted computer.files grant does not include them. The server checks the caller's stable Telegram id on every call; these desktop actions require computer.apps. execution=system is sovereign-only (owner or Praxis self) and desktop calls normally need interactive. For a voice request like 'пришли файл X', use send directly."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.bda939fc8c1e8d89",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "shape",
+          "description"
+        ],
+        "key": "schema.tool.ea987045bd15c2cf",
+        "present": true,
+        "source": "read_window: tree keeps parent links; flat lists only matching nodes"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text_contains",
+          "description"
+        ],
+        "key": "schema.tool.a86d8fc44bdcb900",
+        "present": true,
+        "source": "read_window: keep nodes whose name/value contains this text"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_nodes",
+          "description"
+        ],
+        "key": "schema.tool.81ab884cdd3fbfc8",
+        "present": true,
+        "source": "read_window: cap on nodes read (body clamps)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_depth",
+          "description"
+        ],
+        "key": "schema.tool.74717b798fbef1c5",
+        "present": true,
+        "source": "read_window/act_element/find_elements: cap on tree depth (body clamps)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_text_chars",
+          "description"
+        ],
+        "key": "schema.tool.05edd4f9b98ddc9f",
+        "present": true,
+        "source": "read_window: cap on returned text characters (body clamps); also available inside step.read"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "idempotency_key",
+          "description"
+        ],
+        "key": "schema.tool.5572fab944191d2b",
+        "present": true,
+        "source": "act_element: your own stable key; a retry of the SAME intent MUST reuse it, a new intent needs a new key"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "element_limit",
+          "description"
+        ],
+        "key": "schema.tool.8d8cf1f90ee7cfcc",
+        "present": true,
+        "source": "find_elements: how many matches to show (default 20, capped). Not `limit`: that one belongs to reading files, and two keys of the same name in one schema silently become one"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "element_action",
+          "description"
+        ],
+        "key": "schema.tool.923f8b13646077b1",
+        "present": true,
+        "source": "act_element: what to do to the named element"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "automation_id",
+          "description"
+        ],
+        "key": "schema.tool.713f399324dec57d",
+        "present": true,
+        "source": "act_element/find_elements: the element's AutomationId (exact, case-sensitive) — the most durable way to name it"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "role",
+          "description"
+        ],
+        "key": "schema.tool.e1389b3659844024",
+        "present": true,
+        "source": "act_element/find_elements: control role as read_window reports it (button, edit, list_item...)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "nth",
+          "description"
+        ],
+        "key": "schema.tool.d2471d28a9a55c30",
+        "present": true,
+        "source": "act_element: which of several matches to take, from 0; omit and several matches are refused rather than guessed"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.7b372b02fc1917c5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "caption",
+          "description"
+        ],
+        "key": "schema.tool.ded62180505e8aed",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "command",
+          "description"
+        ],
+        "key": "schema.tool.04e6b29d4d4b374f",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.72ff2ea85d820420",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "operation_id",
+          "description"
+        ],
+        "key": "schema.tool.fdf60526ac7f3262",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "hwnd",
+          "description"
+        ],
+        "key": "schema.tool.3bf4769d18509715",
+        "present": true,
+        "source": "hex native handle returned by action=windows"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "events",
+          "description"
+        ],
+        "key": "schema.tool.49a902f93e94e077",
+        "present": true,
+        "source": "ordered native input events: text; hotkey(keys); key(key,action); mouse(x,y,relative); click(button,x,y,count); wheel(delta,horizontal,x,y); mouse_down/mouse_up(button,x,y); drag(button,x,y,to_x,to_y,steps,hold_ms,step_delay_ms,settle_ms). A held button is scoped to this one input batch; drag requires both endpoints."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.8cffa7d793459be1",
+        "present": true,
+        "source": "text for clipboard_write or type_text"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "keys",
+          "description"
+        ],
+        "key": "schema.tool.84a985dd20b32ea5",
+        "present": true,
+        "source": "named keys for action=hotkey"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "key",
+          "description"
+        ],
+        "key": "schema.tool.c2c62f5bfa5f2153",
+        "present": true,
+        "source": "named key for action=key"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "key_action",
+          "description"
+        ],
+        "key": "schema.tool.592d62544a80b67c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "button",
+          "description"
+        ],
+        "key": "schema.tool.aa54e53e4d1ccaf5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "count",
+          "description"
+        ],
+        "key": "schema.tool.2937108d22f6143e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "steps",
+          "description"
+        ],
+        "key": "schema.tool.67800bef3b8892f6",
+        "present": true,
+        "source": "signed wheel notches; +up/right, -down/left"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "direction",
+          "description"
+        ],
+        "key": "schema.tool.6191a882024ed9f5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "delta",
+          "description"
+        ],
+        "key": "schema.tool.e22dbdc20c108465",
+        "present": true,
+        "source": "advanced raw wheel delta, multiple of 120"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "horizontal",
+          "description"
+        ],
+        "key": "schema.tool.907404cce202725a",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "relative",
+          "description"
+        ],
+        "key": "schema.tool.e5592e37598de6ab",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_foreground",
+          "description"
+        ],
+        "key": "schema.tool.0effc87fe68f7e10",
+        "present": true,
+        "source": "input focus guard: expected hwnd"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_pid",
+          "description"
+        ],
+        "key": "schema.tool.a0e60f61917078e7",
+        "present": true,
+        "source": "activate/input target process guard"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "restore",
+          "description"
+        ],
+        "key": "schema.tool.c5596dc81bdf422d",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "timeout_ms",
+          "description"
+        ],
+        "key": "schema.tool.565bf2c490675120",
+        "present": true,
+        "source": "run: process lifetime, rounded up to whole seconds; 0/omitted means no deadline. UI actions: their existing element/read/activation wait budget, not a process deadline."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "inter_event_delay_ms",
+          "description"
+        ],
+        "key": "schema.tool.5fdabdb25cca6524",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "offset",
+          "description"
+        ],
+        "key": "schema.tool.c70baeee5c364c64",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.bbeaefb14b3f76fd",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "visible_only",
+          "description"
+        ],
+        "key": "schema.tool.2ef151d47c131d77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "pid",
+          "description"
+        ],
+        "key": "schema.tool.e94742b317f20b2b",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "title_contains",
+          "description"
+        ],
+        "key": "schema.tool.c8e4c04c8eb28b6c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name_contains",
+          "description"
+        ],
+        "key": "schema.tool.ac01985d363d0a27",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "session_id",
+          "description"
+        ],
+        "key": "schema.tool.690b3720eb7d91a6",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "target",
+          "description"
+        ],
+        "key": "schema.tool.c86786f91203ef7c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "x",
+          "description"
+        ],
+        "key": "schema.tool.b7d61f8c08d355c4",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "y",
+          "description"
+        ],
+        "key": "schema.tool.1083a0ec674b1be1",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "width",
+          "description"
+        ],
+        "key": "schema.tool.19d6d41dc390213e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "height",
+          "description"
+        ],
+        "key": "schema.tool.a12a6c1ddf420e1d",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.c8997c6cfb84c660",
+        "present": true,
+        "source": "clean PNG filename for screenshot/observe"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit_chars",
+          "description"
+        ],
+        "key": "schema.tool.ddf69ccc4bdcd839",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "start",
+          "description"
+        ],
+        "key": "schema.tool.f4190acb9a55aa44",
+        "present": true,
+        "source": "first line for action=read (default 1)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "end",
+          "description"
+        ],
+        "key": "schema.tool.8959534b73fed27a",
+        "present": true,
+        "source": "last line for action=read (default start+499)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "content",
+          "description"
+        ],
+        "key": "schema.tool.1aea4f9d18020332",
+        "present": true,
+        "source": "full new file content for action=write (≤1.5MB)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "old",
+          "description"
+        ],
+        "key": "schema.tool.f85044443b98868c",
+        "present": true,
+        "source": "exact existing text for action=replace (exactly one occurrence)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "new",
+          "description"
+        ],
+        "key": "schema.tool.a4d8f68db999b459",
+        "present": true,
+        "source": "replacement text for action=replace"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_sha256",
+          "description"
+        ],
+        "key": "schema.tool.c40bf6119c332038",
+        "present": true,
+        "source": "compare-and-swap guard for write/replace: current file sha256 from read/hash"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "backup",
+          "description"
+        ],
+        "key": "schema.tool.fef2b3859f94b4e5",
+        "present": true,
+        "source": "write/replace: keep a backup of the previous file"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "execution",
+          "description"
+        ],
+        "key": "schema.tool.d9419a06954bfae7",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.computer"
   }
 }
