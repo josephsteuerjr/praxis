@@ -222,7 +222,7 @@ class TestManageRoom(Base):
     def test_join_in_private_guard(self):
         with self.owner_turn(None):
             out = agent.tool_manage_room("join")
-        self.assertIn("личке", out.lower())
+        self.assertIn("chat_id", out)
         self.assertEqual(rooms.list_rooms(), [])
 
     def test_leave_and_list(self):

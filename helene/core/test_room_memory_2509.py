@@ -300,7 +300,7 @@ class RecallNamesForeignRoomsInsteadOfHiding(unittest.TestCase):
         self.assertIn("из комнаты -100777 — внутреннее", out)
         self.assertIn("про кота", out)
         self.assertNotIn("из комнаты -100999", out, "своя комната не помечается «оттуда»")
-        self.assertIn("1 совпадений из других комнат — внутреннее", out)
+        self.assertIn("1 совпадений из других комнат — внутренние", out)
         self.assertNotIn("скрыто в этом канале", out)
 
     def test_hide_lever_restores_the_old_behaviour(self):

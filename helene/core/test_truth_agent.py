@@ -1367,7 +1367,7 @@ class RoomLeversTests(unittest.TestCase):
         # превращалось в отчёт о состоянии, и объяснение rooms до неё не доезжало.
         out = self._in_room("mode", mode="мертва")
         self.assertIn("не распознано", out)
-        self.assertIn("факт от Telegram", out)
+        self.assertIn("факт доступа Telegram", out)
 
     def test_the_tool_leaves_the_same_trail_as_the_text_directive(self):
         # Тул обещает ей, что это «то же самое, что директива РЕЖИМ:». До 28.07 директива
@@ -1386,7 +1386,7 @@ class RoomLeversTests(unittest.TestCase):
         self.assertEqual(agent.rooms.disclosure_of("-1001999"), "open")
         self.assertEqual(agent.rooms.room_state("-1001999")["disclosure_set_by"], "praxis")
         self.assertIn("визитк", out.lower())
-        self.assertIn("ЛС", out, "граница рычага названа: в личке он ничего не меняет")
+        self.assertIn("в личном чате", out, "граница рычага названа: в личке он ничего не меняет")
 
     def test_disclosure_without_a_value_reports_instead_of_guessing(self):
         agent.rooms.set_own_disclosure("-1001999", "open")

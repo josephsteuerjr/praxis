@@ -3278,6 +3278,7 @@ def _room_mode_key(word: str) -> str:
     return ""
 
 
+@frame_language.pinned
 def _own_room_mode(chat_id: str, kind: str, *, reason: str, ttl_h: float,
                    where: str = "") -> tuple[bool, str]:
     """Единственная дорога к её собственному режиму комнаты. -> (ok, фраза целиком).
@@ -3292,24 +3293,25 @@ def _own_room_mode(chat_id: str, kind: str, *, reason: str, ttl_h: float,
     if not ok:
         log.info("режим [%s] не применился: %s", chat_id, note)
         return (False, note)
-    word = rooms.MODE_WORD.get(kind, kind)
+    word = rooms.mode_label(kind)
     place = where or str(chat_id)
-    span = f"на {ttl_h:g}ч" if ttl_h else "без срока"
+    span = frame_language.text('room.control.span_normal') if kind == "normal" else (frame_language.text('room.control.span_hours', hours=format(ttl_h,'g')) if ttl_h else frame_language.text('room.control.span_none'))
     log.info("режим [%s]: %s %s (сама)", chat_id, kind, span)
     try:
-        tool_journal(f"[режим] взято «{word}» в {place} {span} — моё решение, не поражение",
+        tool_journal(frame_language.text('room.control.journal_mode', word=word, place=place, span=span),
                      salience=2)
     except Exception:
         log.debug("journal режима не удался", exc_info=True)
     if kind == "frozen":
         try:
             rooms.owner_card(chat_id, "mode",
-                             f"«{place}» заморожено мной ({span}); поднять могу тем же рычагом.")
+                             frame_language.text('room.control.card_frozen', place=place, span=span))
         except Exception:
             log.debug("owner_card режима не удался", exc_info=True)
     return (True, note)
 
 
+@frame_language.pinned
 def tool_manage_room(action: str, chat_id: str | None = None, *,
                      engagement: str = "", context_hot: int | None = None,
                      context_summary_chars: int | None = None,
@@ -3319,37 +3321,36 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
                      presence_hidden: str = "") -> str:
     """Управление комнатами владельцем или самого агента; люди не делегируют это дальше."""
     if not _is_sovereign_actor():
-        return "Отказ: комнаты меняет только владелец или сам агент."
+        return frame_language.text('room.control.authority')
     action = (action or "").lower().strip()
     cid = str(chat_id).strip() if chat_id else _current_room()
     if action == "list":
         rs = rooms.list_rooms()
-        return "Доверенные комнаты: " + (", ".join(rs) if rs else "— пока пусто")
+        return frame_language.text('room.control.catalog', rooms=', '.join(rs) if rs else '—')
     if action == "join":
         if not cid:
-            return "В личке join не нужен — я и так с тобой. Скажи это в самой группе, которую впускаем."
+            return frame_language.text('room.control.join_id')
         added = rooms.add_room(cid)
         room_md = ROOMS_DIR / f"{cid}.md"
         if not room_md.exists():
             ROOMS_DIR.mkdir(parents=True, exist_ok=True)
             room_md.write_text(
-                f"# Комната {cid}\n\n_(контекст этой группы — заполняется по ходу)_\n",
+                f"# Комната {cid}\n\n" + frame_language.text('room.control.seed_body'),
                 encoding="utf-8",
             )
         log.info("manage_room join %s (new=%s)", cid, added)
-        return f"Впустила комнату {cid} в доверенные." if added else f"Комната {cid} уже доверенная."
+        return frame_language.text('room.control.joined', id=cid) if added else frame_language.text('room.control.already_joined', id=cid)
     if action == "leave":
         if not cid:
-            return "Не вижу, какую комнату выпускать — укажи chat_id."
+            return frame_language.text('room.control.id_required')
         removed = rooms.remove_room(cid)
         log.info("manage_room leave %s (removed=%s)", cid, removed)
-        return (f"Вышла из доверенных: {cid}." if removed
-                else f"Комнаты {cid} нет в списке файла (возможно, она из env — её не убрать отсюда).")
+        return frame_language.text('room.control.left', id=cid, previous='yes' if removed else 'no')
     if action == "configure":
         if not cid:
-            return "Не вижу корневую комнату — укажи chat_id."
+            return frame_language.text('room.control.id_required')
         if cid not in rooms.allowed_chats():
-            return f"Сначала впусти корневую комнату {cid} через manage_room(join)."
+            return frame_language.text('room.control.admit_first', id=cid)
         changes = {}
         if str(engagement or "").strip():
             changes["engagement"] = engagement
@@ -3366,9 +3367,8 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
                 rooms.profile_update(cid, **changes)
             policy = rooms.room_policy(cid)
         except ValueError as exc:
-            return f"Профиль комнаты не изменён: {exc}"
-        return f"Профиль корневой комнаты {cid}: " + json.dumps(
-            _room_view(cid, policy), ensure_ascii=False, sort_keys=True)
+            return frame_language.text('room.control.profile_error', detail=exc)
+        return frame_language.text('room.control.profile', id=cid, data=json.dumps(_room_view(cid, policy), ensure_ascii=False, sort_keys=True))
     if action == "mode":
         # ⚠ До 28.07 режим комнаты нельзя было выбрать НИЧЕМ, кроме текстовой директивы
         # `РЕЖИМ:` в её ответе, а единственный указатель на эту директиву не печатался
@@ -3377,13 +3377,13 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
         # рычагом `manage_room`, где режима не было. Теперь рычаг есть и назван.
         # Решение Егора 28.07, дословно: «да, давать».
         if not cid:
-            return "Не вижу комнату — укажи chat_id."
+            return frame_language.text('room.control.id_required')
         state = rooms.room_state(cid)
         choices = "mode: " + " | ".join(
-            f"{rooms.MODE_WORD[m]}({m})" for m in state["self_modes"])
+            f"{rooms.mode_label(m)}({m})" for m in state["self_modes"])
         if not str(mode or "").strip():
             # Пустое значение — это вопрос «что тут сейчас», и отвечать надо состоянием.
-            return (f"Сейчас в {cid}: «{state['mode_word']}» ({state['mode']}). " + choices)
+            return (frame_language.text('room.control.mode_state', id=cid, word=state['mode_word'], mode=state['mode'], choices=choices))
         kind = _room_mode_key(mode)
         if not kind:
             # ⚠ А непонятое слово состоянием отвечать НЕЛЬЗЯ: «замри» с опечаткой или
@@ -3392,8 +3392,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
             # rooms.set_own_mode, чтобы до неё доехало его собственное объяснение
             # («dead — не режим, а факт от Telegram: комнату мёртвой объявляю не я»).
             _, why = rooms.set_own_mode(cid, str(mode), reason=reason, ttl_h=0.0)
-            return (f"Слово «{mode}» не распознано — режим не менялся ({why}). "
-                    f"Сейчас в {cid}: «{state['mode_word']}» ({state['mode']}). " + choices)
+            return (frame_language.text('room.control.mode_unknown', input=mode, why=why, id=cid, word=state['mode_word'], mode=state['mode'], choices=choices))
         # Директива `РЕЖИМ:` по умолчанию берёт 24ч; тул держит тот же срок, чтобы одно
         # и то же её решение не значило разного в зависимости от того, как она его
         # высказала. ttl_h=0 — без срока, снимается только её же рычагом.
@@ -3403,59 +3402,47 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
         # отдаём её ей как есть, не пересобирая.
         ok, note = _own_room_mode(cid, kind, reason=reason, ttl_h=ttl)
         if not ok:
-            return f"Режим не сменился: {note}"
+            return frame_language.text('room.control.mode_failed', detail=note)
         # Честно о том, куда рычаг вообще дотягивается. Запрета здесь нет намеренно:
         # это её комната и её решение. Но в ЛС режим не маршрутизирует НИЧЕГО, кроме
         # «замри», а «замри» в личке Егора отрезает и его сообщения (раннер проверяет
         # is_frozen до ветки личек; наверху остаётся только /panic).
         _ctx = _TURN_CHANNEL.get()
         if _ctx is not None and _ctx.is_dm and not chat_id:
-            note += (" ⚠ Это личка: здесь режим не маршрутизирует ничего, кроме «замри», "
-                     "а «замри» в личке отрезает и сообщения того, с кем говорю "
-                     "(поверх остаётся только /panic). Снимаю тем же рычагом с «обычно».")
+            note += (frame_language.text('room.control.dm_mode'))
         return note
     if action == "disclosure":
         # 10.6 disclosure: open подмешивает к её визитке в группе проверяемую фактуру.
         # Рычаг менял ЕЁ голос, но лежал только в панели у Егора (panel.py:956) и не был
         # назван ей нигде — ни в манифесте, ни в capabilities. Решение Егора 28.07: «да».
         if not cid:
-            return "Не вижу комнату — укажи chat_id."
+            return frame_language.text('room.control.id_required')
         if not str(disclosure or "").strip():
             state = rooms.room_state(cid)
-            return (f"Сейчас в {cid}: раскрытие {state['disclosure']}"
-                    + (f" ({state['disclosure_author']})" if state["disclosure_author"] else "")
-                    + ". disclosure: " + " | ".join(state["disclosure_levels"]))
+            return (frame_language.text('room.control.disclosure_state', id=cid, level=state['disclosure'], author=(' ('+state['disclosure_author']+')') if state['disclosure_author'] else '', choices=' | '.join(state['disclosure_levels'])))
         ok, note = rooms.set_own_disclosure(cid, disclosure)
         if not ok:
-            return f"Раскрытие не изменилось: {note}"
+            return frame_language.text('room.control.disclosure_failed', detail=note)
         # Честно о границе рычага: читается он только в групповой визитке
         # (scope == "group"), в ЛС не меняет ничего.
-        return note + " В ЛС этот рычаг ничего не меняет — он про визитку в группе."
+        return note + frame_language.text('room.control.group_only')
     if action == "transfer":
         # 19.08, её №2 к проекту эпохи: durable-дом её слов о границе переноса.
         # Без носителя формулировка жила бы только в байтах замороженной эпохи и
         # стиралась бы первой же пересборкой. Класс — совет её суждению, не забор:
         # твёрдые полы (creds, authority) живут в своих рельсах и этим не отменяются.
         if not cid:
-            return "Не вижу места — укажи chat_id или скажи это в самой комнате."
+            return frame_language.text('room.control.id_required')
         word = str(transfer or "").strip().casefold()
         if not word and not str(presence_hidden or "").strip():
             state = rooms.transfer_of(cid)
             if state["transfer"]:
-                return (f"Перенос для {cid}: «{state['transfer']}» (моё слово"
-                        + (f", {state['at']}" if state["at"] else "") + ")"
-                        + (" · существование источника не подтверждается"
-                           if state["presence_hidden"] else "")
-                        + ". Словарь: " + " | ".join(rooms.TRANSFER_CLASSES)
-                        + " | снять.")
-            return (f"Моего слова о переносе для {cid} нет — действует умолчание по "
-                    "типу места (помечается умолчанием). Словарь: "
-                    + " | ".join(rooms.TRANSFER_CLASSES) + " | снять.")
+                return (frame_language.text('room.control.transfer_state', id=cid, value=state['transfer'], at=(', '+state['at']) if state['at'] else '', hidden=(frame_language.text('room.control.presence_hidden') if state['presence_hidden'] else ''), choices=' | '.join(rooms.TRANSFER_CLASSES)))
+            return (frame_language.text('room.control.transfer_default', id=cid, hidden=(frame_language.text('room.control.presence_hidden') if state['presence_hidden'] else ''), choices=' | '.join(rooms.TRANSFER_CLASSES)))
         ok, note = rooms.set_own_transfer(
             cid, "" if word == "снять" else word, presence_hidden=presence_hidden)
-        return note if ok else f"Перенос не записан: {note}"
-    return ("action должен быть join | leave | list | configure | mode | disclosure "
-            "| transfer.")
+        return note if ok else frame_language.text('room.control.transfer_failed', detail=note)
+    return (frame_language.text('room.control.action'))
 
 
 def _room_view(chat_id: str, policy: dict) -> dict:
@@ -3468,7 +3455,8 @@ def _room_view(chat_id: str, policy: dict) -> dict:
         view.update(rooms.room_state(chat_id))
     except Exception:
         log.debug("режим/раскрытие комнаты не прочитались", exc_info=True)
-        view["mode"] = "не прочитан"
+        view["mode"] = "unknown"
+        view["mode_error"] = frame_language.text('room.control.state_unreadable')
     return view
 
 
@@ -9471,6 +9459,7 @@ def _recall_origin(hit: dict, path: str) -> str:
     return f"{_recall_room_label(room)} · {source}"
 
 
+@frame_language.pinned
 def _recall_room_label(room: str) -> str:
     """Откуда всплыло совпадение recall — словами, которые не путают личку с комнатой.
 
@@ -9480,7 +9469,7 @@ def _recall_room_label(room: str) -> str:
     отрицательный id (группа, тема форума); положительный — переписка с человеком."""
     key = str(room or "")
     if key == "owner-dm":
-        return "из личной переписки с владельцем"
+        return frame_language.text('room.control.origin_owner')
     if key and not key.startswith("-"):
         who = ""
         try:
@@ -9489,9 +9478,9 @@ def _recall_room_label(room: str) -> str:
             who = str(row.get("display_name") or row.get("username") or "").strip()
         except Exception:
             who = ""
-        return (f"из личной переписки с {who} (tg {key})" if who
-                else f"из личной переписки с tg {key}")
-    return f"из комнаты {key}"
+        return (frame_language.text('room.control.origin_person', name=who, id=key) if who
+                else frame_language.text('room.control.origin_private', id=key))
+    return frame_language.text('room.control.origin_room', id=key)
 
 
 def _trace_lessons_in_frame(hits: list[dict], query: str | None) -> None:

@@ -220,7 +220,7 @@ class TestHerModeLever(RoomsHarness):
         rooms.set_mode("-209", "dead", set_by="praxis", reason="вышла из Telegram")
         ok, why = rooms.set_own_mode("-209", "quiet")
         self.assertFalse(ok)
-        self.assertIn("join", why)
+        self.assertIn("реальное восстановление", why)
 
     def test_self_demote_keeps_its_old_contract(self):
         """Легаси-имя зовут agent.py и старые тесты — его возврат менять нельзя."""

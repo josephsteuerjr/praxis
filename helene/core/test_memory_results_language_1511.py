@@ -31,7 +31,7 @@ class MemoryResults(unittest.TestCase):
           {'path':'soul/self/history/1.md','text':RAW,'source_type':provenance.ARCHIVED_SELF_KIND},
           {'path':'memory/life/claims/c.md','text':RAW,'source_type':provenance.CLAIM_CONTESTED_KIND},
           {'path':'memory/people/sample.md','text':RAW},
-          {'path':'memory/self/rooms/other/turns-x.jsonl','text':RAW}]
+          {'path':'memory/self/rooms/-10099/turns-x.jsonl','text':RAW}]
         original=copy.deepcopy(hits)
         for ui in lang.LANGUAGES:
             for language in lang.LANGUAGES:
@@ -39,11 +39,12 @@ class MemoryResults(unittest.TestCase):
                 try:
                     with patch.object(lang,'settings',return_value={'lang':ui,'agent':{'frame_language':language}}), \
                          patch.object(agent.memory_index,'search',return_value=hits),patch.object(agent,'_active_scope',return_value='known'), \
-                         patch.object(agent,'recall_cross_room',return_value=True),patch.object(agent,'_recall_room_label',return_value='room:other'):
+                         patch.object(agent,'recall_cross_room',return_value=True):
                         value=agent.tool_recall('fixture')
                         for key in ('episodic_label','archived_label','claim_contested','claim_warning','episode_warning','archived_warning','dossier_warning','internal'):
                             self.assertIn(lang.text('memory.result.'+key),value)
-                        self.assertIn('room:other',value);self.assertEqual(value.count(RAW),5);self.own(value,language)
+                        self.assertIn(lang.text('room.control.origin_room',id='-10099'),value)
+                        self.assertEqual(value.count(RAW),5);self.own(value,language)
                         self.assertEqual(hits,original)
                 finally:agent._TURN_CHANNEL.reset(token)
     def test_recall_hidden_room_counts_and_empty_match_keep_existing_filter(self):

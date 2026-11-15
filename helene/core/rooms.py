@@ -549,6 +549,7 @@ def _profile_write(chat_id: str | int, title: str, header: dict, body: str) -> N
         unfreeze(chat_id)
 
 
+@frame_language.pinned
 def _profile_update_unlocked(chat_id: str | int, **changes) -> dict:
     """Обновить поля шапки (body сохраняется). -> свежий профиль."""
     d = profile_read(chat_id)
@@ -567,35 +568,35 @@ def _profile_update_unlocked(chat_id: str | int, **changes) -> dict:
         elif k == "transfer":
             value = str(v or "").strip().casefold()
             if value and value not in TRANSFER_CLASSES:
-                raise ValueError("transfer must be " + " | ".join(TRANSFER_CLASSES))
+                raise ValueError(frame_language.text('room.control.invalid_choices', field='transfer', choices=" | ".join(TRANSFER_CLASSES)))
             header[k] = value
         elif k == "presence_hidden":
             value = str(v or "").strip().casefold()
             value = {"1": "yes", "true": "yes", "да": "yes",
                      "0": "no", "false": "no", "нет": "no"}.get(value, value)
             if value not in ("", "yes", "no"):
-                raise ValueError("presence_hidden must be yes | no")
+                raise ValueError(frame_language.text('room.control.invalid_choices', field='presence_hidden', choices='yes | no'))
             header[k] = value
         elif k == "disclosure":
             value = str(v or "").strip().casefold() or "standard"
             if value not in DISCLOSURE:
-                raise ValueError("disclosure must be standard | open")
+                raise ValueError(frame_language.text('room.control.invalid_choices', field='disclosure', choices='standard | open'))
             header[k] = value
         elif k == "engagement":
             value = str(v or "").strip().casefold()
             if value not in ENGAGEMENTS:
-                raise ValueError("engagement must be addressed | reflective")
+                raise ValueError(frame_language.text('room.control.invalid_choices', field='engagement', choices='addressed | reflective'))
             header[k] = value
         elif k == "cross_topics":
             value = str(v or "").strip().casefold()
             if value not in CROSS_TOPICS:
-                raise ValueError("cross_topics must be off | map")
+                raise ValueError(frame_language.text('room.control.invalid_choices', field='cross_topics', choices='off | map'))
             header[k] = value
         elif k in ("context_hot", "context_summary_chars", "backfill_limit"):
             try:
                 value = int(v)
             except (TypeError, ValueError) as exc:
-                raise ValueError(f"{k} must be an integer") from exc
+                raise ValueError(frame_language.text('room.control.integer', field=k)) from exc
             low, high = {
                 "context_hot": (0, CONTEXT_HOT_MAX),
                 "context_summary_chars": (1000, CONTEXT_SUMMARY_MAX),
@@ -703,6 +704,7 @@ def mode_until_expired(mode_until: str, now: float | None = None) -> bool:
     return expires is not None and (now if now is not None else time.time()) >= expires
 
 
+@frame_language.pinned
 def membership_state(chat_id: str | int, *, mem_dir: Path | None = None,
                      header: dict | None = None) -> dict:
     """Единственный ответ на «я ещё в этой комнате?» — для карт и любых производных.
@@ -723,15 +725,15 @@ def membership_state(chat_id: str | int, *, mem_dir: Path | None = None,
     left_at = str(header.get("left_at") or "").strip()
     mode = str(header.get("mode") or "").strip().casefold()
     if cid in _load_departed(mem_dir):
-        return {"state": "left", "why": "я вышла отсюда (rooms_departed.json)",
+        return {"state": "left", "why": frame_language.text('room.control.membership_left'),
                 "left_at": left_at, "stale_mark": ""}
     if mode == "dead":
         # dead ставит и её собственный leave, и Telegram-ответ banned/private.
-        return {"state": "unreachable", "why": "Telegram не отдаёт эту комнату (mode: dead)",
+        return {"state": "unreachable", "why": frame_language.text('room.control.membership_dead'),
                 "left_at": left_at, "stale_mark": ""}
     stale = ""
     if mark in ("left", "departed") or left_at:
-        stale = "в профиле осталась пометка ухода, но маска снята — комнату считаю живой"
+        stale = frame_language.text('room.control.membership_stale')
     return {"state": "active", "why": "", "left_at": left_at, "stale_mark": stale}
 
 
@@ -804,7 +806,7 @@ def _set_mode_unlocked(chat_id: str | int, mode: str, reason: str = "", set_by: 
     """
     mode = (mode or "").strip().lower()
     if mode not in MODES:
-        return f"нет такого режима: {mode}"
+        return frame_language.text('room.control.invalid_mode', mode=mode)
     t = now if now is not None else time.time()
     until = _iso(t + ttl_h * 3600) if ttl_h else ""
     profile_update(chat_id, mode=mode, mode_reason=(reason or "")[:MODE_REASON_MAX],
@@ -832,6 +834,7 @@ def transfer_of(chat_id: str | int) -> dict:
     }
 
 
+@frame_language.pinned
 def set_own_transfer(chat_id: str | int, transfer: str,
                      presence_hidden: str = "", now: float | None = None) -> tuple[bool, str]:
     """Записать ЕЁ класс переноса для места. Пишет только её рука — авторство praxis.
@@ -840,8 +843,7 @@ def set_own_transfer(chat_id: str | int, transfer: str,
     тоже её решение и тоже датируется."""
     value = str(transfer or "").strip().casefold()
     if value and value not in TRANSFER_CLASSES:
-        return False, ("нет такого класса переноса: "
-                       f"«{transfer}». Словарь: " + " | ".join(TRANSFER_CLASSES))
+        return False, frame_language.text('room.control.transfer_invalid', value=transfer, choices=' | '.join(TRANSFER_CLASSES))
     t = now if now is not None else time.time()
     changes = dict(transfer=value, transfer_set_by="praxis", transfer_at=_iso(t))
     if str(presence_hidden or "").strip():
@@ -852,12 +854,9 @@ def set_own_transfer(chat_id: str | int, transfer: str,
         return False, str(exc)
     hidden = transfer_of(chat_id)["presence_hidden"]
     if value:
-        note = (f"Перенос для {chat_id}: «{value}» (моё слово)"
-                + (" · существование источника не подтверждается (presence_hidden)"
-                   if hidden else ""))
+        note = frame_language.text('room.control.transfer_recorded', id=chat_id, value=value, hidden=(frame_language.text('room.control.presence_hidden') if hidden else ''))
     else:
-        note = (f"Моё слово о переносе для {chat_id} снято — действует умолчание "
-                "по типу места, и оно будет помечено умолчанием")
+        note = frame_language.text('room.control.transfer_unset', id=chat_id, hidden=(frame_language.text('room.control.presence_hidden') if hidden else ''))
     log.info("room %s: transfer=%s presence_hidden=%s by praxis", chat_id, value, hidden)
     return True, note
 
@@ -1018,6 +1017,7 @@ def self_demote(chat_id: str | int, mode: str, reason: str = "",
     return (ok, applied if ok else note)
 
 
+@frame_language.pinned
 def _own_mode(chat_id: str | int, mode: str, *, reason: str, ttl_h: float | None,
               set_by: str, now: float | None = None) -> tuple[bool, str, str]:
     """Общее тело её рычага режима. -> (ok, фраза целиком, применённый режим)."""
@@ -1030,17 +1030,14 @@ def _own_mode(chat_id: str | int, mode: str, *, reason: str, ttl_h: float | None
             mode = key
             break
     if mode not in SELF_MODES:
-        words = ", ".join(f"{MODE_WORD[m]}({m})" for m in SELF_MODES)
-        why = (f"неизвестный мой режим «{mode}»"
-               + (". «dead» — не режим, а факт от Telegram: комнату мёртвой объявляю не я"
-                  if mode == "dead" else "")
-               + f". Я ставлю себе: {words}")
+        words = ", ".join(f"{mode_label(m)}({m})" for m in SELF_MODES)
+        why = frame_language.text('room.control.mode_invalid', mode=mode, dead=(frame_language.text('room.control.dead_fact') if mode=='dead' else ''), choices=words)
         return (False, why, "")
     cur = effective_mode(chat_id, now)
     if cur == "dead":
         # A real rejoin revives a dead room; an in-room control does not fabricate
         # membership that Telegram no longer has.
-        return (False, "комната отмечена как покинутая; сначала нужен реальный join", "")
+        return (False, frame_language.text('room.control.dead_refusal'), "")
     raw_reason = str(reason or "")
     clipped = raw_reason[:MODE_REASON_MAX]
     # Срок имеет смысл только у режима, который держится: «обычно» — это покой, из него
@@ -1054,23 +1051,23 @@ def _own_mode(chat_id: str | int, mode: str, *, reason: str, ttl_h: float | None
     return (True, note, mode)
 
 
+@frame_language.pinned
 def _own_mode_note(chat_id, mode: str, *, set_by: str, ttl_h, applied_ttl,
                    keeps_ttl: bool, clipped: bool, now: float | None) -> str:
-    """Фраза, которую не стыдно показать ей целиком: что записано и чем это снимается."""
-    who = "моё решение" if set_by == "praxis" else author_label(set_by)
-    parts = [f"Комната {chat_id}: режим «{MODE_WORD[mode]}» ({mode}) — {who}."]
+    who = author_label(set_by)
+    parts = [frame_language.text('room.control.mode_note', id=chat_id, word=mode_label(mode), mode=mode, author=who)]
     if applied_ttl:
-        until = profile_read(chat_id)["mode_until"]
-        parts.append(f"Срок: {applied_ttl:g} ч, до {until} — дальше вернусь в «обычно» автоматически.")
+        until = profile_read(chat_id)['mode_until']
+        parts.append(frame_language.text('room.control.mode_ttl', hours=format(applied_ttl,'g'), until=until))
     elif keeps_ttl:
-        parts.append("Срок не задан — держится, пока не сниму.")
+        parts.append(frame_language.text('room.control.mode_no_ttl'))
     elif ttl_h:
-        parts.append(f"Срок {ttl_h:g} ч не записан: «обычно» — покой, а не режим на время.")
-    if mode != "normal":
-        parts.append("Снимается тем же рычагом с «обычно»: это моя дисциплина, не наказание.")
+        parts.append(frame_language.text('room.control.mode_normal_ttl', hours=format(ttl_h,'g')))
+    if mode != 'normal':
+        parts.append(frame_language.text('room.control.mode_lift'))
     if clipped:
-        parts.append(f"Причина обрезана до {MODE_REASON_MAX} знаков.")
-    return " ".join(parts)
+        parts.append(frame_language.text('room.control.reason_clipped', cap=MODE_REASON_MAX))
+    return ' '.join(parts)
 
 
 def set_own_disclosure(chat_id: str | int, level: str) -> tuple[bool, str]:
