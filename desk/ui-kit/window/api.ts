@@ -1,4 +1,5 @@
 import { t as uiText, UiError } from "../../lang/lang";
+import { nativeError } from '../native-error';
 // Связь с харнессом: канал frame.desk.v1 (WebSocket: запросы + живые события)
 // с HTTP-фолбэком, и мост к нативной оболочке (Tauri) там, где она есть.
 
@@ -64,6 +65,10 @@ export interface ElectronBridge {
   look?(paper: { day: string; night: string }): void;
 }
 export const electron: ElectronBridge | undefined = (window as unknown as { __HELENE__?: ElectronBridge }).__HELENE__;
+if(electron?.shell==='python'){
+  const invoke=electron.invoke.bind(electron);
+  electron.invoke=async(command,args)=>{try{return await invoke(command,args);}catch(error){throw nativeError(error);}};
+}
 /**
  * Окно — в оболочке программы, а не веб-версия за каналом. Имя историческое: с 28.09
  * оболочка — Electron (`electron`), прежние выпуски — Tauri; для окна разницы нет.

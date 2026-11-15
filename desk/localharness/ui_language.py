@@ -15,6 +15,53 @@ from .language_settings import LANGUAGES, interface_language
 CATALOGS = Path(__file__).resolve().parents[1] / 'lang'
 PARAMETER = re.compile(r'\{([A-Za-z_][A-Za-z_0-9]*)\}')
 
+# Only these application-owned failures cross the native bridge as captions.
+# External exception messages never acquire ownership by matching their text.
+NATIVE_ERRORS = {
+    'channel_missing': (), 'call_unavailable': (), 'restore_confirm': (),
+    'restore_session': (), 'linux_migration': (), 'build_tools': (),
+    'agent_missing': (), 'components_first': (), 'migration_identity': (),
+    'shutdown_incomplete': ('detail',), 'session_admission': (),
+    'root_mismatch': (), 'window_assets': ('path',), 'interrupted_migration': (),
+}
+
+
+class _NativeCaption:
+    def __init__(self, code, legacy, **values):
+        if code not in NATIVE_ERRORS or set(values) != set(NATIVE_ERRORS[code]):
+            raise ValueError('Invalid native caption parameters')
+        if any(type(value) not in (str, int, float) for value in values.values()):
+            raise ValueError('Invalid native caption value')
+        super().__init__(legacy)
+        self.native_caption = {'schema':'helene.native-error.v1','code':code,'values':dict(values)}
+
+
+class NativeValueError(_NativeCaption, ValueError):
+    pass
+
+
+class NativeRuntimeError(_NativeCaption, RuntimeError):
+    pass
+
+
+class NativeFileNotFoundError(_NativeCaption, FileNotFoundError):
+    pass
+
+
+def native_error(error):
+    if not isinstance(error, (NativeValueError, NativeRuntimeError, NativeFileNotFoundError)):
+        return None
+    value=error.native_caption
+    return dict(value, values=dict(value['values']))
+
+
+def error_text(error, root):
+    value=native_error(error)
+    if value:
+        try:return text('native.app.error.'+value['code'],for_root(root),value['values'])
+        except (OSError, ValueError, KeyError, RuntimeError):pass
+    return str(error)
+
 
 def system_tags() -> tuple[str, ...]:
     """Read UI preference order without starting a shell or changing locale."""

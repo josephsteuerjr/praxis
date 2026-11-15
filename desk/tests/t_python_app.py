@@ -1,5 +1,6 @@
 """Focused Python application consumer checks (temporary owners, never live Hélène)."""
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -29,6 +30,12 @@ class Host:
 
 
 class PythonApplicationTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        # _main intentionally establishes process defaults; unit fixtures own
+        # that environment and must restore it before the next consumer.
+        self.enterContext(patch.dict(os.environ))
+
     def test_normal_renderer_ready_is_published_for_the_actual_window(self):
         with tempfile.TemporaryDirectory() as temporary:
             app=python_app.Application(Path(temporary),Path(temporary))

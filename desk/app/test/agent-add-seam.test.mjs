@@ -170,7 +170,8 @@ const domURL = moduleURL(read(new URL("dom.ts", kit)).replace('"./text"', JSON.s
 const libURL = moduleURL(
   read(new URL("window/lib.ts", kit)).replace('"../text"', JSON.stringify(textURL)).replace('"../dom"', JSON.stringify(domURL)),
 );
-const apiURL = moduleURL(read(new URL("window/api.ts", kit)));
+const nativeErrorURL = moduleURL(read(new URL("native-error.ts", kit)));
+const apiURL = moduleURL(read(new URL("window/api.ts", kit)).replace("'../native-error'", JSON.stringify(nativeErrorURL)));
 const cardSource = read(new URL("../src/agentscard.ts", import.meta.url))
   .replace('"../../ui-kit/window/api"', JSON.stringify(apiURL))
   .replace('"../../ui-kit/window/lib"', JSON.stringify(libURL))

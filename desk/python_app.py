@@ -21,6 +21,22 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 
+def _ui_text(root, key, legacy, **values):
+    try:
+        from localharness.ui_language import text, for_root
+        return text(key,for_root(root),values)
+    except (ImportError,OSError,ValueError,KeyError,RuntimeError):
+        return legacy.format_map(values) if values else legacy
+
+
+def _ui_error(root,error):
+    try:
+        from localharness.ui_language import error_text
+        return error_text(error,root)
+    except ImportError:
+        return str(error)
+
+
 def startup_log(root):
     try:
         from localharness.program_state import directory
@@ -73,11 +89,12 @@ if __name__=='__main__':
             from localharness.bootstrap_ready import signal
             signal(failed=True)
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None,str(exc),'Hélène — startup failed',0x10)
+            ctypes.windll.user32.MessageBoxW(None,_ui_error(root,exc),_ui_text(root,'native.app.startup_title','Hélène — startup failed'),0x10)
         raise SystemExit(1)
 
 from localharness.python_controller import Controller
 from localharness.python_platform import desktop_identity
+from localharness.ui_language import NativeValueError, NativeRuntimeError, NativeFileNotFoundError
 
 
 class _LoopbackHTTPServer(ThreadingHTTPServer):
@@ -136,7 +153,7 @@ class Application:
         prefix = "window.DESK_CONFIG_OVERRIDE = "
         line = script.strip().splitlines()[0]
         if not line.startswith(prefix) or not line.endswith(";"):
-            raise ValueError("Движок не передал канал окна")
+            raise NativeValueError('channel_missing', 'Движок не передал канал окна')
         return json.loads(line[len(prefix):-1])
 
     def event(self, name, data):
@@ -163,7 +180,7 @@ class Application:
 
     def invoke(self, command, args):
         if not isinstance(command, str) or command.startswith("host_"):
-            raise ValueError("Недоступный вызов оболочки")
+            raise NativeValueError('call_unavailable', 'Недоступный вызов оболочки')
         from localharness import program_commands
         # Same default as __init__ (program or root) for partially built instances.
         shared = program_commands.invoke(self.root, getattr(self, 'program', self.root), command, args)
@@ -184,15 +201,15 @@ class Application:
             signal()
             return result
         if command == 'restore_upstream':
-            if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+            if args.get('confirmed') is not True:raise NativeValueError('restore_confirm', 'Подтверди возврат к upstream-коду')
             from localharness import upstream_recovery
             if upstream_recovery.modern(self.root):
-                if self.host is None:raise RuntimeError('Для восстановления открой действующий сеанс Hélène или новый целый архив.')
+                if self.host is None:raise NativeRuntimeError('restore_session', 'Для восстановления открой действующий сеанс Hélène или новый целый архив.')
                 return self.host.invoke(command,args)
             return upstream_recovery.launch(self.root)
         if command == 'migration_wizard':
             if not sys.platform.startswith('linux'):
-                raise ValueError('This offline migration wizard is available in the Linux application')
+                raise NativeValueError('linux_migration', 'This offline migration wizard is available in the Linux application')
             self.migration_wizard = True
             self.relaunch = True
             self.event('exit', {})
@@ -210,9 +227,9 @@ class Application:
             if name == 'relay':
                 from localharness import standalone_relay
                 return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
-            if name == 'toolchain':raise ValueError('Инструменты сборки больше не поставляются с Hélène')
+            if name == 'toolchain':raise NativeValueError('build_tools', 'Инструменты сборки больше не поставляются с Hélène')
             if name in ('xtts','whisper','windows-mcp'):
-                if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
+                if self.host is None:raise NativeRuntimeError('agent_missing', 'Select an agent before installing an optional component')
                 return self.host.invoke('component_install',{'name':name})
             from localharness import app_components
             if self.host is not None:
@@ -266,7 +283,7 @@ class Application:
                     self.window.destroy()
             return None
         if self.host is None:
-            raise RuntimeError("Install the bundled components and start the application first")
+            raise NativeRuntimeError('components_first', 'Install the bundled components and start the application first')
         return self.host.invoke(command, args)
 
     def confirm_ui(self):
@@ -286,7 +303,7 @@ class Application:
                 from localharness import app_migration, owner_stop
                 from localharness.package_notice import read, write
                 note=read(self.root/'python-migration.json')
-                if note.get('id')!=self.migration_id:raise ValueError('Migration confirmation identity changed')
+                if note.get('id')!=self.migration_id:raise NativeValueError('migration_identity', 'Migration confirmation identity changed')
                 if note.get('state')=='failed_before_retirement':return {'confirmed':False,'terminal':True}
                 try:
                     proof=({'stopped':True,'root':str(self.root)} if owner_stop.stopped()
@@ -318,7 +335,7 @@ window.__HELENE__ = {shell:'python', platform:%s,
  invoke: async (command,args={}) => {
   const r = await fetch('/__python__/invoke', {method:'POST',headers:{
    'Content-Type':'application/json','X-Helene-Window':%s},body:JSON.stringify({command,args})});
-  const v = await r.json(); if(!r.ok) throw new Error(v.error); return v.result;
+  const v = await r.json(); if(!r.ok){const error=new Error(v.error);if(v.native_error)error.native_error=v.native_error;throw error;} return v.result;
  }, win(action){this.invoke('python_window',{action}).catch(console.error)}};
 window.addEventListener('helene:ui-ready',async()=>{
  const deadline=performance.now()+60000;
@@ -500,7 +517,11 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
                         record(app.root,request.get('command') if isinstance(request,dict) else None,exc,values=args)
                     except Exception:pass
                     code=400 if isinstance(exc,(OSError,ValueError,KeyError,RuntimeError,TimeoutError)) else 500
-                    self.reply(code, {"error": str(exc),'error_type':type(exc).__name__})
+                    from localharness.ui_language import native_error
+                    payload={'error':str(exc),'error_type':type(exc).__name__}
+                    caption=native_error(exc)
+                    if caption is not None:payload['native_error']=caption
+                    self.reply(code,payload)
 
         return Handler
 
@@ -539,7 +560,8 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
         if getattr(self,'thread',None):finish(lambda:self.thread.join(5))
         finish(lambda:self.control_file.unlink(missing_ok=True))
         if failures:
-            raise RuntimeError('Application shutdown incomplete: '+'; '.join(str(exc) for exc in failures)) from failures[0]
+            diagnostic='; '.join(str(exc) for exc in failures)
+            raise NativeRuntimeError('shutdown_incomplete', 'Application shutdown incomplete: '+diagnostic, detail=diagnostic) from failures[0]
 
 
 def window_geometry(screen):
@@ -724,7 +746,7 @@ def _main(argv=None):
         bootstrap_ready.signal()
         if args.notify and os.name == 'nt':
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
+            ctypes.windll.user32.MessageBoxW(None, _ui_text(args.root,'native.app.emergency_requested','Emergency Stop requested. Automatic starts remain paused.'), 'Hélène', 0)
         return 0
     os.environ['PYTHONNOUSERSITE']='1'
     if sys.platform.startswith('linux'):
@@ -737,9 +759,9 @@ def _main(argv=None):
         bootstrap_ready.signal()
         return 0
     if args.session_tree is not None and not args.session_job:
-        raise ValueError('A selected session tree requires an admitted migration job')
+        raise NativeValueError('session_admission', 'A selected session tree requires an admitted migration job')
     if not args.session_job and program != root:
-        raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
+        raise NativeValueError('root_mismatch', 'Program and configuration root must currently match; agent data may live elsewhere via absolute tree')
     pending_entry=root/'python-migration.json'
     recovery_entry=(pending_entry.is_file() and json.loads(pending_entry.read_text(encoding='utf-8')).get('state')
                     not in ('completed','new_app_started','retirement_incomplete'))
@@ -782,7 +804,7 @@ def _main(argv=None):
         if sys.platform=='win32':portable_start.initialize(root)
     ui = program / "app" / "static"
     if not (ui / "index.html").is_file():
-        raise FileNotFoundError(f"Нет сборки окна: {ui}")
+        raise NativeFileNotFoundError('window_assets', f"Нет сборки окна: {ui}", path=str(ui))
     pending=root/'python-migration.json'
     interrupted=pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving'
     from localharness.essential_backup import load
@@ -791,7 +813,7 @@ def _main(argv=None):
         from localharness.migration_wizard import run
         if not run(root):return 0
     elif interrupted:
-        raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
+        raise NativeRuntimeError('interrupted_migration', 'Interrupted profile copy: resume migration before starting the application')
     # A fresh/interrupted migrator has not yet selected a complete profile.
     # Require its ordinary recovery entry first; running the app still requires
     # the unchanged exact data-pointer/identity checks.
@@ -903,18 +925,18 @@ def main(argv=None):
         try:
             with log.open("a", encoding="utf-8") as output:
                 output.write(detail + "\n")
-            message = f"Hélène could not start.\n\n{exc}\n\nDetails: {log}"
+            message = _ui_text(root,'native.app.startup_log','Hélène could not start.\n\n{error}\n\nDetails: {path}',error=_ui_error(root,exc),path=str(log))
         except OSError as log_error:
-            message = f"Hélène could not start.\n\n{exc}\n\nStartup log unavailable: {log_error}"
+            message = _ui_text(root,'native.app.startup_log_unavailable','Hélène could not start.\n\n{error}\n\nStartup log unavailable: {detail}',error=_ui_error(root,exc),detail=str(log_error))
         print(detail, file=sys.stderr)
         if os.name == "nt":
             from localharness.bootstrap_ready import signal
             signal(failed=True)
             import ctypes
-            ctypes.windll.user32.MessageBoxW(None, message, "Hélène — startup failed", 0x10)
+            ctypes.windll.user32.MessageBoxW(None, message, _ui_text(root,'native.app.startup_title','Hélène — startup failed'), 0x10)
         elif sys.platform == "darwin":
             import subprocess
-            subprocess.run(["osascript", "-e", 'on run argv\ndisplay alert "Hélène — startup failed" message (item 1 of argv) as critical\nend run', message], check=False)
+            subprocess.run(["osascript", "-e", 'on run argv\ndisplay alert (item 1 of argv) message (item 2 of argv) as critical\nend run', _ui_text(root,'native.app.startup_title','Hélène — startup failed'), message], check=False)
         return 1
 
 
