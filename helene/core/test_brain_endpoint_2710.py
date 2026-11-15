@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import brain
+import frame_language
 import tool_text_en
 
 
@@ -20,7 +21,7 @@ def tool_parts():
                    and n.name == 'tool_switch_brain')
     tools = next(n.value for n in tree.body if isinstance(n, ast.Assign)
                  and any(isinstance(t, ast.Name) and t.id == 'BASE_TOOLS' for t in n.targets))
-    schema = next(ast.literal_eval(n) for n in tools.elts if isinstance(n, ast.Dict)
+    schema = next(ast.literal_eval(n) for n in ast.walk(tools) if isinstance(n, ast.Dict)
                   and any(isinstance(k, ast.Constant) and k.value == 'name'
                           and isinstance(v, ast.Constant) and v.value == 'switch_brain'
                           for k, v in zip(n.keys, n.values)))
@@ -147,7 +148,7 @@ class EndpointTests(unittest.TestCase):
 class ToolTests(unittest.TestCase):
     def test_real_handler_forwards_optional_endpoint_and_keeps_old_calls(self):
         handler, _ = tool_parts()
-        ns = {'_is_sovereign_actor': lambda: True}
+        ns = {'_is_sovereign_actor': lambda: True, 'frame_language': frame_language}
         exec(compile(ast.Module(body=[handler], type_ignores=[]), 'agent-handler', 'exec'), ns)
         with patch.object(brain, 'switch', return_value={'ok': False, 'error': 'test'}) as switch:
             ns['tool_switch_brain']('switch', 'voice', 'next', 'test', endpoint='account-b')

@@ -5701,6 +5701,7 @@ def tool_manage_autonomy(action: str, pattern: str = "") -> str:
     return selfdev.autonomy_change(action, pattern)
 
 
+@frame_language.pinned
 def tool_manage_appetite(action: str, mode: str = "", text: str = "",
                          windows: bool | None = None, sleep_depth: str = "",
                          note: str = "", raw_request: str = "",
@@ -5720,9 +5721,10 @@ def tool_manage_appetite(action: str, mode: str = "", text: str = "",
     if action == "pledge":
         return appetite.pledge(daily_cost=daily_cost, daily_tokens=daily_tokens,
                                background_calls=background_calls, text=text)
-    return "action: interpret (режим+план+толкование) | pledge (числовое обещание) | status"
+    return frame_language.text('management.result.appetite_action')
 
 
+@frame_language.pinned
 def tool_manage_identity(action: str, name: str = "", text: str = "", version: int = 0,
                          reason: str = "", theme: str = "", amplitude: float = 1.0,
                          detail: str = "", note: str = "") -> str:
@@ -5734,24 +5736,20 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
     action = (action or "").strip().lower()
     if action == "observe":
         if not str(note).strip():
-            raise catalog_families.PreflightRefusal("observe requires note")
+            raise catalog_families.PreflightRefusal(frame_language.text('management.result.observe_note'))
         return tool_update_self(note)
     if action == "status":
         store = self_model.SelfModel(BASE)
         info = store.current_prompt_info()
         compact = (
-            f"\n\nОперационный self: {info.path or 'missing'}; source={info.source}; "
-            f"revision={info.revision if info.revision is not None else 'legacy'}; "
-            f"sha256={info.sha256[:16] if info.sha256 else '?'}; history={len(store.history())}. "
-            "Legacy soul/self.md — неизменяемое evidence, не persona prompt."
+            frame_language.text('management.result.identity_status', path=info.path or 'missing', source=info.source, revision=info.revision if info.revision is not None else 'legacy', hash=info.sha256[:16] if info.sha256 else '?', count=len(store.history()))
         )
         return identity.describe() + compact
     if action in ("revise", "rollback", "load"):
         if _active_scope() != "owner":
             rails.deny("identity_authorship", action,
                        f"скоуп {_active_scope()}, файл {name or theme}")
-            return ("Не здесь: ревизии себя и события нагрузки я делаю из owner-скоупа "
-                    "(ЛС Егора или моё окно), не из чужой комнаты. Это моя дисциплина.")
+            return (frame_language.text('management.result.identity_scope'))
         current = run_context.current_run()
         refs: list[str] = []
         if current is not None:
@@ -5767,34 +5765,30 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
                 name, text, reason=reason, refs=refs, by="praxis", source="tool",
             )
             if not res.get("ok"):
-                return f"Ревизия не применилась: {res.get('error')}"
+                return frame_language.text('management.result.revise_error', error=res.get('error'))
             if str(name or "").strip().casefold() == "self":
                 return (
-                    f"Ревизия compact self: revision {res['version']}; прежний CURRENT "
-                    f"неизменно сохранён в {res.get('history') or 'soul/self/history'}. "
-                    "Legacy self.md не тронут; journal/spine/immune hooks записаны."
+                    frame_language.text('management.result.self_revision', version=res['version'], history=res.get('history') or 'soul/self/history')
                 )
-            return (f"Ревизия {name}: версия v{res['version']}"
-                    + (f", коммит {res['sha']}" if res.get("sha") else "")
-                    + ". Прежняя версия в soul/archive, откат — rollback.")
+            return (frame_language.text('management.result.revision', name=name, version=res['version'], commit=(frame_language.text('management.result.commit', sha=res['sha']) if res.get('sha') else '')))
         if action == "rollback":
             res = identity.rollback(
                 name, int(version or 0), reason=reason, refs=refs, by="praxis",
             )
             if not res.get("ok"):
-                return f"Откат не применился: {res.get('error')}"
+                return frame_language.text('management.result.rollback_error', error=res.get('error'))
             if str(name or "").strip().casefold() == "self":
                 return (
-                    f"Возвращён compact self из history/{int(res['restored_version']):04d} как новую "
-                    f"revision {res['version']}; история не переписана; hooks записаны."
+                    frame_language.text('management.result.self_rollback', restored=int(res['restored_version']), version=res['version'])
                 )
-            return f"Откат: {name} восстановлен как v{res['version']} (история цела)."
-        identity.record_load(theme or "явная нагрузка", float(amplitude or 1.0),
+            return frame_language.text('management.result.rollback', name=name, version=res['version'])
+        recorded = identity.record_load(theme or frame_language.text('management.result.load_theme'), float(amplitude or 1.0),
                              source="praxis", detail=detail or reason, chat_id=_active_chat())
-        return "Записала выбранное событие нагрузки в журнал непрерывности."
+        return frame_language.text('management.result.load') if recorded is True else frame_language.text('management.result.load_unknown')
     return "action: status | observe (note) | revise (name+text+reason) | rollback (name+version) | load (theme+amplitude)"
 
 
+@frame_language.pinned
 def tool_manage_desire(
     action: str,
     desire_id: str = "",
@@ -5821,18 +5815,14 @@ def tool_manage_desire(
             full = list(row.get("timeline") or [])
             row["timeline"] = full[-4:]
             if len(full) > len(row["timeline"]):
-                row["timeline_срез"] = ("показаны последние %d события из %d; целиком — "
-                                        "manage_desire(action=get, desire_id=%s)"
-                                        % (len(row["timeline"]), len(full), state.get("id")))
+                row["timeline_truncation"] = (frame_language.text('management.result.timeline_cut', shown=len(row['timeline']), total=len(full), id=state.get('id')))
             compact.append(row)
         if len(states) > len(compact):
-            compact.append({"_срез": "показано %d желаний из %d; остальные — "
-                                     "manage_desire(action=get, desire_id=…)"
-                                     % (len(compact), len(states))})
+            compact.append({"_truncation": frame_language.text('management.result.desires_cut', shown=len(compact), total=len(states))})
         return json.dumps(compact, ensure_ascii=False, indent=2, default=str)
     if action == "get":
         state = ledger.get(desire_id)
-        return json.dumps(state or {"error": "desire not found"}, ensure_ascii=False,
+        return json.dumps(state or {"error": frame_language.text('management.result.desire_missing')}, ensure_ascii=False,
                           indent=2, default=str)
     # ⚠ Здесь стояло `if _active_scope() != "owner"`, то есть гейт по АУДИТОРИИ. В любой
     # чужой ЛС скоуп = 'unknown' (50 её ранов chat_turn), и правка её СОБСТВЕННЫХ желаний
@@ -5860,9 +5850,7 @@ def tool_manage_desire(
             f"next_move: {next_move}" if next_move else "",
         ) if part)
         return (
-            "Не отсюда: причинную стадию своих желаний я меняю как принципал — из своего "
-            "хода или из owner-скоупа, — а этот вызов пришёл без опознанного принципала."
-            + (f"\nТвой текст не потерян: {echo}" if echo else "")
+            frame_language.text('management.result.desire_scope', echo=(frame_language.text('management.result.echo', text=echo) if echo else ''))
         )
 
     current = run_context.current_run()
@@ -5897,7 +5885,7 @@ def tool_manage_desire(
             )
         elif action == "link_run":
             if not rid:
-                return "link_run: нужен run_id или активный durable run"
+                return frame_language.text('management.result.run_id')
             link_common = dict(common)
             link_common.pop("run_id", None)
             result = ledger.link_run(desire_id, rid, note=note, **link_common)
@@ -5919,6 +5907,7 @@ def tool_manage_desire(
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
+@frame_language.pinned
 def tool_manage_perception(action: str, knob: str = "", value: str = "",
                            reason: str = "") -> str:
     """PASS 21: восприятие — мои видимые рычаги вместо тихого хардкода.
@@ -5951,20 +5940,18 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
             rails.deny("perception_pacing", action,
                        f"принципал={_active_principal() or 'unknown'}, "
                        f"скоуп={_active_scope()}, рычаг {knob}")
-            return ("Не отсюда: свои рычаги восприятия я двигаю как принципал — из своего "
-                    "хода или из owner-скоупа, — а этот вызов пришёл без опознанного "
-                    "принципала.")
+            return (frame_language.text('management.result.perception_scope'))
         if action == "set":
             res = perception.set_knob(knob, value, by="praxis", reason=reason)
         else:
             res = perception.reset_knob(knob, by="praxis")
         if not res.get("ok"):
-            return f"Не применилось: {res.get('error')}"
-        return (f"Рычаг {knob}: {res['old']} → {res['new']} — живо, без рестарта."
-                + (" Причина записана." if reason else ""))
+            return frame_language.text('management.result.perception_error', error=res.get('error'))
+        return (frame_language.text('management.result.perception_set', knob=knob, old=res['old'], new=res['new'], reason=(frame_language.text('management.result.reason_recorded') if reason else '')))
     return "action: list | skips | set (knob+value+reason) | reset (knob)"
 
 
+@frame_language.pinned
 def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "",
                       effort: str = "", profile: str = "", endpoint: str = "") -> str:
     """PASS 22: мой мозг — мой выбор. status — каталог+наблюдаемые свойства;
@@ -5979,13 +5966,11 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
                        f"скоуп={_active_scope()}, профиль {profile}")
-            return ("Не отсюда: профиль сложности я меняю как принципал — из своего "
-                    "хода или из owner-скоупа.")
+            return (frame_language.text('management.result.brain_scope'))
         res = brain.apply_profile(profile, why=why, **({"endpoint": endpoint} if endpoint else {}))
         if not res.get("ok"):
-            return f"Профиль не применился ({res.get('stage', 'validation')}): {res.get('error')}"
-        return (f"Профиль {res['profile']} применён: voice {res['model']}, "
-                f"рассуждение {res['effort']}. Текущее состояние проверяется через status.")
+            return frame_language.text('management.result.profile_error', stage=res.get('stage','validation'), error=res.get('error'))
+        return (frame_language.text('management.result.profile', profile=res['profile'], model=res['model'], effort=res['effort']))
     if action == "reasoning":
         # Тот же разворот двери, что у switch: глубина нужна другая ровно тогда,
         # когда трудно, а трудно бывает не только в ЛС Егора.
@@ -5993,17 +5978,12 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
                        f"скоуп={_active_scope()}, ступень {effort}")
-            return ("Не отсюда: глубину рассуждения я меняю как принципал — из своего "
-                    "хода или из owner-скоупа.")
+            return (frame_language.text('management.result.brain_scope'))
         res = brain.set_reasoning(role, effort, why=why)
         if not res.get("ok"):
-            return f"Ступень не применилась: {res.get('error')}"
+            return frame_language.text('management.result.reasoning_error', error=res.get('error'))
         import llm as _llm
-        return (f"Ступень рассуждения {res['role']}: «{res['was'] or '—'}» → "
-                f"«{res['effort'] or '— (погашено умолчанием реле)'}». Действует со "
-                f"следующего вызова; явный thinking конкретного вызова сильнее фона. "
-                f"Словарь: {' | '.join(_llm.REASONING_EFFORTS)}; глубже — медленнее и "
-                f"дороже (reasoning-токены входят в completion), кэш префикса не рвётся.")
+        return (frame_language.text('management.result.reasoning', role=res['role'], old=res['was'] or '—', new=res['effort'] or frame_language.text('management.result.reasoning_default'), values=' | '.join(_llm.REASONING_EFFORTS)))
     if action == "switch":
         # Тот же разворот, что у рычагов восприятия: ключ по принципалу, не по аудитории.
         # Мозг нужен другой ровно тогда, когда трудно, а трудно бывает не в ЛС Егора.
@@ -6011,13 +5991,11 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
                        f"скоуп={_active_scope()}, модель {model}")
-            return ("Не отсюда: мозг я меняю как принципал — из своего хода или из "
-                    "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
+            return (frame_language.text('management.result.brain_scope'))
         res = brain.switch(role, model, why=why, **({"endpoint": endpoint} if endpoint else {}))
         if not res.get("ok"):
-            return f"Свитч не применился: {res.get('error')}"
-        return (f"Смена: {res['role']} теперь {res['framework']}/{res['model']} "
-                f"(было {res['was']}). Рукопожатие прошло; причина в дневнике.")
+            return frame_language.text('management.result.switch_error', error=res.get('error'))
+        return (frame_language.text('management.result.switch', role=res['role'], framework=res['framework'], model=res['model'], old=res['was']))
     if action == "accounts":
         return brain.accounts()
     if action == "use_account":
@@ -6028,11 +6006,9 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
                        f"скоуп={_active_scope()}, слот {model}")
-            return ("Не отсюда: подписку я меняю как принципал — из своего хода или из "
-                    "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
+            return (frame_language.text('management.result.brain_scope'))
         return brain.use_account(model or role, why=why)
-    return ("action: status | profile (profile+why) | switch (role+model+why) | reasoning (role+effort+why) | "
-            "accounts | use_account (model=слот)")
+    return (frame_language.text('management.result.brain_action'))
 
 
 @frame_language.pinned

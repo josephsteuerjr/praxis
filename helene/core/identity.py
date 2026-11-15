@@ -498,8 +498,8 @@ def note_self_append(note: str) -> None:
 #  журнал событий нагрузки
 # --------------------------------------------------------------------------- #
 def record_load(theme: str, amplitude: float, *, source: str, detail: str = "",
-                chat_id=None) -> None:
-    """Событие нагрузки — дешёвая строка в кольцо. Никогда не роняет вызвавшего."""
+                chat_id=None) -> bool:
+    """Append one load event; acknowledge the write without raising on journal failure."""
     try:
         theme = (theme or "прочее").strip()[:60]
         amp = max(0.1, min(5.0, float(amplitude)))
@@ -511,8 +511,10 @@ def record_load(theme: str, amplitude: float, *, source: str, detail: str = "",
         with LOAD_PATH.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
         _maybe_compact_load()
+        return True
     except Exception:
         log.debug("identity.record_load не записал", exc_info=True)
+        return False
 
 
 def _maybe_compact_load() -> None:

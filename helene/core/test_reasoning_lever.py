@@ -32,9 +32,9 @@ class CanonicalAndEndpointDictionaries(unittest.TestCase):
 
     def test_canonical_max_is_not_the_embedded_relay_contract(self):
         self.assertEqual(llm.REASONING_EFFORTS,
-                         ("none", "minimal", "low", "medium", "high", "xhigh", "max"))
+                         ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"))
         self.assertEqual(llm.EMBEDDED_RELAY_EFFORTS,
-                         ("none", "minimal", "low", "medium", "high", "xhigh"))
+                         ("minimal", "low", "medium", "high", "xhigh", "max", "ultra"))
         self.assertEqual(llm._GLM_EFFORT['max'], 'max')
         self.assertEqual(llm._effective_effort(None, 'max'), 'max')
 
@@ -111,12 +111,12 @@ class TheHandHasProvenance(unittest.TestCase):
             out = agent.tool_switch_brain(action="reasoning", role="voice",
                                           effort="medium", why="проба глубины")
             self.assertIn("«medium»", out)
-            self.assertIn("кэш префикса не рвётся", out)
+            self.assertIn("со следующего вызова", out)
             status = agent.tool_switch_brain(action="status")
             self.assertIn("рассуждение medium", status)
             out2 = agent.tool_switch_brain(action="reasoning", role="voice",
                                            effort="", why="снимаю после пробы")
-            self.assertIn("погашено", out2)
+            self.assertIn("по умолчанию реле", out2)
 
     def test_canonical_max_roundtrips_through_the_actual_brain_writer(self):
         result = brain.set_reasoning('voice', 'max', why='synthetic canonical max')

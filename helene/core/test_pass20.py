@@ -545,7 +545,7 @@ class AgentWiringTests(Pass20Base):
         self.patch(agent, _CURRENT_SCOPE="owner")
         self.assertIn("слои", agent.tool_manage_identity("status").lower())
         out = agent.tool_manage_identity("load", theme="проверка", amplitude=1.5)
-        self.assertIn("журнал непрерывности", out)
+        self.assertIn("записано в журнал", out)
 
     def test_tool_revise_roundtrip(self):
         import agent
