@@ -1297,7 +1297,7 @@ class TestUpstreamEye(unittest.TestCase):
         self.assertIn("papertrade-lab", note)
         self.assertIn(f"{forge.UPSTREAM_CHECK_SEC / 60:.0f} мин", note)
         self.assertIn(str(forge.UPSTREAM_KEEP), note)
-        self.assertIn("факт, не задача", note)
+        self.assertIn(forge.frame_language.text('forge.support.6',v1=f'{forge.UPSTREAM_CHECK_SEC / 60:.0f}',v3=forge.UPSTREAM_KEEP), note)
 
     def test_the_state_line_carries_only_what_she_was_not_told_yet(self):
         self._task()

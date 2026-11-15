@@ -165,12 +165,12 @@ class LostSaysWhatWasAlreadyDone(unittest.TestCase):
     def test_recap_warns_when_the_worktree_is_gone(self):
         self._abandoned("code-db853ef9", self.tmp / "снесённое-дерево")
         self.assertEqual(forge.reconcile_lost_tasks(), 1)
-        self.assertIn("БОЛЬШЕ НЕТ", self._recap())
+        self.assertIn(forge.frame_language.text("forge.overview.24",v1=self.tmp / "снесённое-дерево"), self._recap())
 
     def test_recap_says_the_root_survived_when_it_did(self):
         self._abandoned("code-alive", self.tmp)
         self.assertEqual(forge.reconcile_lost_tasks(), 1)
-        self.assertIn("на месте", self._recap())
+        self.assertIn(forge.frame_language.text("forge.overview.26",v1=self.tmp), self._recap())
 
     def test_recap_without_any_events_still_works(self):
         self._abandoned("code-silent", self.tmp)

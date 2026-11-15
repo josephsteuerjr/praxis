@@ -547,6 +547,7 @@ def _git_root(path: Path) -> Path | None:
         return None
 
 
+@frame_language.pinned
 def _worktree_would_miss(git: Path, subdir: Path) -> str:
     """Пусто, если `<subdir>` будет в чекауте HEAD; иначе — честная причина, почему нет.
 
@@ -566,15 +567,10 @@ def _worktree_would_miss(git: Path, subdir: Path) -> str:
             return ""
         ignored = _run(["git", "-C", str(git), "check-ignore", "-q", "--", rel], timeout=15)
     except Exception as exc:  # git не ответил — не выдумываем ни «можно», ни «нельзя»
-        return (f"изоляция worktree не проверилась: git по {git} не ответил "
-                f"({type(exc).__name__}: {exc}). Работаю прямо в источнике.")
+        return (frame_language.text('forge.overview.2', v1=f'{git}', v3=f'{type(exc).__name__}', v5=f'{exc}'))
     if ignored.returncode == 0:
-        return (f"изоляция worktree невозможна: «{rel}» в .gitignore репозитория {git}, "
-                f"поэтому в чекауте HEAD этого пути не существует. Работаю прямо в источнике "
-                f"— правки идут в живой каталог, отката через ветку не будет.")
-    return (f"изоляция worktree невозможна: git репозитория {git} не отслеживает «{rel}» "
-            f"(в HEAD нет ни одного файла оттуда). Работаю прямо в источнике — правки идут "
-            f"в живой каталог, отката через ветку не будет.")
+        return (frame_language.text('forge.overview.1', v1=f'{rel}', v3=f'{git}'))
+    return (frame_language.text('forge.overview.0', v1=f'{git}', v3=f'{rel}'))
 
 
 def _git_text(root: Path, *args: str, timeout: int = 30) -> str:
@@ -624,13 +620,14 @@ def _hash(path: Path, *, full: bool = False) -> str:
         return ""
 
 
+@frame_language.pinned
 def _cap(text: str, limit: int = 16000) -> str:
     text = str(text or "")
     if len(text) <= limit:
         return text
     head = int(limit * .62)
     tail = int(limit * .33)
-    return text[:head] + f"\n… вырезано {len(text)-head-tail} символов …\n" + text[-tail:]
+    return text[:head] + frame_language.text('forge.support.0', v1=f'{len(text) - head - tail}') + text[-tail:]
 
 
 def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
@@ -656,6 +653,7 @@ def _control_root(task_id: str, action: str) -> tuple[dict | None, Path | None, 
     return task, root, error
 
 
+@frame_language.pinned
 def _missing_root_reason(task: dict, root: Path) -> str:
     """Почему корня нет — и «не существовал» здесь не то же самое, что «пропал».
 
@@ -666,7 +664,7 @@ def _missing_root_reason(task: dict, root: Path) -> str:
     («восстанавливать потерянный worktree цель прямо запрещала»), и закрыла задачу по
     ложной причине. Слово, которое сообщает о причине, обязано её знать."""
     close_hint = ("" if task.get("status") in {"done", "abandoned"}
-                  else " Закрыть запись — coding_session(action='abandon').")
+                  else frame_language.text('forge.overview.4'))
     wt_raw = str(task.get("worktree_root") or "")
     if wt_raw:
         try:
@@ -679,20 +677,17 @@ def _missing_root_reason(task: dict, root: Path) -> str:
                 rel = root.relative_to(wt).as_posix()
             except ValueError:
                 rel = str(root)
-            return (f"корня задачи не существует: {root}. Сам worktree {wt} на месте и цел — "
-                    f"в нём нет «{rel}», потому что worktree это чекаут HEAD, а git этот путь "
-                    f"не отслеживает (обычно он в .gitignore). Такого корня не было ни разу с "
-                    f"момента открытия задачи: это не пропажа, а изоляция, которая не могла "
-                    f"состояться. Восстанавливать нечего.{close_hint}")
+            return (frame_language.text('forge.overview.5', v1=f'{root}', v3=f'{wt}', v5=f'{rel}', v7=f'{close_hint}'))
         if inside and wt is not None:
-            return f"корень задачи пропал вместе с worktree: нет ни {root}, ни {wt}.{close_hint}"
-    return f"корень задачи пропал: {root}.{close_hint}"
+            return frame_language.text('forge.overview.6', v1=f'{root}', v3=f'{wt}', v5=f'{close_hint}')
+    return frame_language.text('forge.overview.3', v1=f'{root}', v3=f'{close_hint}')
 
 
 def _manifest_hints(root: Path) -> list[str]:
     return [row["command"] for row in forge_intelligence.discovered_checks(root)]
 
 
+@frame_language.pinned
 def _contract_text(task: dict) -> str:
     """Расписка контракта задачи: критерии готовности и команды проверки, построчно.
 
@@ -704,7 +699,7 @@ def _contract_text(task: dict) -> str:
     verify_commands = [str(c).strip() for c in (task.get("verify_commands") or []) if str(c).strip()]
     if not criteria and not verify_commands:
         return ""
-    rows = ["Контракт задачи:"]
+    rows = [frame_language.text('forge.support.1')]
     for index, criterion in enumerate(criteria, 1):
         rows.append(f"  {index}. {criterion}")
     for command in verify_commands:
@@ -822,6 +817,7 @@ def _coordinator_state(task: dict) -> dict:
             "checkpoint": checkpoint, "next_action": checkpoint.get("next_action") or "coordinator decision required"}
 
 
+@frame_language.pinned
 def _orientation_text(task: dict) -> str:
     root = Path(task["root"])
     # Наблюдение за чужим upstream дописывается ПОСЛЕ кап-среза и у всех бэкендов:
@@ -857,7 +853,7 @@ def _orientation_text(task: dict) -> str:
                 counts[lang] = counts.get(lang, 0) + 1
     except OSError:
         pass
-    languages = ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])) or "не распознаны"
+    languages = ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])) or frame_language.text('forge.overview.7')
     instructions = []
     for name in ("AGENTS.md", "CLAUDE.md", "README.md", "CONTRIBUTING.md"):
         if (root / name).is_file():
@@ -865,7 +861,7 @@ def _orientation_text(task: dict) -> str:
     model = forge_intelligence.project_model(root)
     adapters = ", ".join(
         f"{row['language']}:{row['server'] or row['mode']}" for row in model.get("adapters", [])
-    ) or "не распознаны"
+    ) or frame_language.text('forge.overview.8')
     lessons = forge_learning.recall(STATE_DIR, str(task.get("goal") or ""), root, limit=3)
     lines: list[str] = []
     # Контракт — ПЕРВОЙ секцией: пока не прочитаны обзоры и кандидаты проверок, она
@@ -874,27 +870,27 @@ def _orientation_text(task: dict) -> str:
     if contract:
         lines.append(contract)
     lines.extend([
-        f"coding-задача {task['id']}: {task['goal']}",
-        f"корень: {root}",
-        f"режим: {task.get('isolation')}" + (f"; proposal {task.get('proposal_id')}" if task.get("proposal_id") else ""),
-        *([f"⚠ изоляция не та, что просили: {task['isolation_note']}"]
+        frame_language.text('forge.overview.9', v1=f"{task['id']}", v3=f"{task['goal']}"),
+        frame_language.text('forge.overview.10', v1=f'{root}'),
+        frame_language.text('forge.overview.16', v1=f"{task.get('isolation')}") + (f"; proposal {task.get('proposal_id')}" if task.get("proposal_id") else ""),
+        *([frame_language.text('forge.overview.20', v1=f"{task['isolation_note']}")]
           if str(task.get("isolation_note") or "").strip() else []),
-        f"языки (до 10000 файлов): {languages}",
-        f"верхний уровень: {', '.join(top) or 'пусто'}",
-        f"инструкции/карта: {', '.join(instructions) or 'не найдены'}",
-        f"semantic adapters: {adapters}",
-        f"кандидаты проверки: {', '.join(_manifest_hints(root)) or 'определить по проекту'}",
+        frame_language.text('forge.overview.11', v1=f'{languages}'),
+        frame_language.text('forge.overview.12', v1=f"{', '.join(top) or frame_language.text('forge.overview.21')}"),
+        frame_language.text('forge.overview.13', v1=f"{', '.join(instructions) or frame_language.text('forge.overview.22')}"),
+        frame_language.text('forge.support.2', v1=f'{adapters}'),
+        frame_language.text('forge.overview.14', v1=f"{', '.join(_manifest_hints(root)) or frame_language.text('forge.overview.23')}"),
     ])
     if lessons:
-        lines.append("похожие доказуемые уроки:\n" + forge_learning.format_recall(lessons))
+        lines.append(frame_language.text('forge.overview.17') + forge_learning.format_recall(lessons))
     if git:
         lines += [
-            f"git root: {git}",
-            "git status:\n" + (_git_text(git, "status", "--short", "--branch") or "чисто"),
-            "последние коммиты:\n" + _git_text(git, "log", "-5", "--oneline", "--decorate"),
+            frame_language.text('forge.support.3', v1=f'{git}'),
+            frame_language.text('forge.support.4') + (_git_text(git, "status", "--short", "--branch") or frame_language.text('forge.overview.19')),
+            frame_language.text('forge.overview.18') + _git_text(git, "log", "-5", "--oneline", "--decorate"),
         ]
     else:
-        lines.append("git: нет")
+        lines.append(frame_language.text('forge.overview.15'))
     return (_cap("\n".join(lines), 12000) + _upstream_note(task)
             + "\nCOORDINATOR STATE\n" + json.dumps(_coordinator_state(task), ensure_ascii=False))
 
@@ -1259,6 +1255,7 @@ def reconcile_subagent_events(force: bool = False) -> int:
 TASK_ABANDONED_SEC = _env_sec("PRAXIS_FORGE_TASK_ABANDONED_H", 6.0, scale=3600.0)
 
 
+@frame_language.pinned
 def _last_trace_line(task_id: str, limit: int = 3) -> str:
     """Что по задаче наблюдаемо СДЕЛАНО — прежде чем звать её продолжать.
 
@@ -1282,23 +1279,23 @@ def _last_trace_line(task_id: str, limit: int = 3) -> str:
         kind = str(row.get("kind") or "?")
         text = " ".join(str(row.get("summary") or row.get("result") or "").split())
         bits.append(f"{kind}: {text[:110]}" if text else kind)
-    return "Последнее наблюдаемое в журнале задачи — " + "; ".join(bits) + "."
+    return frame_language.text('forge.support.5') + "; ".join(bits) + "."
 
 
+@frame_language.pinned
 def _root_state_line(task: dict) -> str:
     """Цел ли корень задачи. «Продолжить тем же id» стоит разной цены, когда рабочее
     дерево на месте и когда его снесли, — и знать это надо ДО того, как продолжать."""
     root_raw = str(task.get("root") or "").strip()
     if not root_raw:
-        return "Корень не записан."
+        return frame_language.text('forge.overview.25')
     try:
         alive = Path(root_raw).is_dir()
     except OSError:
         alive = False
     if alive:
-        return f"Корень {root_raw} на месте."
-    return (f"⚠ Корня {root_raw} на диске БОЛЬШЕ НЕТ: рабочее дерево не сохранилось, "
-            f"продолжение по этому id начнётся с пустого места.")
+        return frame_language.text('forge.overview.26', v1=f'{root_raw}')
+    return (frame_language.text('forge.overview.24', v1=f'{root_raw}'))
 
 
 #: Задача жива, пока не вынесен исход. `submitted` тоже жива: её предложение ещё ждёт
@@ -1798,6 +1795,7 @@ def _evict_upstreams(data: dict, task_id: str = "") -> list[str]:
     return dropped
 
 
+@frame_language.pinned
 def _upstream_note(task: dict) -> str:
     """Строка про наблюдения ЭТОЙ задачи — в ориентировку и в статус. Чистое чтение."""
     if not isinstance(task, dict):
@@ -1812,23 +1810,20 @@ def _upstream_note(task: dict) -> str:
         known = str(row.get("known_head") or "")
         head = str(row.get("head") or "")
         if not known:
-            where = "точки отсчёта ещё нет — запишу первым же удачным вопросом"
+            where = frame_language.text('forge.support.7')
         elif head and head != known:
-            where = (f"ты знаешь {known[:8]}, сейчас там {head[:8]} — сдвинулся "
-                     f"{row.get('last_move_at') or 'недавно'}")
+            where = (frame_language.text('forge.support.9', v1=f'{known[:8]}', v3=f'{head[:8]}', v5=f"{row.get('last_move_at') or frame_language.text('forge.support.10')}"))
         else:
             # Откуда взялась точка отсчёта — часть правды: «ты это видела» и «я тебе про
             # это сказала» разные вещи, и через неделю их уже не различить по памяти.
             src = str(row.get("known_source") or "")
-            where = (f"на {known[:8]}" + (f" ({src}" if src else " (")
-                     + (f"; проверено {row.get('checked_at')}" if row.get("checked_at")
+            where = (frame_language.text('forge.support.11', v1=f'{known[:8]}') + (f" ({src}" if src else " (")
+                     + (frame_language.text('forge.support.12', v1=f"{row.get('checked_at')}") if row.get("checked_at")
                         else "") + ")").replace(" ()", "")
-        blind = (f"; ⚠ не могу спросить с {row.get('blind_since')}: {row.get('error')}"
+        blind = (frame_language.text('forge.support.8', v1=f"{row.get('blind_since')}", v3=f"{row.get('error')}")
                  if row.get("blind_since") else "")
         lines.append(f"- {row.get('url')}: {where}{blind}")
-    return ("\nнаблюдение за upstream (только HEAD, без клона; сдвиг — факт, не задача; "
-            f"спрашиваю не чаще раза в {UPSTREAM_CHECK_SEC / 60:.0f} мин, наблюдений держу "
-            f"до {UPSTREAM_KEEP}):\n" + "\n".join(lines))
+    return (frame_language.text('forge.support.6', v1=f'{UPSTREAM_CHECK_SEC / 60:.0f}', v3=f'{UPSTREAM_KEEP}') + "\n".join(lines))
 
 
 def _ls_remote_head(url: str) -> tuple[str, str]:
@@ -2076,6 +2071,7 @@ def _hand_upstreams_to_wake(moved: list[dict], blind: list[dict]) -> bool:
     return True
 
 
+@frame_language.pinned
 def upstream_line() -> str:
     """Коротко о наблюдениях — только когда есть НЕОТДАННОЕ (сдвиг или слепота).
     Постоянной строки нет намеренно: она сделала бы forge «активным» в её блоке
@@ -2104,28 +2100,27 @@ def upstream_line() -> str:
     parts = []
     for row in pending[:3]:
         if row.get("blind_since"):
-            parts.append(f"{row.get('key')} — не могу спросить с {row.get('blind_since')}")
+            parts.append(frame_language.text('forge.overview.28', v0=f"{row.get('key')}", v2=f"{row.get('blind_since')}"))
         else:
             parts.append(f"{row.get('key')} {str(row.get('known_head') or '')[:8]}→"
                          f"{str(row.get('head') or '')[:8]}")
-    return f"upstream ({len(rows)} под наблюдением): " + "; ".join(parts)
+    return frame_language.text('forge.overview.27', v1=f'{len(rows)}') + "; ".join(parts)
 
 
+@frame_language.pinned
 def _upstream_row_line(row: dict) -> str:
     known = str(row.get("known_head") or "")
     head = str(row.get("head") or "")
     if not known:
-        state = "точки отсчёта ещё нет — запишу первым же удачным вопросом"
+        state = frame_language.text('forge.overview.30')
     elif head and head != known:
-        state = (f"знаешь {known[:8]}, сейчас там {head[:8]} — сдвинулся "
-                 f"{row.get('last_move_at') or 'недавно'}")
+        state = (frame_language.text('forge.overview.32', v1=f'{known[:8]}', v3=f'{head[:8]}', v5=f"{row.get('last_move_at') or frame_language.text('forge.overview.35')}"))
     else:
-        state = f"на {known[:8]} ({row.get('known_source') or 'источник не записан'})"
-    blind = (f"; ⚠ не могу спросить с {row.get('blind_since')}: {row.get('error')}"
+        state = frame_language.text('forge.overview.33', v1=f'{known[:8]}', v3=f"{row.get('known_source') or frame_language.text('forge.overview.36')}")
+    blind = (frame_language.text('forge.overview.31', v1=f"{row.get('blind_since')}", v3=f"{row.get('error')}")
              if row.get("blind_since") else "")
     tasks = ", ".join(row.get("tasks") or []) or "—"
-    return (f"- {row.get('url')}: {state}{blind}; названо в задачах {tasks}; "
-            f"спрошено {row.get('checked_at') or 'ни разу'}")
+    return (frame_language.text('forge.overview.29', v1=f"{row.get('url')}", v3=f'{state}', v4=f'{blind}', v6=f'{tasks}', v8=f"{row.get('checked_at') or frame_language.text('forge.overview.34')}"))
 
 
 def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
@@ -5960,6 +5955,7 @@ def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
             f"интегрировано и не восстановлено.{tail}")
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Short factual line for Praxis STATE; no model and no cached guesses."""
     tasks = []
@@ -5989,16 +5985,13 @@ def state_line() -> str:
         log.debug("upstream_line упал", exc_info=True)
     if not active and not lost and not arun and not adone and not prun:
         return upstream
-    line = (f"coding: задач {len(active)}, субагентов running {arun}/done {adone}, "
-            f"процессов running {prun}")
+    line = (frame_language.text('forge.overview.37', v1=f'{len(active)}', v3=f'{arun}', v5=f'{adone}', v7=f'{prun}'))
     if upstream:
         line += "; " + upstream
     if aunknown:
         # «unknown» в блоке состояния — не шум, а разница между «работает» и
         # «номер занят, доказать нечем» (легаси-юниты без метки рождения).
-        line += f", юнитов с недоказуемой живостью {aunknown}"
+        line += frame_language.text('forge.overview.38', v1=f'{aunknown}')
     if lost:
-        line += (f"; потеряны из виду {len(lost)} "
-                 f"({', '.join(str(t.get('id')) for t in lost[:3])}) — не закрыты, "
-                 "продолжаются тем же id")
+        line += (frame_language.text('forge.overview.39', v1=f'{len(lost)}', v3=f"{', '.join((str(t.get('id')) for t in lost[:3]))}"))
     return line
