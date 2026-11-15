@@ -37,6 +37,7 @@ schedule) — он дублировал часовой social_pulse. Перио�
 from __future__ import annotations
 
 import os
+import frame_language
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -131,7 +132,7 @@ def when_trouble(t: dict) -> str | None:
     w = t.get("when")
     if not w or _deadline(t, _now()) is not None:
         return None
-    return f"срок «{w}» я прочитать не могу — намерение не сработает, назначь заново"
+    return frame_language.text('lifecycle.result.deadline_trouble', when=w)
 
 
 def _load() -> list:

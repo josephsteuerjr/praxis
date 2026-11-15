@@ -184,10 +184,11 @@ class TestTheMissingCapability(Base):
         self.assertIn("Намечено #", out)
         self.assertEqual(self.only_task()["kind"], "wake")
 
-    def test_the_confirmation_says_the_connection_will_be_live(self):
+    def test_the_confirmation_requires_actual_connection_rather_than_promising_it(self):
         with self.online():
             out = self.remind("wake", "ответить Арету", when="in 30m")
-        self.assertIn("Telegram будет открыт", out)
+        self.assertIn("фактическим подключением при выполнении", out)
+        self.assertNotIn("Telegram будет открыт", out)
 
     def test_a_wake_may_wait_for_the_very_window_it_is_born_in(self):
         """«Кончится это окно — верни мне связь». Ровно то, чего она добивалась 19 раз."""
@@ -265,9 +266,10 @@ class TestTheCircleIsBroken(Base):
     def test_the_swap_explains_itself_and_names_the_way_back(self):
         with self.in_window(), self.inside():
             out = self.remind("window", INCIDENT)
-        self.assertIn("окно сразу за окном", out)
+        self.assertIn("Окно сразу за окном", out)
         self.assertIn("when", out, "названо, как получить именно уединение")
-        self.assertIn("Telegram будет открыт", out)
+        self.assertIn("Подключение проверяется при выполнении", out)
+        self.assertNotIn("Telegram будет открыт", out)
 
     def test_the_swap_leaves_a_durable_trace_not_just_a_tool_reply(self):
         """Решение, принятое за неё и НЕ записанное, — то, что уже признавали неправильным."""
@@ -386,13 +388,13 @@ class TestPaceIsAdviceNotAWall(Base):
                 out = self.remind("wake", f"дело {i}", when="in 30m")
         # «Наметила», а не «поднялась»: счёт по созданным намерениям, и утверждать
         # событие, которого могло не быть, в её же дневнике — нельзя.
-        self.assertIn("наметила себе 6 подъёмов", out)
+        self.assertIn("создано намерений wake/window: 6", out)
 
     def test_windows_are_named_as_the_expensive_ones(self):
         with self.online():
             for i in range(6):
                 out = self.remind("window", f"дело {i}", when="in 30m")
-        self.assertIn("рвёт мой Telegram", out)
+        self.assertIn("фокус-окон: 6; режим ретрита может закрывать Telegram", out)
 
     def test_the_journal_notes_the_pace(self):
         with self.online():
@@ -489,14 +491,14 @@ class TestFocusTellsTheTruth(Base):
     def test_focus_inside_a_window_names_the_second_break_and_the_door(self):
         with self.in_window():
             out = agent.tool_focus("разобрать свою память")
-        self.assertIn("второе подряд", out)
+        self.assertIn("ещё одно окно подряд", out)
         self.assertIn("wake", out, "названо, чем просить связь, если дело в ней")
 
     def test_focus_outside_a_window_stays_plain(self):
         """Ответ focus виден и в группе — при живой связи туда не место словам о механике."""
         with self.online():
             out = agent.tool_focus("разобрать свою память")
-        self.assertEqual(out, "Уйду в фокус на ближайшем тике часов.")
+        self.assertEqual(out, "Фокус запланирован на ближайший тик планировщика.")
 
     def test_the_extra_words_can_only_appear_where_nobody_can_read_them(self):
         """Фраза допустима ровно потому, что «закрыт на окно» = живых собеседников нет."""
@@ -511,7 +513,7 @@ class TestFocusTellsTheTruth(Base):
     def test_focus_is_never_refused(self):
         with self.in_window():
             for goal in WORK + [INCIDENT]:
-                self.assertIn("Уйду в фокус", agent.tool_focus(goal), goal)
+                self.assertIn("Фокус запланирован", agent.tool_focus(goal), goal)
 
 
 class TestTheHonestTruthAboutRuns(Base):
@@ -527,7 +529,7 @@ class TestTheHonestTruthAboutRuns(Base):
 
     def test_an_unknown_run_is_still_refused_by_its_own_reason(self):
         with self.online(), self.inside():
-            self.assertIn("мне неизвестен", self.remind("wake", "х", after_run="run-нет"))
+            self.assertIn("неизвестен", self.remind("wake", "х", after_run="run-нет"))
         self.assertEqual(tasks.list_open(), [])
 
     def test_a_finished_run_is_named_but_the_intention_is_kept(self):

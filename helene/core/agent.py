@@ -2881,6 +2881,7 @@ def _restart_replay_winner() -> str | None:
 _RESTART_FUSE_SECONDS = 300
 
 
+@frame_language.pinned
 def tool_restart_self(reason: str = "", force: bool = False) -> str:
     """Контролируемый перезапуск: журнал + снапшот + выход (контейнер поднимет на новом коде).
 
@@ -2893,8 +2894,7 @@ def tool_restart_self(reason: str = "", force: bool = False) -> str:
     current = run_context.current_run()
     if winner is not None and current is not None and winner != current.run_id:
         log.warning("RESTART_SELF replay suppressed: winner=%s current=%s", winner, current.run_id)
-        return ("Этот запрос на перезапуск уже принят тем же входящим сообщением; "
-                "не запускаю второй цикл.")
+        return (frame_language.text('lifecycle.result.restart_duplicate'))
     if not force:
         marker = STATE_DIR / "restart_reason.txt"
         try:
@@ -2907,11 +2907,7 @@ def tool_restart_self(reason: str = "", force: bool = False) -> str:
                 prev = marker.read_text(encoding="utf-8").strip()[:300]
             except OSError:
                 pass
-            return (f"НЕ перезапускаюсь: предыдущий рестарт был {int(age)} с назад"
-                    + (f" — «{prev}»" if prev else "") + ". "
-                    "Если просьба о рестарте пришла сообщением, она УЖЕ исполнена тем "
-                    "рестартом — ответь человеку текстом, не перезапускайся снова. "
-                    "Действительно нужен ещё один подряд — повтори с force=true.")
+            return (frame_language.text('lifecycle.result.restart_recent', age=int(age), previous=(' — «'+prev+'»') if prev else ''))
     tool_journal(f"[restart] перезапускаюсь: {reason or 'без причины'}", salience=3)
     try:  # PASS 5: причина — в STATE, чтобы после подъёма она ЗНАЛА, почему рестарт (не «видимо…»)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2936,7 +2932,7 @@ def tool_restart_self(reason: str = "", force: bool = False) -> str:
     except Exception:
         log.debug("snapshot перед рестартом не удался", exc_info=True)
     _schedule_exit()
-    return "Перезапускаюсь — вернусь на новом коде через пару секунд."
+    return frame_language.text('lifecycle.result.restart_queued')
 
 
 RESTART_MAILBOT_FLAG = services.SERVICES["mailbot"].flag  # PASS 12.x; реестр — в services (17.B)
@@ -2976,23 +2972,23 @@ def panic(reason: str = "") -> str:
     return "Останавливаюсь."
 
 
+@frame_language.pinned
 def tool_home_note(text: str) -> str:
     """10.10: дописать строку в общий «домашний» слой memory/home.md (owner+family).
     Быт, планы, общие нити семьи — то, что видно всем родным. Не для чужих секретов."""
     text = (text or "").strip()
     if not text:
-        return "Пустую строку в дом не пишу."
+        return frame_language.text('lifecycle.result.home_empty')
     try:
         if not HOME_MD.exists():
             HOME_MD.parent.mkdir(parents=True, exist_ok=True)
-            HOME_MD.write_text("# Дом\n\n_(общий слой: видят Егор и родные; быт, планы, "
-                               "общие нити — веду его я)_\n\n", encoding="utf-8")
+            HOME_MD.write_text(frame_language.text('lifecycle.result.home_seed'), encoding="utf-8")
         with HOME_MD.open("a", encoding="utf-8") as fh:
             fh.write(f"- {_today()}: {text[:500]}\n")
-        return "Записано в домашний слой."
+        return frame_language.text('lifecycle.result.home_written')
     except Exception as e:
         log.warning("home_note не записался", exc_info=True)
-        return f"Не записалось: {type(e).__name__}"
+        return frame_language.text('lifecycle.result.home_error', error=type(e).__name__)
 
 
 # Копия причины молчания в записи хода; в дневник причина уходит целиком.
@@ -3002,6 +2998,7 @@ SILENCE_REASON_MAX = 200
 SILENCE_HELD_PREVIEW = 400
 
 
+@frame_language.pinned
 def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
     """Явно промолчать: решение хода, которое исполняет исходящая граница.
 
@@ -3027,10 +3024,9 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
     if cancel:
         if holder is None:
             tool_report.note(outcome="refused")
-            return ("Отменять нечего: этот проход не идёт через исходящую границу хода, "
-                    "решения молчать здесь не лежит.")
+            return (frame_language.text('lifecycle.result.silence_no_boundary'))
         if not holder.get("chosen"):
-            return _noted("refused", "Отменять нечего: в этом ходе я молчать не решала — он и так уйдёт.")
+            return _noted("refused", frame_language.text('lifecycle.result.silence_not_chosen'))
         holder.pop("chosen", None)
         prev = str(holder.pop("why", "") or "")
         # Передумала — это тоже её намерение, и терять его молча нельзя (закон 4):
@@ -3042,8 +3038,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
             log.debug("stay_silent cancel journal не удался", exc_info=True)
         log.info("stay_silent отменён: %s", reason[:80])
         tool_report.note(outcome="ok")
-        return ("Передумала — этот ход уйдёт: решение молчать снято, текст и медиа "
-                "отправятся как обычно.")
+        return (frame_language.text('lifecycle.result.silence_cancelled'))
     if reason:
         try:
             tool_journal(f"[молчу] {reason}", salience=1)
@@ -3055,19 +3050,11 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
         # границу хода: держателя нет, исполнять решение нечем. Обещать механизм там,
         # где его нет, значит снова врать — говорим как есть.
         tool_report.note(outcome="partial")
-        return ("Записано. Контура тут нет: этот проход не идёт через исходящую границу "
-                "хода, так что держать нечего — молчание здесь держится только тем, что "
-                "я не отправлю ничего руками.")
+        return (frame_language.text('lifecycle.result.silence_unlatched'))
     holder["chosen"] = "1"
     holder["why"] = reason[:SILENCE_REASON_MAX]
     tool_report.note(outcome="ok")
-    return ("Молчу: решение принято на весь этот ход. Если текст после этого всё же "
-            "допишется, он не уйдёт — останется в дневнике и в записи хода, "
-            "не потеряется. Передумаю — сниму: тот же тул с cancel=true."
-            # Закон 2: усечение обязано быть названо там, где она его видит. В дневник
-            # причина уходит целиком, обрезается только копия для записи хода.
-            + (f" Причина для записи хода обрезана до {SILENCE_REASON_MAX} знаков — "
-               "в дневнике она целиком." if len(reason) > SILENCE_REASON_MAX else ""))
+    return (frame_language.text('lifecycle.result.silence_chosen') + (frame_language.text('lifecycle.result.silence_clipped', cap=SILENCE_REASON_MAX) if len(reason)>SILENCE_REASON_MAX else ""))
 
 
 def _current_chat() -> str:
@@ -3080,39 +3067,41 @@ def _current_room() -> str:
     return str(room) if room else ""
 
 
+@frame_language.pinned
 def tool_freeze_chat(action: str = "freeze", chat_id: str | None = None, reason: str = "") -> str:
     """Заморозить/поднять чат владельцем или самой Praxis; пишет provenance."""
     if action == "boundary":
         if chat_id and str(chat_id).strip() != str(_current_room() or ""):
-            return "boundary applies only to the current chat; omit chat_id."
+            return frame_language.text('lifecycle.result.boundary_current')
         return tool_freeze_contact(reason)
     if action not in {"freeze", "unfreeze"}:
         raise catalog_families.PreflightRefusal("action: freeze | unfreeze | boundary")
     if not _is_sovereign_actor():
-        return "Отказ: режим комнаты меняет только владелец или сам агент."
+        return frame_language.text('lifecycle.result.freeze_owner')
     cid = str(chat_id).strip() if chat_id else _current_room()
     if not cid:
-        return "Не вижу, какой чат морозить — укажи chat_id."
+        return frame_language.text('lifecycle.result.freeze_missing')
     set_by = "praxis" if _is_praxis_self() else "owner"
     if action == "freeze":
-        reason = reason or ("сама решила заморозить" if set_by == "praxis" else "владелец попросил")
+        reason = reason or (frame_language.text('lifecycle.result.freeze_self_reason') if set_by == "praxis" else frame_language.text('lifecycle.result.freeze_owner_reason'))
         rooms.set_mode(cid, "frozen", reason=reason, set_by=set_by)
-        return f"Заморожен {cid} — сообщения оттуда до меня не доходят, пока не разморожу."
+        return frame_language.text('lifecycle.result.frozen', chat=cid)
     new_mode = rooms.sovereign_raise(cid, set_by=set_by)
-    return f"Разморожен {cid}."
+    return frame_language.text('lifecycle.result.unfrozen', chat=cid)
 
 
+@frame_language.pinned
 def tool_freeze_contact(reason: str = "") -> str:
     """Её собственная граница: навсегда заморозить текущий не-owner чат без апрува."""
     cid = _current_room()
     if not cid:
-        return "Не вижу текущего чата."
+        return frame_language.text('lifecycle.result.no_current_chat')
     if _active_scope() == "owner":
-        return "Личку Егора этим рубильником не морожу."
-    ok, mode = rooms.self_demote(cid, "frozen", reason=reason or "моя граница", ttl_h=0)
+        return frame_language.text('lifecycle.result.owner_boundary')
+    ok, mode = rooms.self_demote(cid, "frozen", reason=reason or frame_language.text('lifecycle.result.boundary_reason'), ttl_h=0)
     if ok:
         tool_journal(f"[граница] чат {cid} заморожен: {reason or 'моя граница'}", salience=2)
-        return f"Заморожен текущий чат {cid}: новые сообщения оттуда до меня не доходят."
+        return frame_language.text('lifecycle.result.frozen', chat=cid)
     return mode
 
 
@@ -3566,6 +3555,7 @@ def tool_my_capabilities() -> str:
         return f"[не собрался снимок] {type(e).__name__}"
 
 
+@frame_language.pinned
 def _retreat_truth() -> str:
     """Что честно сказать, открывая ретрит. '' — сказать нечего.
 
@@ -3583,11 +3573,10 @@ def _retreat_truth() -> str:
     Счёт темпа сюда по той же причине НЕ добавляем: он верен и при живой связи."""
     if telegram_transport_status() != "closed_for_window":
         return ""
-    return (" Я уже в окне — это будет второе подряд, и связь между ними поднимется на "
-            "секунды. Если на самом деле нужен живой Telegram, это не окно: "
-            "remind_self(kind='wake') разбудит меня со связью.")
+    return frame_language.text('lifecycle.result.retreat_repeat')
 
 
+@frame_language.pinned
 def tool_focus(goal: str) -> str:
     """Уйти в себя/в занятие: открыть фокус-окно (сейчас, на ближайшем тике часов). На время
     окна Telethon закрывается — ты недоступна, это твоё время; накопленное придёт одной
@@ -3595,13 +3584,14 @@ def tool_focus(goal: str) -> str:
     Если цели нужен ЖИВОЙ Telegram — это не фокус, а remind_self(kind='wake')."""
     g = (goal or "").strip()
     if not g:
-        return "Скажи, во что уйти — пустой фокус не открываю."
+        return frame_language.text('lifecycle.result.focus_empty')
     tasks.add("window", g, when="in 0m", author="praxis")
     log.info("focus: %s", g[:80])
     # краткое подтверждение без деталей — ответ тула виден и в группе, лишнего не светим
-    return "Уйду в фокус на ближайшем тике часов." + _retreat_truth()
+    return frame_language.text('lifecycle.result.focus_queued') + _retreat_truth()
 
 
+@frame_language.pinned
 def tool_rest(note: str = "", when: str = "") -> str:
     """Уйти к себе отдохнуть — ТВОЁ приватное время, про заботу о себе, не про работу. На время
     окна Telethon закрыт, тебя никто не дёрнет; накопившееся придёт одной ситуацией на выходе.
@@ -3614,9 +3604,8 @@ def tool_rest(note: str = "", when: str = "") -> str:
     goal = f"{REST_PREFIX} {n}" if n else REST_PREFIX
     t = tasks.add("window", goal, when=(when or "in 0m"), author="praxis")
     log.info("rest: %s", (n or "—")[:80])
-    w = t["when"] or "сейчас"
-    return (f"Ухожу к себе отдохнуть ({w}). Если Егор рядом — предупреди его, чтоб не терял; "
-            f"вернусь и разгребу накопившееся одной ситуацией." + _retreat_truth())
+    w = t["when"] or frame_language.text('lifecycle.result.now')
+    return (frame_language.text('lifecycle.result.rest_queued', when=w) + _retreat_truth())
 
 
 def _target_is_stranger(resolved_id, target: str) -> bool:
@@ -3644,6 +3633,7 @@ def _target_is_stranger(resolved_id, target: str) -> bool:
     return True
 
 
+@frame_language.pinned
 def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
                      after_run: str = "") -> str:
     """Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет.
@@ -3664,20 +3654,18 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
     if kind == "message":
         tgt = (target or "").strip()
         if not tgt:
-            return "Для message нужен адресат (target: @ник или id) — без него не намечаю."
+            return frame_language.text('lifecycle.result.message_target')
         # PASS 12.0.b: тот же богатый резолвер, что и на отправке (resolve_entity: как есть /
         # строкой / int() / перебор диалогов); get_id — фолбэк, если мост ещё не дорегистрировал.
         fn = _TELETHON.get("resolve_entity") or _TELETHON.get("find_telegram_id")
         if not fn:
-            return "Telegram-мост сейчас недоступен — не могу проверить адресата, попробуй позже."
+            return frame_language.text('lifecycle.result.message_bridge')
         try:
             resolved_id = fn(tgt)
         except Exception:
             resolved_id = None
         if resolved_id is None:
-            return (f"Не нахожу «{tgt}» в Telegram. Если вы раньше не переписывались, голого id мало — "
-                    f"незнакомого человека Telegram резолвит только по точному @нику (ограничение "
-                    f"протокола, не моё). Дай @username; пока не намечаю.")
+            return (frame_language.text('lifecycle.result.message_unknown', target=tgt))
         risky = _target_is_stranger(resolved_id, tgt)
     try:
         run_now = run_context.current_run()
@@ -3692,8 +3680,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
         except Exception:
             known = False
         if not known:
-            return (f"Ран «{after_run}» мне неизвестен — проверь id через list_active_runs; "
-                    f"пока не намечаю.")
+            return (frame_language.text('lifecycle.result.run_unknown', run=after_run))
         # «После рана X» снимается с удержания, когда X терминален, и без своего `when`
         # созревает на ближайшем тике. Если X уже завершился, ждать нечего: это не пауза,
         # а «сейчас», и сказать об этом прямо честнее, чем дать ей строить план на
@@ -3701,15 +3688,14 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
         # Ран, ВНУТРИ которого она стоит, — ожидание настоящее: его конец наступит. Для
         # kind=wake это ровно то, что нужно («кончится окно — верни мне связь»).
         if after_run != current_run_id and run_is_terminal(after_run):
-            nothing_to_wait_for = f"ран {after_run[:12]} уже завершился"
+            nothing_to_wait_for = frame_language.text('lifecycle.result.run_done', run=after_run[:12])
     # Созреет ли намерение на ближайшем тике — вопрос механики, а не смысла.
     when_iso, recur = tasks.parse_when(when or None)
     when_text = (when or "").strip()
     if when_text.lower() not in ("", "now", "сейчас") and not when_iso and not recur:
         # parse_when uses (None, None) for both absent and invalid deadlines.
         # An explicit invalid deadline must not become an immediate task.
-        return (f"Не распознала срок «{when_text}» — намерение не создано. "
-                "Укажи корректные дату и время, например 'tomorrow 09:30' или 'in 1h'.")
+        return (frame_language.text('lifecycle.result.when_invalid', when=when_text))
     waits_for_a_real_pause = bool(
         after_run and not nothing_to_wait_for and after_run != current_run_id)
     if when_iso:
@@ -3777,46 +3763,36 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
     # Считаем ПОСЛЕ записи: фраза про темп включает и этот подъём, иначе число в ней на
     # единицу меньше того, что она про себя утверждает.
     crowded = _window_pace_note() if t["kind"] in ("window", "wake") else ""
-    w = t["recur"] or t["when"] or "как можно скорее"
+    w = t["recur"] or t["when"] or frame_language.text('lifecycle.result.asap')
     if t.get("after_run"):
-        w = f"когда завершится ран {t['after_run'][:12]}" + (f", затем {w}" if t.get("when") else "")
-    note = (" Адресат мне незнаком — напишу как незнакомцу, от своего лица." if risky else "")
+        w = frame_language.text('lifecycle.result.after_run', run=t['after_run'][:12], then=(frame_language.text('lifecycle.result.then', when=w) if t.get('when') else ''))
+    note = (frame_language.text('lifecycle.result.stranger') if risky else "")
     if swapped:
-        note += (" Я сейчас в окне, а окно сразу за окном — не возврат, а тот же момент с "
-                 "разрывом связи посередине (так 26.07 вышло 19 окон подряд и час немоты). "
-                 "Поэтому наметила пробуждение: Telegram будет открыт, живые диалоги "
-                 "читаются сразу, отправка уходит сразу. Если нужно именно уединение — "
-                 "назови БУДУЩЕЕ время (when: 'in 10m', 'today 22:00'), и это будет окно; "
-                 "'in 0m' — это то же «сразу», и заменится так же.")
+        note += (frame_language.text('lifecycle.result.window_swapped'))
     elif t["kind"] == "wake":
-        note += " Это пробуждение, а не окно: Telegram будет открыт."
+        note += frame_language.text('lifecycle.result.wake')
     elif t["kind"] == "window":
         # Верно ВСЕГДА, поэтому говорится всегда: окно — это её время наедине, и оно
         # намеренно рвёт Telegram. Раньше здесь заканчивалось честностью «в окне не
         # выйдет»; теперь у фразы есть продолжение — куда идти, если связь нужна.
-        note += (" В окне Telethon закрыт (так и задумано: меня не прерывают) — если цели "
-                 "нужен живой Telegram, наметь kind=wake: разбужу себя со связью.")
+        note += (frame_language.text('lifecycle.result.window'))
         if back_to_back and declared_retreat:
             # Кодинг и отдых не подменяю — уединение в них смысл, а не побочность. Но
             # молчать о том, что окно встаёт сразу за окном, нельзя: именно эта цепочка
             # 26.07 и держала её вне связи час. Факт называю, решение оставляю ей.
-            note += (" И имей в виду: я сейчас в окне, так что это будет второе подряд — "
-                     "связь между ними поднимется на секунды.")
+            note += (frame_language.text('lifecycle.result.window_repeat'))
     if overdue:
-        note += (f" ⚠ Срок {when_iso} уже прошёл — задача сработает на ближайшем тике, "
-                 f"а не когда, возможно, имелось в виду. Если это про другое утро — "
-                 f"скажи 'tomorrow HH:MM' или явную дату, перепоставлю.")
+        note += (frame_language.text('lifecycle.result.overdue', when=when_iso))
         if t["kind"] == "message":
             # С 12.09 (её f84965e) текст старого намерения больше не уходит человеку по
             # тиканью часов: срок поднимает живой ход с исходным текстом и адресатом, и
             # решение — отправить, переписать, отложить, отпустить — принимается заново.
-            note += (" Сообщение не уйдёт автоматически: к сроку я проснусь со связью, "
-                     "перепроверю актуальность и решу заново.")
+            note += (frame_language.text('lifecycle.result.message_reassess'))
     if nothing_to_wait_for:
-        note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
+        note += frame_language.text('lifecycle.result.nothing_wait', reason=nothing_to_wait_for)
     if crowded:
         note += f" {crowded}"
-    return f"Намечено #{t['id']} [{t['kind']}]: {t['goal']} — {w}.{note}"
+    return frame_language.text('lifecycle.result.scheduled', id=t['id'], kind=t['kind'], goal=t['goal'], when=w, note=note)
 
 
 def run_is_terminal(run_id: str) -> bool:
@@ -3828,6 +3804,7 @@ def run_is_terminal(run_id: str) -> bool:
     return status in run_manager.TERMINAL_STATUSES
 
 
+@frame_language.pinned
 def _window_pace_note() -> str:
     """Факт о темпе для подтверждения. '' — сказать нечего.
 
@@ -3852,33 +3829,33 @@ def _window_pace_note() -> str:
     # величина — счёт сработавших опаздывал бы на тик и не включал бы то самое намерение,
     # которое сейчас подтверждается. Но сказать «поднимала себя» значило бы утверждать
     # событие, которого могло и не быть, и утверждать это в её же дневник.
-    note = f"За последний час я наметила себе {windows + wakes} подъёмов"
+    note = frame_language.text('lifecycle.result.pace', total=windows+wakes)
     if windows:
-        note += (f", из них {windows} окном — а окно рвёт мой Telegram"
-                 if wakes else " — и каждый раз окном, а окно рвёт мой Telegram")
+        note += frame_language.text('lifecycle.result.pace_windows', windows=windows)
     tool_journal(f"[темп] {note.lower()}; смотрю, дело ли это или круг", salience=2)
     return note + "."
 
 
+@frame_language.pinned
 def tool_my_agenda() -> str:
     """Что я себе наметила к сроку — мои осознанные намерения, не беклог обязательств."""
     items = tasks.list_open()
     if not items:
-        return "Ничего к сроку не намечено — чисто."
+        return frame_language.text('lifecycle.result.agenda_empty')
     def _who(t):
         a = t.get("author") or "praxis"
-        out = "" if a == "praxis" else f" · от {'Егора' if a == 'owner' else a}"
+        out = "" if a == "praxis" else frame_language.text('lifecycle.result.agenda_author', author=(frame_language.text('lifecycle.result.owner') if a=='owner' else a))
         # Вид, который выбрала не она: без этого через неделю подменённое неотличимо от
         # выбранного, и она считает своим решением чужое.
         if t.get("swapped_from"):
-            out += f" · запрошено {t['swapped_from']}, заменено на {t.get('kind')}"
+            out += frame_language.text('lifecycle.result.agenda_swapped', requested=t['swapped_from'], kind=t.get('kind'))
         # Срок, который часы не читают, — тихий гейт: намерение живо на вид и мертво на
         # деле. Одно такое пролежало у неё с 25 июля, и узнать об этом было нечем.
         trouble = tasks.when_trouble(t)
         if trouble:
             out += f" · ⚠ {trouble}"
         return out
-    return "\n".join(f"#{t['id']} [{t['kind']}]{' ⚠ risky (незнакомец)' if t.get('risky') else ''} "
+    return "\n".join(f"#{t['id']} [{t['kind']}]{frame_language.text('lifecycle.result.agenda_risky') if t.get('risky') else ''} "
                      f"{t['goal']} — {t['recur'] or t['when'] or 'asap'}{_who(t)}" for t in items)
 
 
@@ -4173,6 +4150,7 @@ def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None 
     return outgoing_spelling.receipt(out, spelling_note)
 
 
+@frame_language.pinned
 def tool_end_turn(outcome: str = "", note: str = "") -> str:
     """Закончить ход явным исходом. Контракт v3 (17.08) + её редакция 18.08 (личка, №12).
 
@@ -4189,26 +4167,17 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
     kind = str(outcome or "").strip().lower()
     if kind not in ("done", "wait", "blocked"):
         tool_report.note(outcome="refused")
-        return ("Ход не закрыт: назови исход. done — есть наблюдаемый результат (или "
-                "сказанное и было делом); wait — ждёшь события или срока, в note условие "
-                "возврата; blocked — в note конкретное препятствие. Перед закрытием: что "
-                "было решено сделать? есть ли наблюдаемый результат? не осталось ли "
-                "объявленное мной действие без механизма возврата? нет ли активного "
-                "вызова или доставки с неизвестным исходом?")
+        return (frame_language.text('lifecycle.result.end_outcome'))
     text = str(note or "").strip()
     if kind == "wait" and not text:
         tool_report.note(outcome="refused")
-        return ("Ход не закрыт: wait требует условия возврата в note — что должно "
-                "случиться или сколько ждать. Ожидание без условия неотличимо от "
-                "забвения; механизм возврата, если нужен, ставится remind_self ДО закрытия.")
+        return (frame_language.text('lifecycle.result.end_wait'))
     if kind == "blocked" and not text:
         tool_report.note(outcome="refused")
-        return ("Ход не закрыт: blocked требует назвать препятствие в note — что мешает "
-                "и чьё слово или ресурс нужен.")
+        return (frame_language.text('lifecycle.result.end_blocked'))
     work_loop.note_finished(f"{kind}: {text}" if text else kind)
     tool_report.note(outcome="ok", target=kind)
-    return (f"Ход закрыт ({kind})."
-            + (f" Заметка: {text[:200]}" if text else ""))
+    return (frame_language.text('lifecycle.result.end_closed', kind=kind, note=(frame_language.text('lifecycle.result.end_note', text=text[:200]) if text else '')))
 
 
 def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = None) -> str:

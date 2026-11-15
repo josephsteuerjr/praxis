@@ -251,7 +251,7 @@ class TestManageRoom(Base):
         agent._CURRENT_CHAT = "777"
         agent._CURRENT_SCOPE = "unknown"
         out = agent.TOOL_IMPL["freeze_chat"](action="boundary", reason="спам и давление")
-        self.assertIn("Заморожен", out)
+        self.assertIn("заморожен", out)
         self.assertTrue(rooms.is_frozen("777"))
         self.assertIn("freeze_chat", _tools_for(False))
         self.assertNotIn("freeze_contact", _tools_for(False))
