@@ -12,6 +12,7 @@ import tempfile
 import urllib.parse
 import uuid
 import zipfile
+from . import windows_mcp_words as words
 
 RELATIVE = 'components/windows-mcp'
 PIN = json.loads(Path(__file__).with_name('windows-mcp-release.json').read_text(encoding='utf-8'))
@@ -36,10 +37,12 @@ def artifacts(pin=PIN):
     return rows
 
 
-def require_platform():
+def require_platform(program=None):
     from .python_platform import runtime_target
     if runtime_target() != PIN['target']:
-        raise RuntimeError('Windows MCP доступен на Windows x64.')
+        if program is None:
+            raise RuntimeError(words.configured({},'unsupported_platform'))
+        raise words.Error(program,'unsupported_platform')
 
 
 def directory(program):
@@ -79,7 +82,7 @@ def status(program):
                 version=receipt.get('version', '') if installed else PIN['version'],
                 download_bytes=sum(row['size'] for row in artifacts()),
                 project=PIN['project'], license='MIT',
-                error=error or ('' if supported else 'Нужен компьютер с Windows x64.'),
+                error=error or ('' if supported else words.text(program,'unsupported_platform')),
                 progress=job_status(program, 'windows-mcp'), restart_required=False)
 
 
@@ -135,7 +138,7 @@ def unpack(archive, home, *, wheel=False):
 
 
 def install(program, progress=None):
-    require_platform()
+    require_platform(program)
     from .component_store import root, import_directory, pin
     from .config_transaction import transaction
     rows = artifacts()

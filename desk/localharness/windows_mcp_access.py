@@ -26,11 +26,12 @@ def rights(name, args):
 
 def refusal(config, name, args):
     from .body import enabled, scopes
+    from .windows_mcp_words import configured
     required, _ = rights(name, args)
     if not enabled(config):
-        return 'Windows MCP: включи «Управление компьютером» в Настройках.'
+        return configured(config,'computer_disabled')
     missing = required - set(scopes(config))
-    return ('Windows MCP: владелец не выдал права ' + ', '.join(sorted(missing))) if missing else ''
+    return configured(config,'missing_scopes',scopes=', '.join(sorted(missing))) if missing else ''
 
 
 def install(agent, tree, config, config_path, program):
@@ -41,9 +42,11 @@ def install(agent, tree, config, config_path, program):
     def allowed(name, args):
         live.refresh()
         required, sovereign = rights(name, args)
-        if not live.enabled or not required <= set(live.scopes):
-            return 'Windows MCP: не выданы права Управления компьютером (' + ', '.join(sorted(required)) + ').'
+        if not live.enabled:
+            return {'code':'computer_disabled','values':{}}
+        if not required <= set(live.scopes):
+            return {'code':'missing_scopes','values':{'scopes':', '.join(sorted(required))}}
         if sovereign and not agent._is_sovereign_actor():
-            return 'Windows MCP: запись файлов/реестра доступна владельцу или самому агенту.'
+            return {'code':'sovereign','values':{}}
         return ''
     windows_mcp_tools.configure(lambda name, args: windows_mcp_client.call(program, tree, name, args), allowed)

@@ -1,5 +1,6 @@
 """Core/UI access to the existing authenticated programme session, never a new owner."""
 from pathlib import Path
+from . import windows_mcp_words as words
 
 
 def invoke(program, command, arguments=None, *, tree=None, timeout=10):
@@ -8,12 +9,12 @@ def invoke(program, command, arguments=None, *, tree=None, timeout=10):
     root = Path(program).resolve()
     descriptor = read(session_host.control_path(root))
     if (descriptor.get('program') != str(root) or session_host.process_state(descriptor) != 'alive'):
-        raise RuntimeError('Сеанс приложения Hélène недоступен.')
+        raise words.Error(root,'app_unavailable')
     selected = None
     if tree is not None:
         selected = next((row.id for row in agents.roster(root) if row.tree.resolve() == Path(tree).resolve()), None)
         if selected is None:
-            raise ValueError('Windows MCP caller is not a programme agent')
+            raise words.Error(root,'unknown_caller')
     return session_host._rpc(descriptor, 'invoke', dict(command=command, arguments=arguments or {}, agent=selected), timeout=timeout)
 
 
@@ -32,5 +33,6 @@ def call(program, tree, name, arguments):
     try:
         return invoke(program, 'windows_mcp_call', dict(name=name, arguments=arguments), tree=tree, timeout=190)
     except (OSError, ValueError, RuntimeError) as exc:
-        return dict(isError=True, in_doubt=True, content=[dict(type='text', text=
-            'Результат Windows MCP не подтверждён. Не повторяй действие без проверки состояния. ' + str(exc))])
+        return words.failure(program,'unconfirmed',in_doubt=True,
+            cause=exc.spec if isinstance(exc,words.Error) else None,
+            detail='' if isinstance(exc,words.Error) else str(exc))

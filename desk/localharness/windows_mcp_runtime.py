@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from . import windows_mcp_words as words
 
 PROTOCOL = '2025-11-25'
 MAX_REPLY = 32 * 1024 * 1024
@@ -63,6 +64,7 @@ class Manager:
         self.thread = None
         self.state = 'stopped'
         self.error = ''
+        self.failure = {}
         self.tools = {}
         self.port = 0
         self.key = ''
@@ -94,6 +96,7 @@ class Manager:
             if stop.is_set() or self.owner.exiting:
                 return
             self.state, self.error, self.tools = 'starting', '', {}
+            self.failure = {}
             self.generation = stop
             self.thread = threading.Thread(target=self._start, args=(stop,), name='helene-windows-mcp', daemon=True)
             self.thread.start()
@@ -125,25 +128,28 @@ class Manager:
             deadline = time.monotonic() + 60
             while not stop.is_set():
                 if child.handle is None or child.poll() is not None:
-                    raise RuntimeError('Windows MCP завершился при запуске. Подробности: ' + str(state / 'server.log'))
+                    raise words.Error(self.owner.root,'start_exited',log=str(state/'server.log'))
                 try:
                     rpc(port, key, 'initialize', dict(protocolVersion=PROTOCOL, capabilities={},
                         clientInfo=dict(name='Helene', version='1')), timeout=2)
                     result = rpc(port, key, 'tools/list', timeout=5)
                     rows = result.get('tools', [])
                     if not rows or any(not isinstance(t, dict) or not isinstance(t.get('inputSchema'), dict) for t in rows):
-                        raise ValueError('Windows MCP вернул пустой или неверный каталог инструментов')
+                        raise words.Error(self.owner.root,'invalid_catalog')
                     with self.lock:
                         self.tools = {t['name']: t for t in rows}
                         self.state = 'running'
                     return
                 except (OSError, ValueError, RuntimeError) as exc:
                     if time.monotonic() >= deadline:
-                        raise RuntimeError('Windows MCP не подтвердил готовность: ' + str(exc)) from exc
+                        raise words.Error(self.owner.root,'not_ready',
+                            cause=exc.spec if isinstance(exc,words.Error) else None,
+                            detail='' if isinstance(exc,words.Error) else str(exc)) from exc
                 stop.wait(.25)
         except Exception as exc:
             with self.lock:
                 self.state, self.error = 'error', str(exc)
+                self.failure = exc.spec if isinstance(exc,words.Error) else {}
             if child is not None and child.handle is not None:
                 try:
                     child.stop()
@@ -160,14 +166,15 @@ class Manager:
             elif state == 'running' and not running:
                 state = 'error'
             return dict(state=state, running=state == 'running', tools=len(self.tools) if running else 0,
-                        error=self.error or ('Windows MCP завершился. Нажми «Запустить».' if state == 'error' else ''))
+                        error=(words.render(self.owner.root,self.failure) if self.failure else self.error)
+                        or (words.text(self.owner.root,'exited') if state == 'error' else ''))
 
     def call(self, name, arguments):
         if not isinstance(arguments, dict):
             raise ValueError('Windows MCP arguments must be an object')
         with self.lock:
             if not self.status()['running']:
-                return dict(isError=True, content=[dict(type='text', text='Windows MCP не запущен. Открой Компоненты приложения.')])
+                return words.failure(self.owner.root,'not_running')
             if name not in self.tools:
                 raise ValueError('Unknown Windows MCP tool')
             port, key = self.port, self.key
@@ -175,8 +182,7 @@ class Manager:
             # A transport failure may follow a real desktop action. Never replay.
             return rpc(port, key, 'tools/call', dict(name=name, arguments=arguments), timeout=180)
         except (OSError, ValueError, RuntimeError) as exc:
-            return dict(isError=True, in_doubt=True, content=[dict(type='text', text=
-                'Windows MCP: результат не подтверждён; действие могло выполниться. Проверь состояние перед повтором. ' + str(exc))])
+            return words.failure(self.owner.root,'unconfirmed',in_doubt=True,detail=str(exc))
 
 
 def manager(owner):

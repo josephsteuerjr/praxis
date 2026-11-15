@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import frame_language
 
 TOOLS = json.loads(Path(__file__).with_name('windows_mcp_schemas.json').read_text(encoding='utf-8'))
 SCHEMAS = {tool['name']: tool['input_schema'] for tool in TOOLS}
@@ -36,6 +37,38 @@ assert set(PURPOSES) == set(SCHEMAS)
 _call = None
 _allowed = None
 
+# Only this closed producer-owned envelope is re-rendered. Server text, file
+# content and arbitrary upstream structuredContent always remain literal.
+_MESSAGES = {
+    'wrong_type': {'path'}, 'expected': {'path','kind'}, 'choose': {'path','choices'},
+    'required': {'path'}, 'unknown_fields': {'path'}, 'array_length': {'path'},
+    'unknown_tool': set(), 'component_needed': set(), 'unsupported_image': {'mime'},
+    'empty_result': set(), 'computer_disabled': set(), 'missing_scopes': {'scopes'},
+    'sovereign': set(), 'app_unavailable': set(), 'unknown_caller': set(),
+    'unconfirmed': set(), 'not_running': set(), 'start_exited': {'log'},
+    'invalid_catalog': set(), 'not_ready': set(), 'exited': set(),
+    'unsupported_platform': set(),
+}
+
+
+@frame_language.pinned
+def _format_message(spec, depth=0):
+    if (not isinstance(spec,dict) or depth>3 or not isinstance(spec.get('code'),str)
+            or spec['code'] not in _MESSAGES):
+        return None
+    values=spec.get('values',{})
+    if (not isinstance(values,dict) or set(values)!=_MESSAGES[spec['code']]
+            or any(not isinstance(value,str) for value in values.values())
+            or not isinstance(spec.get('detail',''),str)):
+        return None
+    result=frame_language.text('mcp.'+spec['code'],**values)
+    if spec.get('cause'):
+        cause=_format_message(spec['cause'],depth+1)
+        if cause is None:return None
+        result+='\n'+cause
+    if spec.get('detail'):result+='\n'+spec['detail']
+    return result
+
 
 def configure(call, allowed):
     global _call, _allowed
@@ -52,27 +85,27 @@ def validate(value, schema, path='arguments'):
             except ValueError:
                 pass
         else:
-            raise ValueError(path + ': wrong type')
+            raise ValueError(frame_language.text('mcp.wrong_type',path=path))
     kind = schema.get('type')
     matches = {'object': isinstance(value, dict), 'array': isinstance(value, list),
                'boolean': type(value) is bool, 'integer': type(value) is int,
                'number': type(value) in (int, float), 'string': isinstance(value, str), 'null': value is None}
     if kind and not matches.get(kind, False):
-        raise ValueError(path + ': expected ' + kind)
+        raise ValueError(frame_language.text('mcp.expected',path=path,kind=kind))
     if 'enum' in schema and value not in schema['enum']:
-        raise ValueError(path + ': choose ' + repr(schema['enum']))
+        raise ValueError(frame_language.text('mcp.choose',path=path,choices=repr(schema['enum'])))
     if kind == 'object':
         properties = schema.get('properties', {})
         if set(schema.get('required', [])) - set(value):
-            raise ValueError(path + ': missing required fields')
+            raise ValueError(frame_language.text('mcp.required',path=path))
         if schema.get('additionalProperties') is False and set(value) - set(properties):
-            raise ValueError(path + ': unknown fields')
+            raise ValueError(frame_language.text('mcp.unknown_fields',path=path))
         for key, item in value.items():
             if key in properties:
                 validate(item, properties[key], path + '.' + key)
     if kind == 'array':
         if not schema.get('minItems', 0) <= len(value) <= schema.get('maxItems', 100000):
-            raise ValueError(path + ': wrong array length')
+            raise ValueError(frame_language.text('mcp.array_length',path=path))
         for index, item in enumerate(value):
             validate(item, schema.get('items', {}), f'{path}[{index}]')
 
@@ -96,34 +129,37 @@ def has_side_effect(name, args):
     return True
 
 
+@frame_language.pinned
 def invoke(name, arguments):
     import agent
     import tool_report
     from catalog_families import PreflightRefusal
     if name not in SCHEMAS:
-        raise PreflightRefusal('Unknown Windows MCP tool')
+        raise PreflightRefusal(frame_language.text('mcp.unknown_tool'))
     try:
         validate(arguments, SCHEMAS[name])
     except ValueError as exc:
         raise PreflightRefusal(str(exc)) from None
     if _call is None or _allowed is None:
-        raise PreflightRefusal('Windows MCP не подключён. Установи компонент в приложении на Windows x64.')
+        raise PreflightRefusal(frame_language.text('mcp.component_needed'))
     native = name.removeprefix('windows_mcp_')
     refusal = _allowed(native, arguments)
     if refusal:
-        raise PreflightRefusal(refusal)
+        raise PreflightRefusal(_format_message(refusal) or str(refusal))
     args = dict(arguments)
     if native == 'Scrape':
         args['use_sampling'] = False
     result = _call(native, args)
     text, images = [], []
-    for block in result.get('content', []):
+    owned=_format_message(result.get('helene_error'))
+    blocks=[dict(type='text',text=owned)] if owned is not None else result.get('content', [])
+    for block in blocks:
         if block.get('type') == 'text':
             text.append(str(block.get('text', '')))
         elif block.get('type') == 'image':
             mime = block.get('mimeType')
             if mime not in ('image/png', 'image/jpeg', 'image/webp'):
-                text.append('Unsupported Windows MCP image type: ' + str(mime))
+                text.append(frame_language.text('mcp.unsupported_image',mime=str(mime)))
                 continue
             raw = base64.b64decode(block.get('data', ''), validate=True)
             parent = agent.STATE_DIR / 'windows-mcp-images'
@@ -141,7 +177,7 @@ def invoke(name, arguments):
     failed = result.get('isError') or any(s.lstrip().lower().startswith('error:') for s in text)
     outcome = 'in_doubt' if result.get('in_doubt') else 'failed' if failed else 'ok'
     tool_report.note(outcome=outcome, target=str(args.get('path') or args.get('name') or native))
-    receipt = '\n'.join(text) or 'Windows MCP returned an empty result.'
+    receipt = '\n'.join(text) or frame_language.text('mcp.empty_result')
     return agent.ToolObservation(receipt, tuple(images)) if images else receipt
 
 

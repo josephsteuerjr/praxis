@@ -20143,5 +20143,115 @@
     "en": "0f0e7704",
     "fr": "0f0e7704",
     "zh": "0f0e7704"
+  },
+  "native.mcp.wrong_type": {
+    "en": "2d1b5a97",
+    "fr": "2d1b5a97",
+    "zh": "2d1b5a97"
+  },
+  "native.mcp.expected": {
+    "en": "5dbb672c",
+    "fr": "5dbb672c",
+    "zh": "5dbb672c"
+  },
+  "native.mcp.choose": {
+    "en": "fb799388",
+    "fr": "fb799388",
+    "zh": "fb799388"
+  },
+  "native.mcp.required": {
+    "en": "9240a3a1",
+    "fr": "9240a3a1",
+    "zh": "9240a3a1"
+  },
+  "native.mcp.unknown_fields": {
+    "en": "0e03debf",
+    "fr": "0e03debf",
+    "zh": "0e03debf"
+  },
+  "native.mcp.array_length": {
+    "en": "0168a6e6",
+    "fr": "0168a6e6",
+    "zh": "0168a6e6"
+  },
+  "native.mcp.unknown_tool": {
+    "en": "c6b7d6a7",
+    "fr": "c6b7d6a7",
+    "zh": "c6b7d6a7"
+  },
+  "native.mcp.component_needed": {
+    "en": "01bff203",
+    "fr": "01bff203",
+    "zh": "01bff203"
+  },
+  "native.mcp.unsupported_image": {
+    "en": "9647c096",
+    "fr": "9647c096",
+    "zh": "9647c096"
+  },
+  "native.mcp.empty_result": {
+    "en": "47f61c32",
+    "fr": "47f61c32",
+    "zh": "47f61c32"
+  },
+  "native.mcp.computer_disabled": {
+    "en": "d8e171c3",
+    "fr": "d8e171c3",
+    "zh": "d8e171c3"
+  },
+  "native.mcp.missing_scopes": {
+    "en": "2f56b79b",
+    "fr": "2f56b79b",
+    "zh": "2f56b79b"
+  },
+  "native.mcp.sovereign": {
+    "en": "ac5c28d6",
+    "fr": "ac5c28d6",
+    "zh": "ac5c28d6"
+  },
+  "native.mcp.app_unavailable": {
+    "en": "050a03cc",
+    "fr": "050a03cc",
+    "zh": "050a03cc"
+  },
+  "native.mcp.unknown_caller": {
+    "en": "08a27fea",
+    "fr": "08a27fea",
+    "zh": "08a27fea"
+  },
+  "native.mcp.unconfirmed": {
+    "en": "e838907e",
+    "fr": "e838907e",
+    "zh": "e838907e"
+  },
+  "native.mcp.not_running": {
+    "en": "ae498109",
+    "fr": "ae498109",
+    "zh": "ae498109"
+  },
+  "native.mcp.start_exited": {
+    "en": "ac7f01ee",
+    "fr": "ac7f01ee",
+    "zh": "ac7f01ee"
+  },
+  "native.mcp.invalid_catalog": {
+    "en": "2679cbe5",
+    "fr": "2679cbe5",
+    "zh": "2679cbe5"
+  },
+  "native.mcp.not_ready": {
+    "en": "826938ae",
+    "fr": "826938ae",
+    "zh": "826938ae"
+  },
+  "native.mcp.exited": {
+    "en": "0f41fa13",
+    "fr": "0f41fa13",
+    "zh": "0f41fa13"
+  },
+  "native.mcp.unsupported_platform": {
+    "en": "1dcacf38",
+    "fr": "1dcacf38",
+    "zh": "1dcacf38"
   }
 }
