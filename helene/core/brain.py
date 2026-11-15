@@ -22,6 +22,8 @@ swap_fallback-семантику — тройка framework/model/fallback_model
 """
 
 from __future__ import annotations
+import frame_language
+import interface_language
 
 import datetime as _dt
 import praxis_time
@@ -131,6 +133,7 @@ def allowlist(framework: str) -> list[str]:
     return sorted(names)
 
 
+@frame_language.pinned
 def catalog() -> dict:
     """Каталог для тула/пульта: роли, доступные модели по фреймворкам, наблюдения, лимит."""
     import llm
@@ -186,6 +189,7 @@ def catalog() -> dict:
 # --------------------------------------------------------------------------- #
 #  switch_brain — её рука на своём мозге
 # --------------------------------------------------------------------------- #
+@frame_language.pinned
 def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
            endpoint: str = "") -> dict:
     """Сменить модель роли (без одобрения; ключи не трогаются). -> {ok, ...}|{ok:False,error}.
@@ -197,11 +201,11 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
     role = (role or "").strip()
     model = (model or "").strip()
     if role not in llm.ROLES:
-        return {"ok": False, "error": f"не знаю роли «{role}»; мои: {', '.join(llm.ROLES)}"}
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.200', p0=f'{role}', p1=f"{', '.join(llm.ROLES)}")}
     if not model:
-        return {"ok": False, "error": "назови модель (каталог — switch_brain status)"}
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.202')}
     if not (why or "").strip():
-        return {"ok": False, "error": "смена мозга без «зачем» не имеет провенанса — назови причину"}
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.204')}
     cfg = llm._config()
     rc = dict((cfg.get("roles") or {}).get(role) or {})
     cur_fw, cur_model = rc.get("framework"), rc.get("model")
@@ -210,7 +214,7 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
     except ValueError as error:
         return {"ok": False, "error": str(error)}
     if model == cur_model and target_fw == cur_fw:
-        return {"ok": False, "error": f"{model} и так основная модель роли {role}"}
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.213', p0=f'{model}', p1=f'{role}')}
     prev = {"framework": cur_fw, "model": cur_model,
             "fallback_model": rc.get("fallback_model"),
             # Откат обязан вернуть и прибитый фреймворк запасной: пустая строка значит
@@ -230,7 +234,7 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
         llm.update_config(changes)
     except Exception as e:
         log.warning("brain.switch: запись конфига не удалась", exc_info=True)
-        return {"ok": False, "error": f"конфиг не записался: {type(e).__name__}"}
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.233', p0=f'{type(e).__name__}')}
 
     try:
         ok, err = llm.ping(role)
@@ -245,12 +249,10 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
             return {"ok": False, "error": err, "stage": "ping",
                     "rollback_error": type(rollback_error).__name__, "rolled_back": False}
         note_call(role, target_fw, model, ok=False, error=err or "ping failed")
-        _journal(f"свитч {role} → {target_fw}/{model} НЕ прошёл рукопожатие ({err[:120]}) — "
-                 "возвращено как было")
-        return {"ok": False, "error": f"рукопожатие с {target_fw}/{model} не прошло: {err[:200]}. "
-                                      f"Возвращено {cur_fw}/{cur_model} — попробую позже или другую."}
+        _journal(frame_language.text('helper.brain.switch.248', p0=f'{role}', p1=f'{target_fw}', p2=f'{model}', p3=f'{err[:120]}'))
+        return {"ok": False, "error": frame_language.text('helper.brain.switch.250', p0=f'{target_fw}', p1=f'{model}', p2=f'{err[:200]}', p3=f'{cur_fw}', p4=f'{cur_model}')}
     note_call(role, target_fw, model, ok=True)
-    _journal(f"свитч мозга ({by}): {role} {cur_fw}/{cur_model} → {target_fw}/{model} — {why[:160]}")
+    _journal(frame_language.text('helper.brain.switch.253', p0=f'{by}', p1=f'{role}', p2=f'{cur_fw}', p3=f'{cur_model}', p4=f'{target_fw}', p5=f'{model}', p6=f'{why[:160]}'))
     _spine(f"{role}: {cur_fw}/{cur_model} → {target_fw}/{model}",
            {"role": role, "old_framework": cur_fw, "old_model": cur_model,
             "framework": target_fw, "model": model, "why": (why or "")[:300], "by": by})
@@ -258,15 +260,16 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
             "was": f"{cur_fw}/{cur_model}"}
 
 
+@frame_language.pinned
 def apply_profile(name: str, *, why: str = "", by: str = "praxis",
                   endpoint: str = "") -> dict:
     """Atomically apply one explicit complexity profile to voice, with ping rollback."""
     import llm
     name = (name or "").strip().lower()
     if name not in PROFILES:
-        return {"ok": False, "error": "не знаю профиль; мои: " + " | ".join(PROFILES)}
+        return {"ok": False, "error": frame_language.text('helper.brain.apply_profile.267') + " | ".join(PROFILES)}
     if not (why or "").strip():
-        return {"ok": False, "error": "профиль без «зачем» не имеет провенанса — назови причину"}
+        return {"ok": False, "error": frame_language.text('helper.brain.apply_profile.269')}
     spec = PROFILES[name]
     before = dict((llm._config().get("roles") or {}).get("voice") or {})
     old_fw = str(before.get("framework") or "")
@@ -301,9 +304,8 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis",
                     "rollback_error": str(rollback_error)}
         return {"ok": False, "error": err, "profile": name, "stage": "ping",
                 "rolled_back": True}
-    _journal(f"профиль сложности {name}: voice {old_model or '—'}/{old_effort or '—'} → "
-             f"{spec['model']}/{spec['effort']} — {why.strip()[:160]}")
-    _spine(f"профиль сложности: {name}", {"profile": name, **spec,
+    _journal(frame_language.text('helper.brain.apply_profile.304', p0=f'{name}', p1=f"{old_model or '—'}", p2=f"{old_effort or '—'}", p3=f"{spec['model']}", p4=f"{spec['effort']}", p5=f'{why.strip()[:160]}'))
+    _spine(frame_language.text('helper.brain.apply_profile.306', p0=f'{name}'), {"profile": name, **spec,
             "old_framework": old_fw, "old_model": old_model, "old_effort": old_effort,
             "framework": target_fw, "why": why.strip()[:300], "by": by})
     return {"ok": True, "profile": name, **spec, "framework": target_fw,
@@ -323,7 +325,7 @@ def _journal(msg: str) -> None:
         if not p.exists():
             p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {praxis_time.now():%H:%M} [мозг] {msg}\n")
+            fh.write(frame_language.text('helper.brain._journal.326', p0=f'{praxis_time.now():%H:%M}', p1=f'{msg}'))
     except Exception:
         log.debug("journal brain не удался", exc_info=True)
 
@@ -363,7 +365,7 @@ def _relay_call(path: str, payload: dict | None = None) -> dict:
     import urllib.request
     base = _relay_base()
     if not base:
-        raise RuntimeError("адрес реле не настроен — смотреть memory/llm.json")
+        raise RuntimeError(frame_language.text('helper.brain._relay_call.366'))
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(base + path, data=body,
                                  headers={"Content-Type": "application/json"},
@@ -377,7 +379,7 @@ def _relay_call(path: str, payload: dict | None = None) -> dict:
         try:
             return json.loads(exc.read() or b"{}")
         except Exception:
-            raise RuntimeError(f"реле отказало: HTTP {exc.code}") from exc
+            raise RuntimeError(frame_language.text('helper.brain._relay_call.380', p0=f'{exc.code}')) from exc
 
 
 def _slots_text(slots: list) -> str:
@@ -385,51 +387,51 @@ def _slots_text(slots: list) -> str:
     for row in slots or ():
         if not isinstance(row, dict):
             continue
-        mark = " ← активна" if row.get("active") else ""
+        mark = frame_language.text('helper.brain._slots_text.388') if row.get("active") else ""
         cooldown = int(row.get("cooldown_seconds_left") or 0)
-        parked = f", отдыхает ещё {cooldown // 60}м" if cooldown > 0 else ""
+        parked = frame_language.text('helper.brain._slots_text.390', p0=f'{cooldown // 60}') if cooldown > 0 else ""
         parts.append(f"{row.get('slot')}{mark}{parked}")
-    return "; ".join(parts) or "(реле не назвало ни одного слота)"
+    return "; ".join(parts) or frame_language.text('helper.brain._slots_text.392')
 
 
+@frame_language.pinned
 def accounts() -> str:
     """Какие подписки настроены и какая работает прямо сейчас."""
     try:
         data = _relay_call(ACCOUNTS_PATH)
     except Exception as exc:
-        return (f"Не спросила реле о подписках: {type(exc).__name__}: {str(exc)[:160]}. "
-                f"Это факт о канале до реле, а не о подписках.")
-    return (f"Подписки: {_slots_text(data.get('slots') or [])}. "
-            f"Активна «{data.get('active_slot')}», настроено {data.get('configured_slots')}.")
+        return (frame_language.text('helper.brain.accounts.400', p0=f'{type(exc).__name__}', p1=f'{str(exc)[:160]}'))
+    return (frame_language.text('helper.brain.accounts.402', p0=f"{_slots_text(data.get('slots') or [])}", p1=f"{data.get('active_slot')}", p2=f"{data.get('configured_slots')}"))
 
 
+@frame_language.pinned
 def use_account(slot: str, *, why: str = "") -> str:
     """Перевести провайдера на названный слот. Решение её; отказ — словами реле."""
     wanted = str(slot or "").strip()
     if not wanted:
-        return "Нужно имя слота: primary или secondary (accounts покажет настроенные)."
+        return frame_language.text('helper.brain.use_account.410')
     try:
         data = _relay_call(f"{ACCOUNTS_PATH}/switch", {"slot": wanted})
     except Exception as exc:
-        return (f"Переключение не состоялось: {type(exc).__name__}: {str(exc)[:160]}. "
-                f"Активная подписка не менялась.")
+        return (frame_language.text('helper.brain.use_account.414', p0=f'{type(exc).__name__}', p1=f'{str(exc)[:160]}'))
     error = data.get("error")
     if isinstance(error, dict):
-        return (f"Реле отказало: {error.get('message')}. Осталась «{data.get('active_slot')}»; "
-                f"{_slots_text(data.get('slots') or [])}.")
+        return (frame_language.text('helper.brain.use_account.418', p0=f"{error.get('message')}", p1=f"{data.get('active_slot')}", p2=f"{_slots_text(data.get('slots') or [])}"))
     previous, active = data.get("previous_slot"), data.get("active_slot")
-    _journal(f"подписка: {previous} → {active}" + (f" — {why}" if why.strip() else ""))
-    _spine(f"Перевела провайдера с подписки «{previous}» на «{active}».",
+    if not isinstance(previous, str) or active != wanted:
+        return frame_language.text('helper.brain.account_unconfirmed')
+    _journal(frame_language.text('helper.brain.use_account.421', p0=f'{previous}', p1=f'{active}') + (f" — {why}" if why.strip() else ""))
+    _spine(frame_language.text('helper.brain.use_account.422', p0=f'{previous}', p1=f'{active}'),
            {"kind": "account_switch", "from": previous, "to": active, "why": why})
     if previous == active:
-        return f"Уже была «{active}» — ничего не меняла. {_slots_text(data.get('slots') or [])}."
-    return (f"Перевела: «{previous}» → «{active}». {_slots_text(data.get('slots') or [])}. "
-            f"Реле держит слот в памяти, поэтому это работает сразу, без перезапуска.")
+        return frame_language.text('helper.brain.use_account.425', p0=f'{active}', p1=f"{_slots_text(data.get('slots') or [])}")
+    return (frame_language.text('helper.brain.use_account.426', p0=f'{previous}', p1=f'{active}', p2=f"{_slots_text(data.get('slots') or [])}"))
 
 
 # --------------------------------------------------------------------------- #
 #  наружу: тул, пульт
 # --------------------------------------------------------------------------- #
+@frame_language.pinned
 def set_reasoning(role: str, effort: str, *, why: str = "") -> dict:
     """Ступень рассуждения роли — ЕЁ рычаг (19.08, её же «reasoning лучше менять
     не наугад» из Уробороса). Пишет roles.<role>.reasoning_effort в llm.json.
@@ -443,7 +445,7 @@ def set_reasoning(role: str, effort: str, *, why: str = "") -> dict:
     role = (role or "").strip()
     value = (effort or "").strip().lower()
     if role not in llm.ROLES:
-        return {"ok": False, "error": f"не знаю роли «{role}»; мои: {', '.join(llm.ROLES)}"}
+        return {"ok": False, "error": frame_language.text('helper.brain.set_reasoning.446', p0=f'{role}', p1=f"{', '.join(llm.ROLES)}")}
     config = llm._config()
     selected = (config.get('roles') or {}).get(role) or {}
     account = selected.get('framework')
@@ -456,62 +458,61 @@ def set_reasoning(role: str, effort: str, *, why: str = "") -> dict:
         except ValueError as exc:
             return {'ok': False, 'error': str(exc)}
     elif value and value not in llm.REASONING_EFFORTS:
-        return {"ok": False, "error": "ступень из словаря реле: "
+        return {"ok": False, "error": frame_language.text('helper.brain.set_reasoning.459')
                                       + " | ".join(llm.REASONING_EFFORTS)
-                                      + "; пусто — снять"}
+                                      + frame_language.text('helper.brain.set_reasoning.461')}
     if not (why or "").strip():
-        return {"ok": False, "error": "смена глубины без «зачем» не имеет провенанса — назови причину"}
+        return {"ok": False, "error": frame_language.text('helper.brain.set_reasoning.463')}
     cfg = llm._config()
     prev = str(((cfg.get("roles") or {}).get(role) or {}).get("reasoning_effort") or "")
     try:
         llm.update_config({"roles": {role: {"reasoning_effort": value}}})
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-    _journal(f"ступень рассуждения {role}: «{prev or '—'}» → «{value or '—'}» — {why.strip()[:160]}")
+    _journal(frame_language.text('helper.brain.set_reasoning.470', p0=f'{role}', p1=f"{prev or '—'}", p2=f"{value or '—'}", p3=f'{why.strip()[:160]}'))
     return {"ok": True, "role": role, "effort": value, "was": prev}
 
 
+@frame_language.pinned
 def describe() -> str:
     cat = catalog()
-    lines = ["Мой мозг (каталог + наблюдаемые свойства на моих задачах):"]
+    lines = [frame_language.text('helper.brain.describe.476')]
     for role, rc in cat["roles"].items():
-        fb = f", запасная {rc.get('fallback_model')}" if rc.get("fallback_model") else ""
-        state = " [на фолбэке]" if rc.get("on_fallback") else ""
-        depth = (f", рассуждение {rc.get('reasoning_effort')}"
+        fb = frame_language.text('helper.brain.describe.478', p0=f"{rc.get('fallback_model')}") if rc.get("fallback_model") else ""
+        state = frame_language.text('helper.brain.describe.479') if rc.get("on_fallback") else ""
+        depth = (frame_language.text('helper.brain.describe.480', p0=f"{rc.get('reasoning_effort')}")
                  if rc.get("reasoning_effort")
-                 else ", рассуждение погашено (умолчание реле)")
+                 else frame_language.text('helper.brain.describe.482'))
         lines.append(f"- {role}: {rc.get('framework')}/{rc.get('model')}{fb}{depth}{state}")
     active = cat.get("current_profiles") or []
-    lines.append("- профили сложности: " + "; ".join(
+    lines.append(frame_language.text('helper.brain.describe.485') + "; ".join(
         f"{name}={spec['model']}/{spec['effort']}" for name, spec in PROFILES.items())
-        + (f"; совпадает сейчас: {', '.join(active)}" if active else "; сейчас вне профиля"))
+        + (frame_language.text('helper.brain.describe.487', p0=f"{', '.join(active)}") if active else frame_language.text('helper.brain.describe.487.2')))
     for fw, d in cat["frameworks"].items():
         al = d.get("allowlist") or []
-        al_text = ", ".join(al) if al else "(провайдер не ответил — наблюдаю только сконфигурированные имена)"
-        lines.append(f"- каталог {fw}: {al_text}")
+        al_text = ", ".join(al) if al else frame_language.text('helper.brain.describe.490')
+        lines.append(frame_language.text('helper.brain.describe.491', p0=f'{fw}', p1=f'{al_text}'))
     stats = cat.get("stats") or {}
     if stats:
-        lines.append("Наблюдения (вызовы · ок · сбои · пустые · латентность EMA):")
+        lines.append(frame_language.text('helper.brain.describe.494'))
         for key in sorted(stats, key=lambda k: -stats[k].get("calls", 0))[:8]:
             m = stats[key]
             errs = sum((m.get("errors") or {}).values())
-            lat = f", ~{m['lat_ms_ema']}мс" if m.get("lat_ms_ema") else ""
+            lat = frame_language.text('helper.brain.describe.498', p0=f"{m['lat_ms_ema']}") if m.get("lat_ms_ema") else ""
             last_err = m.get("last_error") or {}
-            le = f"; последний сбой {last_err.get('class')} {last_err.get('ts', '')[:16]}" if last_err else ""
-            lines.append(f"  · {key}: {m.get('calls', 0)} выз., ок {m.get('ok', 0)}, "
-                         f"сбоев {errs}, пустых {m.get('empty', 0)}{lat}{le}")
+            le = frame_language.text('helper.brain.describe.500', p0=f"{last_err.get('class')}", p1=f"{last_err.get('ts', '')[:16]}") if last_err else ""
+            lines.append(frame_language.text('helper.brain.describe.501', p0=f'{key}', p1=f"{m.get('calls', 0)}", p2=f"{m.get('ok', 0)}", p3=f'{errs}', p4=f"{m.get('empty', 0)}", p5=f'{lat}', p6=f'{le}'))
     ug = cat.get("usage_7d") or {}
     if ug:
         top = sorted(ug.items(), key=lambda kv: -(kv[1]["in"] + kv[1]["out"]))[:5]
-        lines.append("Токены за 7 дней: " + "; ".join(
-            f"{m} {v['in'] // 1000}к→{v['out'] // 1000}к ({v['calls']} выз.)" for m, v in top))
-    lines.append(f"Остаток провайдера: {cat.get('provider_remaining')}")
-    lines.append("Дисциплина сложности: рутина на дешёвой, сложный синтез эскалирует; при "
-                 "considerate экономлю на рутине, не на сложном. Свитч — switch_brain "
-                 "(зачем — обязательно; рукопожатие после; ключи не мои — пульт).")
+        lines.append(frame_language.text('helper.brain.describe.506') + "; ".join(
+            frame_language.text('helper.brain.describe.507', p0=f'{m}', p1=f"{v['in'] // 1000}", p2=f"{v['out'] // 1000}", p3=f"{v['calls']}") for m, v in top))
+    lines.append(frame_language.text('helper.brain.describe.508', p0=f"{cat.get('provider_remaining')}"))
+    lines.append(frame_language.text('helper.brain.describe.509'))
     return "\n".join(lines)
 
 
+@interface_language.localized
 def panel_state() -> dict:
     return catalog()
 
@@ -527,15 +528,15 @@ def _target_framework(model, current, endpoint=""):
     specs = llm._config().get('frameworks') or {}
     if endpoint:
         if not isinstance(endpoint, str) or endpoint not in specs:
-            raise ValueError('Unknown configured endpoint ID')
+            raise ValueError(frame_language.text('helper.brain._target_framework.530'))
         if model not in allowlist(endpoint):
-            raise ValueError(f'«{model}» is not available on endpoint {endpoint}')
+            raise ValueError(frame_language.text('helper.brain._target_framework.532', p0=f'{model}', p1=f'{endpoint}'))
         return endpoint
     candidates = [fw for fw in specs if model in allowlist(fw)]
     if current in candidates:
         return current
     if not candidates:
-        raise ValueError(f'«{model}» нет в моём каталоге')
+        raise ValueError(frame_language.text('helper.brain._target_framework.538', p0=f'{model}'))
     groups = {}
     for fw in candidates:
         spec = specs[fw]
@@ -543,6 +544,6 @@ def _target_framework(model, current, endpoint=""):
                     str(spec.get('api_key') or ''), str(spec.get('api_mode') or ''))
         groups.setdefault(identity, []).append(fw)
     if len(groups) != 1:
-        raise ValueError('Model has several configured accounts; choose an endpoint: ' + ', '.join(candidates))
+        raise ValueError(frame_language.text('helper.brain._target_framework.546') + ', '.join(candidates))
     equivalent = next(iter(groups.values()))
     return next((fw for fw in equivalent if fw not in llm.FRAMEWORKS), equivalent[0])

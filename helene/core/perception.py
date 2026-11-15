@@ -23,6 +23,8 @@ praxis | egor.
 """
 
 from __future__ import annotations
+import frame_language
+import interface_language
 
 import datetime as _dt
 import praxis_time
@@ -72,6 +74,8 @@ KNOBS: dict[str, dict] = {
                               kind="float", desc="зазор между наррациями в один тред, сек "
                               "(мой темп рассказа по ходу работы)"),
 }
+
+KNOB_DESCRIPTION_KEYS = {'debounce_sec': 'helper.perception.module.56', 'cooldown_dm': 'helper.perception.module.58', 'cooldown_group': 'helper.perception.module.60', 'cooldown_addressed': 'helper.perception.module.62', 'group_ack_max_len': 'helper.perception.module.64', 'missed_dm_hours': 'helper.perception.module.67', 'forge_event_gap_sec': 'helper.perception.module.69', 'narration_gap_sec': 'helper.perception.module.72'}
 
 _CACHE = {"mtime": None, "data": {}}
 _LAST_SKIP: dict[tuple, dict] = {}     # (stage, chat) -> {ts, n} — схлопывание повторов
@@ -157,12 +161,13 @@ def source_of(knob: str) -> str:
     return "default"
 
 
+@frame_language.pinned
 def effective() -> list[dict]:
     """Полная таблица рычагов для тула/пульта/rails: значение, источник, границы, описание."""
     out = []
     for knob, meta in KNOBS.items():
         row = {"knob": knob, "value": value(knob), "source": source_of(knob),
-               "env": meta["env"], "default": meta["default"], "desc": meta["desc"]}
+               "env": meta["env"], "default": meta["default"], "desc": frame_language.text(KNOB_DESCRIPTION_KEYS[knob]) if knob in KNOB_DESCRIPTION_KEYS else meta["desc"], "desc_key": KNOB_DESCRIPTION_KEYS.get(knob, "")}
         if meta["kind"] != "hours":
             row["bounds"] = [meta["lo"], meta["hi"]]
         ov = (_state().get("overrides") or {}).get(knob) or {}
@@ -174,18 +179,17 @@ def effective() -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def set_knob(knob: str, raw_value, *, by: str = "praxis", reason: str = "") -> dict:
     """Поставить рычаг (живо, без рестарта). by: praxis | egor — источник честно виден."""
     if knob not in KNOBS:
-        return {"ok": False, "error": f"не знаю рычага «{knob}»; мои: {', '.join(KNOBS)}"}
+        return {"ok": False, "error": frame_language.text('helper.perception.set_knob.180', p0=f'{knob}', p1=f"{', '.join(KNOBS)}")}
     parsed = _parse(knob, raw_value)
     if parsed is None:
-        return {"ok": False, "error": f"значение «{raw_value}» не разбирается для {knob} "
-                                      f"({KNOBS[knob]['kind']})"}
+        return {"ok": False, "error": frame_language.text('helper.perception.set_knob.183', p0=f'{raw_value}', p1=f'{knob}', p2=f"{KNOBS[knob]['kind']}")}
     if not _in_bounds(knob, parsed):
         meta = KNOBS[knob]
-        return {"ok": False, "error": f"{parsed} вне физических границ [{meta['lo']}..{meta['hi']}] "
-                                      "— это защита от крэша, не поведение"}
+        return {"ok": False, "error": frame_language.text('helper.perception.set_knob.187', p0=f'{parsed}', p1=f"{meta['lo']}", p2=f"{meta['hi']}")}
     st = dict(_state())
     ov = dict(st.get("overrides") or {})
     old = value(knob)
@@ -196,27 +200,28 @@ def set_knob(knob: str, raw_value, *, by: str = "praxis", reason: str = "") -> d
         _save_state(st)
     except Exception as e:
         log.warning("perception.set_knob: персист не удался", exc_info=True)
-        return {"ok": False, "error": f"персист не удался: {type(e).__name__}"}
-    _journal(f"рычаг {knob}: {old} → {parsed} ({by}"
+        return {"ok": False, "error": frame_language.text('helper.perception.set_knob.199', p0=f'{type(e).__name__}')}
+    _journal(frame_language.text('helper.perception.set_knob.200', p0=f'{knob}', p1=f'{old}', p2=f'{parsed}', p3=f'{by}')
              + (f", {reason[:120]}" if reason else "") + ")")
     _spine(f"{knob}: {old} → {parsed}", {"knob": knob, "old": old, "new": parsed,
                                          "by": by, "reason": (reason or "")[:200]})
     return {"ok": True, "old": old, "new": parsed}
 
 
+@frame_language.pinned
 def reset_knob(knob: str, *, by: str = "praxis") -> dict:
     if knob not in KNOBS:
-        return {"ok": False, "error": f"не знаю рычага «{knob}»"}
+        return {"ok": False, "error": frame_language.text('helper.perception.reset_knob.209', p0=f'{knob}')}
     st = dict(_state())
     ov = dict(st.get("overrides") or {})
     if knob not in ov:
-        return {"ok": False, "error": f"{knob} и так на дефолте (env/базовый)"}
+        return {"ok": False, "error": frame_language.text('helper.perception.reset_knob.213', p0=f'{knob}')}
     old = value(knob)
     ov.pop(knob, None)
     st["overrides"] = ov
     _save_state(st)
-    _journal(f"рычаг {knob}: {old} → дефолт ({by})")
-    _spine(f"{knob}: сброс к дефолту", {"knob": knob, "old": old, "by": by})
+    _journal(frame_language.text('helper.perception.reset_knob.218', p0=f'{knob}', p1=f'{old}', p2=f'{by}'))
+    _spine(frame_language.text('helper.perception.reset_knob.219', p0=f'{knob}'), {"knob": knob, "old": old, "by": by})
     return {"ok": True, "old": old, "new": value(knob)}
 
 
@@ -232,7 +237,7 @@ def _journal(msg: str) -> None:
         if not p.exists():
             p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {praxis_time.now():%H:%M} [восприятие] {msg}\n")
+            fh.write(frame_language.text('helper.perception._journal.235', p0=f'{praxis_time.now():%H:%M}', p1=f'{msg}'))
     except Exception:
         log.debug("journal perception не удался", exc_info=True)
 
@@ -407,33 +412,33 @@ def skips_today() -> dict:
 # --------------------------------------------------------------------------- #
 #  наружу: тул, STATE, пульт
 # --------------------------------------------------------------------------- #
+@frame_language.pinned
 def describe() -> str:
-    lines = ["Мои рычаги восприятия (env — дефолт Егора, моё значение поверх, живо без рестарта):"]
+    lines = [frame_language.text('helper.perception.describe.411')]
     for row in effective():
-        src = {"default": "дефолт", "env": "env Егора"}.get(row["source"], row["source"])
+        src = {"default": frame_language.text('helper.perception.describe.413'), "env": frame_language.text('helper.perception.describe.413.2')}.get(row["source"], row["source"])
         b = f" [{row['bounds'][0]}..{row['bounds'][1]}]" if "bounds" in row else ""
         why = f" — {row['reason']}" if row.get("reason") else ""
         lines.append(f"- {row['knob']} = {row['value']} ({src}){b}: {row['desc']}{why}")
     sk = skips_today()
     if sk:
-        lines.append("Пропуски сегодня: " + ", ".join(f"{k} {v}" for k, v in sorted(sk.items())))
+        lines.append(frame_language.text('helper.perception.describe.419') + ", ".join(f"{k} {v}" for k, v in sorted(sk.items())))
     amb = ambient_today()
     if amb:
         total = sum(amb.values())
-        lines.append(f"Фон групп сегодня (среда, не пропуск): {total} сообщений в {len(amb)} чатах.")
-    lines.append("Каждый пропуск имеет класс причины: не_увидела / не_сочла_важным / отложила / "
-                 "запретил_егор. Менять рычаги — set из owner-скоупа; это мои рычаги, "
-                 "Егор ставит свои через пульт (источник виден).")
+        lines.append(frame_language.text('helper.perception.describe.423', p0=f'{total}', p1=f'{len(amb)}'))
+    lines.append(frame_language.text('helper.perception.describe.424'))
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def skips_text(n: int = 12, *, chat_id=None, include_provenance: bool = True) -> str:
     recs = recent_skips(n)
     if chat_id is not None:
         recs = [r for r in recs if str(r.get("chat") or "") == str(chat_id)]
     if not recs:
-        return "Журнал пропусков пуст — всё, что доходило, было увидено и решено мной."
-    lines = ["Последние пропуски до голоса (класс · этап · чат · деталь):"]
+        return frame_language.text('helper.perception.skips_text.435')
+    lines = [frame_language.text('helper.perception.skips_text.436')]
     for r in recs:
         ts = _dt.datetime.fromtimestamp(float(r.get("ts") or 0)).strftime("%d.%m %H:%M")
         count = skip_record_count(r)
@@ -441,30 +446,32 @@ def skips_text(n: int = 12, *, chat_id=None, include_provenance: bool = True) ->
         meta = r.get("meta") if include_provenance and isinstance(r.get("meta"), dict) else {}
         provenance = []
         if meta.get("mode_set_by"):
-            provenance.append(f"задал {meta['mode_set_by']}")
+            provenance.append(frame_language.text('helper.perception.skips_text.444', p0=f"{meta['mode_set_by']}"))
         if meta.get("mode_reason"):
-            provenance.append(f"причина: {meta['mode_reason']}")
+            provenance.append(frame_language.text('helper.perception.skips_text.446', p0=f"{meta['mode_reason']}"))
         if meta.get("mode_until"):
-            provenance.append(f"до {meta['mode_until']}")
+            provenance.append(frame_language.text('helper.perception.skips_text.448', p0=f"{meta['mode_until']}"))
         lines.append(f"- {ts} {r.get('class')} · {r.get('stage')}{extra}"
-                     + (f" · чат {r.get('chat')}" if r.get("chat") else "")
+                     + (frame_language.text('helper.perception.skips_text.450', p0=f"{r.get('chat')}") if r.get("chat") else "")
                      + (f" · {r.get('detail')}" if r.get("detail") else "")
                      + (f" · {'; '.join(provenance)}" if provenance else ""))
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Строка для STATE: только если сегодня были пропуски или мои переопределения."""
     parts = []
     ov = _state().get("overrides") or {}
     if ov:
-        parts.append(f"рычагов переопределено {len(ov)} (manage_perception list)")
+        parts.append(frame_language.text('helper.perception.state_line.461', p0=f'{len(ov)}'))
     sk = skips_today()
     if sk:
-        parts.append("пропуски: " + ", ".join(f"{k} {v}" for k, v in sorted(sk.items())))
+        parts.append(frame_language.text('helper.perception.state_line.464') + ", ".join(f"{k} {v}" for k, v in sorted(sk.items())))
     return "; ".join(parts)
 
 
+@interface_language.localized
 def panel_state() -> dict:
     skips = []
     for rec in reversed(recent_skips(20)):
