@@ -3389,11 +3389,26 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         code, status, changes, duration=duration, log=log_path, unresolved=unresolved)
 
 
+class CheckpointReply(str):
+    """Local checkpoint evidence; display text remains a compatible str.
+
+    Only the current producer can confirm committed or unchanged. A backend's
+    unstructured text and a failed Git command cannot authorize integration.
+    """
+    def __new__(cls, text, *, status, sha=""):
+        if status not in {"committed", "unchanged", "refused", "unknown"}:
+            raise ValueError("invalid checkpoint status")
+        value = super().__new__(cls, text)
+        value.checkpoint_status = status
+        value.sha = sha
+        return value
+
+
 @frame_language.pinned
 def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str:
     task, root, err = _task_root(task_id)
     if err:
-        return err
+        return CheckpointReply(err, status="refused")
     assert task is not None and root is not None
     remote = _remote_client(task)
     if remote is not None:
@@ -3404,18 +3419,18 @@ def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str
         return out
     git = _git_root(root)
     if not git:
-        return frame_language.text('forge.execution.37')
+        return CheckpointReply(frame_language.text('forge.execution.37'), status='refused')
     status = _git_text(git, "status", "--porcelain")
     if not status.strip():
-        return frame_language.text('forge.execution.38')
+        return CheckpointReply(frame_language.text('forge.execution.38'), status='unchanged')
     _run(["git", "-C", str(git), "add", "-A"], timeout=30)
     r = _run(["git", "-C", str(git), "-c", "user.name=Praxis", "-c",
               "user.email=praxis@local", "commit", "-m", str(message or "forge checkpoint")], timeout=60)
     if r.returncode != 0:
-        return frame_language.text('forge.execution.40') + _cap((r.stderr or r.stdout).strip(), 5000)
+        return CheckpointReply(frame_language.text('forge.execution.40') + _cap((r.stderr or r.stdout).strip(), 5000), status='unknown')
     sha = _git_text(git, "rev-parse", "--short", "HEAD").strip()
     _event(task_id, "checkpoint", summary=f"{sha} {message}", sha=sha)
-    return frame_language.text('forge.execution.41', v1=f'{sha}', v3=f'{message}')
+    return CheckpointReply(frame_language.text('forge.execution.41', v1=f'{sha}', v3=f'{message}'), status='committed', sha=sha)
 
 
 @frame_language.pinned
@@ -5787,7 +5802,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         beat(240)          # add -A + commit: свои сроки git-а, до четырёх минут
         cp = _checkpoint_unlocked(task_id, title or f"forge: {task.get('goal') or task_id}")
         beat()
-        if not (cp.startswith("Checkpoint ") or cp.startswith("Изменений нет")):
+        if not isinstance(cp, CheckpointReply) or cp.checkpoint_status not in {"committed", "unchanged"}:
             return f"Не интегрировала: {cp}"
         source_git_raw = str(task.get("source_git") or "")
         source_git = Path(source_git_raw) if source_git_raw else None
