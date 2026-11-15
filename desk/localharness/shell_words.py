@@ -15,6 +15,7 @@ Linux. Первое сообщение предупреждало, что опи
 from __future__ import annotations
 
 import logging
+import copy
 import sys
 from pathlib import Path
 
@@ -48,8 +49,9 @@ def text(tree: Path, install_root: Path, platform: str | None = None) -> str:
             "и `cmd.exe /d /c …` или рукой computer. Смотри, пробуй, мастери; навыки себе — "
             f"в {home}/soul/skills/."
         )
+    system = "Mac владельца" if platform == "darwin" else "Linux-компьютер владельца"
     return (
-        "Твои руки на этом компьютере — shell (`bash -lc`). Это Mac владельца, не "
+        f"Твои руки на этом компьютере — shell (`bash -lc`). Это {system}, не "
         f"контейнер и не сервер: папки /app здесь нет. Твой дом — {home}: душа в "
         f"{home}/soul (SOUL.md, self/CURRENT.md, skills/), память в {home}/memory, рабочая "
         f"папка и cwd по умолчанию — {home}/workspace. Твой код — {code}, программа, "
@@ -82,8 +84,9 @@ def text_en(tree: Path, install_root: Path, platform: str | None = None) -> str:
             "-Command ...`, `cmd.exe /d /c ...`, or the computer hand. Look, try, build; you "
             f"may write yourself skills into {home}/soul/skills/."
         )
+    system = "Mac" if platform == "darwin" else "Linux computer"
     return (
-        "Your hands on this computer: a shell (`bash -lc`). This is the owner's Mac, not a "
+        f"Your hands on this computer: a shell (`bash -lc`). This is the owner's {system}, not a "
         f"container and not a server: there is no /app here. Your home is {home}: the soul "
         f"in {home}/soul (SOUL.md, self/CURRENT.md, skills/), memory in {home}/memory, the "
         f"working folder and default cwd is {home}/workspace. Your code is {code}; the "
@@ -92,9 +95,56 @@ def text_en(tree: Path, install_root: Path, platform: str | None = None) -> str:
     )
 
 
-def install(agent_mod, tree: Path, install_root: Path) -> int:
+def _native_install(agent_mod, tree, install_root, platform, language):
+    """Register exact installed variants; render language at frame construction."""
+    import frame_language
+    system = ('Windows' if platform == 'win32' else 'macOS' if platform == 'darwin'
+              else 'Linux' if platform.startswith('linux') else platform)
+    values = {'home': _p(tree), 'code': _p(Path(getattr(agent_mod, '__file__', install_root/'tree/agent.py')).parent),
+              'app': _p(install_root/'app'), 'cwd': _p(Path(getattr(agent_mod, 'WORKDIR', tree/'workspace'))),
+              'timeout': int(getattr(agent_mod, 'SHELL_TIMEOUT', 30))}
+    key = 'native.shell.windows' if platform == 'win32' else 'native.shell.posix'
+    top_values = dict(values)
+    if platform != 'win32':
+        top_values['system'] = system
+    descriptions = [{'path': ['description'], 'key': key, 'values': top_values}]
+    fields = {'command': {}, 'cwd': {k: values[k] for k in ('home','cwd')},
+              'timeout': {'timeout': values['timeout']}}
+    for field, data in fields.items():
+        descriptions.append({'path': ['input_schema','properties',field,'description'],
+                             'key': 'native.shell.'+field, 'values': data})
+    purpose = {'key': 'native.shell.purpose', 'values': {'system': system, 'cwd': values['cwd']}}
+    seen = set(); changed = 0
+    candidates = []
+    for attr in TOOL_LISTS:
+        tools = getattr(agent_mod, attr, None)
+        if isinstance(tools, list):
+            candidates.extend(tools)
+    candidates.append(getattr(agent_mod, 'SHELL_TOOL', None))
+    for tool in candidates:
+        if not isinstance(tool, dict) or tool.get('name') != 'shell' or id(tool) in seen:
+            continue
+        seen.add(id(tool))
+        if not language.accepts_variant(tool):
+            continue
+        after = copy.deepcopy(tool)
+        for entry in descriptions:
+            cursor = after
+            for part in entry['path'][:-1]:
+                cursor = cursor[part]
+            cursor['description'] = frame_language.catalog('ru')[entry['key']].format_map(entry['values'])
+        if language.register_variant(tool, after, descriptions=descriptions, purpose=purpose):
+            tool.clear(); tool.update(after); changed += 1
+    return changed
+
+
+def install(agent_mod, tree: Path, install_root: Path, *, platform: str | None = None) -> int:
     """Переписать описание руки `shell` во всех списках рук. Вернуть число правок."""
-    words = text(Path(tree), Path(install_root))
+    platform = platform or sys.platform
+    language = getattr(agent_mod, 'tool_language', None)
+    if getattr(language, 'NATIVE_SCHEMA_LANGUAGE_API', 0) == 1:
+        return _native_install(agent_mod, Path(tree), Path(install_root), platform, language)
+    words = text(Path(tree), Path(install_root), platform)
     changed = 0
     seen: set[int] = set()
     for attr in TOOL_LISTS:
@@ -117,7 +167,7 @@ def install(agent_mod, tree: Path, install_root: Path) -> int:
         import tool_text_en
         entry = getattr(tool_text_en, "EN", {}).get("shell")
         if isinstance(entry, dict):
-            entry["d"] = text_en(Path(tree), Path(install_root))
+            entry["d"] = text_en(Path(tree), Path(install_root), platform)
             changed += 1
     except ImportError:
         pass

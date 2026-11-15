@@ -938,5 +938,11 @@
   "schema.tool.purpose.read_other_chat": "读取另一对话的近期消息",
   "schema.tool.9347b510c2a065e2": "当历史似乎已过时时，直接从 Telegram 重新获取当前聊天的最近 N 条消息。这仍是同一渠道，不是其他私聊。",
   "schema.tool.bca1bffe4c8492c8": "近期消息数量，默认 50。",
-  "schema.tool.purpose.reread_this_chat": "从 Telegram 刷新当前聊天上下文"
+  "schema.tool.purpose.reread_this_chat": "从 Telegram 刷新当前聊天上下文",
+  "native.shell.windows": "此 Windows 计算机上的本地 shell：通过随附的 busybox 执行 bash -lc。这不是 Linux/WSL：PowerShell/cmd 中的 bash 名称可能指向 WSL，而此工具使用随附的解释器。busybox 可能将提升权限的账户称为 root；该名称本身不能证明系统是 Linux。PowerShell：powershell.exe -NoProfile -Command …；cmd：cmd.exe /d /c …；computer 工具启用后也可使用。主目录：{home}；灵魂：{home}/soul（SOUL.md、self/CURRENT.md、skills/）；记忆：{home}/memory；工作文件：{home}/workspace。代码：{code}；应用程序：{app}。默认 cwd：{cwd}；配置的目录消失后使用主目录。使用带正斜杠的完整路径。访问能力取决于当前隔离状态和操作系统权限，而非此描述。默认 timeout 为 {timeout} 秒，最大 600 秒。查看最终状态/回执；响应丢失或超时不能证明进程树已结束。无 shell 管道的单个程序：run_command(argv=[...])。通过 edit 或 praxis_hands 修改代码，并检查版本和写入所有权。",
+  "native.shell.posix": "此计算机（{system}）上的本地 shell：bash -lc。主目录：{home}；灵魂：{home}/soul（SOUL.md、self/CURRENT.md、skills/）；记忆：{home}/memory；工作文件：{home}/workspace。代码：{code}；应用程序：{app}。默认 cwd：{cwd}；配置的目录消失后使用主目录。使用完整路径。访问能力取决于当前隔离状态和操作系统权限，而非此描述。默认 timeout 为 {timeout} 秒，最大 600 秒。查看最终状态/回执；响应丢失或超时不能证明进程树已结束。无 shell 管道的单个程序：run_command(argv=[...])。通过 edit 或 praxis_hands 修改代码，并检查版本和写入所有权。",
+  "native.shell.command": "传给 bash -lc 的 shell 命令；命令内容按原样传递。",
+  "native.shell.cwd": "运行目录。默认为 {cwd}；相对路径以 {home} 为起点。",
+  "native.shell.timeout": "时间限制（秒）：默认为 {timeout}，最大 600。",
+  "native.shell.purpose": "{system} 上的本地 bash；cwd 为 {cwd}。权限和隔离取决于当前状态；通过 edit/praxis_hands 写入代码。"
 }
