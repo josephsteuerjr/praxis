@@ -15,7 +15,7 @@
   · у каждого языка нет ключей, которых нет в каноне (опечатка автора);
   · для каждого переведённого ключа отпечаток совпадает с текущим русским текстом;
   · перевод не равен русскому байт в байт (кроме имён собственных и цифр);
-  · непереведённые ключи перечислены ЧИСЛОМ — это не ошибка, а известный долг.
+  · все четыре каталога содержат одинаковые ключи и параметры: пропуск — ошибка.
 """
 from __future__ import annotations
 
@@ -86,17 +86,16 @@ class Translations(unittest.TestCase):
         ru = _load("ru")
         for code in LANGS:
             same = [k for k, v in _load(code).items()
-                    if str(v).strip() == str(ru.get(k, "")).strip() and len(str(v)) > 12]
+                    if str(v).strip() == str(ru.get(k, "")).strip() and len(str(v)) > 12
+                    and re.search(r'[^\W\d_]', re.sub(r'\{[A-Za-z_][A-Za-z_0-9]*\}', '', str(v)), re.UNICODE)]
             self.assertEqual(same, [], f"{code}.json: строки остались русскими — {same[:5]}")
 
-    def test_the_debt_is_counted_not_hidden(self):
-        """Непереведённое — не ошибка, но оно обязано быть посчитанным."""
+    def test_missing_translations_are_errors_with_key_names(self):
+        """Новый ключ требует все четыре перевода; число долга не заменяет проверку."""
         ru = _load("ru")
         for code in LANGS:
             missing = sorted(set(ru) - set(_load(code)))
-            # Пока перевод неполон, это печатается в отчёт стенда: долг виден числом.
-            if missing:
-                print(f"  {code}: непереведённых ключей {len(missing)} из {len(ru)}")
+            self.assertEqual(missing,[],f'{code}: missing translations: {missing[:8]}')
 
 
 if __name__ == "__main__":

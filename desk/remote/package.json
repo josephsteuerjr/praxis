@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5175 --strictPort",
-    "build": "tsc --noEmit && vite build"
+    "build": "node ../qa/localize.mjs check ui && tsc --noEmit && vite build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

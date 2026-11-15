@@ -1,6 +1,7 @@
 """Run-owned language selection must not translate authored content or leak agents."""
 from __future__ import annotations
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -48,6 +49,15 @@ class FrameLanguages(unittest.TestCase):
             self.assertEqual(set(catalog),set(canonical))
             for key,value in canonical.items():
                 self.assertEqual(parameters(value),parameters(catalog[key]),f'{lang}:{key}')
+
+    def test_frame_reviews_bind_all_four_translations_and_name_stale_keys(self):
+        root=Path(frame_language.__file__).with_name('frame_text')
+        reviews=json.loads((root/'reviewed.json').read_text(encoding='utf-8'))
+        catalogs={language:frame_language.catalog(language) for language in frame_language.LANGUAGES}
+        self.assertEqual(set(reviews),set(catalogs['ru']))
+        for key in catalogs['ru']:
+            payload=json.dumps([catalogs[language][key] for language in frame_language.LANGUAGES],ensure_ascii=False,separators=(',',':'))
+            self.assertEqual(reviews[key],hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16],f'{key}: supply all four reviewed translations via desk/qa/localize.mjs')
 
     def test_turn_pins_both_choices_once_and_next_turn_uses_saved_change(self):
         self.write_config('fr',True)

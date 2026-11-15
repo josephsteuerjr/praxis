@@ -20303,5 +20303,1220 @@
     "en": "66e12e27",
     "fr": "66e12e27",
     "zh": "66e12e27"
+  },
+  "run.title.operator": {
+    "en": "fabe578e",
+    "fr": "fabe578e",
+    "zh": "fabe578e"
+  },
+  "run.title.operator_short": {
+    "en": "cdce3b1c",
+    "fr": "cdce3b1c",
+    "zh": "cdce3b1c"
+  },
+  "run.title.wake": {
+    "en": "8cf77f08",
+    "fr": "8cf77f08",
+    "zh": "8cf77f08"
+  },
+  "run.title.task": {
+    "en": "7dd1c94f",
+    "fr": "7dd1c94f",
+    "zh": "7dd1c94f"
+  },
+  "run.title.self_event": {
+    "en": "6a42618a",
+    "fr": "6a42618a",
+    "zh": "6a42618a"
+  },
+  "run.title.agent_event": {
+    "en": "6bf96fb3",
+    "fr": "6bf96fb3",
+    "zh": "6bf96fb3"
+  },
+  "run.title.missing_messages": {
+    "en": "e31fbe1b",
+    "fr": "e31fbe1b",
+    "zh": "e31fbe1b"
+  },
+  "run.title.missing_trigger": {
+    "en": "42f0577f",
+    "fr": "42f0577f",
+    "zh": "42f0577f"
+  },
+  "run.title.participant": {
+    "en": "14816663",
+    "fr": "14816663",
+    "zh": "14816663"
+  },
+  "run.title.author": {
+    "en": "e8287e60",
+    "fr": "e8287e60",
+    "zh": "e8287e60"
+  },
+  "run.title.conversation": {
+    "en": "2a62715c",
+    "fr": "2a62715c",
+    "zh": "2a62715c"
+  },
+  "run.title.turn": {
+    "en": "ee30bdb0",
+    "fr": "ee30bdb0",
+    "zh": "ee30bdb0"
+  },
+  "run.title.message": {
+    "en": "3e0ccd92",
+    "fr": "3e0ccd92",
+    "zh": "3e0ccd92"
+  },
+  "phone.actions.history": {
+    "en": "704a3d39",
+    "fr": "704a3d39",
+    "zh": "704a3d39"
+  },
+  "phone.actions.current_loading": {
+    "en": "7306bb44",
+    "fr": "7306bb44",
+    "zh": "7306bb44"
+  },
+  "phone.actions.current": {
+    "en": "e4a187a5",
+    "fr": "e4a187a5",
+    "zh": "e4a187a5"
+  },
+  "phone.actions.more": {
+    "en": "31b6c5b0",
+    "fr": "31b6c5b0",
+    "zh": "31b6c5b0"
+  },
+  "phone.actions.agents": {
+    "en": "cf5873b9",
+    "fr": "cf5873b9",
+    "zh": "cf5873b9"
+  },
+  "phone.actions.more_checks": {
+    "en": "76c396c8",
+    "fr": "76c396c8",
+    "zh": "76c396c8"
+  },
+  "phone.actions.operators": {
+    "en": "f1e910fe",
+    "fr": "f1e910fe",
+    "zh": "f1e910fe"
+  },
+  "phone.actions.forge_readonly": {
+    "en": "2ef6bf59",
+    "fr": "2ef6bf59",
+    "zh": "2ef6bf59"
+  },
+  "phone.actions.checks_loading": {
+    "en": "c61414ec",
+    "fr": "c61414ec",
+    "zh": "c61414ec"
+  },
+  "phone.actions.checks_invalid": {
+    "en": "6d8c08bf",
+    "fr": "6d8c08bf",
+    "zh": "6d8c08bf"
+  },
+  "phone.actions.checks_empty": {
+    "en": "9211506d",
+    "fr": "9211506d",
+    "zh": "9211506d"
+  },
+  "phone.actions.checks_failed": {
+    "en": "64b5e05e",
+    "fr": "64b5e05e",
+    "zh": "64b5e05e"
+  },
+  "phone.actions.steps": {
+    "en": "9b6b992f",
+    "fr": "9b6b992f",
+    "zh": "9b6b992f"
+  },
+  "phone.actions.reset": {
+    "en": "196eca5b",
+    "fr": "196eca5b",
+    "zh": "196eca5b"
+  },
+  "phone.actions.reset_hint": {
+    "en": "15aac4ca",
+    "fr": "15aac4ca",
+    "zh": "15aac4ca"
+  },
+  "phone.actions.reset_wait": {
+    "en": "b0d9fe01",
+    "fr": "b0d9fe01",
+    "zh": "b0d9fe01"
+  },
+  "phone.actions.reset_unknown": {
+    "en": "ad29c042",
+    "fr": "ad29c042",
+    "zh": "ad29c042"
+  },
+  "phone.actions.reset_error": {
+    "en": "fd0fdcee",
+    "fr": "fd0fdcee",
+    "zh": "fd0fdcee"
+  },
+  "phone.actions.empty": {
+    "en": "eb86fa05",
+    "fr": "eb86fa05",
+    "zh": "eb86fa05"
+  },
+  "phone.actions.loading": {
+    "en": "53c9106d",
+    "fr": "53c9106d",
+    "zh": "53c9106d"
+  },
+  "phone.actions.no_current": {
+    "en": "66412235",
+    "fr": "66412235",
+    "zh": "66412235"
+  },
+  "phone.actions.page_invalid": {
+    "en": "86cd9d24",
+    "fr": "86cd9d24",
+    "zh": "86cd9d24"
+  },
+  "phone.actions.page_failed": {
+    "en": "3cfac075",
+    "fr": "3cfac075",
+    "zh": "3cfac075"
+  },
+  "phone.actions.update_failed": {
+    "en": "5e0bd326",
+    "fr": "5e0bd326",
+    "zh": "5e0bd326"
+  },
+  "phone.actions.current_failed": {
+    "en": "e5cbba3c",
+    "fr": "e5cbba3c",
+    "zh": "e5cbba3c"
+  },
+  "run.control.invalid_id": {
+    "en": "846814ec",
+    "fr": "846814ec",
+    "zh": "846814ec"
+  },
+  "run.control.ambiguous_id": {
+    "en": "ef91d844",
+    "fr": "ef91d844",
+    "zh": "ef91d844"
+  },
+  "run.control.confirmed": {
+    "en": "75839bdb",
+    "fr": "75839bdb",
+    "zh": "75839bdb"
+  },
+  "run.control.pending": {
+    "en": "bf54166f",
+    "fr": "bf54166f",
+    "zh": "bf54166f"
+  },
+  "native.app.error.channel_missing": {
+    "en": "26ea0307",
+    "fr": "26ea0307",
+    "zh": "26ea0307"
+  },
+  "native.app.error.call_unavailable": {
+    "en": "6f76edc1",
+    "fr": "6f76edc1",
+    "zh": "6f76edc1"
+  },
+  "native.app.error.restore_confirm": {
+    "en": "5cce8dca",
+    "fr": "5cce8dca",
+    "zh": "5cce8dca"
+  },
+  "native.app.error.restore_session": {
+    "en": "becf9cdb",
+    "fr": "becf9cdb",
+    "zh": "becf9cdb"
+  },
+  "native.app.error.linux_migration": {
+    "en": "c969653b",
+    "fr": "c969653b",
+    "zh": "c969653b"
+  },
+  "native.app.error.build_tools": {
+    "en": "66d1a36d",
+    "fr": "66d1a36d",
+    "zh": "66d1a36d"
+  },
+  "native.app.error.agent_missing": {
+    "en": "65576d30",
+    "fr": "65576d30",
+    "zh": "65576d30"
+  },
+  "native.app.error.components_first": {
+    "en": "8baefcbd",
+    "fr": "8baefcbd",
+    "zh": "8baefcbd"
+  },
+  "native.app.error.migration_identity": {
+    "en": "6b02a7c4",
+    "fr": "6b02a7c4",
+    "zh": "6b02a7c4"
+  },
+  "native.app.error.shutdown_incomplete": {
+    "en": "ddbfb3fc",
+    "fr": "ddbfb3fc",
+    "zh": "ddbfb3fc"
+  },
+  "native.app.error.session_admission": {
+    "en": "72bbb9b8",
+    "fr": "72bbb9b8",
+    "zh": "72bbb9b8"
+  },
+  "native.app.error.root_mismatch": {
+    "en": "3cb6b03b",
+    "fr": "3cb6b03b",
+    "zh": "3cb6b03b"
+  },
+  "native.app.error.window_assets": {
+    "en": "59f2d44a",
+    "fr": "59f2d44a",
+    "zh": "59f2d44a"
+  },
+  "native.app.error.interrupted_migration": {
+    "en": "36b29f63",
+    "fr": "36b29f63",
+    "zh": "36b29f63"
+  },
+  "native.app.startup_title": {
+    "en": "8f391ee1",
+    "fr": "8f391ee1",
+    "zh": "8f391ee1"
+  },
+  "native.app.emergency_requested": {
+    "en": "885b89f4",
+    "fr": "885b89f4",
+    "zh": "885b89f4"
+  },
+  "native.app.startup_log": {
+    "en": "468c3572",
+    "fr": "468c3572",
+    "zh": "468c3572"
+  },
+  "native.app.startup_log_unavailable": {
+    "en": "1eb109af",
+    "fr": "1eb109af",
+    "zh": "1eb109af"
+  },
+  "native.bootstrap.root_missing": {
+    "en": "97d86a37",
+    "fr": "97d86a37",
+    "zh": "97d86a37"
+  },
+  "native.bootstrap.identity": {
+    "en": "ff285031",
+    "fr": "ff285031",
+    "zh": "ff285031"
+  },
+  "native.bootstrap.exited": {
+    "en": "4709c187",
+    "fr": "4709c187",
+    "zh": "4709c187"
+  },
+  "native.bootstrap.unconfirmed": {
+    "en": "56862312",
+    "fr": "56862312",
+    "zh": "56862312"
+  },
+  "native.bootstrap.windows_error": {
+    "en": "a583ba04",
+    "fr": "a583ba04",
+    "zh": "a583ba04"
+  },
+  "native.bootstrap.python_error": {
+    "en": "bd39296d",
+    "fr": "bd39296d",
+    "zh": "bd39296d"
+  },
+  "native.bootstrap.migration_error": {
+    "en": "e5fe87c9",
+    "fr": "e5fe87c9",
+    "zh": "e5fe87c9"
+  },
+  "native.components.intro": {
+    "en": "758d77ea",
+    "fr": "758d77ea",
+    "zh": "758d77ea"
+  },
+  "native.components.start": {
+    "en": "0a4ffb18",
+    "fr": "0a4ffb18",
+    "zh": "0a4ffb18"
+  },
+  "native.components.installed": {
+    "en": "0b29a364",
+    "fr": "0b29a364",
+    "zh": "0b29a364"
+  },
+  "native.components.available": {
+    "en": "b24e2723",
+    "fr": "b24e2723",
+    "zh": "b24e2723"
+  },
+  "native.components.unavailable": {
+    "en": "31433897",
+    "fr": "31433897",
+    "zh": "31433897"
+  },
+  "native.components.install": {
+    "en": "a5aa06de",
+    "fr": "a5aa06de",
+    "zh": "a5aa06de"
+  },
+  "native.components.installing": {
+    "en": "9abd1e19",
+    "fr": "9abd1e19",
+    "zh": "9abd1e19"
+  },
+  "notice.speech_failed": {
+    "en": "2fded4e8",
+    "fr": "2fded4e8",
+    "zh": "2fded4e8"
+  },
+  "notice.speech_unknown": {
+    "en": "03d84e87",
+    "fr": "03d84e87",
+    "zh": "03d84e87"
+  },
+  "notice.turn_incomplete": {
+    "en": "57d3cf2b",
+    "fr": "57d3cf2b",
+    "zh": "57d3cf2b"
+  },
+  "notice.files_pending": {
+    "en": "81499198",
+    "fr": "81499198",
+    "zh": "81499198"
+  },
+  "notice.paused": {
+    "en": "67a5597a",
+    "fr": "67a5597a",
+    "zh": "67a5597a"
+  },
+  "notice.turn_failed": {
+    "en": "c2a29108",
+    "fr": "c2a29108",
+    "zh": "c2a29108"
+  },
+  "notice.silence": {
+    "en": "be24f798",
+    "fr": "be24f798",
+    "zh": "be24f798"
+  },
+  "notice.silence_reason": {
+    "en": "b76f854f",
+    "fr": "b76f854f",
+    "zh": "b76f854f"
+  },
+  "notice.closed": {
+    "en": "0a77e0f9",
+    "fr": "0a77e0f9",
+    "zh": "0a77e0f9"
+  },
+  "notice.closed_file": {
+    "en": "8259a523",
+    "fr": "8259a523",
+    "zh": "8259a523"
+  },
+  "notice.tree_busy": {
+    "en": "31d5483b",
+    "fr": "31d5483b",
+    "zh": "31d5483b"
+  },
+  "notice.birth_silent": {
+    "en": "672aa1bc",
+    "fr": "672aa1bc",
+    "zh": "672aa1bc"
+  },
+  "notice.birth_failed": {
+    "en": "bb715c7e",
+    "fr": "bb715c7e",
+    "zh": "bb715c7e"
+  },
+  "notice.resume_refused": {
+    "en": "e3e41a9f",
+    "fr": "e3e41a9f",
+    "zh": "e3e41a9f"
+  },
+  "notice.note_gave_up": {
+    "en": "d85c338f",
+    "fr": "d85c338f",
+    "zh": "d85c338f"
+  },
+  "notice.note_rejected": {
+    "en": "0541777f",
+    "fr": "0541777f",
+    "zh": "0541777f"
+  },
+  "native.app.error.layout_seed": {
+    "en": "f30ee901",
+    "fr": "f30ee901",
+    "zh": "f30ee901"
+  },
+  "native.app.error.layout_candidate": {
+    "en": "baf3467b",
+    "fr": "baf3467b",
+    "zh": "baf3467b"
+  },
+  "native.app.error.layout_marker_link": {
+    "en": "81d2eed1",
+    "fr": "81d2eed1",
+    "zh": "81d2eed1"
+  },
+  "native.app.error.layout_marker_tree": {
+    "en": "6a0be6de",
+    "fr": "6a0be6de",
+    "zh": "6a0be6de"
+  },
+  "native.app.error.layout_birth_incomplete": {
+    "en": "13348955",
+    "fr": "13348955",
+    "zh": "13348955"
+  },
+  "native.app.error.layout_marker_file": {
+    "en": "df3ef768",
+    "fr": "df3ef768",
+    "zh": "df3ef768"
+  },
+  "native.app.error.layout_birth_pending": {
+    "en": "f294e1db",
+    "fr": "f294e1db",
+    "zh": "f294e1db"
+  },
+  "native.app.error.layout_birth_state": {
+    "en": "ed869921",
+    "fr": "ed869921",
+    "zh": "ed869921"
+  },
+  "native.app.error.layout_folder": {
+    "en": "c0b3a6c1",
+    "fr": "c0b3a6c1",
+    "zh": "c0b3a6c1"
+  },
+  "native.app.error.layout_constitution": {
+    "en": "7db62bf8",
+    "fr": "7db62bf8",
+    "zh": "7db62bf8"
+  },
+  "native.app.error.layout_skills": {
+    "en": "7db00b57",
+    "fr": "7db00b57",
+    "zh": "7db00b57"
+  },
+  "native.app.error.layout_transfer_unreadable": {
+    "en": "61eead24",
+    "fr": "61eead24",
+    "zh": "61eead24"
+  },
+  "native.app.error.layout_transfer_active": {
+    "en": "88d93598",
+    "fr": "88d93598",
+    "zh": "88d93598"
+  },
+  "native.app.error.layout_custody_held": {
+    "en": "0690d595",
+    "fr": "0690d595",
+    "zh": "0690d595"
+  },
+  "native.app.error.layout_custody_previous": {
+    "en": "ae00c197",
+    "fr": "ae00c197",
+    "zh": "ae00c197"
+  },
+  "native.app.error.layout_custody_unconfirmed": {
+    "en": "9d6106ca",
+    "fr": "9d6106ca",
+    "zh": "9d6106ca"
+  },
+  "native.app.error.first_ready": {
+    "en": "ef46914d",
+    "fr": "ef46914d",
+    "zh": "ef46914d"
+  },
+  "native.app.error.first_start_unconfirmed": {
+    "en": "17bb2c29",
+    "fr": "17bb2c29",
+    "zh": "17bb2c29"
+  },
+  "native.app.error.first_action": {
+    "en": "14e3cd6a",
+    "fr": "14e3cd6a",
+    "zh": "14e3cd6a"
+  },
+  "native.app.error.first_separate_program": {
+    "en": "04dafa1a",
+    "fr": "04dafa1a",
+    "zh": "04dafa1a"
+  },
+  "native.app.error.first_separate_install": {
+    "en": "0efd5d12",
+    "fr": "0efd5d12",
+    "zh": "0efd5d12"
+  },
+  "native.app.error.first_profile_record": {
+    "en": "3eb4606c",
+    "fr": "3eb4606c",
+    "zh": "3eb4606c"
+  },
+  "native.app.error.first_legacy_jobs": {
+    "en": "324ec942",
+    "fr": "324ec942",
+    "zh": "324ec942"
+  },
+  "native.app.error.first_preparation_receipt": {
+    "en": "536f6f9d",
+    "fr": "536f6f9d",
+    "zh": "536f6f9d"
+  },
+  "native.app.error.first_previous_owner": {
+    "en": "05863f95",
+    "fr": "05863f95",
+    "zh": "05863f95"
+  },
+  "native.app.error.first_preparation_needed": {
+    "en": "85d2e74e",
+    "fr": "85d2e74e",
+    "zh": "85d2e74e"
+  },
+  "native.app.error.first_agent_fields": {
+    "en": "7e2707b6",
+    "fr": "7e2707b6",
+    "zh": "7e2707b6"
+  },
+  "native.app.error.first_api_key": {
+    "en": "8d4dffae",
+    "fr": "8d4dffae",
+    "zh": "8d4dffae"
+  },
+  "native.app.error.first_linked_path": {
+    "en": "c5c6338a",
+    "fr": "c5c6338a",
+    "zh": "c5c6338a"
+  },
+  "native.app.error.first_model_protocol": {
+    "en": "19f284a8",
+    "fr": "19f284a8",
+    "zh": "19f284a8"
+  },
+  "native.app.error.first_channel_port": {
+    "en": "aa1c5a09",
+    "fr": "aa1c5a09",
+    "zh": "aa1c5a09"
+  },
+  "native.app.error.first_source_changed": {
+    "en": "146920ce",
+    "fr": "146920ce",
+    "zh": "146920ce"
+  },
+  "native.app.error.first_alias_changed": {
+    "en": "c0836803",
+    "fr": "c0836803",
+    "zh": "c0836803"
+  },
+  "native.app.error.first_empty_changed": {
+    "en": "2ac10c12",
+    "fr": "2ac10c12",
+    "zh": "2ac10c12"
+  },
+  "native.app.error.first_receipt_changed": {
+    "en": "605a1210",
+    "fr": "605a1210",
+    "zh": "605a1210"
+  },
+  "native.app.error.first_protected_cleanup": {
+    "en": "5ba8d998",
+    "fr": "5ba8d998",
+    "zh": "5ba8d998"
+  },
+  "native.app.error.first_started_receipt": {
+    "en": "b0c8233b",
+    "fr": "b0c8233b",
+    "zh": "b0c8233b"
+  },
+  "native.app.error.first_leftovers": {
+    "en": "68055bee",
+    "fr": "68055bee",
+    "zh": "68055bee"
+  },
+  "native.app.error.first_prepared_data": {
+    "en": "98813691",
+    "fr": "98813691",
+    "zh": "98813691"
+  },
+  "native.app.error.first_profile_location": {
+    "en": "e0b22520",
+    "fr": "e0b22520",
+    "zh": "e0b22520"
+  },
+  "native.app.error.first_settings_changed": {
+    "en": "3976762d",
+    "fr": "3976762d",
+    "zh": "3976762d"
+  },
+  "native.app.error.first_archive_incomplete": {
+    "en": "be015bf3",
+    "fr": "be015bf3",
+    "zh": "be015bf3"
+  },
+  "native.app.error.first_settings_finish": {
+    "en": "8c4a9314",
+    "fr": "8c4a9314",
+    "zh": "8c4a9314"
+  },
+  "native.app.error.first_owner_changed": {
+    "en": "26cf5c05",
+    "fr": "26cf5c05",
+    "zh": "26cf5c05"
+  },
+  "native.app.error.first_soul_choice": {
+    "en": "c782d74d",
+    "fr": "c782d74d",
+    "zh": "c782d74d"
+  },
+  "native.app.error.first_old_external": {
+    "en": "487b998a",
+    "fr": "487b998a",
+    "zh": "487b998a"
+  },
+  "native.app.error.first_mixed_programs": {
+    "en": "bbc3c395",
+    "fr": "bbc3c395",
+    "zh": "bbc3c395"
+  },
+  "native.app.error.first_cleanup_data": {
+    "en": "a3d8a582",
+    "fr": "a3d8a582",
+    "zh": "a3d8a582"
+  },
+  "native.app.error.first_moved_identity": {
+    "en": "b611082a",
+    "fr": "b611082a",
+    "zh": "b611082a"
+  },
+  "native.app.error.first_moved_conflict": {
+    "en": "10b5059d",
+    "fr": "10b5059d",
+    "zh": "10b5059d"
+  },
+  "native.app.error.first_already_bound": {
+    "en": "96c5ba6c",
+    "fr": "96c5ba6c",
+    "zh": "96c5ba6c"
+  },
+  "native.app.error.first_unknown_receipt": {
+    "en": "9f6875ba",
+    "fr": "9f6875ba",
+    "zh": "9f6875ba"
+  },
+  "native.app.error.first_source_outside": {
+    "en": "25e39621",
+    "fr": "25e39621",
+    "zh": "25e39621"
+  },
+  "native.app.error.first_process_data": {
+    "en": "1a0cc1f5",
+    "fr": "1a0cc1f5",
+    "zh": "1a0cc1f5"
+  },
+  "native.app.error.first_config_data": {
+    "en": "e4353dc3",
+    "fr": "e4353dc3",
+    "zh": "e4353dc3"
+  },
+  "native.app.error.first_extracted_conflict": {
+    "en": "a48a2fd7",
+    "fr": "a48a2fd7",
+    "zh": "a48a2fd7"
+  },
+  "native.app.error.first_recovered_conflict": {
+    "en": "29da9583",
+    "fr": "29da9583",
+    "zh": "29da9583"
+  },
+  "native.app.error.first_found_external": {
+    "en": "0a3d7cb0",
+    "fr": "0a3d7cb0",
+    "zh": "0a3d7cb0"
+  },
+  "status.reader_failed": {
+    "en": "9f07bc18",
+    "fr": "9f07bc18",
+    "zh": "9f07bc18"
+  },
+  "status.not_running": {
+    "en": "415b29cc",
+    "fr": "415b29cc",
+    "zh": "415b29cc"
+  },
+  "status.quota_fallback": {
+    "en": "57795151",
+    "fr": "57795151",
+    "zh": "57795151"
+  },
+  "status.quota_no_fallback": {
+    "en": "627dba15",
+    "fr": "627dba15",
+    "zh": "627dba15"
+  },
+  "status.reset_time": {
+    "en": "2e9f9d81",
+    "fr": "2e9f9d81",
+    "zh": "2e9f9d81"
+  },
+  "status.key_missing": {
+    "en": "9c670624",
+    "fr": "9c670624",
+    "zh": "9c670624"
+  },
+  "status.model_missing": {
+    "en": "14080529",
+    "fr": "14080529",
+    "zh": "14080529"
+  },
+  "status.relay_signin": {
+    "en": "18e17b16",
+    "fr": "18e17b16",
+    "zh": "18e17b16"
+  },
+  "status.sleeping": {
+    "en": "d4063c91",
+    "fr": "d4063c91",
+    "zh": "d4063c91"
+  },
+  "status.thinking": {
+    "en": "e4976738",
+    "fr": "e4976738",
+    "zh": "e4976738"
+  },
+  "status.wake_wait": {
+    "en": "fbb73662",
+    "fr": "fbb73662",
+    "zh": "fbb73662"
+  },
+  "status.online": {
+    "en": "a7a733db",
+    "fr": "a7a733db",
+    "zh": "a7a733db"
+  },
+  "status.paused": {
+    "en": "d0385963",
+    "fr": "d0385963",
+    "zh": "d0385963"
+  },
+  "status.error.auth": {
+    "en": "0dd5ae77",
+    "fr": "0dd5ae77",
+    "zh": "0dd5ae77"
+  },
+  "status.error.quota": {
+    "en": "04dd2f1f",
+    "fr": "04dd2f1f",
+    "zh": "04dd2f1f"
+  },
+  "status.error.timeout": {
+    "en": "49e9097f",
+    "fr": "49e9097f",
+    "zh": "49e9097f"
+  },
+  "status.error.network": {
+    "en": "c87795f8",
+    "fr": "c87795f8",
+    "zh": "c87795f8"
+  },
+  "status.error.address": {
+    "en": "45e83615",
+    "fr": "45e83615",
+    "zh": "45e83615"
+  },
+  "status.error.parameter": {
+    "en": "86b302ff",
+    "fr": "86b302ff",
+    "zh": "86b302ff"
+  },
+  "status.error.context": {
+    "en": "f24e77bd",
+    "fr": "f24e77bd",
+    "zh": "f24e77bd"
+  },
+  "status.error.policy": {
+    "en": "e58d3247",
+    "fr": "e58d3247",
+    "zh": "e58d3247"
+  },
+  "status.error.request": {
+    "en": "8cad419a",
+    "fr": "8cad419a",
+    "zh": "8cad419a"
+  },
+  "status.error.server": {
+    "en": "a2b0309a",
+    "fr": "a2b0309a",
+    "zh": "a2b0309a"
+  },
+  "status.error.unknown": {
+    "en": "0b850d50",
+    "fr": "0b850d50",
+    "zh": "0b850d50"
+  },
+  "status.action.restart": {
+    "en": "a553a46b",
+    "fr": "a553a46b",
+    "zh": "a553a46b"
+  },
+  "status.action.settings": {
+    "en": "985b5e0f",
+    "fr": "985b5e0f",
+    "zh": "985b5e0f"
+  },
+  "status.action.key": {
+    "en": "7b2ed638",
+    "fr": "7b2ed638",
+    "zh": "7b2ed638"
+  },
+  "status.action.configure": {
+    "en": "d7187587",
+    "fr": "d7187587",
+    "zh": "d7187587"
+  },
+  "status.action.signin": {
+    "en": "8fc9ab2e",
+    "fr": "8fc9ab2e",
+    "zh": "8fc9ab2e"
+  },
+  "status.alarm.reader_state": {
+    "en": "5aaa86b0",
+    "fr": "5aaa86b0",
+    "zh": "5aaa86b0"
+  },
+  "status.alarm.reader_pulse": {
+    "en": "dc0469ee",
+    "fr": "dc0469ee",
+    "zh": "dc0469ee"
+  },
+  "status.alarm.restart_loop": {
+    "en": "ec4122ae",
+    "fr": "ec4122ae",
+    "zh": "ec4122ae"
+  },
+  "status.alarm.debt": {
+    "en": "dbdb478e",
+    "fr": "dbdb478e",
+    "zh": "dbdb478e"
+  },
+  "status.alarm.long_silence": {
+    "en": "051cf92d",
+    "fr": "051cf92d",
+    "zh": "051cf92d"
+  },
+  "status.alarm.defer_storm": {
+    "en": "117ca652",
+    "fr": "117ca652",
+    "zh": "117ca652"
+  },
+  "machine.join": {
+    "en": "ef898fa9",
+    "fr": "ef898fa9",
+    "zh": "ef898fa9"
+  },
+  "machine.body.initial": {
+    "en": "75940a98",
+    "fr": "75940a98",
+    "zh": "75940a98"
+  },
+  "machine.body.absent": {
+    "en": "f1a23055",
+    "fr": "f1a23055",
+    "zh": "f1a23055"
+  },
+  "machine.body.executor": {
+    "en": "8d54ae83",
+    "fr": "8d54ae83",
+    "zh": "8d54ae83"
+  },
+  "machine.body.ports": {
+    "en": "3b507783",
+    "fr": "3b507783",
+    "zh": "3b507783"
+  },
+  "machine.body.service_wait": {
+    "en": "280e8df5",
+    "fr": "280e8df5",
+    "zh": "280e8df5"
+  },
+  "machine.body.connecting": {
+    "en": "82940e54",
+    "fr": "82940e54",
+    "zh": "82940e54"
+  },
+  "machine.body.bridge_name": {
+    "en": "16526a97",
+    "fr": "16526a97",
+    "zh": "16526a97"
+  },
+  "machine.body.body_name": {
+    "en": "735c0193",
+    "fr": "735c0193",
+    "zh": "735c0193"
+  },
+  "machine.body.child_exit": {
+    "en": "6c9cd1a7",
+    "fr": "6c9cd1a7",
+    "zh": "6c9cd1a7"
+  },
+  "machine.body.connected": {
+    "en": "43d979b1",
+    "fr": "43d979b1",
+    "zh": "43d979b1"
+  },
+  "machine.body.bridge_down": {
+    "en": "eb18d8ed",
+    "fr": "eb18d8ed",
+    "zh": "eb18d8ed"
+  },
+  "machine.body.body_wait": {
+    "en": "1aa873f5",
+    "fr": "1aa873f5",
+    "zh": "1aa873f5"
+  },
+  "machine.body.no_response": {
+    "en": "6947861c",
+    "fr": "6947861c",
+    "zh": "6947861c"
+  },
+  "machine.body.stopped": {
+    "en": "61a30b86",
+    "fr": "61a30b86",
+    "zh": "61a30b86"
+  },
+  "machine.body.remote_unselected": {
+    "en": "af816c06",
+    "fr": "af816c06",
+    "zh": "af816c06"
+  },
+  "machine.body.remote_connected": {
+    "en": "7058cc05",
+    "fr": "7058cc05",
+    "zh": "7058cc05"
+  },
+  "machine.body.remote_offline": {
+    "en": "0c9bfbac",
+    "fr": "0c9bfbac",
+    "zh": "0c9bfbac"
+  },
+  "machine.body.remote_unavailable": {
+    "en": "e41b76f5",
+    "fr": "e41b76f5",
+    "zh": "e41b76f5"
+  },
+  "machine.body.remote_unconfirmed": {
+    "en": "1fd1d10c",
+    "fr": "1fd1d10c",
+    "zh": "1fd1d10c"
+  },
+  "machine.body.remote_stopped": {
+    "en": "820b950f",
+    "fr": "820b950f",
+    "zh": "820b950f"
+  },
+  "machine.body.platform_absent": {
+    "en": "992dc9e7",
+    "fr": "992dc9e7",
+    "zh": "992dc9e7"
+  },
+  "machine.body.disabled": {
+    "en": "a9218d25",
+    "fr": "a9218d25",
+    "zh": "a9218d25"
+  },
+  "machine.body.disabled_absent": {
+    "en": "606c88d9",
+    "fr": "606c88d9",
+    "zh": "606c88d9"
+  },
+  "machine.body.no_scopes": {
+    "en": "69b0b3d2",
+    "fr": "69b0b3d2",
+    "zh": "69b0b3d2"
+  },
+  "machine.body.rights_none": {
+    "en": "941627d1",
+    "fr": "941627d1",
+    "zh": "941627d1"
+  },
+  "machine.body.remote_summary": {
+    "en": "d1f95382",
+    "fr": "d1f95382",
+    "zh": "d1f95382"
+  },
+  "machine.body.local_summary": {
+    "en": "3c42086b",
+    "fr": "3c42086b",
+    "zh": "3c42086b"
+  },
+  "machine.body.tcc": {
+    "en": "373f3159",
+    "fr": "373f3159",
+    "zh": "373f3159"
+  },
+  "machine.body.screen": {
+    "en": "eec9411b",
+    "fr": "eec9411b",
+    "zh": "eec9411b"
+  },
+  "machine.body.accessibility": {
+    "en": "ce2519ca",
+    "fr": "ce2519ca",
+    "zh": "ce2519ca"
+  },
+  "machine.fence.disabled": {
+    "en": "94e1c5d4",
+    "fr": "94e1c5d4",
+    "zh": "94e1c5d4"
+  },
+  "machine.fence.open": {
+    "en": "0b61f583",
+    "fr": "0b61f583",
+    "zh": "0b61f583"
+  },
+  "machine.fence.active": {
+    "en": "360eeb07",
+    "fr": "360eeb07",
+    "zh": "360eeb07"
+  },
+  "machine.fence.yes": {
+    "en": "a8dae0ec",
+    "fr": "a8dae0ec",
+    "zh": "a8dae0ec"
+  },
+  "machine.fence.no": {
+    "en": "7fbc2993",
+    "fr": "7fbc2993",
+    "zh": "7fbc2993"
+  },
+  "machine.fence.launch_failed": {
+    "en": "9eab7922",
+    "fr": "9eab7922",
+    "zh": "9eab7922"
+  },
+  "machine.fence.command_failed": {
+    "en": "3ea6fbdd",
+    "fr": "3ea6fbdd",
+    "zh": "3ea6fbdd"
+  },
+  "machine.fence.unavailable": {
+    "en": "1f431916",
+    "fr": "1f431916",
+    "zh": "1f431916"
+  },
+  "machine.fence.body_unknown": {
+    "en": "a8a0127a",
+    "fr": "a8a0127a",
+    "zh": "a8a0127a"
+  },
+  "machine.touch.commands": {
+    "en": "693ac6ac",
+    "fr": "693ac6ac",
+    "zh": "693ac6ac"
+  },
+  "machine.touch.files_commands": {
+    "en": "256679cb",
+    "fr": "256679cb",
+    "zh": "256679cb"
+  },
+  "machine.touch.tasks": {
+    "en": "7bc465ac",
+    "fr": "7bc465ac",
+    "zh": "7bc465ac"
+  },
+  "machine.touch.files": {
+    "en": "6a647c40",
+    "fr": "6a647c40",
+    "zh": "6a647c40"
+  },
+  "machine.touch.computer": {
+    "en": "afc86713",
+    "fr": "afc86713",
+    "zh": "afc86713"
+  },
+  "machine.touch.host": {
+    "en": "c34cb08b",
+    "fr": "c34cb08b",
+    "zh": "c34cb08b"
+  },
+  "machine.why.path": {
+    "en": "2ce1535f",
+    "fr": "2ce1535f",
+    "zh": "2ce1535f"
+  },
+  "machine.why.container": {
+    "en": "2e61d9da",
+    "fr": "2e61d9da",
+    "zh": "2e61d9da"
+  },
+  "machine.why.mcp": {
+    "en": "977261ac",
+    "fr": "977261ac",
+    "zh": "977261ac"
+  },
+  "machine.why.computer": {
+    "en": "ce7b938d",
+    "fr": "ce7b938d",
+    "zh": "ce7b938d"
+  },
+  "machine.why.host": {
+    "en": "440ff5a0",
+    "fr": "440ff5a0",
+    "zh": "440ff5a0"
+  },
+  "machine.why.forge": {
+    "en": "697894fa",
+    "fr": "697894fa",
+    "zh": "697894fa"
+  },
+  "machine.why.bare": {
+    "en": "34be63d8",
+    "fr": "34be63d8",
+    "zh": "34be63d8"
+  },
+  "machine.why.unloaded": {
+    "en": "ae7d33bd",
+    "fr": "ae7d33bd",
+    "zh": "ae7d33bd"
+  },
+  "machine.why.outside": {
+    "en": "f4beca11",
+    "fr": "f4beca11",
+    "zh": "f4beca11"
+  },
+  "machine.why.unknown": {
+    "en": "1f9230ff",
+    "fr": "1f9230ff",
+    "zh": "1f9230ff"
+  },
+  "machine.caveat.proposal": {
+    "en": "04e670e8",
+    "fr": "04e670e8",
+    "zh": "04e670e8"
+  },
+  "machine.caveat.python": {
+    "en": "aecfbcad",
+    "fr": "aecfbcad",
+    "zh": "aecfbcad"
+  },
+  "machine.caveat.edit": {
+    "en": "1806e833",
+    "fr": "1806e833",
+    "zh": "1806e833"
+  },
+  "machine.caveat.files": {
+    "en": "9af608ab",
+    "fr": "9af608ab",
+    "zh": "9af608ab"
   }
 }
