@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from deskd import run_control
+from unittest.mock import patch
 
 
 class ExactRunControl(unittest.TestCase):
@@ -35,11 +36,26 @@ class ExactRunControl(unittest.TestCase):
         started=time.monotonic();answer=asyncio.run(run_control.cancel(self.root,self.run));worker.join()
         self.assertTrue(answer['confirmed']);self.assertGreater(time.monotonic()-started,.2)
         self.assertEqual(answer['receipt']['request_id'],ask['id'])
+        self.assertEqual(answer['display_note'],{'schema':'helene.run-control.v1','kind':'confirmed'})
 
     def test_no_owner_proof_remains_accepted_but_unconfirmed(self):
         answer=asyncio.run(run_control.cancel(self.root,self.run))
         self.assertTrue(answer['accepted']);self.assertFalse(answer['confirmed'])
         self.assertEqual(answer['receipt'],{})
+        self.assertEqual(answer['display_note'],{'schema':'helene.run-control.v1','kind':'pending'})
+
+    def test_known_refusal_has_recipe_before_request_publication(self):
+        for invalid,kind in (('../run-fixture','invalid_id'),('run-missing','ambiguous_id')):
+            answer=asyncio.run(run_control.cancel(self.root,invalid))
+            self.assertFalse(answer['ok']);self.assertFalse(answer['accepted']);self.assertFalse(answer['confirmed'])
+            self.assertEqual(answer['display_note'],{'schema':'helene.run-control.v1','kind':kind})
+        self.assertFalse((self.root/'memory/.control/run-cancel').exists())
+
+    def test_unowned_os_diagnostic_remains_literal_without_caption_metadata(self):
+        raw='Literal Русский 中文 {owner}'
+        with patch.object(run_control,'request',side_effect=OSError(raw)):
+            answer=asyncio.run(run_control.cancel(self.root,self.run))
+        self.assertEqual(answer['note'],raw);self.assertNotIn('display_note',answer)
 
 
 if __name__=='__main__':unittest.main()

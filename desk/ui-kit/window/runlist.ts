@@ -1,9 +1,9 @@
-import { t as uiText } from "../../lang/lang";
+import { t as uiText, UiError } from "../../lang/lang";
 // Список прогонов с раскрывающимися шагами — общий для «Сейчас» и «Вейков».
 // Подпись хода сохраняет исходный повод и автора; ответ доступен внутри хода.
 import { api, post } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
-import { isToday, runTitle } from "../text";
+import { isToday, runTitle, runControlNote } from "../text";
 import { stepsHTML, type RunDetail } from "../steps";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, runIsLive, type Run } from "./state";
 
@@ -25,23 +25,6 @@ export const cleanLabel = (s: string) =>
     .replace(/[*_`#>]+/g, "")
     .replace(/\s+/g, " ")
     .trim();
-
-/** Цель запуска годится в подпись, только если это не обрезок кадра. */
-function goalLabel(goal: string): string {
-  const g = String(goal || "");
-  if (/ЛЕНТА ОБРЕЗАНА|^\s*…|^\s*\[/.test(g)) return "";
-  const t = cleanLabel(g);
-  return /[\]»]$/.test(t) && t.length > 60 ? "" : t;
-}
-
-/** Заметка границы хода (`done: …`, `wait: …`) — словами. */
-function noteLabel(note: string): string {
-  const n = String(note || "").trim();
-  const m = n.match(/^(done|wait|blocked|silence)\s*:\s*(.*)$/i);
-  const body = m ? m[2] : n;
-  const head = m ? (m[1].toLowerCase() === "wait" ? uiText("ui.ui.kit.window.runlist.eb451ec6a0") : m[1].toLowerCase() === "blocked" ? uiText("ui.ui.kit.window.runlist.82a25559f5") : "") : "";
-  return body.trim() ? head + cleanLabel(body) : "";
-}
 
 export function roomKeyOf(r: Run): string {
   const k = String(r.chat_id ?? "");
@@ -110,9 +93,10 @@ export function bindRunReset(box: HTMLElement): void {
       const id=button.dataset.resetRun!, receipt=button.parentElement!.querySelector<HTMLElement>('.receipt')!;
       button.disabled=true;receipt.textContent=uiText("ui.ui.kit.window.runlist.8d85809664");
       try {
-        const answer=await post<{ok:boolean;confirmed?:boolean;note?:string}>(`/api/run/${encodeURIComponent(id)}/cancel`,{});
-        if(!answer.ok)throw Error(answer.note || uiText("ui.ui.kit.window.runlist.cc4265e4d3"));
-        receipt.textContent=answer.note || (answer.confirmed ? uiText("ui.ui.kit.window.runlist.42a576267d") : uiText("ui.ui.kit.window.runlist.1a43bf64c4"));
+        const answer=await post<{ok:boolean;confirmed?:boolean;note?:string;display_note?:unknown}>(`/api/run/${encodeURIComponent(id)}/cancel`,{});
+        const caption=runControlNote(answer);
+        if(!answer.ok){if(caption)throw new UiError(caption);throw Error(answer.note || uiText("ui.ui.kit.window.runlist.cc4265e4d3"));}
+        receipt.textContent=caption || answer.note || (answer.confirmed ? uiText("ui.ui.kit.window.runlist.42a576267d") : uiText("ui.ui.kit.window.runlist.1a43bf64c4"));
       } catch(error) { receipt.textContent=humanError(error).text; }
       finally { button.disabled=false; }
     });

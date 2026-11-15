@@ -4097,5 +4097,9 @@
   "phone.actions.page_invalid": "History page did not match the selected continuation",
   "phone.actions.page_failed": "Could not read more history. Select “More turns” to retry.",
   "phone.actions.update_failed": "Could not refresh turns. Previously loaded records were retained.",
-  "phone.actions.current_failed": "Could not check the current turn. Showing the last loaded data."
+  "phone.actions.current_failed": "Could not check the current turn. Showing the last loaded data.",
+  "run.control.invalid_id": "Invalid run identifier.",
+  "run.control.ambiguous_id": "The run could not be identified uniquely.",
+  "run.control.confirmed": "Run execution was interrupted. Completed actions and history are retained; unknown outcomes await reconciliation.",
+  "run.control.pending": "Reset requested. Completion of the current action is not confirmed yet."
 }

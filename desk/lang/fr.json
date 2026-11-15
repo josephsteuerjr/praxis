@@ -4097,5 +4097,9 @@
   "phone.actions.page_invalid": "La page ne correspond pas à la suite demandée",
   "phone.actions.page_failed": "Suite de l’historique indisponible. Choisis « Autres échanges » pour réessayer.",
   "phone.actions.update_failed": "Actualisation impossible. Les échanges déjà chargés sont conservés.",
-  "phone.actions.current_failed": "Impossible de vérifier le tour actif. Dernières données chargées affichées."
+  "phone.actions.current_failed": "Impossible de vérifier le tour actif. Dernières données chargées affichées.",
+  "run.control.invalid_id": "Identifiant de lancement invalide.",
+  "run.control.ambiguous_id": "Le lancement n’a pas pu être identifié de manière unique.",
+  "run.control.confirmed": "L’exécution du lancement a été interrompue. Les actions effectuées et l’historique sont conservés ; les résultats inconnus attendent une réconciliation.",
+  "run.control.pending": "Réinitialisation demandée. La fin de l’action en cours n’est pas encore confirmée."
 }

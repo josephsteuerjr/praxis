@@ -52,6 +52,17 @@ export function runOriginText(value: unknown): string {
   return r ? titleRecipe(r.display_title) || titleString(r.text) : "";
 }
 
+/** Only resource-owner outcomes with an explicit recipe receive client captions. */
+export function runControlNote(value: unknown): string {
+  const r = titleRecord(titleRecord(value)?.display_note);
+  if (!r || r.schema !== "helene.run-control.v1") return "";
+  const key = r.kind === "confirmed" ? "run.control.confirmed"
+    : r.kind === "pending" ? "run.control.pending"
+    : r.kind === "invalid_id" ? "run.control.invalid_id"
+    : r.kind === "ambiguous_id" ? "run.control.ambiguous_id" : "";
+  return key ? uiText(key) : "";
+}
+
 export function fmtTime(iso?: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);

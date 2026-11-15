@@ -1,5 +1,5 @@
 import { el } from './dom';
-import { fmtTime, runTitle } from './text';
+import { fmtTime, runTitle, runControlNote } from './text';
 import { t as uiText } from '../lang/lang';
 import { forgePanel } from './window/views/forge-panel';
 import { mountActionSteps } from './window/panel';
@@ -115,9 +115,9 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
       if(cancel.disabled)return;
       const captured=epoch,capturedScope=scope();cancel.disabled=true;notice.textContent=uiText('phone.actions.reset_wait');
       try {
-        const result=await request<{ok:boolean;confirmed?:boolean;note?:string;receipt?:{status?:string}}>(`/api/run/${encodeURIComponent(row.run.id)}/cancel`,{});
+        const result=await request<{ok:boolean;confirmed?:boolean;note?:string;display_note?:unknown;receipt?:{status?:string}}>(`/api/run/${encodeURIComponent(row.run.id)}/cancel`,{});
         if(!active||captured!==epoch||capturedScope!==scope())return;
-        notice.textContent=result.note||uiText('phone.actions.reset_unknown');
+        notice.textContent=runControlNote(result)||result.note||uiText('phone.actions.reset_unknown');
         if(!result.confirmed)cancel.disabled=false;
         else {
           const status=result.receipt?.status||'cancelled',id=row.run.id;

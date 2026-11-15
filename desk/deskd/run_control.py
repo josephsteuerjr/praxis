@@ -9,6 +9,16 @@ import time
 RUN_ID = re.compile(r'run-[A-Za-z0-9_-]{1,100}\Z')
 
 
+def _display_note(kind):
+    return {'schema':'helene.run-control.v1','kind':kind}
+
+
+class RunControlRefusal(ValueError):
+    def __init__(self,kind,note):
+        super().__init__(note)
+        self.display_note=_display_note(kind)
+
+
 def read(path):
     try:
         value=json.loads(Path(path).read_text(encoding='utf-8'))
@@ -17,12 +27,12 @@ def read(path):
 
 
 def request(tree, run_id, reason='immediate owner reset', *, known=False):
-    if not RUN_ID.fullmatch(str(run_id)):raise ValueError('Некорректный идентификатор хода.')
+    if not RUN_ID.fullmatch(str(run_id)):raise RunControlRefusal('invalid_id','Некорректный идентификатор хода.')
     tree=Path(tree)
     if not known:
         manifests=list((tree/'memory/runs').glob('*/'+run_id+'/manifest.json'))
         if len(manifests)!=1 or manifests[0].is_symlink() or not read(manifests[0]):
-            raise ValueError('Ход не найден однозначно.')
+            raise RunControlRefusal('ambiguous_id','Ход не найден однозначно.')
     path=tree/'memory/.control/run-cancel'/(run_id+'.json')
     from localharness.phone_tunnel.platform_support import acquire_file_lock, release_file_lock
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -51,15 +61,17 @@ def known_run(tree, run_id, reason):
 
 async def cancel(tree,run_id):
     try:path,asked=await asyncio.to_thread(request,tree,run_id)
+    except RunControlRefusal as exc:
+        return dict(ok=False,accepted=False,confirmed=False,note=str(exc),display_note=dict(exc.display_note))
     except (ValueError,OSError) as exc:return dict(ok=False,accepted=False,confirmed=False,note=str(exc))
     deadline=time.monotonic()+2
     result={}
     while time.monotonic()<deadline:
         result=await asyncio.to_thread(read,path.with_suffix('.receipt'))
         if result.get('request_id')==asked['id'] and result.get('ok') is True:
-            return dict(ok=True,accepted=True,confirmed=True,receipt=result,
+            return dict(ok=True,accepted=True,confirmed=True,receipt=result,display_note=_display_note('confirmed'),
                         note='Исполнение хода прервано. Совершённые действия и история сохранены; неизвестные исходы ждут сверки.')
         await asyncio.sleep(.05)
-    return dict(ok=True,accepted=True,confirmed=False,
+    return dict(ok=True,accepted=True,confirmed=False,display_note=_display_note('pending'),
                 receipt=result if result.get('request_id')==asked['id'] else {},
                 note='Сброс запрошен. Завершение текущего действия пока не подтверждено.')

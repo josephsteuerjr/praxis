@@ -4097,5 +4097,9 @@
   "phone.actions.page_invalid": "历史页与所选续页不匹配",
   "phone.actions.page_failed": "无法读取更多历史。请点击“更多轮次”重试。",
   "phone.actions.update_failed": "无法刷新轮次。已保留此前读取的记录。",
-  "phone.actions.current_failed": "无法检查当前轮次。显示的是上次读取的数据。"
+  "phone.actions.current_failed": "无法检查当前轮次。显示的是上次读取的数据。",
+  "run.control.invalid_id": "运行标识无效。",
+  "run.control.ambiguous_id": "无法唯一确定该运行。",
+  "run.control.confirmed": "运行执行已中断。已完成的操作和历史记录均予以保留；未知结果有待核对。",
+  "run.control.pending": "已请求重置。尚未确认当前操作已结束。"
 }
