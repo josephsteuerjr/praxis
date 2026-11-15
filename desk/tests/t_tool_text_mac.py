@@ -215,6 +215,8 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
         self.assertTrue(TREE_AGENT.is_file(), f"дерева нет там, где его ждут: {TREE_AGENT}")
 
     def test_owner_block_pairs_are_alive_and_the_block_speaks_mac_afterwards(self):
+        if re.search(r'(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$',TREE_AGENT.read_text(encoding='utf-8')):
+            self.skipTest('Boundary-aware core owns four-language captions; native installation matrix covers them')
         block = owner_block_text(TREE_AGENT)
         self.assertTrue(block, "в дереве не нашлось frame_trace.mark(\"contract.owner_tools\", …) — "
                                "разбор отстал от дерева")
@@ -236,6 +238,10 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
     def test_russian_pointer_pair_is_alive(self):
         ru = dict_entry(TREE_AGENT, "HAND_PURPOSE", "computer")
         self.assertTrue(ru, "в дереве нет HAND_PURPOSE[\"computer\"] — разбор отстал от дерева")
+        if re.search(r'(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$',TREE_AGENT.read_text(encoding='utf-8')):
+            self.assertEqual(ru,'подключённый компьютер; доступные действия указаны в схеме')
+            self.assertEqual(body.mac_pointer_text(ru),ru)
+            return
         self.assertIn("Windows-компьютер Егора", ru, "русский указатель уже не виндовый — пару надо пересобрать")
         said = body.mac_pointer_text(ru)
         for word in ("Windows", "PowerShell", "Егора"):
@@ -249,6 +255,10 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
                           "../live-fix) — английский указатель против живого текста НЕ сверен")
         en = dict_entry(src, "POINTER_PURPOSE", "computer")
         self.assertTrue(en, f"в {src} нет POINTER_PURPOSE[\"computer\"] — разбор отстал")
+        if re.search(r'(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$',TREE_AGENT.read_text(encoding='utf-8')):
+            self.assertEqual(en,'connected computer; available actions are specified by its schema')
+            self.assertEqual(body.mac_pointer_text(en),en)
+            return
         self.assertIn("Yegor's Windows computer", en, "английский указатель уже не виндовый — пару надо пересобрать")
         said = body.mac_pointer_text(en)
         for word in ("Windows", "PowerShell", "Yegor"):

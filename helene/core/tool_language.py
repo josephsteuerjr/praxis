@@ -17,6 +17,10 @@ import threading
 import frame_language
 
 NATIVE_SCHEMA_LANGUAGE_API = 1
+# All computer descriptions now describe the connected target, with Windows
+# mechanics explicitly conditional. Legacy OS substring overlays must not
+# invalidate these reviewed source schemas.
+NEUTRAL_COMPUTER_SCHEMA_API = 1
 _RUNTIME_LIMIT = 8
 _runtime: dict[str, OrderedDict] = {}
 _runtime_lock = threading.RLock()
@@ -56,6 +60,10 @@ def _raw_rule(tool):
 
 
 def _render(entry, language=None):
+    if 'parts' in entry:
+        return ''.join(_render(part, language) for part in entry['parts'])
+    if not isinstance(entry.get('key'),str) or not entry['key']:
+        raise ValueError('native template requires an owned catalog key')
     values = entry.get('values', {})
     if language is None:
         return frame_language.text(entry['key'], **values)
@@ -87,7 +95,11 @@ def register_variant(before: dict, after: dict, *, descriptions: list, purpose=N
     for entry in (previous or {}).get('descriptions', ()):
         path = tuple(entry['path'])
         try:
-            if _at(before, path) == _at(after, path):
+            old_parent,new_parent=_at(before,path[:-1]),_at(after,path[:-1])
+            key=path[-1]
+            if (isinstance(old_parent,dict) and isinstance(new_parent,dict)
+                    and (key in old_parent)==(key in new_parent)
+                    and old_parent.get(key)==new_parent.get(key)):
                 entries[path] = copy.deepcopy(entry)
         except (KeyError, IndexError, TypeError):
             pass
@@ -118,7 +130,19 @@ def register_variant(before: dict, after: dict, *, descriptions: list, purpose=N
     return True
 
 
-def _validate_template(entry):
+def _validate_template(entry, depth=0):
+    if depth > 3 or not isinstance(entry, dict):
+        raise ValueError('native template parts are too deep or invalid')
+    if 'parts' in entry:
+        parts = entry['parts']
+        if ('key' in entry or 'values' in entry or not isinstance(parts, list)
+                or not 1 <= len(parts) <= 4):
+            raise ValueError('native composition requires one to four owned template parts')
+        for part in parts:
+            _validate_template(part, depth+1)
+        return
+    if not isinstance(entry.get('key'),str) or not entry['key']:
+        raise ValueError('native template requires an owned catalog key')
     values = entry.get('values', {})
     if not isinstance(values, dict) or any(type(value) not in (str, int) for value in values.values()):
         raise ValueError('native substitutions must be literal strings or integers')
@@ -138,6 +162,15 @@ def accepts_variant(tool: dict) -> bool:
     """Whether an adapter may mutate this exact source, never authored prose."""
     source = sources().get(tool.get('name'))
     return bool(_raw_rule(tool) or source and fingerprint(tool) == source['raw'])
+
+
+def description_template(tool: dict, path: list):
+    """Return only a trusted owned template, never rendered or authored prose."""
+    rule = _raw_rule(tool)
+    for entry in (rule or {}).get('descriptions', ()):
+        if entry['path'] == path:
+            return copy.deepcopy({key:entry[key] for key in ('key','values','parts') if key in entry})
+    return None
 
 
 @frame_language.pinned

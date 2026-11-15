@@ -1467,6 +1467,44 @@ def _remote_system(kwargs: dict) -> str:
     return 'execution=system — служба выбранного Windows-компьютера:\n' + str(result.get('receipt'))
 
 
+def _body_word(agent_mod, key, legacy, **values):
+    language=getattr(agent_mod,"frame_language",None)
+    if getattr(agent_mod,"FRAME_TEXT_BOUNDARIES_API",0)==1 and language:
+        return language.text("native.body."+key,**values)
+    return legacy.format_map(values) if values else legacy
+
+
+def _body_refusal(agent_mod,key,legacy,**values):
+    if getattr(agent_mod,"FRAME_TEXT_BOUNDARIES_API",0)==1:
+        report=getattr(agent_mod,"tool_report",None)
+        if callable(getattr(report,"note",None)):
+            report.note(outcome="refused")
+    return _body_word(agent_mod,key,legacy,**values)
+
+
+def _present_computer_result(agent_mod, value, *, remote=False, platform=None):
+    """Keep completed observations literal on boundary-aware cores.
+
+    A result can contain a file, clipboard, protocol identifier or a str
+    subclass carrying image metadata. Ownership is not a substring match.
+    The old compatibility presentation remains only for legacy cores.
+    """
+    if getattr(agent_mod, "FRAME_TEXT_BOUNDARIES_API", 0) == 1:
+        return value
+    if not isinstance(value, str):
+        return value
+    if PROTOCOL_WIRE in value:
+        value = value.replace(PROTOCOL_WIRE, PROTOCOL_SAID)
+    if remote:
+        return value
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return mac_result_text(value)
+    if platform.startswith("linux"):
+        return linux_result_text(value)
+    return value
+
+
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
     """Подключить руку `computer` к телу и к разрешению владельца.
 
@@ -1530,61 +1568,53 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         try:
             original_signature.bind(*args, **kwargs)
         except TypeError as error:
-            return f"computer: неверные аргументы ({error}). Действие не выполнено. Используй поля схемы computer; для UIA — action=read_window/find_elements/act_element, для ввода — events."
+            return _body_refusal(agent_mod,"invalid_args",
+                "computer: неверные аргументы ({error}). Действие не выполнено. Используй поля схемы computer; для UIA — action=read_window/find_elements/act_element, для ввода — events.",
+                error=str(error))
         action = str(kwargs.get("action") or (args[0] if args else "") or "").strip().lower()
         live.refresh()
         if not live.enabled:
-            where = ("тело в поставке есть, включается в Настройках — карточка "
-                     "«Управление компьютером»" if STATE.get("available") else
-                     f"и тела в поставке нет ({BRIDGE_EXE}, {BODY_EXE} рядом с программой)")
-            return (f"Рука окон выключена владельцем: {where}. Ограда здесь ни при чём — "
-                    "это отдельная опция, она не зависит от режима.")
+            where = (_body_word(agent_mod,"available",
+                     "тело в поставке есть, включается в Настройках — карточка «Управление компьютером»")
+                     if STATE.get("available") else _body_word(agent_mod,"absent",
+                     "и тела в поставке нет ({bridge}, {body} рядом с программой)",bridge=BRIDGE_EXE,body=BODY_EXE))
+            return _body_refusal(agent_mod,"disabled",
+                "Рука окон выключена владельцем: {where}. Ограда здесь ни при чём — это отдельная опция, она не зависит от режима.",
+                where=where)
         required = action_scopes.get(action)
         if action == "observe" and (kwargs.get("path") or (len(args) > 1 and args[1])):
             required = "computer.files"
         if required and required not in live.scopes:
-            given = ", ".join(live.scopes) or "ни одного"
-            return (f"Владелец не выдал право `{required}` — {SCOPE_WORDS.get(required, required)}. "
-                    f"Выдано: {given}. Галочки — в Настройках, карточка «Управление "
-                    f"компьютером»; уговаривать меня бесполезно, решает он.")
+            given = ", ".join(live.scopes) or _body_word(agent_mod,"none","ни одного")
+            meaning=(_body_word(agent_mod,"scope."+required.split(".")[-1],SCOPE_WORDS[required])
+                     if required in SCOPE_WORDS else required)
+            return _body_refusal(agent_mod,"missing_scope",
+                "Владелец не выдал право `{required}` — {meaning}. Выдано: {given}. Галочки — в Настройках, карточка «Управление компьютером»; уговаривать меня бесполезно, решает он.",
+                required=required,meaning=meaning,given=given)
         if action == "run" and str(kwargs.get("execution") or "").strip().lower() == "system":
             if os.environ.get('HELENE_BROKER_DISABLED') == '1':
-                return 'execution=system недоступен: брокер исключён из Python-поставки.'
+                return _body_refusal(agent_mod,"system_disabled",'execution=system недоступен: брокер исключён из Python-поставки.')
             if isinstance(_BODY, RemoteBody):
                 return _remote_system(kwargs)
             return _system_via_broker(agent_mod, kwargs)
         if not STATE.get("available") or _BODY is None:
-            logs = ", ".join(STATE.get("logs") or []) or "нет"
-            return (f"Опция включена, но тело не поднялось: {STATE.get('reason')}. "
-                    f"Логи: {logs}")
+            logs = ", ".join(STATE.get("logs") or []) or _body_word(agent_mod,"no_logs","нет")
+            return _body_refusal(agent_mod,"not_started",
+                "Опция включена, но тело не поднялось: {reason}. Логи: {logs}",reason=STATE.get('reason'),logs=logs)
         if STATE.get("connected") is not True and action != "status":
             # Быстрая проба перед отказом: тело подключается секунды, а сторож
             # ходит раз в 3–15 с.
             if not _BODY.probe(timeout=3.0):
-                return (f"Тело ещё не подключилось к мосту: {STATE.get('reason')}. "
-                        f"Мост pid {STATE.get('bridge_pid') or '—'}, тело pid "
-                        f"{STATE.get('body_pid') or '—'}; логи: "
-                        + ", ".join(STATE.get("logs") or []) + ". Повтори через несколько "
-                        "секунд или спроси `action=status`.")
+                return _body_refusal(agent_mod,"not_connected",
+                    "Тело ещё не подключилось к мосту: {reason}. Мост pid {bridge}, тело pid {body}; логи: {logs}. Повтори через несколько секунд или спроси `action=status`.",
+                    reason=STATE.get('reason'),bridge=STATE.get('bridge_pid') or '—',
+                    body=STATE.get('body_pid') or '—',logs=", ".join(STATE.get("logs") or []))
         out = original(*args, **kwargs)
-        # 1.2.5: имя протокола тела в каждой квитанции — слово чужого дома («praxis.body.v1»).
-        # Протокол тот же, меняется только то, что читает модель.
-        if isinstance(out, str) and PROTOCOL_WIRE in out:
-            out = out.replace(PROTOCOL_WIRE, PROTOCOL_SAID)
         if action == "status" and isinstance(out, str) and sys.platform == "win32":
-            out += "\n" + ('execution=system недоступен: брокер исключён из Python-поставки.'
-                            if os.environ.get('HELENE_BROKER_DISABLED') == '1' else SYSTEM_ROUTE_NOTE)
-        # 25.09 (D2): результаты руки на Mac — словами Mac. Строка состояния и отказы
-        # маршрутов у дерева написаны под Windows («Windows body», «Session 0», «UI
-        # Automation tree»); отсюда у людей «на Mac UIA не реализовано» — AX реализован,
-        # врали слова. Схему правит describe_for_mac, результаты — здесь.
-        if isinstance(_BODY, RemoteBody):
-            return out
-        if sys.platform == "darwin" and isinstance(out, str):
-            return mac_result_text(out)
-        if sys.platform.startswith("linux") and isinstance(out, str):
-            return linux_result_text(out)
-        return out
+            out += "\n" + (_body_word(agent_mod,"system_disabled",'execution=system недоступен: брокер исключён из Python-поставки.')
+                            if os.environ.get('HELENE_BROKER_DISABLED') == '1'
+                            else _body_word(agent_mod,"system_route",SYSTEM_ROUTE_NOTE))
+        return _present_computer_result(agent_mod, out, remote=isinstance(_BODY, RemoteBody))
 
     computer._helene_body = True
     computer.__wrapped__ = original
@@ -1592,7 +1622,9 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     computer.__doc__ = getattr(original, "__doc__", "")
     impl["computer"] = computer
     import computer_steps
-    computer_steps.install(agent_mod, call, device_id=lambda: _settings()[2], tree=tree)
+    computer_steps.install(agent_mod, call,
+                           platform="win32" if isinstance(_BODY, RemoteBody) else sys.platform,
+                           device_id=lambda: _settings()[2], tree=tree)
     if isinstance(_BODY, RemoteBody):
         # Canonical computer schema already describes the Windows target.
         pass
@@ -1686,6 +1718,8 @@ def results_for_mac(agent_mod, say=None) -> bool:
     `computer action=status` возвращает эту строку как есть, а рука зовёт её по имени
     модуля в момент вызова — подмена атрибута работает и не удваивается.
     """
+    if getattr(agent_mod, "FRAME_TEXT_BOUNDARIES_API", 0) == 1:
+        return False
     client = getattr(agent_mod, "body_client", None)
     fn = getattr(client, "state_line", None)
     if not callable(fn) or getattr(fn, "_helene_mac", False):
@@ -1749,6 +1783,8 @@ def describe_for_mac(agent_mod, texts=None, platform: str = "macOS") -> int:
     схемы может лежать в нескольких списках — правки идемпотентны, повтор
     безвреден. -> сколько схем тронуто.
     """
+    if getattr(getattr(agent_mod, "tool_language", None), "NEUTRAL_COMPUTER_SCHEMA_API", 0) == 1:
+        return 0
     seen: set[int] = set()
     for attr in _TOOL_LISTS:
         lst = getattr(agent_mod, attr, None)
@@ -1824,6 +1860,8 @@ def pointers_for_mac(agent_mod, say=None) -> int:
     английская проекция, которую модель читает при включённом рычаге. Правится то,
     что есть; чужая форма словаря не роняет.
     """
+    if getattr(agent_mod, "FRAME_TEXT_BOUNDARIES_API", 0) == 1:
+        return 0
     touched = 0
     ru = getattr(agent_mod, "HAND_PURPOSE", None)
     en_mod = getattr(agent_mod, "tool_text_en", None)
@@ -1849,6 +1887,8 @@ def owner_words_for_mac(agent_mod, say=None) -> bool:
     ТОЛЬКО его; всё остальное уходит в `mark` как пришло, тем же объектом — как
     `mark` и обещает. Повторный вызов обёртку не удваивает.
     """
+    if getattr(agent_mod, "FRAME_TEXT_BOUNDARIES_API", 0) == 1:
+        return False
     ft = getattr(agent_mod, "frame_trace", None)
     mark = getattr(ft, "mark", None)
     if not callable(mark):

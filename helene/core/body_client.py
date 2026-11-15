@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
+import frame_language
 
 
 PROTOCOL = "praxis.body.v1"
@@ -1741,21 +1742,23 @@ def _context_available(probe: dict, kind: str) -> bool | None:
     return None
 
 
+@frame_language.pinned
 def state_line() -> str:
     if not available():
-        return "Windows body: controller token не настроен"
+        return frame_language.text("body.state.unconfigured")
     probe = status_probe_cached()
     if not probe.get("ok"):
         detail = probe.get("system_error") or probe.get("error") or probe.get("code")
-        return f"Windows body: offline ({detail})"
+        return frame_language.text("body.state.offline",detail=detail)
     identity = probe.get("identity") or {}
     interactive = _context_available(probe, "interactive")
     system = _context_available(probe, "system")
     routes = []
     if interactive is not None:
-        routes.append(f"interactive={'ready' if interactive else 'not connected'}")
+        routes.append("interactive="+frame_language.text("body.state.ready" if interactive else "body.state.not_connected"))
     if system is not None:
-        routes.append(f"system={'ready' if system else 'unavailable'}")
+        routes.append("system="+frame_language.text("body.state.ready" if system else "body.state.unavailable"))
     suffix = ("; " + ", ".join(routes)) if routes else ""
-    return (f"Windows body {_settings()[2]}: {identity.get('kind')} / "
-            f"{identity.get('integrity')}; {PROTOCOL}{suffix}")
+    return frame_language.text("body.state.summary",device=_settings()[2],
+                               kind=identity.get('kind'),integrity=identity.get('integrity'),
+                               protocol=PROTOCOL,suffix=suffix)

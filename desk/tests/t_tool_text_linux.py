@@ -62,6 +62,8 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
         self.assertTrue(TREE_AGENT.is_file(), f"дерева нет там, где его ждут: {TREE_AGENT}")
 
     def test_owner_block_speaks_linux(self):
+        if re.search(r'(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$',TREE_AGENT.read_text(encoding='utf-8')):
+            self.skipTest('Boundary-aware core owns four-language captions; native installation matrix covers them')
         block = owner_block_text(TREE_AGENT)
         self.assertTrue(block, "в дереве не нашлось блока владельца")
         dead = [old for old, _ in body.LINUX_OWNER_TEXT if old not in block]
@@ -79,6 +81,10 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
     def test_russian_pointer_speaks_linux(self):
         ru = dict_entry(TREE_AGENT, "HAND_PURPOSE", "computer")
         self.assertTrue(ru, "в дереве нет HAND_PURPOSE[\"computer\"]")
+        if re.search(r'(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$',TREE_AGENT.read_text(encoding='utf-8')):
+            self.assertEqual(ru,'подключённый компьютер; доступные действия указаны в схеме')
+            self.assertEqual(body.linux_pointer_text(ru),ru)
+            return
         said = body.linux_pointer_text(ru)
         for word in ("Windows", "PowerShell", "Егора"):
             self.assertNotIn(word, said, f"после правки в указателе осталось «{word}»")
