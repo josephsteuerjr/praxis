@@ -239,12 +239,18 @@ TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
 
 _WRITE_LOCK = threading.RLock()
 # 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
-_EVENTS_CACHE: dict[str, tuple[tuple[int, int, int], list[dict]]] = {}
+_EVENTS_CACHE: dict[str, tuple[tuple[int, ...], list[dict]]] = {}
 _EVENTS_CACHE_GUARD = threading.Lock()
 # ⚠ Потолок считает БАЙТЫ ФАЙЛОВ, а в памяти разобранные записи весят в 2,5–3 раза больше
 # (ревью W1 S5, 26.09: 8 МБ ленты держат 22,9 МБ). Умолчание 128 МБ файлов — это ~350 МБ
 # памяти процесса; прежние 512 МБ означали до ~1,4 ГБ на коробке, которая уже свопит.
 _EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "128") or 128)) * 1024 * 1024
+
+# Desktop budget stays unchanged; these derived indexes carry no durable authority.
+_EVENTS_CACHE_OVERFLOW_EVERY_SEC = 600.0
+_EVENTS_CACHE_OVERFLOW_AT: float | None = None
+_EVENT_LOOKUPS = {}
+_EVENT_LOOKUPS_LOCK = threading.RLock()
 _REFRESH_LOCKS_LOCK = threading.Lock()
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_LOCK = threading.Lock()
@@ -619,11 +625,18 @@ def _append_record(record: dict) -> None:
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
     with _WRITE_LOCK:
+        try:
+            before = path.stat()
+        except FileNotFoundError:
+            before = None
         fd = os.open(str(path), flags, 0o600)
         try:
-            os.write(fd, payload)
+            written = os.write(fd, payload)
         finally:
             os.close(fd)
+        after = path.stat()
+    if written == len(payload):
+        _note_indexed_append(path, json.loads(payload), before, after, written)
 
 
 def canonical_event_text(text, direction) -> str:
@@ -682,13 +695,109 @@ def events_cache_enabled() -> bool:
     return raw not in ("off", "0", "false", "no")
 
 
+def _note_indexed_append(path, record, before, after, written):
+    # Only an observed exact append over the same cached source can advance the
+    # accelerator. Concurrent append/replacement/truncation falls back to parsing.
+    if before is None or (before.st_dev, before.st_ino, before.st_size + written) != (
+            after.st_dev, after.st_ino, after.st_size):
+        return
+    key = str(path)
+    old = (before.st_size, before.st_mtime_ns, before.st_ino, before.st_ctime_ns, before.st_dev)
+    new = (after.st_size, after.st_mtime_ns, after.st_ino, after.st_ctime_ns, after.st_dev)
+    with _EVENTS_CACHE_GUARD:
+        parsed = _EVENTS_CACHE.get(key)
+        if parsed is not None and parsed[0] == old:
+            held = sum(v[0][0] for k, v in _EVENTS_CACHE.items() if k != key)
+            if events_cache_enabled() and held + after.st_size <= _EVENTS_CACHE_LIMIT:
+                _EVENTS_CACHE[key] = (new, parsed[1] + [_event_copy(record)])
+            else:
+                _EVENTS_CACHE.pop(key, None)
+    old_lookup = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    new_lookup = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    with _EVENT_LOOKUPS_LOCK:
+        hit = _EVENT_LOOKUPS.get(key)
+        if hit is not None and hit[0] == old_lookup:
+            held = sum(v[0][2] for k, v in _EVENT_LOOKUPS.items() if k != key)
+            if not events_cache_enabled() or held + after.st_size > _EVENTS_CACHE_LIMIT:
+                _EVENT_LOOKUPS.pop(key, None)
+                return
+            ids, dedupe, native = hit[1:]
+            ids.setdefault(str(record.get("id")), []).append(record)
+            if record.get("kind") == "conversation_message":
+                if record.get("dedupe_key"):
+                    dedupe.setdefault(str(record["dedupe_key"]), []).append(record)
+                tg = memory_provenance.telegram_message_key(record)
+                if tg is not None:
+                    native.setdefault(tg[1], []).append(record)
+            _EVENT_LOOKUPS[key] = (new_lookup, ids, dedupe, native)
+
+def _note_events_cache_overflow(path: Path, *, held: int, size: int, cache: str) -> None:
+    """Файл дня не влез под потолок — сказать вслух (не чаще раза в 10 минут на процесс).
+
+    Это не ошибка и не отказ: файл честно разбирается как раньше, просто на каждый вызов.
+    Но 09.10–07.11 ровно так месяц тихо стоила каждая запись входящего секунды (см.
+    `_EVENTS_CACHE_LIMIT`). Строка в логе — единственный способ заметить обрыв до жалобы."""
+    global _EVENTS_CACHE_OVERFLOW_AT
+    now = time.monotonic()
+    last = _EVENTS_CACHE_OVERFLOW_AT
+    if last is not None and now - last < _EVENTS_CACHE_OVERFLOW_EVERY_SEC:
+        return
+    _EVENTS_CACHE_OVERFLOW_AT = now
+    log.warning("events cache overflow [%s]: %s (%d B) не помещается — в кэше %d B, потолок "
+                "%d B (PRAXIS_EVENTS_CACHE_MB); этот файл разбирается заново на каждый вызов",
+                cache, path.name, size, held, _EVENTS_CACHE_LIMIT)
+
+def _lookup_events(*, event_id=None, dedupe_key=None, native_id=None) -> list[dict]:
+    found = []
+    paths = sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []
+    live = {str(p) for p in paths}
+    with _EVENT_LOOKUPS_LOCK:
+        for stale in set(_EVENT_LOOKUPS) - live:
+            _EVENT_LOOKUPS.pop(stale, None)
+        for path in paths:
+            st = path.stat()  # an unreadable source is not proof of no duplicate
+            stamp = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            key = str(path)
+            cached = _EVENT_LOOKUPS.get(key)
+            if cached is None or cached[0] != stamp or not events_cache_enabled():
+                ids, dedupe, native = {}, {}, {}
+                for row in _event_file_records(path):
+                    ids.setdefault(str(row.get("id")), []).append(row)
+                    if row.get("kind") != "conversation_message":
+                        continue
+                    if row.get("dedupe_key"):
+                        dedupe.setdefault(str(row["dedupe_key"]), []).append(row)
+                    tg = memory_provenance.telegram_message_key(row)
+                    if tg is not None:
+                        native.setdefault(tg[1], []).append(row)
+                cached = (stamp, ids, dedupe, native)
+                # Honor the existing cache switch/byte budget. Big days are queried
+                # correctly without retaining a second unbounded history index.
+                held = sum(v[0][2] for k, v in _EVENT_LOOKUPS.items() if k != key)
+                end = path.stat()
+                stable = stamp == (end.st_dev, end.st_ino, end.st_size,
+                                   end.st_mtime_ns, end.st_ctime_ns)
+                if stable and events_cache_enabled() and held + st.st_size <= _EVENTS_CACHE_LIMIT:
+                    _EVENT_LOOKUPS[key] = cached
+                else:
+                    _EVENT_LOOKUPS.pop(key, None)
+                    if stable and events_cache_enabled():
+                        _note_events_cache_overflow(path, held=held, size=st.st_size,
+                                                    cache="lookups")
+            index, value = ((cached[1], str(event_id)) if event_id is not None else
+                            (cached[2], str(dedupe_key)) if dedupe_key is not None else
+                            (cached[3], int(native_id)))
+            found.extend(_event_copy(row) for row in index.get(value, ()))
+    return sorted(found, key=lambda r: (_epoch(r.get("ts")), str(r.get("id", ""))))
+
+
 def _event_file_records(path: Path) -> list[dict]:
     """Записи одного файла ленты — из кэша, если файл не менялся."""
     try:
         stat = path.stat()
     except OSError:
         return []
-    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_ctime_ns, stat.st_dev)
     key = str(path)
     enabled = events_cache_enabled()
     if enabled:
@@ -698,7 +807,8 @@ def _event_file_records(path: Path) -> list[dict]:
             return hit[1]
     try:
         # 26.09 (ревью W3 S6): только "\n" — U+2028 внутри текста реплики не режет запись.
-        lines = path.read_text(encoding="utf-8", errors="ignore").split("\n")
+        with path.open("rb") as source:
+            lines = source.read(stat.st_size).decode("utf-8", errors="ignore").split("\n")
     except OSError:
         return []
     records: list[dict] = []
@@ -711,13 +821,20 @@ def _event_file_records(path: Path) -> list[dict]:
             continue
         if isinstance(rec, dict):
             records.append(rec)
-    if enabled:
+    current = path.stat()
+    stable = signature == (current.st_size, current.st_mtime_ns, current.st_ino,
+                           current.st_ctime_ns, current.st_dev)
+    if enabled and stable:
+        overflow = None
         with _EVENTS_CACHE_GUARD:
             held = sum(sig[0] for name, (sig, _rows) in _EVENTS_CACHE.items() if name != key)
             if held + stat.st_size <= _EVENTS_CACHE_LIMIT:
                 _EVENTS_CACHE[key] = (signature, records)
             else:
                 _EVENTS_CACHE.pop(key, None)
+                overflow = held
+        if overflow is not None:
+            _note_events_cache_overflow(path, held=overflow, size=stat.st_size, cache="records")
     return records
 
 
@@ -776,16 +893,9 @@ def get_event(event_id: str) -> dict | None:
 def _recent_duplicate(chat_id, key: str, state: dict) -> dict | None:
     if not key:
         return None
-    for item in reversed(state.get("dedupe") or []):
-        if item.get("key") == key:
-            return get_event(str(item.get("id") or "")) or {"id": item.get("id"), "duplicate": True}
-    # Covers a crash after JSONL append but before the state cursor was replaced.
-    # 26.09: запись с тем же ключом дедупа ищется по всей ленте места — сначала по ключу
-    # (дёшево), место спрашивается только у совпавших. Ключ дедупа — это сообщение и его
-    # ревизия, совпадение за пределами прежних 400 строк — тот же дубль, не другое.
-    for rec in reversed(iter_events(chat_id=chat_id, kinds={"conversation_message"}, limit=400,
-                                    where=lambda row: row.get("dedupe_key") == key)):
-        if rec.get("dedupe_key") == key:
+    # Query the canonical key even after restart or append-before-state failure.
+    for rec in reversed(_lookup_events(dedupe_key=key)):
+        if _same_place(rec.get("chat_id"), chat_id):
             return rec
     return None
 
@@ -832,9 +942,7 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
             # 26.09: только записи того же сообщения — место спрашивается у них одних.
             native = int(telegram_key[1])
             lineage = _telegram_lineage_event_ids(
-                iter_events(chat_id=chat_id, kinds={"conversation_message"},
-                            where=lambda row: (memory_provenance.telegram_message_key(row)
-                                               or ("", -1))[1] == native),
+                [row for row in _lookup_events(native_id=native) if _same_place(row.get("chat_id"), chat_id)],
                 native,
             )
         if revision_kind in {"edit", "delete"} or len(lineage) > 1:
@@ -875,9 +983,7 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
         chat_id = place
         # 26.09: только записи этого сообщения — место спрашивается у них одних.
         wanted = int(message_id)
-        messages = iter_events(chat_id=chat_id, kinds={"conversation_message"},
-                               where=lambda row: (memory_provenance.telegram_message_key(row)
-                                                  or ("", -1))[1] == wanted)
+        messages = [row for row in _lookup_events(native_id=wanted) if _same_place(row.get("chat_id"), chat_id)]
         lineage_ids = _telegram_lineage_event_ids(messages, message_id)
         state = _load_state(chat_id, rebuild=True)
         if not lineage_ids:
