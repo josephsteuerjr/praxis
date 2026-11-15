@@ -65,7 +65,7 @@ class DesktopRecovery(unittest.TestCase):
         reply=forge.agent(self.tid,'poll',agent_id='agent-old')
         self.assertIn('"status": "lost"',reply)
         self.assertIn('"custody_recovered": true',reply)
-        self.assertIn('extinct',forge.agent(self.tid,'stop',agent_id='agent-old'))
+        self.assertIn(forge.frame_language.text('forge.workers.38',v0='agent-old'),forge.agent(self.tid,'stop',agent_id='agent-old'))
         self.assertEqual(forge.control(self.tid,'stop',agent_id='agent-old')['status'],'settled')
         self.assertEqual(self.history(directory),before)
         self.assertFalse((directory/'result.json').exists())

@@ -237,9 +237,7 @@ class WorkerTree(unittest.TestCase):
             message = self.call("stop", agent_id="agent-aaaaaaaa")
         self.assertIn("agent-cccccccc: не остановлен: uncertain", message)
         self.assertIn("agent-bbbbbbbb: остановлен", message)
-        self.assertIn("agent descendants and their process/verification jobs were fenced", message)
-        self.assertIn("unresolved custody retains its worker", message)
-        self.assertIn("unrelated task jobs were preserved", message)
+        self.assertIn(forge.frame_language.text('forge.workers.54'), message)
         self.assertEqual((a / "result.json").read_bytes(), original)
         self.assertFalse((c / "result.json").exists(), "uncertain kill is never a terminal result")
         self.assertEqual(json.loads((b / "result.json").read_text())["status"], "stopped")
@@ -262,7 +260,7 @@ class WorkerTree(unittest.TestCase):
         with mock.patch.object(forge, "_kill_tree", return_value=forge.KillTreeReply("остановлен", status='stopped')), \
              mock.patch.object(forge, "_pid_alive", return_value=True):
             answer = self.call("stop", agent_id="agent-aaaaaaaa")
-        self.assertIn("unknown: stop acknowledged but supervisor remains alive", answer)
+        self.assertIn(forge.frame_language.text('forge.workers.50'), answer)
         unit = self.dir / "agents/agent-aaaaaaaa"
         self.assertFalse((unit / "result.json").exists())
         self.assertEqual(json.loads((unit / "stop.json").read_text())["state"], 'unresolved')
@@ -281,7 +279,8 @@ class WorkerTree(unittest.TestCase):
              mock.patch.object(forge, "_group_live_members", side_effect=lambda *a: live[0]), \
              mock.patch.object(forge, "_kill_tree", side_effect=stop) as kill:
             message = self.call("stop", agent_id="agent-aaaaaaaa")
-        self.assertIn("result retained (результат сохранён); supervisor group stop: остановлен", message)
+        self.assertIn(forge.frame_language.text('forge.workers.44', v1='done')
+                      +forge.frame_language.text('forge.workers.46', v1='остановлен'), message)
         self.assertEqual((unit / "result.json").read_bytes(), original)
         kill.assert_called_once()
 
@@ -293,7 +292,7 @@ class WorkerTree(unittest.TestCase):
              mock.patch.object(forge, "_group_live_members", side_effect=[True, False]), \
              mock.patch.object(forge, "_kill_tree", return_value=forge.KillTreeReply("остановлен", status='stopped')) as kill:
             message = self.call("stop", agent_id="agent-aaaaaaaa")
-        self.assertIn("supervisor group stop: остановлен", message)
+        self.assertIn(forge.frame_language.text('forge.workers.46', v1='остановлен'), message)
         self.assertEqual((unit / "result.json").read_bytes(), original)
         kill.assert_called_once()
 

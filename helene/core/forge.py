@@ -4876,12 +4876,13 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
                 "reason": resumed["queued_reason"]}
 
 
+@frame_language.pinned
 def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tuple[str, set]:
     """Shared existing agent Stop path, retaining per-unit immutable history."""
     import forge_recovery
     visited = set()
     if not _unit_dir(task_id, "agents", agent_id).is_dir():
-        return f"Нет субагента {agent_id}.", visited
+        return frame_language.text('forge.workers.36', v1=f'{agent_id}'), visited
     try:
         with _mutation_lock(task_id):
             # The entire discovered subtree is fixed under the same admission lock.
@@ -4897,14 +4898,14 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                                  "requested_by": parent_id or "root", "target": agent_id,
                                  "state": "pending"})
     except TimeoutError as exc:
-        return f"Stop not fenced: {exc}", visited
+        return frame_language.text('forge.workers.37', v1=f'{exc}'), visited
     receipts = []
     # Deepest children first: each Forge worker has its OWN process session.
     for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
         directory = _unit_dir(task_id, "agents", unit)
         visited.add(('agents', unit))
         if forge_recovery.read_recovery(directory):
-            receipts.append(f'{unit}: old execution boundary extinct; historical outcome retained')
+            receipts.append(frame_language.text('forge.workers.38', v0=f'{unit}'))
             continue
         if os.name == 'nt' and (directory/'custody-reboot-witness.json').exists():
             receipts.append(_windows_stop(directory))
@@ -4933,7 +4934,7 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
         request = _read_json(directory / "request.json", {}) or {}
         never_started = request.get('status') == 'queued' and not request.get('supervisor_pid')
         if unresolved_commands and not never_started:
-            note = 'owned command/check exit unproven; worker retained: ' + ','.join(unresolved_commands)
+            note = frame_language.text('forge.workers.39') + ','.join(unresolved_commands)
             receipt = _read_json(directory / 'stop.json', {}) or {}
             receipt.update(state='unresolved', observed_at=_now(), note=note)
             _atomic_json(directory / 'stop.json', receipt)
@@ -4952,20 +4953,20 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
             # Resume creates another unit identity. Rechecking other group
             # members must not replace this exact unit's proven Stop with
             # uncertainty merely because its stopped Windows PID is absent.
-            receipts.append(f"{unit}: settled Stop receipt and result retained")
+            receipts.append(frame_language.text('forge.workers.40', v0=f'{unit}'))
             continue
         stop_confirmed = False
         if request.get("status") == "queued" and not request.get("supervisor_pid"):
             if not isinstance(prior, dict):
                 prior = {"status": "stopped", "finished": _now(), "never_started": True,
-                         "note": "queued request stopped before process admission"}
+                         "note": frame_language.text('forge.workers.41')}
                 _atomic_json(directory / "result.json", prior)
-            outcome = "queued unit never started; result retained"
+            outcome = frame_language.text('forge.workers.42')
             stop_confirmed = True
         elif (os.name == "nt" and request.get("supervisor_pid")
               and not _pid_alive(int(request["supervisor_pid"]), str(request.get("supervisor_started_at") or ""))
               and _snapshot_reviewer_has_no_children(task_id, request)):
-            outcome = "bound snapshot reviewer exited; executable tools and delegation were unavailable"
+            outcome = frame_language.text('forge.workers.43')
             stop_confirmed = True
             if not isinstance(prior, dict) or prior.get("status") not in _TERMINAL_AGENT_STATES:
                 with _mutation_lock(task_id):
@@ -4974,7 +4975,7 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                         _atomic_json(directory / "result.json", {**current_result,
                             "status": "stopped", "stopped": _now(), "finished": _now(), "note": outcome})
         elif isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
-            outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
+            outcome = frame_language.text('forge.workers.44', v1=f"{prior.get('status')}")
             # A result is not process-death evidence. The worker may still be
             # unwinding (or have left a descendant); stop it when its bound
             # supervisor is observed alive, without rewriting the result.
@@ -4988,32 +4989,32 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                     remaining = (_group_live_members(pid) if os.name != "nt"
                                  else _pid_alive(pid, born))
                     if remaining is not False:
-                        stopped = "unknown: stop acknowledged but group exit unproven"
+                        stopped = frame_language.text('forge.workers.45')
                 stop_confirmed = _kill_tree_state(stopped) == "stopped"
-                outcome += f"; supervisor group stop: {stopped}"
+                outcome += frame_language.text('forge.workers.46', v1=f'{stopped}')
             elif pid and group_live is False:
                 stop_confirmed = True
             elif not pid:
-                outcome += "; group identity absent; descendant liveness unproven"
+                outcome += frame_language.text('forge.workers.47')
             elif group_live is None:
-                outcome += "; group liveness unproven after terminal result"
+                outcome += frame_language.text('forge.workers.48')
         else:
             current = _unit_state(directory)
             pid = int(current.get("supervisor_pid") or 0)
             outcome = (_kill_tree(pid, str(current.get("supervisor_started_at") or ""),
                                   expect=str(directory / "request.json"))
-                       if pid else "unknown: supervisor pid absent")
+                       if pid else frame_language.text('forge.workers.49'))
             # A successful signal/return code alone does not prove process exit.
             # Already gone without a result is LOST/UNKNOWN, not a clean stop.
             if _kill_tree_state(outcome) == "stopped" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
-                outcome = "unknown: stop acknowledged but supervisor remains alive"
+                outcome = frame_language.text('forge.workers.50')
             if _kill_tree_state(outcome) == "stopped":
                 stop_confirmed = True
                 with _mutation_lock(task_id):
                     result_path = directory / "result.json"
                     current_result = _read_json(result_path)
                     if result_path.exists() and not isinstance(current_result, dict):
-                        outcome = "worker result unreadable; терминальный статус НЕ записан"
+                        outcome = frame_language.text('forge.workers.51')
                     elif not isinstance(current_result, dict) or str(current_result.get("status") or "") in {
                         "running", "starting", "finishing",
                     }:
@@ -5026,9 +5027,9 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
                         emit_unit_event(task_id, unit, stopped,
                                         request=_read_json(directory / "request.json", {}) or {})
                     else:
-                        outcome = "worker settled concurrently; result retained"
+                        outcome = frame_language.text('forge.workers.52')
             else:
-                outcome += " — терминальный статус НЕ записан"
+                outcome += frame_language.text('forge.workers.53')
         receipt = _read_json(directory / "stop.json", {}) or {}
         receipt.update({"observed_at": _now(),
                         "state": "settled" if stop_confirmed else "unresolved",
@@ -5038,11 +5039,11 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
         receipts.append(f"{unit}: {outcome}")
         _event(task_id, "agent_stopped" if stop_confirmed
                else "agent_stop_uncertain", agent_id=unit, summary=outcome)
-    message = ("\n".join(receipts) + "\n[scope] agent descendants and their process/verification jobs were fenced; "
-               "unresolved custody retains its worker; unrelated task jobs were preserved.")
+    message = ("\n".join(receipts) + frame_language.text('forge.workers.54'))
     return message, visited
 
 
+@frame_language.pinned
 def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "",
             host_binding: str = "", reason: str = "") -> dict:
     """Owner/coordinator control. Submission is not an assertion of process exit."""
@@ -5050,7 +5051,7 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     if action not in {"stop", "pause", "resume", "prepare_recovery", "recover"}:
         return {"status": "refused", "reason": "action: stop | pause | resume | prepare_recovery | recover"}
     if agent_id and not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", agent_id):
-        return {"status": "refused", "reason": "invalid agent identity"}
+        return {"status": "refused", "reason": frame_language.text('forge.workers.56')}
     if action in {'prepare_recovery', 'recover'}:
         import forge_windows_custody
         return forge_windows_custody.recovery_control(sys.modules[__name__], task_id, action,
@@ -5065,16 +5066,16 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
             import forge_runtime
             progress = forge_runtime.read_progress(_unit_dir(task_id, "agents", agent_id))
             if expected_generation and progress.get("generation") != expected_generation:
-                return {"status": "refused", "reason": "generation changed"}
+                return {"status": "refused", "reason": frame_language.text('forge.workers.57')}
         else:
             if task.get("status") not in LIVE_TASK_STATUSES and action != "stop":
-                return {"status": "refused", "reason": "terminal task cannot be revived"}
+                return {"status": "refused", "reason": frame_language.text('forge.workers.58')}
             previous = _read_json(_task_dir(task_id) / "control.json", {}) or {}
             if action == "resume":
                 if previous.get("action") != "pause":
-                    return {"status": "refused", "reason": "only explicit task Pause can resume"}
+                    return {"status": "refused", "reason": frame_language.text('forge.workers.59')}
                 _atomic_json(_task_dir(task_id) / "control.json", {"action": "resume", "at": _now()})
-                return {"status": "resumed", "reason": "admission open; select safe unit continuations explicitly"}
+                return {"status": "resumed", "reason": frame_language.text('forge.workers.60')}
             _atomic_json(_task_dir(task_id) / "control.json", {"action": action, "at": _now()})
             if action == "stop" and task.get("status") in LIVE_TASK_STATUSES:
                 task.update(status="stopped", finished=_now())
