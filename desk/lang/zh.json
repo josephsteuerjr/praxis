@@ -4051,5 +4051,13 @@
   "native.mcp.exited": "Windows MCP 已退出。请选择启动。",
   "native.mcp.unsupported_platform": "Windows MCP 需要 Windows x64。",
   "native.mcp.remote_unavailable": "选定的 Windows 计算机不可用。请在该计算机的应用中检查配对连接和本地权限。",
-  "native.mcp.remote_refused": "选定 Windows 计算机的所有者未允许此调用。操作未发送给执行端；请检查连接的本地权限。"
+  "native.mcp.remote_refused": "选定 Windows 计算机的所有者未允许此调用。操作未发送给执行端；请检查连接的本地权限。",
+  "remote.mcp.checking": "Windows MCP：正在检查选定计算机…",
+  "remote.mcp.unknown": "Windows MCP：选定计算机的状态尚未确认。请检查该 Windows 计算机上的应用。",
+  "remote.mcp.offline": "Windows MCP：选定计算机已离线；组件状态未知。",
+  "remote.mcp.install": "Windows MCP · MIT：选定计算机尚未安装此组件。请在该 Windows 计算机应用的“组件”中下载。组件随应用启动，并遵守所有者授予的权限。",
+  "remote.mcp.running": "Windows MCP 正在选定计算机上运行 · 工具数：{count}。",
+  "remote.mcp.starting": "Windows MCP 正在选定计算机上启动…",
+  "remote.mcp.stopped": "Windows MCP 已安装在选定计算机上，但当前已停止。请在该 Windows 计算机应用的“组件”中启动。",
+  "remote.mcp.error": "选定计算机上的 Windows MCP 报告错误。请检查该 Windows 计算机应用的“组件”页面。"
 }

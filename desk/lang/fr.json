@@ -4051,5 +4051,13 @@
   "native.mcp.exited": "Windows MCP s’est arrêté. Choisir Démarrer.",
   "native.mcp.unsupported_platform": "Windows MCP exige Windows x64.",
   "native.mcp.remote_unavailable": "L’ordinateur Windows sélectionné est indisponible. Vérifie sa connexion associée et l’autorisation locale dans son application.",
-  "native.mcp.remote_refused": "Le propriétaire de l’ordinateur Windows sélectionné a refusé cet appel. Aucune action n’a été envoyée ; vérifie les autorisations locales de la connexion."
+  "native.mcp.remote_refused": "Le propriétaire de l’ordinateur Windows sélectionné a refusé cet appel. Aucune action n’a été envoyée ; vérifie les autorisations locales de la connexion.",
+  "remote.mcp.checking": "Windows MCP : vérification de l’ordinateur sélectionné…",
+  "remote.mcp.unknown": "Windows MCP : état non confirmé sur l’ordinateur sélectionné. Vérifie l’application sur cet ordinateur Windows.",
+  "remote.mcp.offline": "Windows MCP : l’ordinateur sélectionné est hors ligne ; l’état du module est inconnu.",
+  "remote.mcp.install": "Windows MCP · MIT : non installé sur l’ordinateur sélectionné. Télécharge-le dans Composants de l’application sur cet ordinateur Windows. Il démarre avec l’application et respecte les autorisations de son propriétaire.",
+  "remote.mcp.running": "Windows MCP fonctionne sur l’ordinateur sélectionné · outils : {count}.",
+  "remote.mcp.starting": "Windows MCP démarre sur l’ordinateur sélectionné…",
+  "remote.mcp.stopped": "Windows MCP est installé et arrêté sur l’ordinateur sélectionné. Démarre-le dans Composants de l’application sur cet ordinateur Windows.",
+  "remote.mcp.error": "Windows MCP a signalé une erreur sur l’ordinateur sélectionné. Vérifie Composants dans l’application sur cet ordinateur Windows."
 }

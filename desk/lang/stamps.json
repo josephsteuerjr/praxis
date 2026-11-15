@@ -20263,5 +20263,45 @@
     "en": "73220ff9",
     "fr": "73220ff9",
     "zh": "73220ff9"
+  },
+  "remote.mcp.checking": {
+    "en": "1e9c2bd3",
+    "fr": "1e9c2bd3",
+    "zh": "1e9c2bd3"
+  },
+  "remote.mcp.unknown": {
+    "en": "546789e3",
+    "fr": "546789e3",
+    "zh": "546789e3"
+  },
+  "remote.mcp.offline": {
+    "en": "cb71318d",
+    "fr": "cb71318d",
+    "zh": "cb71318d"
+  },
+  "remote.mcp.install": {
+    "en": "150ace79",
+    "fr": "150ace79",
+    "zh": "150ace79"
+  },
+  "remote.mcp.running": {
+    "en": "b7416dce",
+    "fr": "b7416dce",
+    "zh": "b7416dce"
+  },
+  "remote.mcp.starting": {
+    "en": "c7a7dd05",
+    "fr": "c7a7dd05",
+    "zh": "c7a7dd05"
+  },
+  "remote.mcp.stopped": {
+    "en": "a193fcc4",
+    "fr": "a193fcc4",
+    "zh": "a193fcc4"
+  },
+  "remote.mcp.error": {
+    "en": "66e12e27",
+    "fr": "66e12e27",
+    "zh": "66e12e27"
   }
 }

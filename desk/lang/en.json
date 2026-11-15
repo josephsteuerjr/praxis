@@ -4051,5 +4051,13 @@
   "native.mcp.exited": "Windows MCP exited. Choose Start.",
   "native.mcp.unsupported_platform": "Windows MCP requires Windows x64.",
   "native.mcp.remote_unavailable": "The selected Windows computer is unavailable. Check its paired connection and local permission in the app on that computer.",
-  "native.mcp.remote_refused": "The selected Windows computer’s owner did not permit this call. No action was dispatched; check the connection’s local permissions."
+  "native.mcp.remote_refused": "The selected Windows computer’s owner did not permit this call. No action was dispatched; check the connection’s local permissions.",
+  "remote.mcp.checking": "Windows MCP: checking the selected computer…",
+  "remote.mcp.unknown": "Windows MCP: status on the selected computer is unconfirmed. Check the app on that Windows computer.",
+  "remote.mcp.offline": "Windows MCP: the selected computer is offline; component status is unknown.",
+  "remote.mcp.install": "Windows MCP · MIT: not installed on the selected computer. Download it in Components in the app on that Windows computer. It starts with the app and uses the permissions granted by its owner.",
+  "remote.mcp.running": "Windows MCP is running on the selected computer · tools: {count}.",
+  "remote.mcp.starting": "Windows MCP is starting on the selected computer…",
+  "remote.mcp.stopped": "Windows MCP is installed on the selected computer and stopped. Start it in Components in the app on that Windows computer.",
+  "remote.mcp.error": "Windows MCP on the selected computer reported an error. Check Components in the app on that Windows computer."
 }

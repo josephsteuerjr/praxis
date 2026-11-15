@@ -1,4 +1,4 @@
-import { t as uiText, UiError } from "../../lang/lang";
+import { t as uiText, UiError, locale } from "../../lang/lang";
 /** Desktop access belongs to the local Windows owner; server settings stay on the server. */
 import { api, post, shell } from "../../ui-kit/window/api";
 import { button, card, el, toggle } from "../../ui-kit/dom";
@@ -14,20 +14,38 @@ type Remote = { enabled?: boolean; id?: string; scopes?: string[] };
 type Device = { id: string; name: string; connected: boolean; scopes: string[];
   identity?: { scopes?: string[]; system?: boolean } };
 type Picture = { selected: string; devices: Device[] };
+type McpPicture = { device_id: string; state: string; component?: {
+  installed: boolean; runtime: { running: boolean; tools: number; state: string } } | null };
+
+export function remoteMcpLine(picture: McpPicture, selected: string): string {
+  if (picture.device_id !== selected || picture.state !== "confirmed" || !picture.component)
+    return uiText("remote.mcp.unknown");
+  if (!picture.component.installed) return uiText("remote.mcp.install");
+  const runtime = picture.component.runtime;
+  if (runtime.running && runtime.state === "running") return uiText("remote.mcp.running", { count: runtime.tools.toLocaleString(locale()) });
+  return uiText(runtime.state === "starting" ? "remote.mcp.starting" : runtime.state === "error" ? "remote.mcp.error" : runtime.state === "stopped" ? "remote.mcp.stopped" : "remote.mcp.unknown");
+}
 
 export async function remoteComputerCard(context: EditionContext): Promise<HTMLElement> {
   const box = el("div");
   box.append(el("p", "dim", uiText("ui.app.src.remote.computer.5cded4e973")));
   const status = el("p", "dim", uiText("ui.app.src.remote.computer.4d76cdebee"));
   const devices = el("div");
-  box.append(status, devices);
+  const mcp = el("p", "dim"); mcp.hidden = true; mcp.dataset.remoteMcp = "status";
+  box.append(status, devices, mcp);
   let busy = false;
   let rendered = "";
+  let readSequence = 0;
+  let mcpTarget = "";
+  let mcpEpoch = 0;
+  let mcpPending = false;
   const refresh = async () => {
+    const sequence = ++readSequence;
     try {
       const picture = await api<Picture>(prefix + "/state");
+      if (sequence !== readSequence) return;
       const signature = JSON.stringify(picture);
-      if (signature === rendered) return; // keep keyboard focus during status polling
+      if (signature !== rendered) { // keep keyboard focus during status polling
       rendered = signature;
       devices.replaceChildren();
       status.textContent = picture.devices.length ? uiText("ui.app.src.remote.computer.7e02add735") : uiText("ui.app.src.remote.computer.a9e80f3816");
@@ -44,7 +62,29 @@ export async function remoteComputerCard(context: EditionContext): Promise<HTMLE
         })));
         devices.append(row);
       }
-    } catch (error) { status.textContent = humanError(error).text; }
+      }
+      const selected = picture.devices.find(device => device.id === picture.selected);
+      mcp.hidden = !selected;
+      const target = selected ? JSON.stringify([selected.id, selected.connected]) : "";
+      if (target !== mcpTarget) { mcpTarget = target; mcpEpoch++; mcp.textContent = selected?.connected ? uiText("remote.mcp.checking") : ""; }
+      if (selected) {
+        if (!selected.connected) { mcp.textContent = uiText("remote.mcp.offline"); return; }
+        if (!mcp.textContent) mcp.textContent = uiText("remote.mcp.checking");
+        // One status read in flight, without delaying settings or device selection.
+        // A late answer belongs to its exact selection/connection epoch.
+        if (!mcpPending) {
+          const epoch = mcpEpoch; mcpPending = true;
+          void api<McpPicture>(prefix + "/windows-mcp")
+            .then(answer => { if (epoch === mcpEpoch) mcp.textContent = remoteMcpLine(answer, picture.selected); })
+            .catch(() => { if (epoch === mcpEpoch) mcp.textContent = uiText("remote.mcp.unknown"); })
+            .finally(() => { mcpPending = false; if (epoch !== mcpEpoch && box.isConnected) void refresh(); });
+        }
+      }
+    } catch (error) {
+      if (sequence !== readSequence) return;
+      status.textContent = humanError(error).text;
+      if (!mcp.hidden) mcp.textContent = uiText("remote.mcp.unknown");
+    }
   };
   const action = async (fn: () => Promise<void>) => {
     if (busy) return;
