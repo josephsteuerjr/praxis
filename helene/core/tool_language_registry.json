@@ -4704,5 +4704,579 @@
       }
     ],
     "purpose": "schema.tool.purpose.manage_appetite"
+  },
+  "remind_self": {
+    "sha256": "63ac7fc345558621e6dd56cb00efd7964bf2d394a0f9483a3f287a08b505df39",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.3b795a25fdad946d",
+        "present": true,
+        "source": "Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет и не обязательство. kind: wake (разбудить себя СО СВЯЗЬЮ: живой ход, Telegram открыт) | window (уйти в фокус к сроку; на время окна Telethon закрыт — тебя не прерывают, но и живых диалогов нет) | message (в срок поднимется живой ход с этим текстом и адресатом — отправишь рукой send_message; сам текст автоматически не уходит) | note (напоминание себе/владельцу) | email. when: ISO datetime, or 'in 2h'/'in 30m'/'in 2m', 'today 14:00'/'tomorrow 10:00', 'daily 02:00' (recurring), 'every 4h'. target: recipient for email/message. Выбор между wake и window — про связь, а не про важность: нужно прочитать/написать живое — wake; нужно уединение и долгая работа над собой — window. Микро-ход: wake с when='in 2m' и заметкой в goal — проснёшься с этой заметкой на связи и решишь ЖИВЬЁМ, что сказать и кому (или промолчать; отправка — обычным send_message). after_run: <id рана> — намерение дождётся ЗАВЕРШЕНИЯ рана и созреет только после него (пример: «когда доделаю имплементацию — написать Арету, что журнал готов»; «когда кончится это окно — разбуди меня со связью» — это wake с after_run текущего рана)."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "kind",
+          "description"
+        ],
+        "key": "schema.tool.4e48ad4dfd74a837",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "goal",
+          "description"
+        ],
+        "key": "schema.tool.4bcfcc5169a1c615",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "when",
+          "description"
+        ],
+        "key": "schema.tool.65184f79f08ee811",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "target",
+          "description"
+        ],
+        "key": "schema.tool.e13d1d86bb932975",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "after_run",
+          "description"
+        ],
+        "key": "schema.tool.01fccc9069c7b83e",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.remind_self"
+  },
+  "telegram_account": {
+    "sha256": "9613176bbb6fa4897dd9f3c38f527417f41400443597b6f9f5503e51a3e036dd",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.1bb89e25ca0cdae6",
+        "present": true,
+        "source": "Telethon dispatcher for you and the owner. join/leave — real membership by invite, link, @username or id, with room onboarding/cleanup and exact receipts (not a raw Join/Leave). followups — durable thread ledger: what a thread already covered; a report goes out only if someone asked (watch_reply/unwatch_reply toggle it; cancel_followup drops the thread). list/search/describe/call expose the installed MTProto schema, including auth/session/logout/2FA/account state: those calls run directly, and their parameters and results are never echoed into receipts."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.86c280a6685ca0ff",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "target",
+          "description"
+        ],
+        "key": "schema.tool.cb235c634ea6ddab",
+        "present": true,
+        "source": "membership link/@username/chat id or request name"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "followup_id",
+          "description"
+        ],
+        "key": "schema.tool.a3ba704348fa5a7e",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.a6414aa1f8992f28",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "request",
+          "description"
+        ],
+        "key": "schema.tool.70461b4f74479acf",
+        "present": true,
+        "source": "exact functions.*Request name"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "params_json",
+          "description"
+        ],
+        "key": "schema.tool.bdfdfc54fb3c6652",
+        "present": true,
+        "source": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds}, unrestrict, ban_member {user_id}; purge_member {user_id} — ban + DeleteParticipantHistory for spammers; {history: true} — what was already done to the room"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "scope",
+          "description"
+        ],
+        "key": "schema.tool.1c40d61b1c9143dd",
+        "present": true,
+        "source": "optional telegram.* registry filter"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "namespace",
+          "description"
+        ],
+        "key": "schema.tool.e09c9d1ddff72f18",
+        "present": true,
+        "source": "optional registry namespace filter"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "risk",
+          "description"
+        ],
+        "key": "schema.tool.936f9924230652ff",
+        "present": true,
+        "source": "optional registry risk filter"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "offset",
+          "description"
+        ],
+        "key": "schema.tool.639b0fcd635f79b8",
+        "present": true,
+        "source": "list page offset"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.ff0746ccd8ca53e8",
+        "present": true,
+        "source": "list/search page size (default 25)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.telegram_account"
+  },
+  "manage_desire": {
+    "sha256": "b9c26780ddcd9bb9f3ca5e2c6ac5629ff630917d29a0410bb4dec6b44a5fbbf2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.c2a0c3463cd8ed3a",
+        "present": true,
+        "source": "Inspect or advance your own provenance-backed intention. The causal order is strict: notice -> want -> choose -> act -> observe -> change. `act` automatically links the current durable run; its RECAP later supplies observed evidence but never auto-claims the desire is satisfied. Use list/get for orientation, link_run for an already-spawned run, and reopen only for an explicitly revisited satisfied/released desire. Raw journal/reflection text is never valid provenance: cite independently verified conversation/run/artifact/owner evidence. Owner/internal scope only."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.673555a6748e8e23",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "desire_id",
+          "description"
+        ],
+        "key": "schema.tool.84f6326d8443c0c5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "statement",
+          "description"
+        ],
+        "key": "schema.tool.b97d2902a6cead7b",
+        "present": true,
+        "source": "notice: what I may want"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "source",
+          "description"
+        ],
+        "key": "schema.tool.ad26e07dab196cfc",
+        "present": true,
+        "source": "notice: what in lived evidence raised it"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "why_it_matters",
+          "description"
+        ],
+        "key": "schema.tool.6b7d5dd79fd8eec0",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "note",
+          "description"
+        ],
+        "key": "schema.tool.af8e70c18246830b",
+        "present": true,
+        "source": "ground for this causal transition"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "status",
+          "description"
+        ],
+        "key": "schema.tool.d7e358eb5ffdd718",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "next_move",
+          "description"
+        ],
+        "key": "schema.tool.f2d7f6183f1c4b94",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "run_id",
+          "description"
+        ],
+        "key": "schema.tool.b89dba88162e3839",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "evidence_refs",
+          "description"
+        ],
+        "key": "schema.tool.2320930359c43d5f",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "dedupe_key",
+          "description"
+        ],
+        "key": "schema.tool.33361ddbd3e5d038",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.manage_desire"
+  },
+  "update_profile": {
+    "sha256": "b957fa4a6c324ccf8329cdd6a2e875ac5b1b45504fd6584af171a7f77afbec50",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.c59caffb823f0630",
+        "present": true,
+        "source": "Update your own Telegram profile. about is the 'about me' text (usual limit about 70 characters; '-' clears it); first_name/last_name are your name, also yours ('-' in last_name removes it). Empty fields are left untouched; a server refusal is reported honestly. avatar sets your profile photo from a local path. Avatar and metadata are independent requests, with separate results."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "about",
+          "description"
+        ],
+        "key": "schema.tool.826b05796768d238",
+        "present": true,
+        "source": "'about me' text; '-' clears it"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "first_name",
+          "description"
+        ],
+        "key": "schema.tool.109990ae71c9f60f",
+        "present": true,
+        "source": "your first name"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "last_name",
+          "description"
+        ],
+        "key": "schema.tool.62479f164cc8ccfe",
+        "present": true,
+        "source": "your last name; '-' removes it"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "avatar",
+          "description"
+        ],
+        "key": "schema.tool.eac660d8c6bb8caf",
+        "present": true,
+        "source": "Local profile photo path; omitted means leave photo unchanged"
+      }
+    ],
+    "purpose": "schema.tool.purpose.update_profile"
+  },
+  "react": {
+    "sha256": "5643cf12bfb388592e5ab7fda32619cd87694a9879c98c6c512f1fb5b2e68dc9",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.48697200901362ee",
+        "present": true,
+        "source": "Поставить эмодзи-реакцию на сообщение — жест вместо слов. message_id — номер сообщения из контекста (#N); chat — где (пусто = текущий чат); emoji — один обычный эмодзи (❤️ 🔥 👍 😂 🤔 …; в чате может быть свой список разрешённых — отказ сервера верну честно); remove=true — снять свою реакцию."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "emoji",
+          "description"
+        ],
+        "key": "schema.tool.01c2484eaa1f66b5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "message_id",
+          "description"
+        ],
+        "key": "schema.tool.3b383055803c47ba",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "chat",
+          "description"
+        ],
+        "key": "schema.tool.5a7031a52739b188",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "remove",
+          "description"
+        ],
+        "key": "schema.tool.7f96d0a81e877f74",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.react"
+  },
+  "read_log": {
+    "sha256": "fbc4c5f2159a182ee1c3fdb023f034ae43faea45c6cc0f3d72b82e2fc7c293bf",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.fed6abefa48e74a3",
+        "present": true,
+        "source": "Your own runner log (survives container recreation): tail or substring grep. MSG lines carry sender ids (spammers included); brain HTTP errors land here too. query — filter substring; lines — last N matches (max 120). With unit, read a service container log (secrets masked): default 60, max 200 lines; omit query. The runner log defaults to 40, max 120 lines."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.a6e0484d02cd7e22",
+        "present": true,
+        "source": "substring to filter by (empty = plain tail)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "lines",
+          "description"
+        ],
+        "key": "schema.tool.c1c3ebec58e00a46",
+        "present": true,
+        "source": "Last lines: runner default 40/max120, service default60/max200"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "unit",
+          "description"
+        ],
+        "key": "schema.tool.ffbbfd7c5d44ad9e",
+        "present": true,
+        "source": "Optional service container name (praxis, praxis-mailbot, praxis-serverapp, relay)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.read_log"
+  },
+  "server_status": {
+    "sha256": "be4bf09b1354aa49f72930522f63852c271e8809c7a53579ebce942bb5813e3a",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.ddb68d9644f8e3c9",
+        "present": true,
+        "source": "Look at the machine you live on — READ-ONLY eyes, the first rung of the ladder. overview: host health (cpu, memory, disk, uptime, which commit you run on); containers: who is alive, who restarted, what they eat, whose isolation is loose; ports: what is exposed to the world. You cannot restart or change anything here — the observatory that serves this data cannot write, by construction. Use it when something feels off (a service you depend on may be down), before blaming your own code, or when Yegor asks about the server."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "section",
+          "description"
+        ],
+        "key": "schema.tool.a111c069f1c996db",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.server_status"
+  },
+  "manage_service": {
+    "sha256": "62870ffc9c89ba00eb545865a39f1b350e2bd8f93b3d10d3f0557d339b169bd2",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.45da75022529814f",
+        "present": true,
+        "source": "Your hands on your OWN services — the second rung. restart: ask a service to restart itself (mailbot, serverapp). It is a file signal, not a docker socket: only services that agreed to listen will hear you, and `relay` (a foreign process) will not — you can read its log and tell Yegor. list: what you may touch and your quota. Read the log first (read_log with unit): restarting without knowing why is a loop, not a fix. Restarting YOURSELF is a different, deliberate lever: restart_self."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.f53c148a523d7670",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "unit",
+          "description"
+        ],
+        "key": "schema.tool.1d310c005f282fe6",
+        "present": true,
+        "source": "service name, e.g. serverapp"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.ead5c9559cb4a7b7",
+        "present": true,
+        "source": "why — it lands in the receipt and journal"
+      }
+    ],
+    "purpose": "schema.tool.purpose.manage_service"
   }
 }

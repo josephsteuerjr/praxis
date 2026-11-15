@@ -20,7 +20,8 @@ REVIEWED = ('generate_image','recall','clear_owner_marks','remember','journal','
             'unschedule','send_message','narrate','home_note','git','code_outline','second_look','describe','call',
             'shell','fs_read','edit','fs_search','fs_ls','send_file','web_read','web_find',
             'send_email','check_email','mail_read','mail_draft_reply','task_control',
-            'manage_room','manage_notes','memory_compact','manage_loop','recent_turns','manage_appetite')
+            'manage_room','manage_notes','memory_compact','manage_loop','recent_turns','manage_appetite',
+            'remind_self','telegram_account','manage_desire','update_profile','react','read_log','server_status','manage_service')
 
 
 def stock():
@@ -88,6 +89,43 @@ class GeneralToolLanguages(unittest.TestCase):
                 self.assertIs(tool_language.apply([authored],fallback=tool_text_en.apply)[0],authored)
                 self.assertEqual(agent._hand_purpose(authored),RAW)
                 self.assertEqual(tool_language.coverage([authored],names=['manage_identity'])['stale'],['manage_identity'])
+
+    def test_actual_scout_model_boundary_uses_reviewed_schemas_and_pins_language_across_calls(self):
+        from types import SimpleNamespace
+        original=[tool for tool in list(agent.BASE_TOOLS)+list(agent.OWNER_TOOLS)
+                  if tool.get('name') in agent._SCOUT_TOOL_NAMES]
+        before=copy.deepcopy(original)
+        for ui in frame_language.LANGUAGES:
+            for language in frame_language.LANGUAGES:
+                settings={'lang':ui,'agent':{'frame_language':language}}
+                records=[];inputs=[]
+                def chat(role,**kwargs):
+                    records.append(copy.deepcopy(kwargs))
+                    settings['agent']['frame_language']='ru' if language!='ru' else 'zh'
+                    if len(records)==1:
+                        return SimpleNamespace(stop_reason='tool_use',blocks=[
+                            {'type':'tool_use','id':'read-literal','name':'fs_ls','input':{'path':RAW}}])
+                    return SimpleNamespace(stop_reason='end_turn',text=RAW,blocks=[])
+                def hand(**kwargs):
+                    inputs.append(copy.deepcopy(kwargs));return RAW
+                with self.subTest(ui=ui,frame=language), \
+                     patch.object(frame_language,'settings',side_effect=lambda:copy.deepcopy(settings)), \
+                     patch.object(agent,'_chat_cancellable',side_effect=chat), \
+                     patch.object(agent.llm,'limits',return_value=SimpleNamespace(max_tool_iters=4)), \
+                     patch.object(agent,'TOOL_IMPL',{'fs_ls':hand}),patch.object(agent,'tool_journal'):
+                    self.assertEqual(agent.second_look(RAW),RAW)
+                self.assertEqual(len(records),2)
+                self.assertEqual(inputs,[{'path':RAW}])
+                for record in records:
+                    self.assertEqual(structural(record['tools']),structural(original))
+                    self.assertIn(RAW,record['messages'][0]['content'])
+                    for tool in record['tools']:
+                        for entry in tool_language.registry()[tool['name']]['descriptions']:
+                            cursor=tool
+                            for part in entry['path']:cursor=cursor[part]
+                            self.assertEqual(cursor,frame_language.catalog(language)[entry['key']].format())
+                self.assertEqual(records[1]['messages'][-1]['content'][0]['content'],RAW)
+        self.assertEqual(original,before)
 
 
 if __name__=='__main__':unittest.main()

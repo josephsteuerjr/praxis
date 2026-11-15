@@ -8473,7 +8473,8 @@ def second_look(brief: str) -> str:
     if not (brief or "").strip():
         return frame_language.text('owned.agent.45c211521591')
     pool = list(BASE_TOOLS) + list(OWNER_TOOLS)
-    tools = [t for t in pool if t.get("name") in _SCOUT_TOOL_NAMES]
+    tools = tool_language.apply(
+        [t for t in pool if t.get("name") in _SCOUT_TOOL_NAMES], fallback=tool_text_en.apply)
     messages = [{"role": "user", "content": frame_language.text('prompt.brief', brief=brief.strip())}]
     report = ""
     try:
