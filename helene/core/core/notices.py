@@ -27,6 +27,8 @@
 """
 from __future__ import annotations
 
+import frame_language
+
 import json
 import os
 import logging
@@ -343,9 +345,24 @@ def pending(now: float | None = None) -> list[dict]:
 
 # ─────────────────────────────────────────────── блок в кадре
 
+
+@frame_language.pinned
+def _node_gist(row: dict) -> str:
+    # Render only this producer's exact typed prefix. Unknown/edited evidence
+    # and the authored goal tail stay literal; the stored ledger is untouched.
+    gist = str(row.get('gist') or '')
+    if not all(isinstance(row.get(key), str) and row[key] for key in ('task_id','unit_id','status')):
+        return gist
+    prefix = f"узел {row['unit_id']} задачи {row['task_id']} закончил: {row['status']}"
+    if not gist.startswith(prefix) or gist[len(prefix):] and not gist[len(prefix):].startswith(' — '):
+        return gist
+    return frame_language.text('notices.node_gist',unit=row['unit_id'],task=row['task_id'],
+                               status=row['status']) + gist[len(prefix):]
+
+@frame_language.pinned
 def _line(row: dict, *, owner_context: bool, fresh: bool, chat_id: str = "",
           audience: str = "") -> str:
-    mark = "НОВОЕ" if fresh else "прочитано"
+    mark = frame_language.text('owned.notices.7cef71deafa1') if fresh else frame_language.text('owned.notices.55e4a0b75667')
     when = _hhmm(row.get("ts") or 0)
     kind = row.get("kind")
     who = row.get("who") or "?"
@@ -354,23 +371,23 @@ def _line(row: dict, *, owner_context: bool, fresh: bool, chat_id: str = "",
     if kind == "node":
         node = project_node(row, owner=owner_context, chat_id=chat_id, audience=audience)
         if node.get("redacted"):
-            return f"• {mark}  Forge · узел закончил, {when} (подробности в исходной аудитории)"
-        lines = [f"• {mark}  {gist}, {when}"]
+            return frame_language.text('owned.notices.74750e2dcd7a', v0=mark, v1=when)
+        lines = [f"• {mark}  {_node_gist(row)}, {when}"]
         if node.get("authored_note"):
             lines.append(node["authored_note"])
         if node.get("result_ref"):
-            lines.append("Full result (separate evidence): " + json.dumps(
+            lines.append(frame_language.text('notices.result_prefix') + json.dumps(
                 node["result_ref"], ensure_ascii=False, sort_keys=True))
         return "\n".join(lines)
     if kind == "owner_decision":
-        return f"• {mark}  решение владельца (твоя запись, {when}): «{gist}»"
+        return frame_language.text('owned.notices.55ae0f21136d', v0=mark, v1=when, v2=gist)
     if kind == "owner_line":
         if owner_context:
-            return f"• {mark}  владелец в ЛС, {when}: «{gist}»"
-        return f"• {mark}  владелец написал в ЛС, {when} (содержимое — в ЛС)"
-    what = {"mention": "упоминание", "reply": "ответ на твоё сообщение",
-            "name": "назвали по имени", "dm": "написал(а) в ЛС"}.get(kind, kind)
-    place = "ЛС" if kind == "dm" else where
+            return frame_language.text('owned.notices.340c43fbfc3d', v0=mark, v1=when, v2=gist)
+        return frame_language.text('owned.notices.98579406841e', v0=mark, v1=when)
+    what = {"mention": frame_language.text('owned.notices.21750f7c9585'), "reply": frame_language.text('owned.notices.ad46f083a0f0'),
+            "name": frame_language.text('owned.notices.316e1e3f8f73'), "dm": frame_language.text('owned.notices.0c5631d3f117')}.get(kind, kind)
+    place = frame_language.text('owned.notices.49f1a1128f5a') if kind == "dm" else where
     if not owner_context:
         # Чужая комната достаётся только там, где она своя, либо в owner-аудитории — то же
         # правило, что у recall (A10 F2): вне её — кто и где, не что. Узлы Forge несут
@@ -379,6 +396,7 @@ def _line(row: dict, *, owner_context: bool, fresh: bool, chat_id: str = "",
     return f"• {mark}  {place} · {who} — {what}, {when}: «{gist}»"
 
 
+@frame_language.pinned
 def block_for_input(*, run_id: str, run_kind: str, chat_id, owner_context: bool,
                     busy_label: str = "", mid_turn: bool = False,
                     now: float | None = None, window: bool | None = None,
@@ -437,25 +455,25 @@ def block_for_input(*, run_id: str, run_kind: str, chat_id, owner_context: bool,
             if row.get("shown_first_at") is None:
                 row["shown_first_at"] = now
         _save(items)
-    head = "Пока идёт другое" + (f" ({busy_label})" if busy_label else "") + ":"
+    head = frame_language.text('owned.notices.41170ef68ba9') + (f" ({busy_label})" if busy_label else "") + ":"
     if mid_turn:
-        head = "Пока шла работа, пришло:"
+        head = frame_language.text('owned.notices.8bc61b1a4ec2')
     lines = [head] + [_line(row, owner_context=owner_context, fresh=fresh,
                            chat_id=chat, audience=audience)
                       for row, fresh in shown]
     if rest:
         by_place: dict[str, int] = {}
         for row, _fresh in rest:
-            place = ("ЛС" if row.get("kind") in ("dm", "owner_line") else
+            place = (frame_language.text('owned.notices.49f1a1128f5a') if row.get("kind") in ("dm", "owner_line") else
                      str(row.get("chat_title") or row.get("chat_id") or "?"))
             by_place[place] = by_place.get(place, 0) + 1
-        spread = ", ".join(f"{n} в {place}" for place, n in by_place.items())
-        lines.append(f"…и ещё {len(rest)} ({spread})")
-    lines.append("Это не будильник: закончишь текущее — зайдёшь в тот чат как обычно и "
-                 "решишь по ситуации.")
+        spread = ", ".join(frame_language.text('owned.notices.8ac4e8f58f68', v0=n, v1=place) for place, n in by_place.items())
+        lines.append(frame_language.text('owned.notices.451129d85b88', v0=len(rest), v1=spread))
+    lines.append(frame_language.text('owned.notices.c898187fd332'))
     return "\n".join(lines)
 
 
+@frame_language.pinned
 def state_line() -> str:
     """Одна строка для читалок состояния: сколько ждёт и где."""
     rows = pending()
@@ -464,4 +482,4 @@ def state_line() -> str:
     by_kind: dict[str, int] = {}
     for row in rows:
         by_kind[str(row.get("kind"))] = by_kind.get(str(row.get("kind")), 0) + 1
-    return "уведомлений в накопителе: " + ", ".join(f"{k} {n}" for k, n in sorted(by_kind.items()))
+    return frame_language.text('owned.notices.9576d46deb14') + ", ".join(f"{k} {n}" for k, n in sorted(by_kind.items()))

@@ -1247,6 +1247,7 @@ def build_runner_counters(*, split_counters: bool | None = None) -> dict | None:
     }
 
 
+@frame_language.pinned
 def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
     """Наблюдения, снятые раннером в этом ходе. `None` — хвостовой разрез выключен.
 
@@ -1304,8 +1305,7 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
     return {
         "snapped_by": "runner",
         "snapped_at": praxis_time.stamp(),
-        "note": ("наблюдения раннера на момент сборки этого хода; не постоянные факты. "
-                 "Рычаги восприятия и решения о них остались в STATE."),
+        "note": (frame_language.text('owned.agent.e27da85ba2da')),
         "observations": out,
     }
 
@@ -1344,18 +1344,19 @@ NOT_HERS_LABELS = (
 )
 
 
+@frame_language.pinned
 def _busy_label(current, ctx) -> str:
     """Чем она занята — для шапки блока уведомлений. Только слова, без чужих цитат."""
     kind = str(getattr(current, "kind", "") or "")
     if kind in ("task_window", "coding_window"):
         goal = " ".join(str(getattr(current, "goal", "") or "").split())
-        return f"окно «{goal[:48]}»" if goal else "окно"
+        return frame_language.text('owned.agent.bbe8fb502d77', v0=goal[:48]) if goal else frame_language.text('owned.agent.5943c4045eb8')
     if kind in ("wake", "heartbeat"):
-        return "Пробуждение"
+        return frame_language.text('owned.agent.8cf77f085437')
     title = str(getattr(ctx, "title", "") or "") if ctx is not None else ""
     if title:
-        return f"ход в «{title[:40]}»"
-    return "ход"
+        return frame_language.text('owned.agent.3d5169cbdfcf', v0=title[:40])
+    return frame_language.text('owned.agent.a4beab58fae9')
 
 
 def _live_window_run_ids() -> list[str]:
@@ -20375,6 +20376,7 @@ _BRAIN_MENTION_RE = re.compile(r"\b(?:gpt|glm|claude|deepseek|qwen)-[\w.\-]+|\b(
                                re.IGNORECASE)
 
 
+@frame_language.pinned
 def _appetite_interpretation_view(interpretation: dict) -> dict:
     """Её толкование просьбы об аппетитах — как запись с датой, а не как текущее состояние.
 
@@ -20392,7 +20394,7 @@ def _appetite_interpretation_view(interpretation: dict) -> dict:
         ts = 0.0
     if ts > 0:
         days = max(0, int((time.time() - ts) // 86400))
-        view["recorded"] = f"{time.strftime('%d.%m.%Y', time.gmtime(ts))} ({days} дн. назад)"
+        view["recorded"] = frame_language.text('owned.agent.df2809284180', v0=time.strftime('%d.%m.%Y', time.gmtime(ts)), v1=days)
     model = llm.role_model("voice")
     try:
         effort = str(llm._config()["roles"]["voice"].get("reasoning_effort") or "")
@@ -20404,9 +20406,7 @@ def _appetite_interpretation_view(interpretation: dict) -> dict:
         named = {m.group(0) for m in _BRAIN_MENTION_RE.finditer(text)}
         stale = sorted(n for n in named if n.casefold() not in model.casefold())
         if stale:
-            view["stale"] = (f"профиль из этой записи ({', '.join(stale)}) сейчас НЕ действует: "
-                             f"голос — {view['voice_now']}; факт — в brain_configuration, "
-                             "менять — switch_brain")
+            view["stale"] = (frame_language.text('owned.agent.9d5bb204cf46', v0=', '.join(stale), v1=view['voice_now']))
     return view
 
 
