@@ -2605,5 +2605,11 @@
   "native.body.system._remote_system.1460": "run execution=system: invalid timeout",
   "native.body.system._remote_system.1466": "The broker response did not confirm the selected Windows computer: ",
   "native.body.system._system_via_broker.1441": "Agent command requesting {p0} (computer, execution=system)",
-  "native.body.system._remote_system.1463": "Command on the selected Windows computer"
+  "native.body.system._remote_system.1463": "Command on the selected Windows computer",
+  "native.speech.turn_note": "Application voice channel: speak(text) is an independent asynchronous delivery channel. The reply rule concerns text. After the request is accepted, continue or finish the turn; the application handles synthesis and delivery. Failure or cancellation is possible; request acceptance does not mean audio was delivered. No text introduction, audio inspection, polling, send_media, second reply or follow-up turn is needed.",
+  "native.speech.description": "Speak asynchronously to the current chat. Call once and continue: the application handles synthesis and delivery, including after this turn ends. Failure or cancellation is possible. Do not wait, poll, review or transcribe audio, call send_media or send again. No text introduction, reply call or follow-up turn is required.",
+  "native.speech.purpose": "One voice request; application handles synthesis and delivery, no follow-up turn",
+  "native.speech.missing": "Speech unavailable: no confirmed turn, call or recipient.",
+  "native.speech.refused": "Speech request not accepted: {error}",
+  "native.speech.accepted": "Speech request accepted ({id}, {status}). This is the request state; determine execution and delivery from its receipt. The application handles synthesis and delivery; failure or cancellation is possible. Continue working: no waiting, audio inspection or repeated send is needed."
 }

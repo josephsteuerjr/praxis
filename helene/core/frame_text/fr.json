@@ -2605,5 +2605,11 @@
   "native.body.system._remote_system.1460": "run execution=system : délai invalide",
   "native.body.system._remote_system.1466": "La réponse du courtier n’a pas confirmé l’ordinateur Windows sélectionné : ",
   "native.body.system._system_via_broker.1441": "Commande de l’agent demandant {p0} (computer, execution=system)",
-  "native.body.system._remote_system.1463": "Commande sur l’ordinateur Windows sélectionné"
+  "native.body.system._remote_system.1463": "Commande sur l’ordinateur Windows sélectionné",
+  "native.speech.turn_note": "Canal vocal de l’application : speak(text) est une voie de livraison asynchrone indépendante. La règle reply concerne le texte. Après acceptation de la demande, continue ou termine le tour ; l’application gère la synthèse et la livraison. Un échec ou une annulation reste possible ; l’acceptation ne signifie pas que le son est livré. Ni introduction écrite, ni inspection audio, ni interrogation répétée, ni send_media, ni second reply, ni tour supplémentaire ne sont nécessaires.",
+  "native.speech.description": "Vocaliser le texte de façon asynchrone dans la conversation actuelle. Appelle une fois puis continue : l’application gère la synthèse et la livraison, même après la fin du tour. Un échec ou une annulation reste possible. N’attends pas, n’interroge pas le résultat en boucle, n’inspecte ni ne transcris l’audio, n’appelle pas send_media et ne renvoie pas le son. Ni introduction écrite, ni reply, ni tour supplémentaire ne sont nécessaires.",
+  "native.speech.purpose": "Une demande vocale ; l’application gère synthèse et livraison, sans tour supplémentaire",
+  "native.speech.missing": "Voix indisponible : tour, appel ou destinataire non confirmé.",
+  "native.speech.refused": "Demande vocale non acceptée : {error}",
+  "native.speech.accepted": "Demande vocale acceptée ({id}, {status}). C’est l’état de la demande ; sa preuve permet de vérifier l’exécution et la livraison. L’application gère synthèse et livraison ; un échec ou une annulation reste possible. Continue : inutile d’attendre, d’inspecter l’audio ou de le renvoyer."
 }

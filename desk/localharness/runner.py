@@ -785,8 +785,8 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         # кадр открывается «сработал приоритет, требуется действие».
         turn_orient = orient
         if getattr(_agent, '_application_speech', None) is not None:
-            from localharness.speech_bridge import TURN_NOTE
-            turn_orient = TURN_NOTE + '\n\n' + str(turn_orient or '')
+            from localharness.speech_bridge import turn_note
+            turn_orient = turn_note(_agent) + '\n\n' + str(turn_orient or '')
         if priority_note:
             turn_orient = str(priority_note) + "\n\n" + str(turn_orient or "")
         from contextlib import nullcontext

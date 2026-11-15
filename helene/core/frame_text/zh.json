@@ -2605,5 +2605,11 @@
   "native.body.system._remote_system.1460": "run execution=system：等待时限无效",
   "native.body.system._remote_system.1466": "代理响应未确认所选 Windows 计算机：",
   "native.body.system._system_via_broker.1441": "智能体命令，请求 {p0}（computer，execution=system）",
-  "native.body.system._remote_system.1463": "在所选 Windows 计算机上执行的命令"
+  "native.body.system._remote_system.1463": "在所选 Windows 计算机上执行的命令",
+  "native.speech.turn_note": "应用语音通道：speak(text) 是独立的异步发送通道。reply 规则针对文字。请求被接受后，可继续或结束本轮；应用负责合成与发送。仍可能失败或取消，接受请求不代表音频已送达。无需文字开场、检查音频、轮询、send_media、第二次 reply 或额外一轮。",
+  "native.speech.description": "在当前会话中异步朗读文字。调用一次后继续工作：应用负责合成和发送，即使本轮已结束。仍可能失败或取消。不要等待、轮询、检查或转写音频，不要调用 send_media 或重复发送。无需文字开场、reply 调用或额外一轮。",
+  "native.speech.purpose": "一次语音请求；应用负责合成与发送，无需额外一轮",
+  "native.speech.missing": "语音不可用：没有确认的轮次、调用或接收方。",
+  "native.speech.refused": "语音请求未被接受：{error}",
+  "native.speech.accepted": "语音请求已接受（{id}，{status}）。这是请求状态；执行与送达以回执为准。应用负责合成和发送，仍可能失败或取消。继续工作：无需等待、检查音频或重复发送。"
 }
