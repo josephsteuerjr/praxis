@@ -4673,7 +4673,7 @@ async def _direct_outbox_once() -> None:
             continue
         await _reconcile_direct_outbox_entry(accepted)
 
-    accepted_rows = await asyncio.to_thread(outbox.accepted, verify_files=False)
+    accepted_rows = await asyncio.to_thread(outbox.accepted, verify_files=False, exclude_keys=frozenset(_DIRECT_OUTBOX_RECONCILED))
     for entry in accepted_rows:
         if str(entry.get("key") or "") in _DIRECT_OUTBOX_RECONCILED:
             continue
