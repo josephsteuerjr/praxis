@@ -2991,6 +2991,7 @@ _HAND_CEILING_SEC = _env_sec("PRAXIS_TOOL_CEILING_SEC", 600.0)
 REMOTE_RUN_DEADLINE_SEC = _env_sec("PRAXIS_FORGE_REMOTE_RUN_SEC", 540.0)
 
 
+@frame_language.pinned
 def _remote_run_deadline(asked: int) -> tuple[int, str]:
     """Сколько секунд реально дадим удалённой команде + приписка ей. -> (срок, текст).
 
@@ -3012,19 +3013,15 @@ def _remote_run_deadline(asked: int) -> tuple[int, str]:
         return asked, ""
     if asked and asked <= ceiling:
         return asked, ""
-    wanted = "без предела" if not asked else f"{asked}с"
+    wanted = frame_language.text('forge.execution.0') if not asked else frame_language.text('forge.execution.1', v0=f'{asked}')
     # ⚠ 27.07. Здесь стояло «срок этой удалённой команде — {limit}с», и это было неправдой
     # на один шаг: клиент (`serverd_client._run_budget`) режет бюджет ещё раз под свой
     # длинный ярус (540 просим → 480 достаётся команде) и сам называет ей это строкой
     # «[срок] демону передан бюджет …». Своё число называем как своё: сколько прошу.
-    return limit, (f"\n[forge: я прошу для этой удалённой команды {limit}с (запрошено {wanted}); "
-                   f"сколько из них достанется самой команде, скажет строка [срок] от клиента "
-                   f"— он режет бюджет под свой длинный ярус. "
-                   f"Дольше потолка руки ({int(_HAND_CEILING_SEC)}с) ответа не дождался бы "
-                   f"никто: ход обрывается раньше, и текст пропал бы молча. Для долгого — "
-                   f"coding_process(action=\"start\"): фон, полный лог, poll не блокирует ход.]")
+    return limit, (frame_language.text('forge.execution.2', v1=f'{limit}', v3=f'{wanted}', v5=f'{int(_HAND_CEILING_SEC)}'))
 
 
+@frame_language.pinned
 def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
     """Stop a timed-out local command while its unreaped PID still pins the group.
 
@@ -3039,16 +3036,16 @@ def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
         # shell already exited, its PID is not authority to taskkill a tree:
         # its descendants might remain and the number may have been recycled.
         if proc.poll() is not None:
-            return False, "shell exited; descendant tree unconfirmed (no PID signal)"
+            return False, frame_language.text('forge.execution.3')
         try:
             killed = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                                     capture_output=True, timeout=15)
             if killed.returncode != 0:
-                return False, f"taskkill rc={killed.returncode}; child tree unconfirmed"
+                return False, frame_language.text('forge.execution.4', v1=f'{killed.returncode}')
             proc.wait(timeout=2)
-            return True, "taskkill tree accepted and leader exited"
+            return True, frame_language.text('forge.execution.5')
         except (OSError, subprocess.TimeoutExpired) as exc:
-            return False, f"{type(exc).__name__}; child tree unconfirmed"
+            return False, frame_language.text('forge.execution.6', v0=f'{type(exc).__name__}')
     try:
         os.killpg(proc.pid, signal.SIGTERM)
         for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -3058,16 +3055,16 @@ def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
                 before = _group_live_members(proc.pid)
                 if before is False:
                     proc.wait(timeout=2)
-                    return True, "process group exited"
+                    return True, frame_language.text('forge.execution.7')
                 if before is None:
-                    return False, "process group census unavailable before KILL"
+                    return False, frame_language.text('forge.execution.8')
                 os.killpg(proc.pid, sig)
             end = time.monotonic() + 1.0
             while time.monotonic() < end:
                 live = _group_live_members(proc.pid)
                 if live is False:
                     proc.wait(timeout=2)
-                    return True, "process group exited"
+                    return True, frame_language.text('forge.execution.9')
                 # A transient unreadable /proc row is not an exit witness,
                 # but neither should ONE busy census strand a still-running
                 # descendant before the already-bounded stop window expires.
@@ -3075,19 +3072,19 @@ def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
             after = _group_live_members(proc.pid)
             if after is False:
                 proc.wait(timeout=2)
-                return True, "process group exited"
+                return True, frame_language.text('forge.execution.10')
             if after is None:
-                return False, "process group census unavailable"
-        return False, "process group remains live after KILL"
+                return False, frame_language.text('forge.execution.11')
+        return False, frame_language.text('forge.execution.12')
     except ProcessLookupError:
         # A missing leader is not a missing group.  Only the group census can
         # establish that its foreground descendants also left.
         if _group_live_members(proc.pid) is False:
             proc.wait(timeout=2)
-            return True, "process group exited"
-        return False, "leader absent; process group unconfirmed"
+            return True, frame_language.text('forge.execution.13')
+        return False, frame_language.text('forge.execution.14')
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"{type(exc).__name__}; process group unconfirmed"
+        return False, frame_language.text('forge.execution.15', v0=f'{type(exc).__name__}')
 
 
 def _retain_foreground_unknown(task_id: str, proc: subprocess.Popen, command: str,
@@ -3144,16 +3141,18 @@ def _note_remote_run(command: str, cwd: str, reply: str) -> None:
 _FORGE_SHELL = (shutil.which("bash") if os.name != "nt" else None)
 
 
+@frame_language.pinned
 def run_python(task_id: str, code: str, cwd: str = ".", timeout: int = 600,
                _parent_request_path: str = "") -> str:
     """Direct Python argv, within the same task custody and Stop protocol as run."""
     if not isinstance(code, str):
         tool_report.note(outcome="refused")
-        return "Python refused: code must be a string."
+        return frame_language.text('forge.execution.17')
     return run(task_id, "<python>", cwd, timeout, _parent_request_path,
                _python_code=code)
 
 
+@frame_language.pinned
 def run_command(task_id: str, argv: list, cwd: str = ".", timeout: int = 0,
                 stdin_text: str | None = None, _parent_request_path: str = "",
                 env: dict | None = None, outputs: list | None = None,
@@ -3163,17 +3162,18 @@ def run_command(task_id: str, argv: list, cwd: str = ".", timeout: int = 0,
     try:
         argv = command_execution.validate_argv(argv)
         if stdin_text is not None and not isinstance(stdin_text, str):
-            raise command_execution.ArgvRefusal("stdin_text must be a string")
+            raise command_execution.ArgvRefusal(frame_language.text('forge.execution.18'))
         env = command_execution.validate_env(env)
         for label, value in (("outputs", outputs), ("scratch", scratch)):
             command_execution.declared_paths(value, ".", label=label)
     except command_execution.ArgvRefusal as exc:
         tool_report.note(outcome="refused")
-        return f"run_command refused before launch: {exc}"
+        return frame_language.text('forge.execution.19', v1=f'{exc}')
     return run(task_id, shlex.join(argv), cwd, timeout, _parent_request_path,
                _argv=argv, _stdin_text=stdin_text, _env=env, _outputs=outputs, _scratch=scratch)
 
 
+@frame_language.pinned
 def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         _parent_request_path: str = "", *, _python_code: str | None = None,
         _argv: list[str] | None = None, _stdin_text: str | None = None,
@@ -3188,14 +3188,12 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     if remote is not None:
         if _python_code is not None:
             tool_report.note(outcome="refused", target=str(root))
-            return "Python refused before execution: direct Python is local Linux only; use coding_run or computer for this remote task."
+            return frame_language.text('forge.execution.20')
         if _argv is not None:
             # Host serverd starts `/bin/sh -c command` and the Windows task route is
             # PowerShell: neither has a typed argv request yet. Never fall back to a string.
             tool_report.note(outcome="refused", target=str(root))
-            return (f"run_command unsupported for this {task.get('scope') or 'remote'} task: its "
-                    "backend accepts only a shell command string, so nothing was sent. Use "
-                    "coding_run with an explicit shell command if that is what you intend.")
+            return (frame_language.text('forge.execution.21', v1=f"{task.get('scope') or 'remote'}"))
         # ⚠ Тот же рельс, что и на shell: задача со scope=host отдаёт произвольную
         # команду root-брокеру, и адверсарка 26.07 прошла ею мимо рельса хардбота
         # («rm -rf /opt/hardbot2/data && docker restart hardbot2-bot-1» → root, ok).
@@ -3218,13 +3216,12 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     program = None
     output_paths, scratch_paths = [], []
     if _argv is not None:
-        reason = path_err or ("" if place is not None and place.is_dir() else f"no such directory: {cwd}")
+        reason = path_err or ("" if place is not None and place.is_dir() else frame_language.text('forge.execution.22', v1=f'{cwd}'))
         if not reason:
             program = command_execution.resolve_program(
                 _argv[0], place, command_execution.child_env(None, _env or {}))
             if program is None:
-                reason = (f"program not found: {_argv[0]!r} (searched PATH; a name with a slash "
-                          "is relative to cwd and must be an executable file)")
+                reason = (frame_language.text('forge.execution.23', v1=f'{_argv[0]!r}'))
         if not reason:
             try:
                 output_paths = command_execution.declared_paths(_outputs, place, label="outputs")
@@ -3233,19 +3230,19 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 for declared in output_paths:
                     _, outside = _inside(root, str(declared))
                     if outside:
-                        raise command_execution.ArgvRefusal(f"output {declared} is outside the task root")
+                        raise command_execution.ArgvRefusal(frame_language.text('forge.execution.24', v1=f'{declared}'))
             except command_execution.ArgvRefusal as exc:
                 reason = str(exc)
         if reason:
             tool_report.note(outcome="refused", target=str(place or root))
-            return "run_command refused before launch: " + reason + command_execution.argv_facts(
+            return frame_language.text('forge.execution.25') + reason + command_execution.argv_facts(
                 executor=f"forge task {task_id}", cwd=place or cwd, argv=_argv, program=None,
                 stdin_text=_stdin_text, started=False)
     if path_err or place is None or not place.is_dir():
-        return path_err or f"Нет cwd {cwd}."
+        return path_err or frame_language.text('forge.execution.27', v1=f'{cwd}')
     command = str(command or "").strip()
     if not command:
-        return "Нужна команда."
+        return frame_language.text('forge.execution.28')
     seconds = max(0, int(timeout or 0))
     stop_fact = None
     outputs_before = [command_execution.path_state(p) for p in output_paths]
@@ -3266,7 +3263,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 if reason:
                     if _argv is not None:
                         tool_report.note(outcome="refused", target=str(place))
-                    return f"Run refused: {reason}"
+                    return frame_language.text('forge.execution.29', v1=f'{reason}')
                 before_workspace = command_execution.workspace_snapshot(place)
                 parent_id, _ = _worker_parent(task_id, _parent_request_path)
                 import forge_script
@@ -3318,7 +3315,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 if (directory / 'stop-request.json').exists() or denied:
                     stopped, detail = _stop_foreground(proc)
                     if not stopped:
-                        raise RuntimeError('command group stop unconfirmed: ' + detail)
+                        raise RuntimeError(frame_language.text('forge.execution.30') + detail)
                     break
                 remaining = deadline - time.monotonic() if deadline is not None else None
                 if remaining is not None and remaining <= 0:
@@ -3348,7 +3345,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
             if (directory / "request.json").exists():
                 _atomic_json(directory / "result.json", {"status": "error", "finished": _now(),
                     "error": f"{type(exc).__name__}: {exc}",
-                    "note": "command was not admitted; no executable child resumed"})
+                    "note": frame_language.text('forge.execution.31')})
     duration = round(time.monotonic() - t0, 3)
     if proc is not None and status != "unknown":
         with _mutation_lock(task_id):
@@ -3359,7 +3356,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     out = log_path.read_text(encoding="utf-8", errors="replace")
     _event(task_id, "command", command=command, cwd=str(place), code=code, status=status,
            duration_s=duration, log=str(log_path), summary=f"{status} exit={code} {duration}s")
-    note = f"; process_id={unresolved} (poll/stop; finish blocked)" if unresolved else ""
+    note = frame_language.text('forge.execution.33', v1=f'{unresolved}') if unresolved else ""
     typed_receipt = {"argv": list(_argv), "program": program} if _argv is not None else {}
     tool_report.execution({"kind": "process", "command": command, **typed_receipt, "cwd": str(place),
                            "status": status, "exit_code": code, "duration_s": duration, "log": str(log_path)})
@@ -3375,7 +3372,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
     if _argv is not None:
         observed = proc is not None and status not in {"timed_out", "unknown"}
         shown = code if observed else ("not started" if proc is None else "unobserved")
-        return (_cap(str(out).strip() or "(empty output)") + command_execution.argv_facts(
+        return (_cap(str(out).strip() or frame_language.text('forge.execution.110')) + command_execution.argv_facts(
             executor=f"forge task {task_id}", cwd=place, argv=list(_argv), program=program,
             stdin_text=_stdin_text,
             # An exception after the custodian existed (e.g. at admission) leaves the start unknown.
@@ -3388,10 +3385,11 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
             scratch=scratch_rows)
             + command_execution.tail(shown, status, changes, duration=duration, log=log_path,
                                      unresolved=unresolved))
-    return _cap(str(out).strip() or "(пустой вывод)") + command_execution.tail(
+    return _cap(str(out).strip() or frame_language.text('forge.execution.35')) + command_execution.tail(
         code, status, changes, duration=duration, log=log_path, unresolved=unresolved)
 
 
+@frame_language.pinned
 def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str:
     task, root, err = _task_root(task_id)
     if err:
@@ -3406,32 +3404,33 @@ def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str
         return out
     git = _git_root(root)
     if not git:
-        return "Нет git — checkpoint записан только событием."
+        return frame_language.text('forge.execution.37')
     status = _git_text(git, "status", "--porcelain")
     if not status.strip():
-        return "Изменений нет — checkpoint не нужен."
+        return frame_language.text('forge.execution.38')
     _run(["git", "-C", str(git), "add", "-A"], timeout=30)
     r = _run(["git", "-C", str(git), "-c", "user.name=Praxis", "-c",
               "user.email=praxis@local", "commit", "-m", str(message or "forge checkpoint")], timeout=60)
     if r.returncode != 0:
-        return "Checkpoint не создался:\n" + _cap((r.stderr or r.stdout).strip(), 5000)
+        return frame_language.text('forge.execution.40') + _cap((r.stderr or r.stdout).strip(), 5000)
     sha = _git_text(git, "rev-parse", "--short", "HEAD").strip()
     _event(task_id, "checkpoint", summary=f"{sha} {message}", sha=sha)
-    return f"Checkpoint {sha}: {message}"
+    return frame_language.text('forge.execution.41', v1=f'{sha}', v3=f'{message}')
 
 
+@frame_language.pinned
 def checkpoint(task_id: str, message: str = "forge checkpoint", _parent_request_path: str = "") -> str:
     try:
         with _mutation_lock(task_id) as beat:
             reason = _admission_reason(task_id, _parent_request_path, general=True)
             if reason:
-                return f"Checkpoint refused: {reason}"
+                return frame_language.text('forge.execution.43', v1=f'{reason}')
             # `add -A` + `commit` (или один удалённый checkpoint) идут секунды-десятки
             # секунд без единого удара — объявляем это, а не молчим (см. _remote_step_lease).
             beat(_remote_step_lease(get(task_id)))
             return _checkpoint_unlocked(task_id, message)
     except TimeoutError as exc:
-        return f"Checkpoint не начался: {exc}."
+        return frame_language.text('forge.execution.44', v1=f'{exc}')
 
 
 def _unit_dir(task_id: str, kind: str, unit_id: str) -> Path:
@@ -3726,6 +3725,7 @@ def _windows_job_name() -> str:
     return forge_windows_custody.new_job_name()
 
 
+@frame_language.pinned
 def _windows_stop(directory: Path) -> str | None:
     """A bound Windows unit must settle its exact Job, never fall back to PID."""
     import forge_recovery
@@ -3733,7 +3733,7 @@ def _windows_stop(directory: Path) -> str | None:
     if recovery:
         return f"{directory.name}: {recovery['outcome']}"
     if os.name == 'nt' and (directory/'custody-reboot-witness.json').exists():
-        return f"{directory.name}: reboot witness retained; use recover after restarting the original Windows computer"
+        return frame_language.text('forge.execution.45', v0=f'{directory.name}')
     if os.name != 'nt' or not (directory/'windows-job.json').exists():
         return None
     try:
@@ -3747,7 +3747,7 @@ def _windows_stop(directory: Path) -> str | None:
             _RUNNERS.pop(int(binding['pid']), None)
         return f"{directory.name}: {proof['outcome']}"
     except (OSError, ValueError, TypeError, KeyError, TimeoutError) as exc:
-        note = f"Windows tree exit unconfirmed: {exc}; custody retained"
+        note = frame_language.text('forge.execution.46', v1=f'{exc}')
         with _mutation_lock(directory.parents[1].name):
             _atomic_json(directory/'stop.json', {'state': 'unresolved', 'observed_at': _now(), 'note': note})
         return f"{directory.name}: {note}"
@@ -3808,6 +3808,7 @@ def _proc_cmdline(pid: int) -> str:
         return ""
 
 
+@frame_language.pinned
 def _kill_identity(pid: int, started_at: str = "", expect: str = "") -> str:
     """Тот ли это процесс, что мы завели? Пусто = доказано, иначе — честный отказ.
 
@@ -3832,14 +3833,10 @@ def _kill_identity(pid: int, started_at: str = "", expect: str = "") -> str:
     if started_at:
         if born == started_at:
             return ""
-        return (f"не трогаю: номер {pid} сейчас занят ДРУГИМ процессом (метка рождения "
-                f"{born} ≠ {started_at}) — мой умер, а по этому номеру живёт посторонний")
+        return (frame_language.text('forge.execution.47', v1=f'{pid}', v3=f'{born}', v5=f'{started_at}'))
     if expect and expect in _proc_cmdline(pid):
         return ""
-    return (f"не убила: метки рождения у этого юнита нет (заводился до 27.07), а номера "
-            f"в контейнере переиспользуются — доказать, что {pid} всё ещё мой, нечем. "
-            f"Ни жив, ни мёртв не утверждаю. Посмотреть, кто там сейчас: "
-            f"/proc/{pid}/cmdline; если это точно он — сними руками (kill -TERM -{pid})")
+    return (frame_language.text('forge.execution.48', v1=f'{pid}', v3=f'{pid}', v5=f'{pid}'))
 
 
 def _group_live_members(pgid: int) -> bool | None:
@@ -3903,9 +3900,10 @@ def _kill_tree_state(reply) -> str:
     return reply.termination if isinstance(reply, KillTreeReply) else "unknown"
 
 
+@frame_language.pinned
 def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     if not pid:
-        return KillTreeReply("pid отсутствует", status='unknown')
+        return KillTreeReply(frame_language.text('forge.execution.49'), status='unknown')
     doubt = _kill_identity(pid, started_at, expect)
     if doubt:
         return KillTreeReply(doubt, status='unknown')
@@ -3923,18 +3921,18 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
                                   errors="replace", timeout=15)
             rc = int(proc.returncode)
             if rc == 0:
-                return KillTreeReply("остановлен", status='stopped')
+                return KillTreeReply(frame_language.text('forge.execution.50'), status='stopped')
             if rc == 128:
-                return KillTreeReply("уже завершён", status='already_exited')
+                return KillTreeReply(frame_language.text('forge.execution.51'), status='already_exited')
             detail = (proc.stderr or proc.stdout or "").strip()[:120]
-            return KillTreeReply(f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": "), status='unknown')
+            return KillTreeReply(frame_language.text('forge.execution.52', v1=f'{rc}', v3=f'{detail}').rstrip(": "), status='unknown')
         else:
             os.killpg(pid, signal.SIGTERM)
             deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 group_live = _group_live_members(pid)
                 if group_live is False:
-                    return KillTreeReply("остановлен", status='stopped')
+                    return KillTreeReply(frame_language.text('forge.execution.53'), status='stopped')
                 # A transient unreadable /proc row is uncertainty, not a
                 # terminal verdict. Use the existing bounded census window.
                 time.sleep(.05)
@@ -3944,27 +3942,27 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
                 # its foreground descendants can ignore TERM.
                 fresh_doubt = _kill_identity(pid, born, expect)
                 if fresh_doubt:
-                    return KillTreeReply(f"не остановлен: группа не доказана перед KILL; {fresh_doubt}", status='unknown')
+                    return KillTreeReply(frame_language.text('forge.execution.54', v1=f'{fresh_doubt}'), status='unknown')
                 os.killpg(pid, signal.SIGKILL)
                 deadline = time.monotonic() + 1.0
                 while time.monotonic() < deadline:
                     group_live = _group_live_members(pid)
                     if group_live is False:
-                        return KillTreeReply("остановлен", status='stopped')
+                        return KillTreeReply(frame_language.text('forge.execution.55'), status='stopped')
                     time.sleep(.05)
                 group_live = _group_live_members(pid)
                 if group_live is False:
-                    return KillTreeReply("остановлен", status='stopped')
+                    return KillTreeReply(frame_language.text('forge.execution.56'), status='stopped')
                 if group_live is None:
-                    return KillTreeReply("не остановлен: состав группы после KILL неизвестен", status='unknown')
-                return KillTreeReply("не остановлен: в группе после KILL остались живые процессы", status='unknown')
+                    return KillTreeReply(frame_language.text('forge.execution.57'), status='unknown')
+                return KillTreeReply(frame_language.text('forge.execution.58'), status='unknown')
             if group_live is False:
-                return KillTreeReply("остановлен", status='stopped')
-            return KillTreeReply("не остановлен: состав группы после TERM неизвестен", status='unknown')
+                return KillTreeReply(frame_language.text('forge.execution.59'), status='stopped')
+            return KillTreeReply(frame_language.text('forge.execution.60'), status='unknown')
     except ProcessLookupError:
-        return KillTreeReply("уже завершён", status='already_exited')
+        return KillTreeReply(frame_language.text('forge.execution.61'), status='already_exited')
     except Exception as exc:
-        return KillTreeReply(f"не остановлен: {type(exc).__name__}: {exc}", status='unknown')
+        return KillTreeReply(frame_language.text('forge.execution.62', v1=f'{type(exc).__name__}', v3=f'{exc}'), status='unknown')
 
 
 def process(task_id: str, action: str, process_id: str = "", command: str = "",

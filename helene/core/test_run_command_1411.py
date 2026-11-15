@@ -172,6 +172,9 @@ class Home(HomeFixture, unittest.TestCase):
 
 class ForgeRoute(unittest.TestCase):
     def setUp(self):
+        # These legacy contract assertions deliberately check English captions;
+        # the actual independent16language combinations have their own regressions.
+        self.enterContext(forge.frame_language.use('en'))
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / 'a.txt').write_text('one\n')
