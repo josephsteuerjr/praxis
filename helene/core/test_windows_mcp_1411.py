@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import agent
 import windows_mcp_tools as mcp
+import frame_language
 from catalog_families import PreflightRefusal
 
 
@@ -29,6 +30,18 @@ class NativeWindowsMCP(unittest.TestCase):
         with self.assertRaises(PreflightRefusal):mcp.invoke('windows_mcp_Click',{'loc':[1,2,3]})
         with self.assertRaises(PreflightRefusal):mcp.invoke('windows_mcp_FileSystem',{'mode':'read'})
         self.assertEqual(len(calls),1)
+
+    def test_actual_K_target_contract_follows_frame_for_all_ui_pairs_and_audiences(self):
+        markers={'ru':'парном Windows','en':'paired Windows','fr':'associé sélectionné','zh':'配对 Windows'}
+        for ui in frame_language.LANGUAGES:
+            for language in frame_language.LANGUAGES:
+                with patch.object(frame_language,'settings',return_value={'lang':ui,'agent':{'frame_language':language}}):
+                    prefix=frame_language.text('owned.agent.a70451c5d2a9',v0=1,v1=2,v2=3).split('\n',2)[1]
+                    self.assertIn(markers[language],prefix)
+                    self.assertIn('FileSystem(mode=read,path,offset,limit)',prefix)
+                    for owner in (True,False):
+                        prompt=agent.build_system_prompt(speaker='PRIVATE Русский 中文 {literal}',owner=owner)
+                        self.assertIn(prefix,prompt)
 
     def test_permission_refusal_never_crosses_the_transport(self):
         with patch.object(mcp,'_call') as transport:
