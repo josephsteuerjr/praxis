@@ -65,7 +65,67 @@ const fields:Record<string,readonly string[]>={
   "layout_custody_unconfirmed": [],
   "first_ready": [],
   "first_start_unconfirmed": [],
-  "first_action": []
+  "first_action": [],
+  "first_separate_program": [],
+  "first_separate_install": [],
+  "first_profile_record": [],
+  "first_legacy_jobs": [],
+  "first_preparation_receipt": [],
+  "first_previous_owner": [],
+  "first_preparation_needed": [],
+  "first_agent_fields": [],
+  "first_api_key": [],
+  "first_linked_path": [
+    "path"
+  ],
+  "first_model_protocol": [],
+  "first_channel_port": [],
+  "first_source_changed": [],
+  "first_alias_changed": [],
+  "first_empty_changed": [
+    "path"
+  ],
+  "first_receipt_changed": [],
+  "first_protected_cleanup": [],
+  "first_started_receipt": [],
+  "first_leftovers": [
+    "path"
+  ],
+  "first_prepared_data": [],
+  "first_profile_location": [],
+  "first_settings_changed": [],
+  "first_archive_incomplete": [],
+  "first_settings_finish": [],
+  "first_owner_changed": [],
+  "first_soul_choice": [],
+  "first_old_external": [
+    "path"
+  ],
+  "first_mixed_programs": [
+    "path"
+  ],
+  "first_cleanup_data": [
+    "reason",
+    "path"
+  ],
+  "first_moved_identity": [],
+  "first_moved_conflict": [
+    "path"
+  ],
+  "first_already_bound": [],
+  "first_unknown_receipt": [],
+  "first_source_outside": [],
+  "first_process_data": [],
+  "first_config_data": [],
+  "first_extracted_conflict": [
+    "path"
+  ],
+  "first_recovered_conflict": [
+    "path"
+  ],
+  "first_found_external": [
+    "path"
+  ]
 };
 const record=(v:unknown):Record<string,unknown>|null=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:null;
 const owns=(v:object,key:string)=>Object.prototype.hasOwnProperty.call(v,key);

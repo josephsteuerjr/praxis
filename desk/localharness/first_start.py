@@ -6,6 +6,7 @@ No old interpreter, agent, update job or migration scheduler is started here.
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from .ui_language import NativeValueError,NativeRuntimeError
 import base64
 import copy
 import datetime as dt
@@ -62,7 +63,7 @@ def plain(path):
         try:info=part.lstat()
         except FileNotFoundError:continue
         if stat.S_ISLNK(info.st_mode) or getattr(info,'st_file_attributes',0)&0x400:
-            raise ValueError('Linked first-start path: '+str(part))
+            raise NativeValueError('first_linked_path', 'Linked first-start path: '+str(part), path=str(part))
     return normalized(path)
 
 
@@ -245,9 +246,9 @@ def discover(root,places,*,empty_only=None):
         and any(normalized(p)==base or normalized(p).is_relative_to(base) for base in bases)})
     data=plain(places.data)
     if root==data or root.is_relative_to(data) or data.is_relative_to(root):
-        raise ValueError('Распакуй программу в отдельную папку, вне данных агента в профиле')
+        raise NativeValueError('first_separate_program', 'Распакуй программу в отдельную папку, вне данных агента в профиле')
     if any(root==base or root.is_relative_to(base) for base in bases):
-        raise ValueError('Распакуй новую Hélène в отдельную папку вне AppData и Program Files: прежние установки там очищаются.')
+        raise NativeValueError('first_separate_install', 'Распакуй новую Hélène в отдельную папку вне AppData и Program Files: прежние установки там очищаются.')
     def group(base):
         empty=[]
         roots=_roots(base,root,require_marker=base not in local_bases,empty_only=empty,temporary=temporary)
@@ -294,11 +295,11 @@ def configurations(roots,places):
             if value.get('mode','local')!='local':continue
             tree=Path(value.get('tree') or 'data');tree=plain(tree if tree.is_absolute() else config.parent/tree)
             if tree.is_dir() and not _data_allowed(tree,places):
-                raise ValueError('Старая копия хранит данные вне AppData/Program Files: '+str(tree)+'. Сначала перенеси эту папку в разрешённое место.')
+                raise NativeValueError('first_old_external', 'Старая копия хранит данные вне AppData/Program Files: '+str(tree)+'. Сначала перенеси эту папку в разрешённое место.', path=str(tree))
             code=Path(value.get('code') or 'tree');code=plain(code if code.is_absolute() else config.parent/code)
             mixed=tree==root or tree==code or ((tree/'agent.py').is_file() and (tree/'llm.py').is_file())
             if any(other.is_relative_to(tree) and (tree!=other or not mixed) for other in roots):
-                raise ValueError('Папка данных содержит другие программы: '+str(tree))
+                raise NativeValueError('first_mixed_programs', 'Папка данных содержит другие программы: '+str(tree), path=str(tree))
             result.append({'program':str(root),'directory':str(config.parent),'tree':str(tree),
                            'config':value,'relative':config.relative_to(root).as_posix(),'mixed':mixed})
     return result
@@ -375,13 +376,13 @@ def guard_cleanup_data(candidates,places,admitted=()):
             memory=here/'memory'
             if agent_exists(here) or (memory.is_dir() and any(memory.iterdir())):
                 reason='Найдены данные вне AppData/Program Files' if not _data_allowed(here,places) else 'Не определена структура прежних данных'
-                raise ValueError(reason+': '+str(here)+'. Исходные файлы сохранены.')
+                raise NativeValueError('first_cleanup_data', reason+': '+str(here)+'. Исходные файлы сохранены.', reason=str(reason), path=str(here))
             for child in here.iterdir():
                 checkpoint()
                 if linked(child) or not child.is_dir() or child.name.casefold() in skip:continue
                 if child.name.casefold()=='data':
                     if not any(child==source or child.is_relative_to(source) for source in admitted) and any(child.iterdir()):
-                        raise ValueError('Найдены данные вне AppData/Program Files: '+str(child)+'. Эта папка сохранена.')
+                        raise NativeValueError('first_found_external', 'Найдены данные вне AppData/Program Files: '+str(child)+'. Эта папка сохранена.', path=str(child))
                 else:todo.append(child)
 
 
@@ -451,7 +452,7 @@ def _separate_data(source,destination):
         if path.is_dir():_move(path,out)
         else:
             if out.exists():
-                if path.read_bytes()!=out.read_bytes():raise ValueError('Conflicting extracted data: '+str(out))
+                if path.read_bytes()!=out.read_bytes():raise NativeValueError('first_extracted_conflict', 'Conflicting extracted data: '+str(out), path=str(out))
                 path.unlink()
             else:path.rename(out)
 
@@ -472,7 +473,7 @@ def _from_brain(data,root):
         endpoint=(brain.get('frameworks') or {}).get(chosen.get('framework')) or {}
         if not chosen.get('model'):continue
         protocol=endpoint.get('protocol') or chosen.get('framework')
-        if protocol not in ('openai','anthropic'):raise ValueError('Не распознан протокол сохранённой модели')
+        if protocol not in ('openai','anthropic'):raise NativeValueError('first_model_protocol', 'Не распознан протокол сохранённой модели')
         result[key]={**chosen,'framework':protocol,'base_url':endpoint.get('base_url',''),
                      'key':endpoint.get('api_key','')}
         for field in ('api_mode','provider'):
@@ -500,7 +501,7 @@ def _bind(config,old,root,data):
     phone=value.get('phone') or {}
     if phone.get('mode')=='stable' or (phone.get('external') and type(phone.get('local_port')) is int):
         port=phone.get('local_port') or value.get('port')
-        if type(port) is not int or not 1<=port<=65535:raise ValueError('Для постоянного адреса телефона нужен сохранённый локальный порт канала')
+        if type(port) is not int or not 1<=port<=65535:raise NativeValueError('first_channel_port', 'Для постоянного адреса телефона нужен сохранённый локальный порт канала')
         value['port']=port;value['phone']=dict(phone,local_port=port)
     else:
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));value['port']=sock.getsockname()[1]
@@ -534,7 +535,7 @@ def _move(source,target):
             if getattr(exc,'winerror',None)!=17 and exc.errno!=18:raise
         else:
             after=target.stat()
-            if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):raise RuntimeError('Moved data identity changed')
+            if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):raise NativeRuntimeError('first_moved_identity', 'Moved data identity changed')
             return
     if source.is_file():
         import tempfile
@@ -542,7 +543,7 @@ def _move(source,target):
             with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
         expected=digest(source)
         if target.exists():
-            if not target.is_file() or digest(target)!=expected:raise ValueError('Conflicting moved asset: '+str(target))
+            if not target.is_file() or digest(target)!=expected:raise NativeValueError('first_moved_conflict', 'Conflicting moved asset: '+str(target), path=str(target))
         else:
             descriptor,name=tempfile.mkstemp(prefix='.asset-transfer-',dir=target.parent);os.close(descriptor);part=Path(name)
             try:
@@ -562,7 +563,7 @@ def _move(source,target):
             out=target/'recovered'/hashlib.sha256(str(source).encode()).hexdigest()[:16]/relative
             plain(out.parent).mkdir(parents=True,exist_ok=True)
             if os.path.lexists(out):
-                if digest_data(out)!=expected:raise ValueError('Conflicting recovered data: '+str(out))
+                if digest_data(out)!=expected:raise NativeValueError('first_recovered_conflict', 'Conflicting recovered data: '+str(out), path=str(out))
                 return out,True
         return out,False
     def transfer(path):
@@ -595,7 +596,7 @@ def _move(source,target):
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
         moved={path:(out,digest) for path,out,digest in pool.map(transfer,representatives)}
     for path,representative,generation in references:
-        if identity(plain(path).stat())!=generation:raise ValueError('Source data reference changed')
+        if identity(plain(path).stat())!=generation:raise NativeValueError('first_source_changed', 'Source data reference changed')
         backing,expected=moved[representative]
         backing,_=entry(backing,target);before=backing.stat()
         out,matched=location(path.relative_to(source),expected)
@@ -611,8 +612,8 @@ def _move(source,target):
                         if hashlib.file_digest(stream,'sha256').hexdigest()!=expected:raise IOError('Data alias copy verification failed')
                     part.replace(out)
                 finally:part.unlink(missing_ok=True)
-        if identity(backing.stat())!=identity(before):raise ValueError('Transferred alias target changed')
-        if identity(plain(path).stat())!=generation:raise ValueError('Source data reference changed')
+        if identity(backing.stat())!=identity(before):raise NativeValueError('first_alias_changed', 'Transferred alias target changed')
+        if identity(plain(path).stat())!=generation:raise NativeValueError('first_source_changed', 'Source data reference changed')
         unlink_regular(path)
     for here,dirs,_files in os.walk(source,topdown=False):
         for name in dirs:(Path(here)/name).rmdir()
@@ -725,24 +726,24 @@ def validate_legacy_plan(plan,places):
     for path in plan.get('empty_only',[]):
         if not os.path.lexists(path):continue  # A prior confirmed empty-only removal is idempotent.
         if linked(path) or not path.is_dir() or any(path.iterdir()):
-            raise ValueError('Прежняя пустая папка изменилась. Повтори подготовку: '+str(path))
+            raise NativeValueError('first_empty_changed', 'Прежняя пустая папка изменилась. Повтори подготовку: '+str(path), path=str(path))
     for raw,digest in plan['receipts'].items():
         path=plain(raw)
         if not ready(path,places) or hashlib.sha256(receipt(path).read_bytes()).hexdigest()!=digest:
-            raise ValueError('Квитанция прежней программы изменилась. Повтори обновление.')
+            raise NativeValueError('first_receipt_changed', 'Квитанция прежней программы изменилась. Повтори обновление.')
     for candidate in [*plan['old_roots'],*plan['siblings']]:
         if any(candidate==path or candidate.is_relative_to(path) or path.is_relative_to(candidate)
                for path in [places.data,*plan['protected']]):
-            raise ValueError('Очистка пересекается с защищённой программой или данными')
+            raise NativeValueError('first_protected_cleanup', 'Очистка пересекается с защищённой программой или данными')
         if not linked(candidate) and receipted_programs(candidate,places):
-            raise ValueError('В папке появилась квитанция успешного запуска. Повтори обновление.')
+            raise NativeValueError('first_started_receipt', 'В папке появилась квитанция успешного запуска. Повтори обновление.')
 
 
 def archive_profiles(configs,data):
     if not configs:return
     archive=data/'memory/.state/imported-profiles.json'
     imported=load(archive) if archive.is_file() else {'format':'helene-imported-profiles.v1','profiles':{}}
-    if imported.get('format')!='helene-imported-profiles.v1':raise ValueError('Unknown imported profile record')
+    if imported.get('format')!='helene-imported-profiles.v1':raise NativeValueError('first_profile_record', 'Unknown imported profile record')
     for row in configs:
         record={key:copy.deepcopy(row[key]) for key in ('program','relative','config')}
         original=Path(row['directory'])/'helene.json'
@@ -766,7 +767,7 @@ def settle_legacy_jobs(root,places,plan,configs):
     # Read and settle original identities before any programme/data is moved.
     settled=update_supersession.retire(jobs)
     _write(Path(root)/'.helene/legacy-supersession-result.json',settled,private=True)
-    if settled['blocked']:raise RuntimeError('Прежние задания обновления требуют проверки завершения процессов')
+    if settled['blocked']:raise NativeRuntimeError('first_legacy_jobs', 'Прежние задания обновления требуют проверки завершения процессов')
     plan['supersession']=jobs;plan['supersession_result']=settled
     return settled
 
@@ -818,7 +819,7 @@ def cleanup_leftovers(backend,roots,*,notes=True):
     for path in roots:
         if not os.path.lexists(path):continue
         inside=[k for k in kept if k==Path(path) or k.is_relative_to(path)]
-        if not inside:raise RuntimeError('Прежние файлы ещё не удалены: '+str(path))
+        if not inside:raise NativeRuntimeError('first_leftovers', 'Прежние файлы ещё не удалены: '+str(path), path=str(path))
         messages.append(f'Windows не дала удалить без прав администратора {len(inside)} элемент(ов) прежней программы в {path}. '
                         'Новая Hélène работает с твоими данными; эти файлы можно удалить вручную. '
                         'Прежнюю программу оттуда не запускай: данные теперь у новой.')
@@ -832,16 +833,16 @@ def sweep_legacy(root,*,places=None,backend=None,progress=None):
     authoritative. Only unreceipted legacy programmes and their state move.
     """
     places=places or Places.current();root=plain(root);target=plain(places.data)
-    if not ready(root,places):raise ValueError('Для обновления нужна квитанция подготовки программы')
+    if not ready(root,places):raise NativeValueError('first_preparation_receipt', 'Для обновления нужна квитанция подготовки программы')
     if backend is None:
         from .windows_first_start import Backend
         backend=Backend(root)
     report=progress or (lambda value:None)
     with backend.exclusive(target):
-        if not target.is_dir() or not agent_exists(target):raise ValueError('В профиле не найдены данные подготовленного агента')
+        if not target.is_dir() or not agent_exists(target):raise NativeValueError('first_prepared_data', 'В профиле не найдены данные подготовленного агента')
         active=configurations([root],places)
         if any(Path(row['tree'])!=target and not Path(row['tree']).is_relative_to(target) for row in active):
-            raise ValueError('Данные подготовленной программы должны находиться в профиле')
+            raise NativeValueError('first_profile_location', 'Данные подготовленной программы должны находиться в профиле')
         plan=legacy_plan(root,places,backend)
         backend.excluded=plan['protected']
         backend.process_excluded=[root]
@@ -862,7 +863,7 @@ def sweep_legacy(root,*,places=None,backend=None,progress=None):
         backend.stop(stop_roots,identities)
         settled_configs={Path(row['directory'])/'helene.json' for row in configurations(roots,places)}
         if settled_configs!=set(snapshots) or any(not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest for path,digest in snapshots.items()):
-            raise ValueError('Прежние настройки изменились во время подготовки. Повтори запуск.')
+            raise NativeValueError('first_settings_changed', 'Прежние настройки изменились во время подготовки. Повтори запуск.')
         validate_legacy_plan(plan,places)
         # Shutdown can publish final data or backups after the preview. Never
         # prune using a discovery snapshot from before the writers stopped.
@@ -928,7 +929,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
         required=('runtime/python.exe','app/python_app.py','app/deskapp.py','app/windows_start.py',
                   'app/resources/first-start.html','tree/agent.py','tree/llm.py','python-app.json')
         if any(not (root/name).is_file() for name in required):
-            raise ValueError('Архив распакован не полностью. Распакуй его целиком в новую папку.')
+            raise NativeValueError('first_archive_incomplete', 'Архив распакован не полностью. Распакуй его целиком в новую папку.')
         plan=legacy_plan(root,places,backend)
         old_roots,siblings,all_roots,retained=[plan[key] for key in ('old_roots','siblings','all_roots','retained')]
         owner=load(target/'memory/.control/desktop-session.json') if (target/'memory/.control/desktop-session.json').is_file() else {}
@@ -945,11 +946,11 @@ def prepare(root,*,places=None,backend=None,progress=None):
             existing=load(root/'helene.json');bound=Path(existing.get('tree') or 'data')
             bound=plain(bound if bound.is_absolute() else root/bound)
             if bound.is_dir() and bound!=target:
-                raise ValueError('Эта папка уже подключена к другим данным. Распакуй новый архив в отдельную папку.')
+                raise NativeValueError('first_already_bound', 'Эта папка уже подключена к другим данным. Распакуй новый архив в отдельную папку.')
         previous={}
         if receipt(root).is_file():
             previous=load(receipt(root))
-            if previous.get('format')!=FORMAT:raise ValueError('Unknown first-start receipt')
+            if previous.get('format')!=FORMAT:raise NativeValueError('first_unknown_receipt', 'Unknown first-start receipt')
         preview_sources=data_sources(old_roots,configs,places)
         guard_cleanup_data([*old_roots,*siblings],places,preview_sources)
         primary=target if agent_exists(target) else max(preview_sources,key=lambda p:_score(p,configs),default=target)
@@ -963,7 +964,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
         from .first_start_assets import prepare as prepare_assets,retain as retain_assets
         prepare_assets(target,[*old_roots,*[p for p in siblings if p.is_dir() and not linked(p)],*retained],preview_sources,copy.deepcopy(configs),copy.deepcopy(config),selected)
         if any(not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest for path,digest in snapshots.items()):
-            raise ValueError('Прежние настройки изменились во время подготовки. Повтори запуск.')
+            raise NativeValueError('first_settings_changed', 'Прежние настройки изменились во время подготовки. Повтори запуск.')
         report({'stage':'stopping' if all_roots or protected else 'preparing',
                 'label':'Завершаем прежнюю Hélène' if all_roots or protected else 'Подготавливаем новый профиль'})
         backend.stop(all_roots,protected)
@@ -971,7 +972,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
         sources=data_sources(old_roots,configs,places)
         for raw in previous.get('sources',[]):
             path=plain(raw)
-            if not _data_allowed(path,places):raise ValueError('Recorded data source leaves allowed roots')
+            if not _data_allowed(path,places):raise NativeValueError('first_source_outside', 'Recorded data source leaves allowed roots')
             if path.is_dir() and path not in sources:sources.append(path)
         owner_sources=[p for p in sources if p!=target or target_existed]
         if set(owner_sources)-set(protected):backend.stop(all_roots,owner_sources)
@@ -980,7 +981,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
         guard_cleanup_data([*old_roots,*siblings],places,sources)
         settled_configs={Path(row['directory'])/'helene.json' for row in configurations(all_roots,places)}
         if settled_configs!=set(snapshots) or any(not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest for path,digest in snapshots.items()):
-            raise ValueError('Прежние настройки изменились при завершении. Исходные файлы сохранены. Повтори запуск.')
+            raise NativeValueError('first_settings_finish', 'Прежние настройки изменились при завершении. Исходные файлы сохранены. Повтори запуск.')
         assets=prepare_assets(target,[*old_roots,*[p for p in siblings if p.is_dir() and not linked(p)],*retained],sources,configs,config,selected)
         for source in sources:
             if any(source==base or source.is_relative_to(base) for base in places.program_files):
@@ -1079,15 +1080,15 @@ def handover(root,*,places=None):
     if other==root:return False
     state=session_host.process_state(value);admitted=ready(other,places)
     if state=='unknown':
-        raise RuntimeError('Не удалось подтвердить прежнего владельца данных')
+        raise NativeRuntimeError('first_previous_owner', 'Не удалось подтвердить прежнего владельца данных')
     from .windows_first_start import Backend
     backend=Backend(root)
     with backend.exclusive(places.data):
         current=load(descriptor)
         if current.get('generation')!=value.get('generation') or current.get('pid')!=value.get('pid'):
-            raise RuntimeError('Владелец данных сменился во время запуска')
+            raise NativeRuntimeError('first_owner_changed', 'Владелец данных сменился во время запуска')
         if state=='alive':
-            if normalized(value.get('tree',''))!=normalized(places.data):raise ValueError('Прежний процесс принадлежит другой папке данных')
+            if normalized(value.get('tree',''))!=normalized(places.data):raise NativeValueError('first_process_data', 'Прежний процесс принадлежит другой папке данных')
             if admitted:
                 try:migration_lifecycle.stop(other)
                 except (OSError,RuntimeError):pass
@@ -1097,7 +1098,7 @@ def handover(root,*,places=None):
         if admitted and config.is_file():
             saved=load(config)
             data=Path(saved.get('tree') or 'data');data=normalized(data if data.is_absolute() else other/data)
-            if data!=normalized(places.data):raise ValueError('Настройки прежней версии указывают на другие данные')
+            if data!=normalized(places.data):raise NativeValueError('first_config_data', 'Настройки прежней версии указывают на другие данные')
             saved=_bind(saved,other,root,places.data)
             _write(places.data/'memory/.state/helene-profile.json',
                 {key:entry for key,entry in saved.items() if key not in ('tree','code','python','app','runner','port','installed')},private=True)
@@ -1140,19 +1141,19 @@ def create_agent(root,values,*,places=None,progress=None):
 
 def _create_agent(root,values,*,places,progress=None):
     places=places or Places.current();root=plain(root)
-    if not ready(root,places):raise ValueError('Сначала нужно завершить подготовку')
+    if not ready(root,places):raise NativeValueError('first_preparation_needed', 'Сначала нужно завершить подготовку')
     from .boot import birth_custody
     with birth_custody(plain(places.data)):
         return _create_agent_locked(root,values,places=places,progress=progress)
 
 
 def _create_agent_locked(root,values,*,places,progress=None):
-    if not ready(root,places):raise ValueError('Сначала нужно завершить подготовку')
+    if not ready(root,places):raise NativeValueError('first_preparation_needed', 'Сначала нужно завершить подготовку')
     name=str(values.get('name') or '').strip();owner=str(values.get('owner') or '').strip()
     provider=values.get('provider');model=str(values.get('model') or '').strip();key=str(values.get('key') or '').strip()
     if not name or not model or provider not in ('openai','anthropic','chatgpt'):
-        raise ValueError('Введи имя агента и модель, выбери подключение')
-    if provider!='chatgpt' and not key:raise ValueError('Введи ключ доступа к API')
+        raise NativeValueError('first_agent_fields', 'Введи имя агента и модель, выбери подключение')
+    if provider!='chatgpt' and not key:raise NativeValueError('first_api_key', 'Введи ключ доступа к API')
     previous=load(root/'helene.json');config=creation_config(previous,values)
     # Explicit birth choice lives with the profile, even while subscription
     # sign-in is pending and before the first runner has created soul/SOUL.md.
@@ -1161,7 +1162,7 @@ def _create_agent_locked(root,values,*,places,progress=None):
     if 'soul' in values:
         soul=values['soul']
         if not isinstance(soul,dict) or soul.get('kind') not in ('canonical','text'):
-            raise ValueError('Выбери конституцию Hélène или свой текст')
+            raise NativeValueError('first_soul_choice', 'Выбери конституцию Hélène или свой текст')
         from .agents import _soul_seed_text
         seed=_soul_seed_text(root,soul,None)
         if seed is None:
