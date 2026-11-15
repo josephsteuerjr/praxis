@@ -6130,5 +6130,608 @@
       }
     ],
     "purpose": "schema.tool.purpose.coding_control"
+  },
+  "coding_agent": {
+    "sha256": "5a668134d3ad954440ea1b2dd557b9554ab6d1e9489bbf9b0a8bb9b1fe5d058e",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.9c7cf31a5faaedde",
+        "present": true,
+        "source": "Spawn/poll/stop/list a real fresh-context team member, record exact-result disposition, or drain the durable queue. payload reads an exact result/request/payload page: pass payload_sha256 (result_sha256 is also accepted for kind=result); follow next_offset until complete. events reads ordered durable events. Parent identity is runtime-owned; queued editing workers share one root. Read-only critics advise; acceptance never relabels their findings."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.c50d71f192e8bb77",
+        "present": true,
+        "source": "Durable Forge task identity."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.d0321cd4ebc80397",
+        "present": true,
+        "source": "Requested typed operation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "agent_id",
+          "description"
+        ],
+        "key": "schema.tool.8002669a6a9ca3bb",
+        "present": true,
+        "source": "Selected participant identity; empty selects the task."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "brief",
+          "description"
+        ],
+        "key": "schema.tool.f5125f2f67df1859",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "phase",
+          "description"
+        ],
+        "key": "schema.tool.5afbfa5d84ca0419",
+        "present": true,
+        "source": "Concrete stage of the assigned work."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "success_criteria",
+          "description"
+        ],
+        "key": "schema.tool.96325588611c9cf8",
+        "present": true,
+        "source": "Observable conditions for completing this assignment."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "result_sha256",
+          "description"
+        ],
+        "key": "schema.tool.da978820eb5a5646",
+        "present": true,
+        "source": "Exact hash of the observed result.json bytes."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "disposition",
+          "description"
+        ],
+        "key": "schema.tool.3f68394ff9c69b7c",
+        "present": true,
+        "source": "Author decision about this exact result; independent findings retain their own verdict."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "role",
+          "description"
+        ],
+        "key": "schema.tool.92f759df802d8850",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "model",
+          "description"
+        ],
+        "key": "schema.tool.b90ec28328649624",
+        "present": true,
+        "source": "Optional per-agent model from the live/configured catalogue; omitted keeps the voice-role default."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_iters",
+          "description"
+        ],
+        "key": "schema.tool.b54802b0ae742531",
+        "present": true,
+        "source": "Per-unit model turn allowance; zero retains the configured Forge default."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "tail",
+          "description"
+        ],
+        "key": "schema.tool.1b1ab499ab532180",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "payload_sha256",
+          "description"
+        ],
+        "key": "schema.tool.9db1340281d9ab74",
+        "present": true,
+        "source": "Exact SHA of the full immutable payload or result/request record."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "kind",
+          "description"
+        ],
+        "key": "schema.tool.a5de661cf684d2dd",
+        "present": true,
+        "source": "Record type to page: immutable payload or exact result/request JSON."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "offset",
+          "description"
+        ],
+        "key": "schema.tool.2cd346d672be4422",
+        "present": true,
+        "source": "Unicode character offset returned by the previous content page."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.ceb4f153b9432477",
+        "present": true,
+        "source": "Maximum page length; outputs expose the next offset explicitly."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "after_seq",
+          "description"
+        ],
+        "key": "schema.tool.811292d287728b2f",
+        "present": true,
+        "source": "Last consumed event sequence, for ordered journal paging."
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_agent"
+  },
+  "coding_review": {
+    "sha256": "52a10ec34bc817f39a6c73f8b2b3754499d146cb1b3c35e124ccb61466806c8d",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.8d6289ed73ee512c",
+        "present": true,
+        "source": "Prepare/start/inspect independent frozen source review or a separate isolated A/L/B/M merger, retain findings, request review of fixes and record an explicit author decision. A=base,L=authored local,B=incoming,M=candidate. This never applies live code; critics remain advisory."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "task_id",
+          "description"
+        ],
+        "key": "schema.tool.66667cfd4cfb5b50",
+        "present": true,
+        "source": "Durable Forge task identity."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.376bedb569957ff8",
+        "present": true,
+        "source": "Requested typed operation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "review_id",
+          "description"
+        ],
+        "key": "schema.tool.97cf397f01215143",
+        "present": true,
+        "source": "Identity returned by the frozen review or merge preparation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "criteria",
+          "description"
+        ],
+        "key": "schema.tool.792092962ee1f4be",
+        "present": true,
+        "source": "Concrete review criteria or correction brief."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "previous_review_id",
+          "description"
+        ],
+        "key": "schema.tool.ad8680e42c45a9be",
+        "present": true,
+        "source": "Previous review whose findings the new revision must address."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "merge_id",
+          "description"
+        ],
+        "key": "schema.tool.26095dac6ccdc172",
+        "present": true,
+        "source": "Finished isolated merger whose exact A/L/B/M composition should be reviewed."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "paths",
+          "description"
+        ],
+        "key": "schema.tool.fce33e1517aa0a08",
+        "present": true,
+        "source": "Optional exact relative source paths; the recorded scope says when review is partial."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "base",
+          "description"
+        ],
+        "key": "schema.tool.27872cab15b4e728",
+        "present": true,
+        "source": "Directory of original base A."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "local",
+          "description"
+        ],
+        "key": "schema.tool.3c3a1d29388b7580",
+        "present": true,
+        "source": "Directory of authored local source L."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "incoming",
+          "description"
+        ],
+        "key": "schema.tool.d25397a206402231",
+        "present": true,
+        "source": "Directory of incoming source B."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "critics",
+          "description"
+        ],
+        "key": "schema.tool.b65ed591a6615f1c",
+        "present": true,
+        "source": "Explicit independent critic count, from 1 through 8; default 1."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "max_iters",
+          "description"
+        ],
+        "key": "schema.tool.29c7156907bfaeb4",
+        "present": true,
+        "source": "Per-unit model turn allowance; zero retains the configured Forge default."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "model",
+          "description"
+        ],
+        "key": "schema.tool.cea5cbe66fbf0c4f",
+        "present": true,
+        "source": "Optional configured model; empty retains the voice-role route."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_subject_sha256",
+          "description"
+        ],
+        "key": "schema.tool.94aa8e337e817d06",
+        "present": true,
+        "source": "Exact frozen review subject hash returned by preparation."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "decision",
+          "description"
+        ],
+        "key": "schema.tool.92b12f9935662493",
+        "present": true,
+        "source": "Explicit author disposition; override never changes the critic verdict."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.ca76b63bcfa04318",
+        "present": true,
+        "source": "Concrete reason for the author decision."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "verification_id",
+          "description"
+        ],
+        "key": "schema.tool.426464e0e4a00f19",
+        "present": true,
+        "source": "Actual canonical verification matrix identity from the exported stand."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "expected_candidate_sha256",
+          "description"
+        ],
+        "key": "schema.tool.02318d2a24b04978",
+        "present": true,
+        "source": "Exact planned source composition SHA; distinct from review subject and result hashes."
+      }
+    ],
+    "purpose": "schema.tool.purpose.coding_review"
+  },
+  "host_ctl": {
+    "sha256": "4865efeaff7f2db2a43d10e96a0a501106623fd84465166c8de49300678c4b89",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.e6ae332dcb079685",
+        "present": true,
+        "source": "Typed root capabilities with before/after evidence. systemctl/docker/pkg/file/net/reboot execute directly; load-bearing mutations return a timed recovery receipt that rolls back unless confirm is called after observing the result. This is a recoverability belt, not a permission gate: arbitrary host work remains available through a host Forge task."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "verb",
+          "description"
+        ],
+        "key": "schema.tool.581f9a615c8b361f",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.fb5e5c9c078186a7",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "unit",
+          "description"
+        ],
+        "key": "schema.tool.7b4c9d7cfb6150da",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "name",
+          "description"
+        ],
+        "key": "schema.tool.2f6c39bfe4ab4692",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "args",
+          "description"
+        ],
+        "key": "schema.tool.ab72d2e08bfba2e5",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "names",
+          "description"
+        ],
+        "key": "schema.tool.7cdb72accfc12d7c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "path",
+          "description"
+        ],
+        "key": "schema.tool.c98686b0ea7bd207",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "target",
+          "description"
+        ],
+        "key": "schema.tool.2cba9e9e8402783c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "cwd",
+          "description"
+        ],
+        "key": "schema.tool.df604e51b02cd585",
+        "present": true,
+        "source": "absolute project directory for docker compose"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "content",
+          "description"
+        ],
+        "key": "schema.tool.0eb88758c79815e6",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "mode",
+          "description"
+        ],
+        "key": "schema.tool.6b246a55585fb586",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "owner",
+          "description"
+        ],
+        "key": "schema.tool.5d858a8b7b251806",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "receipt_id",
+          "description"
+        ],
+        "key": "schema.tool.d5ef53fabd189181",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "recover_after",
+          "description"
+        ],
+        "key": "schema.tool.7274d4c4520e7e8c",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "delay_minutes",
+          "description"
+        ],
+        "key": "schema.tool.674d35e8006a644b",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "verify_command",
+          "description"
+        ],
+        "key": "schema.tool.7976579fbad58d08",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.host_ctl"
   }
 }
