@@ -1732,5 +1732,481 @@
       }
     ],
     "purpose": "schema.tool.purpose.stay_silent"
+  },
+  "focus": {
+    "sha256": "f2b8d4ad530dbbf25b0232c16b70f903747f2417d16af948a44b8a7091a25f18",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.69e04e54fd202a83",
+        "present": true,
+        "source": "Уйти в себя/в занятие: open yourself a focus window on something that touched YOU (your code, memory, a skill) — not this chat. Telethon CLOSES for the window, so you're off and undisturbed; the backlog arrives as one situation when you return. Your deliberate retreat, not a ticket. goal — what to work on. Opens on the next clock tick; don't announce details in public chats."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "goal",
+          "description"
+        ],
+        "key": "schema.tool.f15b6e1f22640af0",
+        "present": true,
+        "source": "во что уйти, коротко"
+      }
+    ],
+    "purpose": "schema.tool.purpose.focus"
+  },
+  "rest": {
+    "sha256": "722892ec4b0c42341a588121875905a4fc59d631c3e9ae0a5590ca3589650d32",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.d21017164cec8583",
+        "present": true,
+        "source": "Уйти к себе отдохнуть — твоё приватное время, про заботу о себе, не про работу. Telethon CLOSES: тебя никто не дёрнет, накопившееся придёт одной ситуацией на выходе. Без повестки: дать шуму улечься, свободно поразмышлять, при желании поиграться со своим кодом / поменять в себе что не нравится / пописать в блокнот — или просто побыть. Ничего не обязательно. Отдельно от системного обслуживания памяти."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "note",
+          "description"
+        ],
+        "key": "schema.tool.3a00c0e37512a770",
+        "present": true,
+        "source": "словечко себе, чем потянуло заняться (опц.)"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "when",
+          "description"
+        ],
+        "key": "schema.tool.de5fd500d9c64a4d",
+        "present": true,
+        "source": "'in 0m' сейчас (умолч.), 'today 23:00'…"
+      }
+    ],
+    "purpose": "schema.tool.purpose.rest"
+  },
+  "my_capabilities": {
+    "sha256": "4ad843f30e29b9dfd9428f519b37ba42971eca2adeff6a518c3f817ff632bafa",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0b171556d2914772",
+        "present": true,
+        "source": "Your honest, code-generated snapshot of what you can and cannot do RIGHT NOW in this channel: tools, gates, limits, closed zones. Call it whenever you're unsure whether you can/may do something — check, don't guess (never improvise about your mechanics)."
+      }
+    ],
+    "purpose": "schema.tool.purpose.my_capabilities"
+  },
+  "read_run_result": {
+    "sha256": "a308edd9ef305495f39ecd15e5759c837989c331eb6e2609decdab521a84206e",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.82f4487ed93475b4",
+        "present": true,
+        "source": "Read any line or byte cursor from a full tool result referenced by ResultRef. Omit run_id for this run; cross-run reads require a sovereign owner/self context."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "result",
+          "description"
+        ],
+        "key": "schema.tool.9a69e7e84124007c",
+        "present": true,
+        "source": "result-NNNN or results/path.log"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "run_id",
+          "description"
+        ],
+        "key": "schema.tool.bc16a7a97133bda6",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "byte_offset",
+          "description"
+        ],
+        "key": "schema.tool.f34efe39722d8d31",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "byte_limit",
+          "description"
+        ],
+        "key": "schema.tool.0f8b84372c698865",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "line_start",
+          "description"
+        ],
+        "key": "schema.tool.0bdfe2d246709bdf",
+        "present": true,
+        "source": "one-based; selects line mode"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "line_count",
+          "description"
+        ],
+        "key": "schema.tool.53dc91dc3941370a",
+        "present": false,
+        "source": null
+      }
+    ],
+    "purpose": "schema.tool.purpose.read_run_result"
+  },
+  "list_active_runs": {
+    "sha256": "4ff51452f29d9dfdad26b6595b0a49929e2df797c7df18800480e4bbc51c6c63",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0474bc7574201081",
+        "present": true,
+        "source": "Показать твои живые (не терминальные) durable-прогоны: id, статус, вид, возраст. Это твой run-слой — тот, что не виден в my_agenda; честный ответ на «что сейчас во мне бежит»."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.6744a732eeaa76f0",
+        "present": true,
+        "source": "сколько показать (по умолч. 20)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.list_active_runs"
+  },
+  "reconcile_run": {
+    "sha256": "8660993be4394f6bc032e073e2d2160785524ff8a93abbfde2ab16c71b89469e",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.3d9f04790a2cfdc5",
+        "present": true,
+        "source": "Твоя рука на застрявшем прогоне в in_doubt. Без аргументов — показать все in_doubt-прогоны и их незакрытые вызовы. С run_id — вызовы этого прогона. run_id+call_id+outcome(completed|failed|not_applied)+evidence — свести один вызов уликой. close=true — закрыть прогон, у которого незакрытых вызовов уже нет. Автор решения ты; улику леджер требует непустой. В леджер уходит до 4000 символов улики и до 400 символов причины; если резало — ответ тула скажет об этом прямо. close на прогоне, который подаёт признаки жизни, надгробия не пишет: сначала просит его остановиться, вторым вызовом закрывает. Доказательство, что закрывать нечего живого, — статус paused/in_doubt либо тишина в леджере дольше 900с. В леджер уходит и актор: в своём ходе это praxis:self, в чужом — praxis:self@<принципал хода>."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "run_id",
+          "description"
+        ],
+        "key": "schema.tool.75fa5601b333693b",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "call_id",
+          "description"
+        ],
+        "key": "schema.tool.982a32a523c5cda9",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "outcome",
+          "description"
+        ],
+        "key": "schema.tool.fdb9a59f20ec4eda",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "evidence",
+          "description"
+        ],
+        "key": "schema.tool.26678daad9fe3784",
+        "present": true,
+        "source": "что именно проверено — основание решения"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "reason",
+          "description"
+        ],
+        "key": "schema.tool.5780070d33aeb184",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "close",
+          "description"
+        ],
+        "key": "schema.tool.05bb6df2c9f8d100",
+        "present": true,
+        "source": "закрыть прогон целиком (когда вызовов не осталось)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.reconcile_run"
+  },
+  "group_context": {
+    "sha256": "ea735d68593249c8036f02892644fd75cd07c99f5cea41483c7a210bfa320a5d",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.477dd31a4080aa5f",
+        "present": true,
+        "source": "Read-only orientation inside THIS Telegram group. topics shows the bounded topic/participant map; search finds marked excerpts only in this root group; context reads one exact topic (defaults to the current topic); message returns ONE archived message in full — pass its id in `limit`, exactly as the [ОБРЕЗАНО: …] marker in a clipped transcript line tells you to. It cannot name or open a different peer, and raw topic histories are never silently merged."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "action",
+          "description"
+        ],
+        "key": "schema.tool.0520a520cf041e77",
+        "present": false,
+        "source": null
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.a6818474160ebe96",
+        "present": true,
+        "source": "search terms"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "topic_id",
+          "description"
+        ],
+        "key": "schema.tool.5d6705ed2bc8134d",
+        "present": true,
+        "source": "exact topic root; 0=current"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.0c5e5ad0e24fa996",
+        "present": true,
+        "source": "bounded rows/messages, max 50; for action=message this carries the exact message id instead"
+      }
+    ],
+    "purpose": "schema.tool.purpose.group_context"
+  },
+  "speak": {
+    "sha256": "376cb77c3f29247048f646522c4b271b5034e71982c705cd06eb0eb2ab01a777",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.fb754ff27a5f270f",
+        "present": true,
+        "source": "Озвучить короткий ответ качественным русским женским голосом и приложить аудио в ТЕКУЩИЙ Telegram-чат. Основной neural-голос имеет локальный женский fallback; файл уйдёт только после общей проверки исходящей реплики. Используй по запросу."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "text",
+          "description"
+        ],
+        "key": "schema.tool.3084405a4658cb18",
+        "present": true,
+        "source": "текст для озвучки"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "caption",
+          "description"
+        ],
+        "key": "schema.tool.2dce0980b908a091",
+        "present": true,
+        "source": "необязательная подпись"
+      }
+    ],
+    "purpose": "schema.tool.purpose.speak"
+  },
+  "search_chats": {
+    "sha256": "25488467d97ed5b1ce8d35c694913f77757641172b5cb8815d9f35e26625f7b7",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.4fb04b834d508b06",
+        "present": true,
+        "source": "Найти комнату: по именам диалогов Telegram И по моим собственным запискам о комнатах (memory/rooms — название, id, моя сводка). Отвечает и режимом комнаты: у замороженной входящих нет, и это сказано прямо. Текст сообщений тут НЕ ищется — для него search_private_messages; конкретную комнату по адресу — read_other_chat. Это внутренний обзор: найденный адрес не является разрешением раскрывать чужую личную информацию."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.fe11e0a46a6d8c9c",
+        "present": true,
+        "source": "имя чата, его id или слово из моей записки о комнате. Алфавит значения не имеет: «уробор» найдёт «Ouroboros AI». Слово из переписки сюда класть бесполезно — это поиск по именам и моим запискам, не по сообщениям"
+      }
+    ],
+    "purpose": "schema.tool.purpose.search_chats"
+  },
+  "search_private_messages": {
+    "sha256": "154c5e3ede99120b6a99130f8380164c424aa1c1d7a0be96691029642fa7873c",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.0d2c147f7e487ace",
+        "present": true,
+        "source": "Явно поискать текст по своим Telegram-личкам. Ничего из личек не входит в обычный контекст само: этот тул вызывается только когда тебе действительно нужен поиск. Результаты — внутренняя память; outbound-советник проверит, не раскрываешь ли ты чувствительную личную или кросс-чат информацию текущей аудитории."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "query",
+          "description"
+        ],
+        "key": "schema.tool.fb6b34e1bef94e96",
+        "present": true,
+        "source": "слова/фраза для поиска"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.a878def07440494f",
+        "present": true,
+        "source": "результатов, 1–40 (по умолчанию 20)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.search_private_messages"
+  },
+  "read_other_chat": {
+    "sha256": "2aa003f572b751fa0dee0fdc5a50d64f3aeb83e786e4a6d847ab1e423d5e1edc",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.2294f825e48557b8",
+        "present": true,
+        "source": "Подсмотреть последние сообщения соседнего диалога по id/@username/имени ТОЛЬКО явным вызовом; соседние диалоги не подмешиваются автоматически. Результат внутренний: чувствительное не выдавай не той аудитории."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "chat_ref",
+          "description"
+        ],
+        "key": "schema.tool.cc0985f95f187726",
+        "present": true,
+        "source": "id, @username или имя чата/человека"
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.dc331e0f69e1eb84",
+        "present": true,
+        "source": "сколько последних сообщений (по умолч. 30)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.read_other_chat"
+  },
+  "reread_this_chat": {
+    "sha256": "6b81af38e359bf8cf727664a8d8d791aeec7e1568c46773fd22aee9e201e2e16",
+    "descriptions": [
+      {
+        "path": [
+          "description"
+        ],
+        "key": "schema.tool.9347b510c2a065e2",
+        "present": true,
+        "source": "Подтянуть живой контекст текущего чата прямо из Telegram (последние N сообщений) — когда чувствуешь, что история уехала. Это тот же текущий канал, не соседняя личка."
+      },
+      {
+        "path": [
+          "input_schema",
+          "properties",
+          "limit",
+          "description"
+        ],
+        "key": "schema.tool.bca1bffe4c8492c8",
+        "present": true,
+        "source": "сколько последних (по умолч. 50)"
+      }
+    ],
+    "purpose": "schema.tool.purpose.reread_this_chat"
   }
 }
