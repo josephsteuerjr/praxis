@@ -4119,5 +4119,12 @@
   "native.app.startup_title": "Hélène — échec du démarrage",
   "native.app.emergency_requested": "Arrêt d’urgence demandé. Les démarrages automatiques restent en pause.",
   "native.app.startup_log": "Hélène n’a pas pu démarrer.\n\n{error}\n\nDétails : {path}",
-  "native.app.startup_log_unavailable": "Hélène n’a pas pu démarrer.\n\n{error}\n\nJournal de démarrage indisponible : {detail}"
+  "native.app.startup_log_unavailable": "Hélène n’a pas pu démarrer.\n\n{error}\n\nJournal de démarrage indisponible : {detail}",
+  "native.bootstrap.root_missing": "Impossible de déterminer le dossier de l’application.",
+  "native.bootstrap.identity": "Impossible de créer l’identité de démarrage.",
+  "native.bootstrap.exited": "Python s’est terminé avant de confirmer l’ouverture de sa fenêtre ({status}). Détails : {path}",
+  "native.bootstrap.unconfirmed": "L’ouverture de la fenêtre n’est pas encore confirmée (processus {pid}). Détails : {path}",
+  "native.bootstrap.windows_error": "Impossible de démarrer Hélène. Conserver helene.exe, app et runtime dans le même dossier.\n\n{detail}",
+  "native.bootstrap.python_error": "L’application Python n’a pas démarré : {detail}",
+  "native.bootstrap.migration_error": "La migration n’a pas démarré : {detail}"
 }

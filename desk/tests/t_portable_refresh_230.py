@@ -18,6 +18,7 @@ INSTALLER = Path(__file__).resolve().parents[1] / 'installer'
 sys.path.insert(0, str(INSTALLER))
 import portable_refresh as refresh
 import portable_sources as sources
+import windows_archive_entry as bootstrap_entry
 from portable_zip import Entry, PREFIX, digest, encoded, info_for, mode, record_hashes, sha
 
 VERSION = '2.3.0-rc.1'
@@ -52,6 +53,8 @@ class Fixture:
             put(self.source, 'desk/' + n, (INSTALLER.parent / n).read_bytes())
         for n in ('windows_archive_entry.py', 'windows_launcher.rs'):
             put(self.source, 'desk/installer/' + n, (INSTALLER / n).read_bytes())
+        for n in ('Cargo.toml','Cargo.lock','build.rs','lib.rs','main.rs','migrate.rs'):
+            put(self.source,'desk/python-launcher/'+n,(INSTALLER.parent/'python-launcher'/n).read_bytes())
         put(self.source, 'desk/shell/icons/icon.ico', (INSTALLER.parent / 'shell/icons/icon.ico').read_bytes())
         put(self.source, 'desk/resources/first-start.html',
             (INSTALLER.parent / 'resources/first-start.html').read_bytes())
@@ -102,8 +105,9 @@ class Fixture:
         struct.pack_into('<H', bootstrap, 0x98, 0x20b)
         struct.pack_into('<H', bootstrap, 0x80 + 92, 2)
         bootstrap = bytes(bootstrap)
-        bootstrap_receipt = {'kind':'helene-python-bootstrap.v1',
+        bootstrap_receipt = {'kind':'helene-python-bootstrap.v2',
             'source_sha256':digest(self.source/'desk/installer/windows_launcher.rs'),
+            'inputs_sha256':bootstrap_entry.bootstrap_inputs(self.source/'desk'),
             'icon_sha256':digest(self.source/'desk/shell/icons/icon.ico'),
             'binary_sha256':sha(bootstrap)}
         entries = {

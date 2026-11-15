@@ -1,4 +1,5 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
+use helene_python_launcher::{language, present, text};
 use std::{
     path::PathBuf,
     process::{Command, ExitCode},
@@ -6,8 +7,12 @@ use std::{
 fn main() -> ExitCode {
     let root = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .expect("launcher directory");
+        .and_then(|p| p.parent().map(PathBuf::from));
+    let lang = language(root.as_deref());
+    let Some(root) = root else {
+        startup_error(&text("native.bootstrap.root_missing", lang, &[]), lang);
+        return ExitCode::FAILURE;
+    };
     let python = root.join(if cfg!(windows) {
         "runtime/pythonw.exe"
     } else {
@@ -24,32 +29,19 @@ fn main() -> ExitCode {
     {
         Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
         Err(e) => {
-            startup_error(&format!("Python application did not start: {e}"));
+            startup_error(
+                &text(
+                    "native.bootstrap.python_error",
+                    lang,
+                    &[("detail", &e.to_string())],
+                ),
+                lang,
+            );
             ExitCode::FAILURE
         }
     }
 }
 
-fn startup_error(message: &str) {
-    eprintln!("{message}");
-    #[cfg(windows)]
-    {
-        #[link(name = "user32")]
-        unsafe extern "system" {
-            fn MessageBoxW(
-                window: *mut std::ffi::c_void,
-                text: *const u16,
-                title: *const u16,
-                kind: u32,
-            ) -> i32;
-        }
-        let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-        let title: Vec<u16> = "Hélène — startup failed"
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        unsafe {
-            MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10);
-        }
-    }
+fn startup_error(message: &str, lang: usize) {
+    present(message, &text("native.app.startup_title", lang, &[]));
 }

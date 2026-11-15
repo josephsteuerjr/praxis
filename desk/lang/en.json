@@ -4119,5 +4119,12 @@
   "native.app.startup_title": "Hélène — startup failed",
   "native.app.emergency_requested": "Emergency Stop requested. Automatic starts remain paused.",
   "native.app.startup_log": "Hélène could not start.\n\n{error}\n\nDetails: {path}",
-  "native.app.startup_log_unavailable": "Hélène could not start.\n\n{error}\n\nStartup log unavailable: {detail}"
+  "native.app.startup_log_unavailable": "Hélène could not start.\n\n{error}\n\nStartup log unavailable: {detail}",
+  "native.bootstrap.root_missing": "The application folder could not be determined.",
+  "native.bootstrap.identity": "Could not create the startup identity.",
+  "native.bootstrap.exited": "Python exited before confirming its window ({status}). Details: {path}",
+  "native.bootstrap.unconfirmed": "Window startup is still unconfirmed (process {pid}). Details: {path}",
+  "native.bootstrap.windows_error": "Could not start Hélène. Keep helene.exe, app and runtime in the same folder.\n\n{detail}",
+  "native.bootstrap.python_error": "The Python application did not start: {detail}",
+  "native.bootstrap.migration_error": "Migration did not start: {detail}"
 }

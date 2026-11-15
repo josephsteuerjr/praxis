@@ -23,6 +23,7 @@ from portable_zip import (PREFIX, Entry, Package, copy_records, digest, encoded,
                           mode, record_hashes, relative, sha, snapshot)
 from portable_sources import (FRONTS, application, build_frontends, compose_core,
                               checked, identities, public, scan, sealed, verify_frontends)
+from windows_archive_entry import bootstrap_matches
 
 PLATFORMS = ('windows', 'macos', 'debian', 'fedora')
 
@@ -60,7 +61,7 @@ def _windows_bootstrap(package,source,binary=None):
     else:
         body=entry.data if entry else b''
         receipt=package.value('helene-bootstrap.json',{})
-    if (receipt.get('source_sha256')!=digest(source_file)
+    if (not bootstrap_matches(receipt,source/'desk')
             or receipt.get('icon_sha256')!=digest(source/'desk/shell/icons/icon.ico')
             or receipt.get('binary_sha256')!=sha(body)):
         raise ValueError('Supply the current source-bound Windows bootstrap binary and receipt')
@@ -503,6 +504,9 @@ def verify_archive(path, report):
                     or p.value('source-inputs.json')['files'].get('installer/windows_launcher.rs')!=bootstrap['source_sha256']
                     or hashes[PREFIX+'app/resources/python-app.ico']!=bootstrap['icon_sha256']):
                 raise ValueError('Windows bootstrap source/icon/binary identity differs')
+            for name,value in (bootstrap.get('inputs_sha256') or {}).items():
+                if p.value('source-inputs.json')['files'].get(name)!=value:
+                    raise ValueError('Windows bootstrap compiled input differs: '+name)
     return hashes
 
 

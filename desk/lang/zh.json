@@ -4119,5 +4119,12 @@
   "native.app.startup_title": "Hélène — 启动失败",
   "native.app.emergency_requested": "已请求紧急停止。自动启动保持暂停。",
   "native.app.startup_log": "Hélène 无法启动。\n\n{error}\n\n详情：{path}",
-  "native.app.startup_log_unavailable": "Hélène 无法启动。\n\n{error}\n\n启动日志不可用：{detail}"
+  "native.app.startup_log_unavailable": "Hélène 无法启动。\n\n{error}\n\n启动日志不可用：{detail}",
+  "native.bootstrap.root_missing": "无法确定应用程序文件夹。",
+  "native.bootstrap.identity": "无法创建启动标识。",
+  "native.bootstrap.exited": "Python 在确认窗口打开前已退出（{status}）。详情：{path}",
+  "native.bootstrap.unconfirmed": "尚未确认窗口已启动（进程 {pid}）。详情：{path}",
+  "native.bootstrap.windows_error": "无法启动 Hélène。请将 helene.exe、app 和 runtime 放在同一文件夹中。\n\n{detail}",
+  "native.bootstrap.python_error": "Python 应用程序未能启动：{detail}",
+  "native.bootstrap.migration_error": "迁移未能启动：{detail}"
 }

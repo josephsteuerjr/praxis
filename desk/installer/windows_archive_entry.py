@@ -1,11 +1,37 @@
 """Clickable portable Windows entries; all product lifecycle logic stays Python."""
 from pathlib import Path
 import subprocess
-import hashlib,json,shutil,struct,sys
+import hashlib,json,os,shutil,struct,sys,tempfile,tomllib
 
 OBSOLETE_ENTRIES=('Start Helene.vbs','Helene setup and recovery.vbs','Migrate Helene.vbs')
 INSTRUCTION_FILES=('START-HERE.md',)
 OBSOLETE_INSTRUCTIONS=('FIRST-RUN.md','ПЕРВЫЙ-ЗАПУСК.md')
+
+
+def bootstrap_inputs(desk):
+    """Exact source/catalog closure of the selected native bootstrap builder."""
+    desk=Path(desk);names=['installer/windows_launcher.rs']
+    manifest=desk/'python-launcher/Cargo.toml'
+    if manifest.is_file():
+        value=tomllib.loads(manifest.read_text(encoding='utf-8'))
+        if any(row.get('name')=='helene-bootstrap' for row in value.get('bin',[])):
+            names += ['python-launcher/'+name for name in ('Cargo.toml','Cargo.lock','build.rs','lib.rs')]
+            names += ['lang/'+lang+'.json' for lang in ('ru','en','fr','zh')]
+    result={}
+    for name in names:
+        path=desk/name
+        parents=[desk/parent for parent in path.relative_to(desk).parents]
+        linked=any(item.is_symlink() or bool(getattr(item.lstat(),'st_file_attributes',0)&0x400)
+                   for item in (path,*parents) if item.exists() or item.is_symlink())
+        if not path.is_file() or linked:raise ValueError('Missing or linked bootstrap input: '+name)
+        result[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
+
+def bootstrap_matches(receipt,desk):
+    inputs=bootstrap_inputs(desk)
+    return (receipt.get('source_sha256')==inputs['installer/windows_launcher.rs']
+            and (len(inputs)==1 or (receipt.get('kind')=='helene-python-bootstrap.v2' and receipt.get('inputs_sha256')==inputs)))
 
 
 def embed_icon(binary,icon):
@@ -46,23 +72,35 @@ def launcher(root,binary=None):
     icon_sha=hashlib.sha256(icon.read_bytes()).hexdigest()
     target=root/'helene.exe'
     source_sha=hashlib.sha256(source.read_bytes()).hexdigest()
+    inputs=bootstrap_inputs(source.parents[1])
     if binary is not None:
         binary=Path(binary);meta=json.loads(binary.with_name(binary.stem+'-bootstrap.json').read_text(encoding='utf-8'))
-        if meta.get('source_sha256')!=source_sha or meta.get('icon_sha256')!=icon_sha or meta.get('binary_sha256')!=hashlib.sha256(binary.read_bytes()).hexdigest():
+        if not bootstrap_matches(meta,source.parents[1]) or meta.get('icon_sha256')!=icon_sha or meta.get('binary_sha256')!=hashlib.sha256(binary.read_bytes()).hexdigest():
             raise ValueError('Windows bootstrap does not match its source-bound receipt')
         if binary.resolve()!=target.resolve():
             target.unlink(missing_ok=True);shutil.copy2(binary,target)
     else:
         if sys.platform!='win32':raise ValueError('Supply the verified Windows bootstrap binary and JSON receipt when assembling on another OS')
         target.unlink(missing_ok=True)  # a donor may share immutable files by link
-        subprocess.run(['rustc','--edition=2021','-C','opt-level=s','-C','strip=symbols',
-                        '--crate-name','helene_entry',str(source),'-o',str(target)],check=True,capture_output=True)
+        if len(inputs)>1:
+            with tempfile.TemporaryDirectory(prefix='helene-bootstrap-build-') as folder:
+                subprocess.run(['cargo','build','--manifest-path',str(source.parents[1]/'python-launcher/Cargo.toml'),
+                    '--locked','--offline','--release','--features','windows-bootstrap','--bin','helene-bootstrap'],
+                    env=dict(os.environ,CARGO_TARGET_DIR=folder),check=True,capture_output=True)
+                shutil.copy2(Path(folder)/'release/helene-bootstrap.exe',target)
+        else:
+            subprocess.run(['rustc','--edition=2021','-C','opt-level=s','-C','strip=symbols',
+                            '--crate-name','helene_entry',str(source),'-o',str(target)],check=True,capture_output=True)
         embed_icon(target,icon)
     content=target.read_bytes();pe=struct.unpack_from('<I',content,0x3c)[0]
     if content[:2]!=b'MZ' or content[pe:pe+4]!=b'PE\0\0' or struct.unpack_from('<H',content,pe+4)[0]!=0x8664 or struct.unpack_from('<H',content,pe+24+68)[0]!=2:
         raise ValueError('Expected an x64 Windows GUI bootstrap')
-    target.with_name(target.stem+'-bootstrap.json').write_text(json.dumps({'kind':'helene-python-bootstrap.v1','source_sha256':source_sha,
-        'binary_sha256':hashlib.sha256(content).hexdigest(),'icon_sha256':icon_sha},indent=2),encoding='utf-8')
+    if bootstrap_inputs(source.parents[1])!=inputs or hashlib.sha256(icon.read_bytes()).hexdigest()!=icon_sha:
+        raise ValueError('Windows bootstrap inputs changed during its build')
+    receipt={'kind':'helene-python-bootstrap.v2' if len(inputs)>1 else 'helene-python-bootstrap.v1','source_sha256':source_sha,
+        'binary_sha256':hashlib.sha256(content).hexdigest(),'icon_sha256':icon_sha}
+    if len(inputs)>1:receipt['inputs_sha256']=inputs
+    target.with_name(target.stem+'-bootstrap.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
     return target
 
 def write(root,*,launcher_binary=None):

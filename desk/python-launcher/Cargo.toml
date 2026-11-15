@@ -3,6 +3,22 @@ name = "helene-python-launcher"
 version = "1.9.2"
 edition = "2021"
 
+[dependencies]
+serde_json = "=1.0.151"
+
+[build-dependencies]
+serde_json = "=1.0.151"
+
+[lib]
+path = "lib.rs"
+
+[features]
+windows-bootstrap = []
+
+[profile.release]
+opt-level = "s"
+strip = "symbols"
+
 [[bin]]
 name = "helene"
 path = "main.rs"
@@ -10,3 +26,8 @@ path = "main.rs"
 [[bin]]
 name = "helene-setup"
 path = "migrate.rs"
+
+[[bin]]
+name = "helene-bootstrap"
+path = "../installer/windows_launcher.rs"
+required-features = ["windows-bootstrap"]

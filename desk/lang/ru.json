@@ -4119,5 +4119,12 @@
   "native.app.startup_title": "Hélène — не удалось запустить",
   "native.app.emergency_requested": "Аварийный Stop запрошен. Автоматические запуски остаются на паузе.",
   "native.app.startup_log": "Не удалось запустить Hélène.\n\n{error}\n\nПодробности: {path}",
-  "native.app.startup_log_unavailable": "Не удалось запустить Hélène.\n\n{error}\n\nЖурнал запуска недоступен: {detail}"
+  "native.app.startup_log_unavailable": "Не удалось запустить Hélène.\n\n{error}\n\nЖурнал запуска недоступен: {detail}",
+  "native.bootstrap.root_missing": "Не удалось определить папку программы.",
+  "native.bootstrap.identity": "Не удалось создать идентичность запуска.",
+  "native.bootstrap.exited": "Python завершился, не подтвердив открытие окна ({status}). Подробности: {path}",
+  "native.bootstrap.unconfirmed": "Открытие окна пока не подтверждено (процесс {pid}). Подробности: {path}",
+  "native.bootstrap.windows_error": "Не удалось запустить Hélène. Файл helene.exe и папки app и runtime должны лежать вместе.\n\n{detail}",
+  "native.bootstrap.python_error": "Приложение Python не запустилось: {detail}",
+  "native.bootstrap.migration_error": "Перенос не запустился: {detail}"
 }

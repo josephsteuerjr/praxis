@@ -260,6 +260,14 @@ def application(source):
         p = desk / 'installer' / name
         if p.is_file():
             selected['app/installer/' + name], origins['app/installer/' + name] = Entry(p.read_bytes()), 'desk/installer/' + name
+    # Build-time native captions are derived from the same runtime catalogs.
+    # Explicit files prevent a local Cargo target/cache from entering a package.
+    for name in ('Cargo.toml','Cargo.lock','build.rs','lib.rs','main.rs','migrate.rs'):
+        p=desk/'python-launcher'/name
+        if p.is_file():
+            if linked(p):raise ValueError('Linked native launcher input')
+            dest='app/python-launcher/'+name
+            selected[dest],origins[dest]=Entry(p.read_bytes()),'desk/python-launcher/'+name
     for source_name, destination in (('desk/shell/icons/icon.ico', 'app/resources/python-app.ico'),
                                      ('desk/shell/icons/python-app.png', 'app/resources/python-app.png')):
         p = source / source_name
