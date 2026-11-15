@@ -846,6 +846,42 @@ def _event_copy(rec: dict) -> dict:
     return out
 
 
+def _place_read_resolver():
+    """One read operation, not a cross-turn cache or a writer transaction.
+
+    The immutable fold journal wins. Mutable routes are read once per root, so
+    hundreds of topic keys do not repeatedly decode the same document. A later
+    operation observes new routes/bindings. Exact-place lock overrides survive.
+    """
+    bound = bindings()
+    overrides = dict(getattr(_STATE_GUARD_LOCAL, "place_overrides", None) or {})
+    routes, resolved = {}, {}
+
+    def resolve(value):
+        key = str(value)
+        if key in resolved:
+            return resolved[key]
+        result = key
+        if int(overrides.get(key) or 0) <= 0:
+            result = bound.get(key)
+            if not result:
+                try:
+                    import telegram_routes
+                    room = telegram_routes.room_of(key)
+                    if telegram_routes.topic_of(key) is None:
+                        result = room or key
+                    else:
+                        if room not in routes:
+                            routes[room] = telegram_routes.read(room)
+                        result = telegram_routes.place_from_record(key, routes[room]) or key
+                except Exception:
+                    result = key
+        resolved[key] = result
+        return result
+
+    return bound, resolve
+
+
 def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = None,
                 limit: int | None = None,
                 where: Callable[[dict], bool] | None = None) -> list[dict]:
@@ -864,6 +900,7 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
     """
     out: list[dict] = []
     belongs: dict[str, bool] = {}
+    bound, resolve = _place_read_resolver() if chat_id is not None else ({}, None)
     for path in sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []:
         for rec in _event_file_records(path):
             if kinds and rec.get("kind") not in kinds:
@@ -874,7 +911,8 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
                 key = str(rec.get("chat_id"))
                 hit = belongs.get(key)
                 if hit is None:
-                    hit = _same_place(key, chat_id)
+                    hit = (memory_provenance.same_conversation(key, chat_id, bound)
+                           or resolve(key) == resolve(chat_id))
                     belongs[key] = hit
                 if not hit:
                     continue
