@@ -532,7 +532,7 @@ class ReconcileRunTests(_RunHarness):
         row = [r for r in self.manager.events(context.run_id)
                if r.get("kind") == "tool_reconciled"][-1]
         stored = row["evidence"]["praxis_evidence"]
-        self.assertIn("обрезано", stored, "маркер обязан быть в самой улике")
+        self.assertIn("улика усечена", stored, "маркер обязан быть в самой улике")
         self.assertIn("обрезано", row["reason"])
         self.assertLessEqual(len(row["reason"]), agent._RECONCILE_REASON_CHARS + 120)
 
@@ -638,8 +638,8 @@ class CloseRequiresProofTests(_RunHarness):
         manifest = self.manager.manifest(context.run_id)
         self.assertNotEqual(manifest["status"], "cancelled")
         self.assertEqual(manifest["status"], "paused")
-        self.assertIn("признаки жизни", out)
-        self.assertIn("close requested by Praxis",
+        self.assertIn("завершение не записано", out)
+        self.assertIn("запрошена остановка для закрытия",
                       str((manifest.get("control") or {}).get("reason") or ""))
         # Намерение не потеряно и не отложено навсегда: второй вызов закрывает начисто.
         again = agent.tool_reconcile_run(context.run_id, close=True)
@@ -671,12 +671,12 @@ class CloseRequiresProofTests(_RunHarness):
         with run_context.bind_run(self.manager.context(context.run_id)):
             kind, why = agent._close_terminality_proof(context.run_id, stale)
         self.assertEqual(kind, "alive")
-        self.assertIn("внутри которого", why)
+        self.assertIn("текущий прогон", why)
 
     def test_a_manifest_without_a_readable_clock_is_unknown_not_dead(self):
         kind, why = agent._close_terminality_proof("run-x", {"status": "running"})
         self.assertEqual(kind, "alive")
-        self.assertIn("неизвестен", why)
+        self.assertIn("неизвестна", why)
 
     def test_close_names_the_proof_it_acted_on(self):
         context = self._create("proof", kind="chat_turn")

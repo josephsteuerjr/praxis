@@ -32,7 +32,7 @@ class NativeWindowsMCP(unittest.TestCase):
         self.assertEqual(len(calls),1)
 
     def test_actual_K_target_contract_follows_frame_for_all_ui_pairs_and_audiences(self):
-        markers={'ru':'парном Windows','en':'paired Windows','fr':'associé sélectionné','zh':'配对 Windows'}
+        markers={'ru':'парный Windows','en':'paired Windows','fr':'associé sélectionné','zh':'配对 Windows'}
         for ui in frame_language.LANGUAGES:
             for language in frame_language.LANGUAGES:
                 with patch.object(frame_language,'settings',return_value={'lang':ui,'agent':{'frame_language':language}}):

@@ -2527,16 +2527,24 @@ def tool_shell(command: str, cwd: str = "", timeout: int = 0) -> str:
 
 
 
+@frame_language.pinned
+def _run_result_excerpt(text: str, limit: int) -> str:
+    value = str(text or '')
+    return value if len(value)<=limit else value[:limit]+frame_language.text('run.result.excerpt', shown=limit, total=len(value))
+
+
+@frame_language.pinned
 def tool_python(code: str, cwd: str = "", timeout: int = 0, task_id: str = "") -> str:
     """Direct Python with h preloaded, preserving the selected execution address."""
     if not isinstance(code, str):
         tool_report.note(outcome="refused")
-        return "Python refused: code must be a string."
+        return frame_language.text('run.result.python')
     if task_id:
         return forge.run_python(task_id, code, cwd=cwd or ".", timeout=timeout)
     return _home_command(code, cwd, timeout, python_code=code)
 
 
+@frame_language.pinned
 def tool_run_command(argv: list, cwd: str = "", timeout: int = 0, task_id: str = "",
                      stdin_text: str | None = None, env: dict | None = None,
                      outputs: list | None = None, scratch: list | None = None) -> str:
@@ -2545,12 +2553,12 @@ def tool_run_command(argv: list, cwd: str = "", timeout: int = 0, task_id: str =
     try:
         argv = command_execution.validate_argv(argv)
         if stdin_text is not None and not isinstance(stdin_text, str):
-            raise command_execution.ArgvRefusal("stdin_text must be a string")
+            raise command_execution.ArgvRefusal(frame_language.text('run.result.stdin'))
         env_map = command_execution.validate_env(env)
         for label, value in (("outputs", outputs), ("scratch", scratch)):
             command_execution.declared_paths(value, ".", label=label)  # shape only, before routing
     except command_execution.ArgvRefusal as exc:
-        raise catalog_families.PreflightRefusal(f"run_command: {exc}; nothing was launched") from None
+        raise catalog_families.PreflightRefusal(frame_language.text('run.result.argv', error=exc)) from None
     if task_id:
         # The task route validates the same public [{name, value}] form itself.
         return forge.run_command(task_id, argv, cwd=cwd or ".", timeout=timeout,
@@ -4541,6 +4549,7 @@ def _is_windows_task(task_id: str) -> bool:
     return str(task_id or "").startswith("wcode-")
 
 
+@frame_language.pinned
 def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         target: str = "self", isolation: str = "auto", scope: str = "self",
                         priority: str = "normal",
@@ -4572,12 +4581,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                 # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
                 # первой строки (её парсит журнальный гейт выше и позиционные тесты).
                 out += (
-                    "\n\n⚠ wcode-прокси deprecated: кодинг на Windows — "
-                    "прямые глаголы computer.* (read/hash/write/replace файлов, run/poll/stop, "
-                    "observe, send, десктоп) без задачи-контейнера; расписки вяжутся к твоему "
-                    "ходу сами. Эта задача работает как раньше (finish/status/inspect целы), "
-                    "и субагентам (coding_agent) wcode пока нужен. Снос прокси — только "
-                    "с твоей приёмкой."
+                    frame_language.text('run.result.legacy')
                 )
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
@@ -4951,6 +4955,7 @@ def _observe_local_image(image_path: Path, *, mime: str) -> "ToolObservation | s
     )
 
 
+@frame_language.pinned
 def tool_fs_read(path: str = "", start: int = 0, end: int = 0, task_id: str = "",
                  paths: list[str] | None = None, start_char: int = 0,
                  expected_sha256: str = "") -> "ToolObservation | str":
@@ -4959,14 +4964,14 @@ def tool_fs_read(path: str = "", start: int = 0, end: int = 0, task_id: str = ""
         if (path or not isinstance(paths, list) or not paths
                 or any(not isinstance(p, str) or not p for p in paths)
                 or start_char or expected_sha256):
-            raise catalog_families.PreflightRefusal("Choose path OR nonempty paths; cursor and hash apply to one path.")
+            raise catalog_families.PreflightRefusal(frame_language.text('run.result.read_choose'))
         texts, images, outcomes = [], [], []
         for name in paths:
             tool_report.note(outcome="unknown")
             try:
                 value = tool_fs_read(name, start, end, task_id)
             except OSError as exc:
-                value = f"Read unavailable: {type(exc).__name__}; no content or version obtained."
+                value = frame_language.text('run.result.read_error', error=type(exc).__name__)
                 tool_report.note(outcome="failed")
             outcomes.append(tool_report.current())
             texts.append(f"--- {name} ---\n{value}")
@@ -4987,7 +4992,7 @@ def tool_fs_read(path: str = "", start: int = 0, end: int = 0, task_id: str = ""
         text = "\n\n".join(texts)
         return ToolObservation(text, tuple(images)) if images else text
     if not isinstance(path, str) or not path:
-        raise catalog_families.PreflightRefusal("A nonempty path or paths is required.")
+        raise catalog_families.PreflightRefusal(frame_language.text('run.result.read_missing'))
     if task_id:
         return forge.noted(_task_inspect(task_id, "read", path=path, start=start or 1, end=end,
                                          start_char=start_char, expected_sha256=expected_sha256))
@@ -5386,10 +5391,11 @@ def tool_code_query(op: str, root: str = "home", path: str = "", name: str = "",
         op, root, path, name, module, limit, cursor, home=BASE), ensure_ascii=False)
 
 
+@frame_language.pinned
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", end: int = 0, module: str = "", limit: int = 40, cursor: str = "") -> str:
     if str(action or "").strip().lower() in {"read", "list", "search"}:
-        raise catalog_families.PreflightRefusal("Use fs_read/fs_ls/fs_search with task_id for task files.")
+        raise catalog_families.PreflightRefusal(frame_language.text('run.result.inspect_files'))
     extra = dict(module=module, limit=limit, cursor=cursor) if action in {"definition", "callers", "callees"} else {}
     return forge.noted(forge.inspect(task_id, action=action, path=path, query=query, end=end, **extra))
 
@@ -6205,6 +6211,7 @@ def tool_speak(text: str, caption: str = "") -> str:
                              move=True)
 
 
+@frame_language.pinned
 def tool_read_run_result(result: str, run_id: str = "", byte_offset: int = 0,
                          byte_limit: int = 65536, line_start: int = 0,
                          line_count: int = 200) -> str:
@@ -6212,9 +6219,9 @@ def tool_read_run_result(result: str, run_id: str = "", byte_offset: int = 0,
     current = run_context.current_run()
     target = str(run_id or (current.run_id if current is not None else "")).strip()
     if not target:
-        return "read_run_result: нет активного run_id"
+        return frame_language.text('run.result.run_missing')
     if current is not None and target != current.run_id and _active_scope() != "owner":
-        return "read_run_result: чужой run доступен только во владельческом контексте"
+        return frame_language.text('run.result.run_scope')
     try:
         kwargs = {"byte_offset": byte_offset, "byte_limit": byte_limit}
         if line_start:
@@ -6358,6 +6365,7 @@ def _run_quiet_seconds(manifest: dict) -> float | None:
     return max(0.0, _dt.datetime.now(_dt.timezone.utc).timestamp() - stamp.timestamp())
 
 
+@frame_language.pinned
 def _close_terminality_proof(run_id: str, manifest: dict) -> tuple[str, str]:
     """Доказательство, что закрывать нечего ЖИВОГО. -> (вид, фраза для ответа).
 
@@ -6371,27 +6379,25 @@ def _close_terminality_proof(run_id: str, manifest: dict) -> tuple[str, str]:
     status = str(manifest.get("status") or "")
     current = run_context.current_run()
     if current is not None and str(current.run_id) == run_id:
-        return "alive", "это тот самый прогон, внутри которого ты сейчас говоришь"
+        return "alive", frame_language.text('run.result.proof_current')
     if status in {"in_doubt", "paused"}:
-        return "proven", f"статус «{status}» — исполнитель его уже отпустил"
+        return "proven", frame_language.text('run.result.proof_state', status=status)
     quiet = _run_quiet_seconds(manifest)
     if quiet is None:
-        return "alive", "в манифесте нет читаемой метки времени — возраст молчания неизвестен"
+        return "alive", frame_language.text('run.result.proof_unknown')
     if quiet >= _RECONCILE_QUIET_SEC:
-        return "proven", (f"леджер молчит {int(quiet // 60)} мин — дольше кап тишины "
-                          f"{int(_RECONCILE_QUIET_SEC)}с, за который не молчит ни одна "
-                          f"живая рука")
-    return "alive", (f"последняя запись в леджере {int(quiet)}с назад при статусе "
-                     f"«{status}» — это моложе кап тишины {int(_RECONCILE_QUIET_SEC)}с")
+        return "proven", frame_language.text('run.result.proof_quiet', seconds=int(quiet), cap=int(_RECONCILE_QUIET_SEC))
+    return "alive", frame_language.text('run.result.proof_recent', seconds=int(quiet), status=status, cap=int(_RECONCILE_QUIET_SEC))
 
 
+@frame_language.pinned
 def _clip_evidence(text: str, limit: int) -> tuple[str, bool]:
     """Улика до кап, переносы строк сохранены; обрыв помечен явно. -> (текст, резали ли)."""
     value = str(text or "")
     if len(value) <= limit:
         return value, False
     return (value[:limit].rstrip()
-            + f"\n[…обрезано: улика длиннее кап {limit} симв., хвост в леджер не попал]",
+            + frame_language.text('run.result.clip_evidence', cap=limit),
             True)
 
 
@@ -6419,18 +6425,22 @@ def _in_doubt_run_ids() -> list[str]:
     return rows
 
 
+@frame_language.pinned
 def _describe_outstanding(run_id: str) -> str:
     rows = _outstanding_rows(run_id)
     if not rows:
-        return "  (незакрытых вызовов нет)"
+        return frame_language.text('run.result.no_calls')
     out = []
     for call_id, started in sorted(rows.items()):
         args = started.get("args") or {}
-        gist = ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
+        gist = ", ".join(f"{k}={_run_result_excerpt(str(v),40)}" for k, v in list(args.items())[:3])
+        if len(args) > 3:
+            gist += frame_language.text('run.result.args_more', count=len(args)-3)
         out.append(f"  {call_id} → {started.get('tool') or '?'}({gist})")
     return "\n".join(out)
 
 
+@frame_language.pinned
 def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
                        evidence: str = "", reason: str = "", close: bool = False) -> str:
     """Закрыть свой застрявший in_doubt-прогон: посмотреть, свести вызов уликой, закрыть ран.
@@ -6448,15 +6458,12 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
     if not run_id:
         ids = _in_doubt_run_ids()
         if not ids:
-            return "Прогонов в in_doubt нет — сводить нечего."
-        parts = [f"Прогонов в in_doubt: {len(ids)}."]
+            return frame_language.text('run.result.none')
+        parts = [frame_language.text('run.result.count', count=len(ids))]
         for rid in ids:
             parts.append(rid)
             parts.append(_describe_outstanding(rid))
-        parts.append("Свести вызов: reconcile_run(run_id, call_id, outcome, evidence). "
-                     f"outcome — одно из {', '.join(_RECONCILE_OUTCOMES)}. "
-                     "Улику леджер требует непустой (она и есть основание); "
-                     "закрыть уже сведённый ран целиком — close=true.")
+        parts.append(frame_language.text('run.result.how', values=', '.join(_RECONCILE_OUTCOMES)))
         return "\n".join(parts)
     try:
         manifest = _runs().manifest(run_id)
@@ -6465,12 +6472,11 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
     status = str(manifest.get("status") or "")
     if close:
         if status in run_manager.TERMINAL_STATUSES:
-            return f"{run_id} уже терминальный ({status}) — закрывать нечего."
+            return frame_language.text('run.result.terminal', id=run_id, status=status)
         outstanding = _outstanding_rows(run_id)
         if outstanding:
-            return (f"{run_id}: закрыть нельзя, пока висят вызовы — сведи их сначала:\n"
-                    + _describe_outstanding(run_id))
-        why = str(reason or "").strip() or "closed by Praxis after explicit reconciliation"
+            return (frame_language.text('run.result.outstanding', id=run_id, calls=_describe_outstanding(run_id)))
+        why = str(reason or "").strip() or frame_language.text('run.result.close_reason')
         actor = _reconcile_actor()
         proof_kind, proof = _close_terminality_proof(run_id, manifest)
         if proof_kind != "proven":
@@ -6481,38 +6487,27 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
             # и следующий close закроет его уже С доказательством, а не вместо него.
             try:
                 _runs().request_pause(run_id, actor=actor,
-                                      reason=f"close requested by Praxis: {why}")
+                                      reason=frame_language.text('run.result.close_request', reason=why))
             except Exception as exc:
-                return (f"{run_id} [{status}]: не закрыт — прогон подаёт признаки жизни "
-                        f"({proof}). Попросить его остановиться тоже не вышло "
-                        f"({type(exc).__name__}: {exc}). Когда леджер промолчит "
-                        f"{int(_RECONCILE_QUIET_SEC)}с, close закроет его без вопросов.")
+                return (frame_language.text('run.result.pause_error', id=run_id, status=status, proof=proof, error=f'{type(exc).__name__}: {exc}', quiet=int(_RECONCILE_QUIET_SEC)))
             after = str(_runs().manifest(run_id).get("status") or "")
-            return (f"{run_id}: надгробие не поставлено — прогон подаёт признаки жизни "
-                    f"({proof}), а «cancelled после сведения» было бы записью о сведении, "
-                    f"которого не было. Ему отправлена просьба остановиться: статус «{after}», "
-                    f"исполнитель выйдет на ближайшем шве. Повтори close=true — закрою "
-                    f"начисто. В леджер ушёл актор «{actor}».")
+            return (frame_language.text('run.result.pause_requested', id=run_id, proof=proof, status=after, actor=actor))
         try:
             _runs().request_cancel(run_id, actor=actor, reason=why)
         except Exception as exc:
             return f"reconcile_run close: {type(exc).__name__}: {exc}"
         _finish_durable_run(run_id, "cancelled", reason=why)
         after = str(_runs().manifest(run_id).get("status") or "")
-        return (f"{run_id}: закрыт как «{after}» — основание: {proof}. "
-                f"Причина и актор «{actor}» записаны в манифест и RECAP.")
+        return (frame_language.text('run.result.closed', id=run_id, status=after, proof=proof, actor=actor))
     if not call_id:
-        return (f"{run_id} [{status}]. Незакрытые вызовы:\n" + _describe_outstanding(run_id)
-                + "\nСвести: reconcile_run(run_id, call_id, outcome, evidence).")
+        return (frame_language.text('run.result.view', id=run_id, status=status, calls=_describe_outstanding(run_id)))
     if outcome not in _RECONCILE_OUTCOMES:
-        return (f"outcome должен быть одним из {', '.join(_RECONCILE_OUTCOMES)} — "
-                "это словарь леджера, а не моя оценка.")
+        return (frame_language.text('run.result.outcome', values=', '.join(_RECONCILE_OUTCOMES)))
     note = str(evidence or "").strip()
     if not note:
-        return ("Нужна улика: леджер не сводит вызов без основания (иначе «свела» было бы "
-                "просто стиранием следа). Скажи, ЧТО именно проверено — текстом.")
+        return (frame_language.text('run.result.evidence'))
     kept, evidence_clipped = _clip_evidence(note, _RECONCILE_EVIDENCE_CHARS)
-    raw_reason = str(reason or "").strip() or f"reconciled by Praxis as {outcome}"
+    raw_reason = str(reason or "").strip() or frame_language.text('run.result.reconcile_reason', outcome=outcome)
     kept_reason = _clip_reason(raw_reason, _RECONCILE_REASON_CHARS)
     actor = _reconcile_actor()
     try:
@@ -6526,20 +6521,18 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
         return f"reconcile_run: {type(exc).__name__}: {exc}"
     after = str(_runs().manifest(run_id).get("status") or "")
     left = _outstanding_rows(run_id)
-    tail = (f" Осталось незакрытых: {len(left)}." if left else
-            " Незакрытых больше нет — можно закрыть ран целиком: close=true.")
+    tail = (frame_language.text('run.result.left', count=len(left)) if left else frame_language.text('run.result.no_left'))
     # Обрезка обязана быть видна ТАМ ЖЕ, где ты узнаёшь об успехе: иначе через неделю
     # ты читаешь собственное основание, обрывающееся на полуслове, и не знаешь почему.
     if evidence_clipped:
-        tail += (f" ⚠ Улика длиннее кап {_RECONCILE_EVIDENCE_CHARS} симв. — в леджер ушли "
-                 f"первые {_RECONCILE_EVIDENCE_CHARS}, хвост не сохранён нигде.")
+        tail += (frame_language.text('run.result.evidence_cut', cap=_RECONCILE_EVIDENCE_CHARS))
     if len(raw_reason) > _RECONCILE_REASON_CHARS:
-        tail += f" ⚠ Причина обрезана до {_RECONCILE_REASON_CHARS} симв. (маркер в тексте)."
+        tail += frame_language.text('run.result.reason_cut', cap=_RECONCILE_REASON_CHARS)
     # Актор — часть записи, а не служебная деталь: через неделю по леджеру будет видно,
     # пришла ты к этому в своём ходе или в чужом, и запись обязана это сказать вслух.
     if actor != PRAXIS_SELF_PRINCIPAL:
-        tail += f" Актор в леджере: «{actor}» — ход вызван не тобой одной."
-    return f"{run_id}: вызов {call_id} сведён как «{outcome}». Статус: {after}.{tail}"
+        tail += frame_language.text('run.result.actor', actor=actor)
+    return frame_language.text('run.result.reconciled', id=run_id, call=call_id, outcome=outcome, status=after, tail=tail)
 
 
 def _forge_task_receipt(task_id: str) -> dict:
@@ -6619,21 +6612,22 @@ def reconcile_in_doubt_from_receipts(*, run_ids=None) -> list[dict]:
     return reports
 
 
+@frame_language.pinned
 def tool_group_context(action: str = "context", query: str = "",
                        topic_id: int = 0, limit: int = 20) -> str:
     """Deliberately inspect the current admitted group without crossing its root peer."""
 
     ctx = _TURN_CHANNEL.get()
     if ctx is None or ctx.is_dm or ctx.room_chat_id is None:
-        return "group_context доступен только внутри текущей группы."
+        return frame_language.text('run.result.group_scope')
     peer_id = str(ctx.room_chat_id)
     try:
         route = telegram_topics.route_from_conversation_id(ctx.chat_id)
         if route.peer_id != peer_id:
-            return "group_context: conversation/root mismatch; чтение закрыто."
+            return frame_language.text('run.result.group_root')
         requested = int(topic_id or 0)
         if requested < 0:
-            return "group_context: topic_id должен быть положительным."
+            return frame_language.text('run.result.group_topic')
         operation = str(action).casefold()
         if operation == "message":
             # limit несёт message_id: маркер обрезки обещает достать сообщение
@@ -6678,6 +6672,7 @@ _OWNER_MARK_GROUPS = ("memory/notes", "memory/journal", "workspace", "workspace/
                       "soul", "memory/work", "memory/desires")
 
 
+@frame_language.pinned
 def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
     """Марки правок владельца: показать или убрать (провенанс — служба, не памятник).
 
@@ -6690,14 +6685,14 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
     if str(path or "").strip():
         rel = str(path).strip().replace("\\", "/").lstrip("/")
         if ".." in rel.split("/"):
-            return "clear_owner_marks: путь с «..» не рассматриваю"
+            return frame_language.text('run.result.mark_parent')
         base = BASE / rel
         try:
             base.resolve().relative_to(BASE.resolve())
         except ValueError:
-            return "clear_owner_marks: путь вне дерева"
+            return frame_language.text('run.result.mark_outside')
         if not str(base).endswith(".md") or not base.is_file():
-            return f"clear_owner_marks: {rel} — не .md файл"
+            return frame_language.text('run.result.mark_file', path=rel)
         roots = [base]
     else:
         for group in _OWNER_MARK_GROUPS:
@@ -6715,11 +6710,11 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
             found.append((file, marks))
     if action != "clear":
         if not found:
-            return "Марок правок владельца нет ни в одном файле."
-        out = [f"Файлов с марками: {len(found)}."]
+            return frame_language.text('run.result.mark_none')
+        out = [frame_language.text('run.result.mark_count', total=len(found), shown=min(20,len(found)))]
         for file, marks in found[:20]:
             rel = file.relative_to(BASE).as_posix()
-            out.append(f"— {rel}: {len(marks)} марк.; например: {marks[0][:160]}")
+            out.append(frame_language.text('run.result.mark_row', path=rel, count=len(marks), example=_run_result_excerpt(marks[0],160)))
         return "\n".join(out)
     cleared = 0
     for file, _marks in found:
@@ -6734,11 +6729,11 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
             os.replace(tmp, file)
             cleared += 1
         except OSError:
-            return f"clear_owner_marks: не переписался {file.relative_to(BASE).as_posix()}"
+            return frame_language.text('run.result.mark_error', path=file.relative_to(BASE).as_posix())
     if not cleared:
-        return "Марок не было — убирать нечего."
+        return frame_language.text('run.result.mark_empty')
     plural = "файлов" if cleared % 10 in (0, 5, 6, 7, 8, 9) or 11 <= cleared % 100 <= 14 else "файла" if cleared % 10 in (2, 3, 4) else "файл"
-    return f"Марки убраны в {cleared} {plural}; правки владельца теперь часть текста без служебных строк."
+    return frame_language.text('run.result.mark_cleared', count=cleared)
 
 
 def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '',
@@ -8338,6 +8333,7 @@ WEB_FIND_TOOL = {
 _LOG_LINE_CLIP = 280
 
 
+@frame_language.pinned
 def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> str:
     """Owner: её собственный runner-лог (logsink: memory/.logs/praxis.log + ротация) —
     хвост или greп по подстроке. Техническое зеркало: строки MSG несут id отправителей
@@ -8345,7 +8341,7 @@ def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> 
     HTTP-ошибки мозга. Файлы переживают пересоздание контейнера, docker logs — нет."""
     if unit:
         if query:
-            raise catalog_families.PreflightRefusal("unit logs support a tail, not query; omit query")
+            raise catalog_families.PreflightRefusal(frame_language.text('run.result.log_unit'))
         return tool_server_logs(unit, 60 if lines is None else lines)
     import logsink
     try:
@@ -8366,8 +8362,12 @@ def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> 
         rows = [r for r in rows if q in r.lower()]
     tail = rows[-lines:]
     if not tail:
-        return "Пусто: " + (f"«{query}» в логе не встречается." if q else "лог-файлов нет.")
-    return "\n".join(r[:_LOG_LINE_CLIP] for r in tail)[-7000:]
+        return frame_language.text('run.result.log_none', query=(frame_language.text('run.result.log_query', query=query) if q else ''))
+    shown = '\n'.join(r[:_LOG_LINE_CLIP] for r in tail)
+    omitted = max(0,len(shown)-7000)
+    clipped_lines = sum(len(r)>_LOG_LINE_CLIP for r in tail)
+    shown = shown[-7000:]
+    return (frame_language.text('run.result.log_cut', text=shown, cap=_LOG_LINE_CLIP, lines=clipped_lines, omitted=omitted) if omitted or clipped_lines else shown)
 
 
 # Разведчик — свежие глаза без её персоны и памяти, read-only руки; отчёт ЕЙ.
@@ -8511,6 +8511,7 @@ _GIT_READ_ONLY = ("status", "log", "diff", "fetch")
 _GIT_ACTIONS = _GIT_READ_ONLY + ("pull", "add", "commit", "push")
 
 
+@frame_language.pinned
 def _git_root(repo: str) -> tuple[Path | None, str]:
     """Корень репозитория по её слову. Пусто — сказать, чего именно нет."""
     name = str(repo or "").strip().lower()
@@ -8518,8 +8519,7 @@ def _git_root(repo: str) -> tuple[Path | None, str]:
         return BASE, ""
     if name == "public":
         if not (PUBLIC_REPO_PATH / ".git").exists():
-            return None, ("публичное зеркало сюда не смонтировано: жду его в %s. "
-                          "Это не запрет, а отсутствие пути." % PUBLIC_REPO_PATH)
+            return None, frame_language.text('run.result.git_root', path=PUBLIC_REPO_PATH)
         return PUBLIC_REPO_PATH, ""
     return None, "repo: self | public"
 
@@ -8539,6 +8539,7 @@ def _git_run(root: Path, argv: list[str], timeout: int = 120) -> tuple[int, str]
     return proc.returncode, out.strip()
 
 
+@frame_language.pinned
 def _git_paths(paths) -> tuple[list[str], bool]:
     """(pathspec argv, legacy). The schema takes an array since 14.11.2026; a string is only
     a call recorded before that, replayed with its own historical whitespace split."""
@@ -8547,14 +8548,15 @@ def _git_paths(paths) -> tuple[list[str], bool]:
     if isinstance(paths, str):
         return paths.split(), True
     if not isinstance(paths, (list, tuple)):
-        raise catalog_families.PreflightRefusal("paths must be an array of path strings")
+        raise catalog_families.PreflightRefusal(frame_language.text('run.result.git_paths'))
     for item in paths:
         if not isinstance(item, str) or not item or "\0" in item:
             raise catalog_families.PreflightRefusal(
-                "each path must be a non-empty string without NUL; nothing was run")
+                frame_language.text('run.result.git_path'))
     return list(paths), False
 
 
+@frame_language.pinned
 def tool_git(repo: str = "self", action: str = "status", message: str = "",
              paths: list[str] | str | None = None) -> str:
     """Её git обеими руками: своё дерево и публичное зеркало.
@@ -8599,42 +8601,36 @@ def tool_git(repo: str = "self", action: str = "status", message: str = "",
                 # Выбор между rebase и merge меняет то, как будет выглядеть твоя работа
                 # в чужих глазах, — это твоё решение, а не умолчание руки.
                 out += (
-                    "\n\nЭто не сбой: у вас с удалёнкой РАЗОШЛИСЬ истории — у тебя есть "
-                    "свои коммиты, и у неё свои. Fast-forward тут невозможен по "
-                    "построению. Выбирать rebase или merge — тебе, руками через `shell`: "
-                    "это решение о том, как твоя работа будет выглядеть в истории.")
+                    frame_language.text('run.result.git_pull'))
         elif act == "add":
             code, out = _git_run(root, ["add", "--"] + (path_args or ["."]))
             if code == 0:
                 code, out = _git_run(root, ["status", "--short"])
         elif act == "commit":
             if not str(message or "").strip():
-                return "[git] коммит без сообщения — это запись без причины. Назови её."
+                return frame_language.text('run.result.git_message')
             code, out = _git_run(root, ["commit", "-m", message.strip()])
         else:  # push
             fetch_code, fetch_out = _git_run(root, ["fetch", "origin"], timeout=180)
             if fetch_code != 0:
-                return "[git] fetch перед push не прошёл:\n" + fetch_out[:600]
+                return frame_language.text('run.result.git_fetch', output=_run_result_excerpt(fetch_out,600))
             _c, branch = _git_run(root, ["rev-parse", "--abbrev-ref", "HEAD"])
             behind_code, behind = _git_run(
                 root, ["rev-list", "--count", "HEAD..origin/" + branch.strip()])
             if behind_code == 0 and behind.strip().isdigit() and int(behind.strip()):
-                return ("[git] удалёнка ушла вперёд на %s коммит(ов) — push отобьётся. "
-                        "Сначала `pull` (он идёт только fast-forward), потом push. "
-                        "Это та самая ловушка: `status` сравнивает тебя с устаревшей "
-                        "ссылкой и говорит, что всё в порядке." % behind.strip())
+                return (frame_language.text('run.result.git_behind', count=behind.strip()))
             code, out = _git_run(root, ["push", "origin", branch.strip()], timeout=300)
     except subprocess.TimeoutExpired:
-        return "[git] %s не уложился в срок — команда шла слишком долго" % act
+        return frame_language.text('run.result.git_timeout', action=act)
     except Exception as exc:
         return "[git] %s: %s" % (type(exc).__name__, str(exc)[:200])
     if act not in _GIT_READ_ONLY:
-        tool_journal("[git] %s в %s: %s" % (act, repo, (out or "тихо")[:160]),
+        tool_journal(frame_language.text('run.result.git_journal', action=act, repo=repo, output=_run_result_excerpt(out,160) if out else frame_language.text('run.result.git_empty')),
                      salience=2 if code == 0 else 1)
-    head = "[git %s/%s]%s\n" % (repo, act, "" if code == 0 else " ⚠ код %d" % code)
+    head = frame_language.text('run.result.git_header', repo=repo, action=act, code=(frame_language.text('run.result.git_code', code=code) if code else ''))
     if legacy_paths and act in ("diff", "add"):
-        head += "[paths: старая строка, разбита по пробелам: %s]\n" % json.dumps(path_args, ensure_ascii=False)
-    return head + (out[:3000] if out else "(вывод пуст)")
+        head += frame_language.text('run.result.git_legacy', paths=json.dumps(path_args,ensure_ascii=False))
+    return head + (_run_result_excerpt(out,3000) if out else frame_language.text('run.result.git_empty'))
 
 
 TOOL_IMPL["git"] = tool_git
@@ -8724,6 +8720,7 @@ OWNER_TOOLS = [PYTHON_TOOL, RUN_COMMAND_TOOL, CODE_QUERY_TOOL, PROPOSAL_TOOL, PR
 
 # Praxis is a sovereign actor with the same operational hands as the owner.  Only
 # delegation of human trust stays human-owner-only; implementations repeat that check.
+@frame_language.pinned
 def tool_task_control(action: str, summary: str = "", evidence: str = "",
                       blocker: str = "", wake_on: str = "") -> str:
     """Её слово о конце рабочего хода. Единственное, что закрывает окно.
@@ -8750,7 +8747,7 @@ def tool_task_control(action: str, summary: str = "", evidence: str = "",
         if not accepted:
             # Слово НЕ кладётся в слот: ход остаётся открытым, и это единственное место,
             # где отказ имеет смысл — до того, как цикл прочитал её решение.
-            return _noted("refused", "[task_control] «сделано» не принято. " + why)
+            return _noted("refused", frame_language.text('run.result.task_refused', why=why))
     try:
         record = work_loop.claim(
             action, summary=summary, evidence=evidence, blocker=blocker, wake_on=wake_on)
@@ -8760,11 +8757,9 @@ def tool_task_control(action: str, summary: str = "", evidence: str = "",
     tool_report.note(outcome="ok", target=name)
     card_line = _work_card_after_word(record, current, row)
     if name == "done" and not record.get("evidence"):
-        return ("[task_control] принято: done без evidence. Ход закрыт, но чем это "
-                "подтверждается — не сказано." + card_line)
+        return (frame_language.text('run.result.task_no_evidence', card=card_line))
     tail = record.get("evidence") or record.get("blocker") or record.get("wake_on") or ""
-    return "[task_control] принято: %s%s%s" % (
-        name, (" — " + tail) if tail else "", card_line)
+    return frame_language.text('run.result.task_accepted', action=name, detail=(' — '+tail if tail else ''), card=card_line)
 
 
 def _work_dod_enabled() -> bool:
@@ -8775,6 +8770,7 @@ def _work_dod_enabled() -> bool:
 _WORK_CARD_STATUS = {"done": "done", "wait": "waiting", "blocked": "blocked"}
 
 
+@frame_language.pinned
 def _work_card_after_word(record: dict, current, row: dict | None) -> str:
     """Карточка работы после её слова. Заводится там, где работа НЕ кончилась.
 
@@ -8794,7 +8790,7 @@ def _work_card_after_word(record: dict, current, row: dict | None) -> str:
             if name not in {"wait", "blocked"}:
                 return ""
             row = work_store.open_card(
-                goal=str(getattr(current, "goal", "") or "работа без имени"),
+                goal=str(getattr(current, "goal", "") or frame_language.text('run.result.card_goal')),
                 kind=str(getattr(current, "kind", "") or "work"),
                 run_id=run_id, origin=str(getattr(current, "principal_id", "") or ""),
             )
@@ -8802,18 +8798,17 @@ def _work_card_after_word(record: dict, current, row: dict | None) -> str:
                 if name == "wait" else None)
         row = work_store.transition(
             row["id"], _WORK_CARD_STATUS.get(name, "running"),
-            reason="её слово «%s»" % name,
+            reason=frame_language.text('run.result.card_reason', action=name),
             evidence=str(record.get("evidence") or ""),
             blocker=str(record.get("blocker") or ""), wake=wake,
         )
         if record.get("summary"):
             work_store.note(row["id"], str(record["summary"]))
         work_store.write_board()
-        return "\n[работа] карточка `%s` → %s · `memory/work/BOARD.md`" % (
-            row["id"], row["status"])
+        return frame_language.text('run.result.card', id=row['id'], status=row['status'])
     except Exception as exc:
         log.warning("карточка работы не записалась [%s]", run_id, exc_info=True)
-        return "\n[работа] ⚠ карточка НЕ записалась: %s: %s" % (type(exc).__name__, exc)
+        return frame_language.text('run.result.card_error', error=f'{type(exc).__name__}: {exc}')
 
 
 TOOL_IMPL["task_control"] = tool_task_control

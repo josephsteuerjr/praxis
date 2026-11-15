@@ -143,17 +143,22 @@ class Home(HomeFixture, unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_background_descendant_survives_a_normal_foreground_exit(self):
+        import psutil
         marker = self.root / 'background'
         child = 'import time,pathlib;time.sleep(1.5);pathlib.Path(%r).write_text("ok")' % str(marker)
         started = time.monotonic()
         out, _ = self.call(argv=[sys.executable, '-c',
-                                 'import subprocess,sys;subprocess.Popen([sys.executable,"-c",%r])' % child], timeout=10)
+                                 'import subprocess,sys;p=subprocess.Popen([sys.executable,"-c",%r]);print(p.pid)' % child], timeout=10)
         self.assertLess(time.monotonic() - started, 1.4)
         self.assertTrue(out.endswith('[exit 0]'), out)
+        process = psutil.Process(int(out.splitlines()[0]))
+        process.create_time()  # bind its birth before waiting, never terminate a recycled PID
         deadline = time.monotonic() + 4
         while not marker.exists() and time.monotonic() < deadline:
             time.sleep(.05)
         self.assertEqual(marker.read_text(), 'ok')
+        if process.is_running():
+            process.wait(timeout=4)  # Windows may retain the inherited cwd until interpreter exit
 
     def test_hardbot_rail_sees_the_displayed_argv(self):
         with patch.object(agent.stewardship, 'check', return_value='rail said no') as rail, \
