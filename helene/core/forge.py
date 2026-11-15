@@ -5526,6 +5526,7 @@ def learn(task_id: str, action: str = "recall", query: str = "", lesson: str = "
     return "action: recall | record"
 
 
+@frame_language.pinned
 def _finish_survey(task_id: str, beat=None) -> dict:
     """Осмотр перед finish: три удалённых вызова, каждый — с ОБЪЯВЛЕННЫМ сроком молчания.
 
@@ -5562,9 +5563,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         # ПО ПОСТРОЕНИЮ (forge_intelligence.changed_files: git-root нет → []), и платить
         # за пустоту минутами ядра незачем. Гейт именно по git-root, не по base.
         if not str(task.get("source_git") or ""):
-            notes.append("список изменённых файлов НЕ ЗАПРОШЕН: у корня задачи нет git "
-                         "(source_git пуст) — impact вернул бы пустой список, а разбор "
-                         "дерева стоит минуты ядра. Это «не знаю», а не «изменений нет».")
+            notes.append(frame_language.text('forge.finish.1'))
         else:
             beat(lease)                      # impact — самый долгий из трёх, до 13 минут
             with _remote_observations(task):
@@ -5578,10 +5577,9 @@ def _finish_survey(task_id: str, beat=None) -> dict:
             if isinstance(impact, dict):
                 changed = list(impact.get("changed") or [])
                 if impact.get("truncated"):
-                    notes.append(f"impact усечён самим демоном: {impact.get('truncated')}")
+                    notes.append(frame_language.text('forge.finish.2', v1=f"{impact.get('truncated')}"))
             else:
-                notes.append("список изменённых файлов НЕИЗВЕСТЕН: impact не ответил "
-                             f"разбираемым JSON — {str(impact_text)[:200]}")
+                notes.append(frame_language.text('forge.finish.3', v1=f'{str(impact_text)[:200]}'))
     else:
         changed = forge_intelligence.changed_files(root, str(task.get("base_commit") or ""))
     verification_rows = _units(task_id, "verifications")
@@ -5597,7 +5595,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     unknown_units = [x for x in agent_rows + job_rows + verification_rows
                      if x.get("status") == "unknown"]
     for row in unknown_units:
-        notes.append(f"юнит {row.get('id')}: {row.get('liveness') or 'живость неизвестна'}")
+        notes.append(frame_language.text('forge.finish.4', v1=f"{row.get('id')}", v3=f"{row.get('liveness') or frame_language.text('forge.finish.5')}"))
     active_remote_ops = []
     remote_ops_unknown = False
     if task.get("scope") == "host":
@@ -5610,8 +5608,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
             # таймаут демона выглядел как «активных операций на хосте нет», и задача
             # терминализовалась вслепую поверх живого op.run.
             why = " ".join(str(op_result.get(k) or "") for k in ("code", "error")).strip()
-            notes.append(f"живые операции на хосте НЕИЗВЕСТНЫ — демон не ответил ({why}). "
-                         "Молчание не значит «операций нет».")
+            notes.append(frame_language.text('forge.finish.6', v1=f'{why}'))
         else:
             # `op.list` упорядочен по времени и ограничен сверху. Поэтому сто новых
             # terminal-записей могут вытеснить из ответа старую, всё ещё running
@@ -5631,22 +5628,18 @@ def _finish_survey(task_id: str, beat=None) -> dict:
             if count_truncated or note_truncated:
                 remote_ops_unknown = True
                 detail = (f"shown={shown}, matched={matched}"
-                          if shown is not None or matched is not None else "счётчики не переданы")
-                notes.append("живые операции на хосте НЕИЗВЕСТНЫ — op.list усечён "
-                             f"({detail}{'; ' + note if note else ''}). Непоказанный хвост "
-                             "может содержать running-операцию.")
+                          if shown is not None or matched is not None else frame_language.text('forge.finish.11'))
+                notes.append(frame_language.text('forge.finish.12', v1=f'{detail}', v2=f"{('; ' + note if note else '')}"))
         operation_rows_value = op_result.get("operations")
         operation_rows = operation_rows_value if isinstance(operation_rows_value, list) else []
         malformed_rows = [row for row in operation_rows if not isinstance(row, dict)]
         if op_result.get("ok") and (not isinstance(operation_rows_value, list) or malformed_rows):
             remote_ops_unknown = True
             if not isinstance(operation_rows_value, list):
-                detail = f"поле operations имеет тип {type(operation_rows_value).__name__}, нужен list"
+                detail = frame_language.text('forge.finish.13', v1=f'{type(operation_rows_value).__name__}')
             else:
-                detail = f"malformed строк не-object: {len(malformed_rows)}"
-            notes.append("живые операции на хосте НЕИЗВЕСТНЫ — успешный op.list вернул "
-                         f"повреждённый список ({detail}). Пропущенные строки нельзя считать "
-                         "завершёнными.")
+                detail = frame_language.text('forge.finish.14', v1=f'{len(malformed_rows)}')
+            notes.append(frame_language.text('forge.finish.15', v1=f'{detail}'))
         active_remote_ops = [row for row in operation_rows
                              if isinstance(row, dict)
                              and row.get("status") in {"starting", "running", "finishing"}]
@@ -5657,8 +5650,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         beat()
         if not op_result.get("ok"):
             why = " ".join(str(op_result.get(k) or "") for k in ("code", "error")).strip()
-            notes.append(f"живые процессы на Windows-теле НЕИЗВЕСТНЫ — тело не ответило "
-                         f"({why}). Молчание не значит «процессов нет».")
+            notes.append(frame_language.text('forge.finish.16', v1=f'{why}'))
         active_remote_ops = [row for row in op_result.get("operations") or []
                              if row.get("status") in {"admitted", "starting", "running", "cancelling"}]
     survey: dict[str, Any] = {
@@ -5669,12 +5661,8 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         survey["contract"] = contract_evidence
     if active_agents or active_jobs or active_checks or unknown_units or active_remote_ops or remote_ops_unknown:
         survey["blocked"] = (
-            f"Задача ещё живая: agents running={len(active_agents)}, processes running="
-            f"{len(active_jobs) + len(active_remote_ops)}, verification running="
-            f"{len(active_checks)}. Дождись/останови их или продолжай работать; finish "
-            "ничего не оборвал."
-            + (" Наличие живых host-операций не доказано из-за неполного op.list; "
-               "finish заблокирован до полного списка." if remote_ops_unknown else "")
+            frame_language.text('forge.finish.17', v1=f'{len(active_agents)}', v3=f'{len(active_jobs) + len(active_remote_ops)}', v5=f'{len(active_checks)}')
+            + (frame_language.text('forge.finish.18') if remote_ops_unknown else "")
             + ("\n" + "\n".join(notes) if notes else ""))
         return survey
     git_before = _git_root(root) if remote is None else None
@@ -5740,6 +5728,7 @@ def _reviewer_evidence(task_id: str) -> str:
     return best
 
 
+@frame_language.pinned
 def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: str = "",
                      submit: bool = True, survey: dict | None = None, beat=None,
                      reviewer: str = "") -> str:
@@ -5751,7 +5740,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     beat = beat if callable(beat) else (lambda lease_sec=0.0: None)
     custody = _admission_reason(task_id) or _shared_writer_reason(task_id, '')
     if custody:
-        return 'Finish refused: ' + custody
+        return frame_language.text('forge.finish.19') + custody
     if survey is None:                       # прямой вызов (тест/внутренний путь)
         survey = _finish_survey(task_id, beat=beat)
         if survey.get("error"):
@@ -5767,11 +5756,10 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     submission = ""
     new_status = "done"
     if remote is not None:
-        submission = (f"{task.get('scope')}-task закрыта в едином Forge; "
-                      "execution backend не держит второй task store.")
+        submission = (frame_language.text('forge.finish.20', v0=f"{task.get('scope')}"))
     elif submit and task.get("proposal_id"):
         if not str(review or "").strip():
-            return "Для submit собственного кода нужен review: твой вердикт после coding_inspect(diff)."
+            return frame_language.text('forge.finish.21')
         # Retain a voluntarily requested critic's evidence. An absent critic or
         # BLOCKED opinion does not require skip/override for ordinary finish.
         reviewer_evidence = str(reviewer or "").strip() or _reviewer_evidence(task_id)
@@ -5794,20 +5782,18 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         cp = _checkpoint_unlocked(task_id, title or f"forge: {task.get('goal') or task_id}")
         beat()
         if not isinstance(cp, CheckpointReply) or cp.checkpoint_status not in {"committed", "unchanged"}:
-            return f"Не интегрировала: {cp}"
+            return frame_language.text('forge.finish.22', v1=f'{cp}')
         source_git_raw = str(task.get("source_git") or "")
         source_git = Path(source_git_raw) if source_git_raw else None
         if source_git is None or not source_git.is_dir():
-            return "Не интегрировала: исходный git root пропал; рабочая ветка сохранена."
+            return frame_language.text('forge.finish.23')
         current = _git_text(source_git, "branch", "--show-current").strip()
         expected = str(task.get("source_branch") or "")
         if expected and current != expected:
-            return (f"Не интегрировала: исходный checkout теперь на ветке {current}, задача начиналась "
-                    f"на {expected}. Ветка {task.get('branch')} сохранена — выбери адрес осознанно.")
+            return (frame_language.text('forge.finish.24', v1=f'{current}', v3=f'{expected}', v5=f"{task.get('branch')}"))
         dirty = _git_text(source_git, "status", "--porcelain")
         if dirty.strip():
-            return ("Не интегрировала поверх незакоммиченного исходного дерева; рабочая ветка "
-                    f"{task.get('branch')} и worktree сохранены. Текущий status:\n{dirty[:3000]}")
+            return (frame_language.text('forge.finish.25', v1=f"{task.get('branch')}", v3=f'{dirty[:3000]}'))
         branch = str(task.get("branch") or "")
         beat(180)                                   # merge --no-ff со своим сроком 120с
         merge = _run(["git", "-C", str(source_git), "-c", "user.name=Praxis", "-c",
@@ -5816,7 +5802,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         beat()
         if merge.returncode != 0:
             _run(["git", "-C", str(source_git), "merge", "--abort"], timeout=30)
-            return ("Интеграция конфликтнула; исходное дерево возвращено, worktree и ветка сохранены:\n"
+            return (frame_language.text('forge.finish.27')
                     + _cap((merge.stderr or merge.stdout).strip(), 5000))
         merged = _git_text(source_git, "rev-parse", "--short", "HEAD").strip()
         wt_raw = str(task.get("worktree_root") or "")
@@ -5824,7 +5810,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             _run(["git", "-C", str(source_git), "worktree", "remove", "--force", wt_raw], timeout=60)
         if branch:
             _run(["git", "-C", str(source_git), "branch", "-D", branch], timeout=30)
-        submission = f"Интегрировано в {expected or current}: {merged}; временный worktree убран."
+        submission = frame_language.text('forge.finish.28', v1=f'{expected or current}', v3=f'{merged}')
         try:
             # Манифест рельсов не должен стареть от дневных мержей: уже третий раз
             # номер строки судьи в soul/rails.md гниёт (16855→16999→17008→17011),
@@ -5835,7 +5821,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             import rails
             if rails.sync_md():
                 _event(task_id, "rails_manifest_synced",
-                       summary="мерж сдвинул строки — манифест перевыпущен")
+                       summary=frame_language.text('forge.finish.29'))
         except Exception:
             pass  # манифест — зеркало, а не рельс: отказ синка не отменяет мерж
     task["status"] = new_status
@@ -5856,14 +5842,11 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             evidence = computer_memory.task_summary(task_id)
             capabilities = ", ".join(sorted(evidence.get("capabilities") or {})) or "none"
             evidence_lesson = (
-                f"Windows evidence сохранено в {evidence.get('map')}: "
-                f"observations={evidence.get('observations', 0)}, capabilities={capabilities}. "
-                "Для сходной задачи начинать с этой карты и проверять hashes/receipts, а не пересказывать "
-                "прошлый вывод по памяти."
+                frame_language.text('forge.finish.30', v1=f"{evidence.get('map')}", v3=f"{evidence.get('observations', 0)}", v5=f'{capabilities}')
             )
         if unknowns:
             # урок не имеет права выглядеть полнее, чем были данные
-            evidence_lesson = (evidence_lesson + "\nЧего не было известно при закрытии: "
+            evidence_lesson = (evidence_lesson + frame_language.text('forge.finish.31')
                                + "; ".join(unknowns)).strip()
         lesson_row = forge_learning.record(
             STATE_DIR, task=task, root=root, events=_events(task_id, 2000),
@@ -5873,9 +5856,9 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         )
         _event(task_id, "lesson_recorded", lesson_id=lesson_row["id"],
                summary=lesson_row["lesson"][:180])
-        lesson_note = f"урок: {lesson_row['id']} — {lesson_row['lesson']}"
+        lesson_note = frame_language.text('forge.finish.32', v1=f"{lesson_row['id']}", v3=f"{lesson_row['lesson']}")
     except Exception as exc:
-        lesson_note = f"урок не записался: {type(exc).__name__}: {exc}"
+        lesson_note = frame_language.text('forge.finish.33', v1=f'{type(exc).__name__}', v3=f'{exc}')
     evidence_note = ""
     if task.get("scope") == "windows" and new_status == "done":
         try:
@@ -5887,27 +5870,26 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
                              f"artifacts={len(episode.get('artifacts') or [])} · "
                              f"life={episode.get('life_event_id') or 'not-promoted'}")
         except Exception as exc:
-            evidence_note = f"computer evidence не свелась: {type(exc).__name__}: {exc}"
+            evidence_note = frame_language.text('forge.finish.35', v1=f'{type(exc).__name__}', v3=f'{exc}')
     contract_note = ""
     if contract:
         # Контракт — advisory-расписка: исход честно назван, finish не блокирован (закон 3).
         # Вердикт — из единого источника (forge_learning.contract_status), как в уроке.
         verify = contract.get("verify") or {}
-        contract_note = (f"контракт {forge_learning.contract_status(contract)}: "
-                         f"verify met={verify.get('met', 0)} unmet={verify.get('unmet', 0)} "
-                         f"unknown={verify.get('unknown', 0)}")
+        contract_note = (frame_language.text('forge.finish.36', v1=f'{forge_learning.contract_status(contract)}', v3=f"{verify.get('met', 0)}", v5=f"{verify.get('unmet', 0)}", v7=f"{verify.get('unknown', 0)}"))
     return _cap("\n".join([
         f"{task_id}: {new_status}",
-        f"изменения: {stat_before.strip() or 'diffstat пуст'}",
-        f"проверено: {checked or 'не указано'}",
+        frame_language.text('forge.finish.37', v1=f"{stat_before.strip() or frame_language.text('forge.finish.38')}"),
+        frame_language.text('forge.finish.39', v1=f"{checked or frame_language.text('forge.finish.40')}"),
         contract_note,
-        ("чего не было известно при закрытии: " + "; ".join(unknowns)) if unknowns else "",
+        (frame_language.text('forge.finish.41') + "; ".join(unknowns)) if unknowns else "",
         lesson_note,
         evidence_note,
         submission,
     ]).strip(), 16000)
 
 
+@frame_language.pinned
 def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
            submit: bool = True, reviewer: str = "") -> str:
     try:
@@ -5920,10 +5902,10 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
         with _mutation_lock(task_id, timeout=120) as beat:
             task = get(task_id)
             if task and task.get("status") not in LIVE_TASK_STATUSES:
-                return f"{task_id} is terminal ({task.get('status')}); result retained."
+                return frame_language.text('forge.finish.42', v0=f'{task_id}', v2=f"{task.get('status')}")
             custody = _admission_reason(task_id) or _shared_writer_reason(task_id, '')
             if custody:
-                return 'Finish refused: ' + custody
+                return frame_language.text('forge.finish.43') + custody
             survey = _finish_survey(task_id, beat=beat)
             if survey.get("error"):
                 return str(survey["error"])
@@ -5940,14 +5922,16 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
             return _finish_unlocked(task_id, title=title, review=review, checked=checked,
                                     submit=submit, survey=survey, beat=beat, reviewer=reviewer)
     except TimeoutError as exc:
-        return f"Finish не начался: {exc}. Другой worker ещё фиксирует изменение."
+        return frame_language.text('forge.finish.44', v1=f'{exc}')
 
 
+@frame_language.pinned
 def abandon(task_id: str, reason: str = "", checked: str = "") -> str:
     with _mutation_lock(task_id):
         return _abandon_unlocked(task_id, reason, checked)
 
 
+@frame_language.pinned
 def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
     """Закрыть запись задачи, ничего не интегрируя и ничего не восстанавливая.
 
@@ -5963,13 +5947,12 @@ def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
     отличимо и от `done`, и от `lost`, потому что `lost` ставит жнец, а `abandoned` — она."""
     task = get(task_id)
     if not task:
-        return f"нет coding-задачи {task_id}"
+        return frame_language.text('forge.finish.45', v1=f'{task_id}')
     reason = str(reason or "").strip()
     if not reason:
-        return ("Нужна причина: abandon закрывает запись НАВСЕГДА и без интеграции. "
-                "Одна фраза о том, что проверено и почему продолжать нечего.")
+        return (frame_language.text('forge.finish.46'))
     if task.get("status") in {"done", "abandoned"}:
-        return f"{task_id} уже закрыта со статусом {task.get('status')}."
+        return frame_language.text('forge.finish.47', v0=f'{task_id}', v2=f"{task.get('status')}")
     _, root, root_err = _task_root(task_id)
     previous = str(task.get("status") or "")
     task["status"] = "abandoned"
@@ -5978,7 +5961,7 @@ def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
     task["review"] = reason
     task["checked"] = str(checked or "").strip()
     task["abandoned_from"] = previous
-    task["abandon_root_state"] = root_err or (f"корень на месте: {root}" if root else "")
+    task["abandon_root_state"] = root_err or (frame_language.text('forge.finish.48', v1=f'{root}') if root else "")
     _save_task(task)
     _event(task_id, "task_abandoned", reason=reason[:1000], checked=str(checked or "")[:1000],
            previous_status=previous, root_state=task["abandon_root_state"][:500])
@@ -5986,15 +5969,14 @@ def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
         forge_learning.record(
             STATE_DIR, task=task, root=root or Path(str(task.get("root") or ".")),
             events=_events(task_id, 500), changed=[], verification="",
-            lesson=(f"Задача оставлена без интеграции. Причина: {reason}"
-                    + (f" Состояние корня: {task['abandon_root_state']}"
+            lesson=(frame_language.text('forge.finish.49', v1=f'{reason}')
+                    + (frame_language.text('forge.finish.50', v1=f"{task['abandon_root_state']}")
                        if task["abandon_root_state"] else "")),
             regression=str(checked or ""), outcome="abandoned")
     except Exception:
         pass          # урок — приложение к закрытию, а не условие его законности
-    tail = f" Состояние корня: {task['abandon_root_state']}" if task["abandon_root_state"] else ""
-    return (f"{task_id} оставлена (было: {previous or 'без статуса'}). Ничего не "
-            f"интегрировано и не восстановлено.{tail}")
+    tail = frame_language.text('forge.finish.51', v1=f"{task['abandon_root_state']}") if task["abandon_root_state"] else ""
+    return (frame_language.text('forge.finish.52', v0=f'{task_id}', v2=f"{previous or frame_language.text('forge.finish.53')}", v4=f'{tail}'))
 
 
 @frame_language.pinned
