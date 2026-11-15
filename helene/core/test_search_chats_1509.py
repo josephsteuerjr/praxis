@@ -138,7 +138,7 @@ class ToolSearchChats(unittest.TestCase):
         self.assertIn("Ouroboros AI", out)
         self.assertIn(OUROBOROS, out)
         self.assertIn("замри", out)
-        self.assertIn("НЕ приходят", out)
+        self.assertIn("входящие приостановлены", out)
         self.assertNotIn("ничего не нашла", out)
 
     def test_both_sources_are_shown_and_named(self):

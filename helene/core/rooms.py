@@ -51,6 +51,7 @@ mode_until/mode_set_by/disclosure) + её секции («Нормы и атмо
 from __future__ import annotations
 
 import datetime as _dt
+import frame_language
 import json
 import logging
 import os
@@ -948,6 +949,7 @@ def latin_fold(text: str) -> str:
     return "".join(squeezed)
 
 
+@frame_language.pinned
 def search_profiles(query: str, limit: int = 10) -> list[dict]:
     """ЕЁ СОБСТВЕННЫЕ профили комнат под запрос: [{chat_id, title, mode, where}].
 
@@ -970,7 +972,7 @@ def search_profiles(query: str, limit: int = 10) -> list[dict]:
             continue
         d = parse_profile(raw)
         title = str(d.get("title") or "").lstrip("# ").strip()
-        row = {"chat_id": chat_id, "title": title or f"комната {chat_id}"}
+        row = {"chat_id": chat_id, "title": title or frame_language.text('telegram.result.room_name', id=chat_id)}
         try:
             row["mode"] = effective_mode(chat_id)
         except Exception:

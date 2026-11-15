@@ -3104,19 +3104,20 @@ def tool_panic(reason: str = "") -> str:
     return panic(reason or "по своей воле")
 
 
+@frame_language.pinned
 def tool_get_id(name_or_username: str) -> str:
     """Снять telegram id человека/чата по имени/@username (через Telethon). Только владельцу."""
     fn = _TELETHON.get("find_telegram_id")
     if not fn:
-        return "Недоступно (нет связи с Telethon)."
+        return frame_language.text('telegram.result.unavailable')
     try:
         return str(fn(name_or_username))
     except TimeoutError as e:
         # HOTFIX 07.07 (вечер): таймаут ≠ «не нашла». str(TimeoutError()) пуст — тул отвечал
         # «[не нашла] », и она честно передавала Егору ЛОЖЬ про существующего человека.
-        return f"[Telethon не ответил вовремя — сбой канала, НЕ «нет такого»] {e}"
+        return frame_language.text('telegram.result.id_timeout', detail=e)
     except Exception as e:
-        return f"[не найдено] {e}"
+        return frame_language.text('telegram.result.id_error', detail=e)
 
 
 def telegram_transport_status() -> str:
@@ -3135,12 +3136,19 @@ def telegram_transport_status() -> str:
 
 
 _TRANSPORT_CLOSED_LINES = {
-    "closed_for_window": ("[транспорт закрыт: это моё фокус-окно, Telegram вернётся после "
-                          "его конца — отложи чтение, это не сбой и не «нет данных»]"),
-    "disconnected": "[Telegram-транспорт сейчас отвалился — сбой канала, НЕ «нет данных»]",
+    "closed_for_window": "telegram.result.transport_window",
+    "disconnected": "telegram.result.transport_disconnected",
 }
 
 
+def _transport_closed_line(status: str):
+    caption = _TRANSPORT_CLOSED_LINES.get(status)
+    return frame_language.text(caption) if caption in {
+        'telegram.result.transport_window', 'telegram.result.transport_disconnected'
+    } else caption
+
+
+@frame_language.pinned
 def _rooms_block(query: str) -> str:
     """Её собственные профили комнат под запрос — телом ответа, а не сноской.
 
@@ -3157,15 +3165,13 @@ def _rooms_block(query: str) -> str:
     lines = []
     for h in hits:
         mode = str(h.get("mode") or "normal")
-        tail = rooms.MODE_INTAKE.get(mode)
-        word = rooms.MODE_WORD.get(mode, mode)
-        lines.append(f"— {h['title']} · {h['chat_id']} · режим «{word}»"
-                     + (f" ({tail})" if tail else "")
-                     + f" · нашлось по: {h['where']}")
-    return ("Мои профили комнат (memory/rooms/, читать целиком — inbox/файлом, "
-            "менять режим — manage_room):\n" + "\n".join(lines))
+        tail = frame_language.text('telegram.result.intake_'+mode) if mode in rooms.MODE_INTAKE else None
+        word = frame_language.text('telegram.result.mode_'+mode) if mode in rooms.MODE_WORD else mode
+        lines.append(frame_language.text('telegram.result.profile_row', title=h['title'], id=h['chat_id'], mode=word, intake=(' ('+tail+')') if tail else '', where=(frame_language.text('telegram.result.where_title') if h['where']=='название' else frame_language.text('telegram.result.where_body') if h['where']=='её текст о комнате' else h['where'])))
+    return frame_language.text('telegram.result.profiles_title', rows='\n'.join(lines))
 
 
+@frame_language.pinned
 def tool_search_chats(query: str) -> str:
     """Поискать комнату: по именам диалогов Telegram И по своим профилям комнат.
 
@@ -3181,75 +3187,73 @@ def tool_search_chats(query: str) -> str:
     """
     mine = _rooms_block(query)
     fn = _TELETHON.get("search_chats")
-    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status()) if fn else None
+    closed = _transport_closed_line(telegram_transport_status()) if fn else None
     if not fn:
-        dialogs, why = "", "диалоги Telegram не смотрела: нет связи с Telethon"
+        dialogs, why = "", frame_language.text('telegram.result.dialogs_unavailable')
     elif closed:
-        dialogs, why = "", f"диалоги Telegram не смотрела: {closed}"
+        dialogs, why = "", frame_language.text('telegram.result.dialogs_closed', reason=closed)
     else:
         try:
             dialogs, why = str(fn(query)).strip(), ""
         except Exception as e:
-            dialogs, why = "", f"диалоги Telegram не смотрела: [ошибка] {e}"
+            dialogs, why = "", frame_language.text('telegram.result.dialogs_error', detail=e)
     parts = []
     if dialogs:
-        parts.append("Диалоги Telegram по имени:\n" + dialogs)
+        parts.append(frame_language.text('telegram.result.dialogs_title', dialogs=dialogs))
     if mine:
         parts.append(mine)
     if parts:
         if why:
             parts.append(why + ".")
         return "\n\n".join(parts)
-    scope = ("Искала по именам диалогов Telegram и по своим профилям комнат "
-             "(memory/rooms/) — совпадений нет."
-             if not why else why + "; по своим профилям комнат совпадений нет.")
-    return (scope + " Это про ИМЕНА и мои записки о комнатах, не про текст сообщений: "
-            "по словам внутри переписки — `search_private_messages`, конкретную комнату "
-            "по id или @имени — `read_other_chat`.")
+    scope = (frame_language.text('telegram.result.scope_none') if not why else frame_language.text('telegram.result.scope_local_none', reason=why))
+    return (scope + frame_language.text('telegram.result.search_help'))
 
 
+@frame_language.pinned
 def tool_read_chat(chat_ref: str, limit: int = 30) -> str:
     """Явно прочитать соседний диалог; он никогда не подмешивается автоматически."""
     fn = _TELETHON.get("read_other_chat")
     if not fn:
-        return "Недоступно (нет связи с Telethon)."
-    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status())
+        return frame_language.text('telegram.result.unavailable')
+    closed = _transport_closed_line(telegram_transport_status())
     if closed:
         return closed
     try:
         out = str(fn(chat_ref, int(limit)))
         if not out:
-            return "(пусто)"
-        return ("[PRIVATE CROSS-CHAT READ — внутренний материал; не цитируй чувствительные "
-                "личные сведения аудитории без права их получить]\n" + out)
+            return frame_language.text('telegram.result.empty')
+        return (frame_language.text('telegram.result.private', data=out))
     except Exception as e:
-        return f"[не удалось прочитать] {e}"
+        return frame_language.text('telegram.result.read_error', detail=e)
 
 
+@frame_language.pinned
 def tool_read_context(limit: int = 50) -> str:
     """Подтянуть живой контекст текущего чата прямо из Telegram (последние N)."""
     fn = _TELETHON.get("fetch_context")
     cid = _current_chat()
     if not fn:
-        return "Недоступно (нет связи с Telethon)."
+        return frame_language.text('telegram.result.unavailable')
     if not cid:
-        return "Не вижу, какой это чат — контекст тянется в активном диалоге."
+        return frame_language.text('telegram.result.context_missing')
     try:
         out = str(fn(cid, int(limit)))
-        return out or "(пусто)"
+        return out or frame_language.text('telegram.result.empty')
     except Exception as e:
-        return f"[не удалось подтянуть] {e}"
+        return frame_language.text('telegram.result.context_error', detail=e)
 
 
+@frame_language.pinned
 def tool_search_private_messages(query: str, limit: int = 20) -> str:
     """Явный полнотекстовый поиск по личкам Praxis; обычный контекст его не вызывает."""
     fn = _TELETHON.get("search_private_messages")
     if not fn:
-        return "Недоступно (нет связи с Telethon)."
+        return frame_language.text('telegram.result.unavailable')
     try:
         return str(fn(query, int(limit)))
     except Exception as e:
-        return f"[поиск по личкам не удался] {e}"
+        return frame_language.text('telegram.result.private_error', detail=e)
 
 
 def _named(text: str) -> bool:
