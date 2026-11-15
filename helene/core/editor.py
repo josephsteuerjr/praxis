@@ -94,6 +94,8 @@ def edit_result(action='replace', path='', content='', old='', new='', patch='',
         reply=forge.edit(task_id,action,path=path,content=content,old=old,new=new,patch=patch,
                          expected_sha256=expected_sha256,files=files,mode=mode,all=all,
                          _parent_request_path=_parent_request_path,_script_context=_script_context,_typed_result=True)
+        if isinstance(reply, forge.EditReply):
+            return dict(reply.edit_result)
         if reply.startswith('remote_edit: '):
             return json.loads(reply[13:])
         if reply.startswith('batch: '):

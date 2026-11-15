@@ -26,6 +26,13 @@ import forge_script  # noqa: E402
 import workshop  # noqa: E402
 
 REPO = Path(__file__).resolve().parent
+# A composed Hélène core has no private soul. Inspect the real factory kit,
+# supplied by the exact checkout/snapshot, when an installed tree is absent.
+SKILL_ROOTS = [REPO / 'soul/skills']
+if not SKILL_ROOTS[0].is_dir():
+    edition = Path(os.environ.get('HELENE_TEST_SOURCE_ROOT', str(REPO.parents[1])))
+    SKILL_ROOTS = [edition / 'desk/resources' / name / 'skills'
+                   for name in ('soul', 'soul.en', 'soul.fr', 'soul.zh')]
 DEAD = re.compile(r"\b(?:fs_edit|coding_edit)\b")
 SHADOWS = ("editor", "workshop", "forge", "hands", "edit_batch", "forge_script")
 
@@ -158,10 +165,11 @@ except h.Refused:
 
 class TheWordsNameLiveHands(Home):
     def test_no_skill_names_a_dead_hand(self):
-        skills = sorted((REPO / "soul/skills").glob("*.md"))
-        self.assertTrue(skills)
-        for skill in skills:
-            self.assertIsNone(DEAD.search(skill.read_text(encoding="utf-8")), skill.name)
+        for root in SKILL_ROOTS:
+            skills = sorted(root.rglob('*.md'))
+            self.assertTrue(skills, root)
+            for skill in skills:
+                self.assertIsNone(DEAD.search(skill.read_text(encoding="utf-8")), str(skill))
 
     def test_write_refusals_name_edit(self):
         out = self.script('''

@@ -2775,6 +2775,18 @@ def _inspect(task_id: str, action: str = "status", path: str = "", query: str = 
                         "search | diff | history", "refused")
 
 
+class EditReply(str):
+    """Current single-file/patch outcome, separate from any localized display caption."""
+    def __new__(cls, text, status, **fields):
+        if status not in {'confirmed', 'refused', 'in_doubt', 'ok'}:
+            raise ValueError('invalid edit outcome')
+        value = super().__new__(cls, text)
+        value.edit_result = {'status': status, 'message': str(text),
+                             'before_sha256': None, 'after_sha256': None, **fields}
+        return value
+
+
+@frame_language.pinned
 def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
                    new: str = "", patch: str = "", expected_sha256: str = "", files=None, mode: str = "snapshot", _typed_result=False, all: bool=False) -> str:
     task, root, err = _task_root(task_id)
@@ -2786,19 +2798,19 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
     if action == 'batch' or files is not None:
         import edit_batch
         if action != 'batch' or path or content or old or new or patch or expected_sha256 or all:
-            return edit_batch.render(edit_batch.refused(files, 'Use action=batch with files and mode only.'))
+            return edit_batch.render(edit_batch.refused(files, frame_language.text('forge.edit.0')))
         if remote is not None:
-            return edit_batch.render(edit_batch.refused(files, 'Remote host/Windows batch is not supported; no remote edit was sent.'))
+            return edit_batch.render(edit_batch.refused(files, frame_language.text('forge.edit.1')))
         value = edit_batch.apply(files, lambda name: _inside(root, name), mode)
         _event(task_id, 'batch_edit', outcome=value['status'], files=value['files'])
         return edit_batch.render(value)
     if not isinstance(all, bool) or (all and action!='replace'):
-        return 'Edit refused: all must be boolean and applies only to replace.'
+        return frame_language.text('forge.edit.2')
     if mode != 'snapshot':
-        return 'Edit refused: mode applies only to action=batch.'
+        return frame_language.text('forge.edit.3')
     if remote is not None:
         if all and getattr(remote, 'NEGOTIATES_EDIT_ALL', False) is not True:
-            return "Edit refused: this remote backend does not negotiate all replacement; no edit sent."
+            return frame_language.text('forge.edit.4')
         with _remote_observations(task):
             if _typed_result:
                 import editor
@@ -2807,35 +2819,33 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
                         old=old, new=new, patch=patch, expected_sha256=expected_sha256,
                         **({'all': True} if all else {}))
                 except Exception as exc:
-                    result = {'ok': False, 'code': 'unknown', 'error': f'Remote edit response unavailable: {type(exc).__name__}'}
+                    result = {'ok': False, 'code': 'unknown', 'error': frame_language.text('forge.edit.5', v1=f'{type(exc).__name__}')}
                 return 'remote_edit: ' + json.dumps(editor.remote_result(result), ensure_ascii=False)
-            return remote.workspace_edit(
+            return EditReply(remote.workspace_edit(
                 str(root), action, path=path, content=content, old=old, new=new, patch=patch,
                 expected_sha256=expected_sha256, **({'all': True} if all else {}),
-            )
+            ), 'in_doubt')
     action = str(action or "").strip().lower()
     if action == "patch":
         if expected_sha256:
-            return ("Patch не применён: expected_sha256 относится к одному файлу, "
-                    "а patch может затронуть несколько. Используй replace/write "
-                    "с хешем либо перечитай diff и подай patch без ложной CAS-гарантии.")
+            return (frame_language.text('forge.edit.6'))
         patch = str(patch or content or "")
         if not patch.strip():
-            return "Для patch нужен unified diff."
+            return frame_language.text('forge.edit.7')
         try:
             check = _run(["git", "apply", "--check", "--whitespace=nowarn", "-"], cwd=root,
                          timeout=30, input_text=patch)
         except Exception as exc:
-            return f"patch check упал: {type(exc).__name__}: {exc}"
+            return frame_language.text('forge.edit.8', v1=f'{type(exc).__name__}', v3=f'{exc}')
         if check.returncode != 0:
-            return "Patch не применён; check:\n" + _cap((check.stderr or check.stdout).strip(), 5000)
+            return frame_language.text('forge.edit.9') + _cap((check.stderr or check.stdout).strip(), 5000)
         apply = _run(["git", "apply", "--whitespace=nowarn", "-"], cwd=root,
                      timeout=30, input_text=patch)
         if apply.returncode != 0:
-            return "Patch прошёл check, но apply упал:\n" + _cap((apply.stderr or apply.stdout).strip(), 5000)
+            return EditReply(frame_language.text('forge.edit.10') + _cap((apply.stderr or apply.stdout).strip(), 5000), 'in_doubt')
         changed = _git_text(_git_root(root) or root, "status", "--short")
         _event(task_id, "patch_applied", summary=f"{len(patch)} chars", changed=changed[:1000])
-        return "Patch применён.\n" + (changed or "git не показал изменений")
+        return EditReply(frame_language.text('forge.edit.11') + (changed or frame_language.text('forge.edit.12')), 'ok')
 
     p, path_err = _inside(root, path)
     if path_err:
@@ -2845,7 +2855,7 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
     try:
         raw, digest = hands.snapshot(p)
     except OSError as exc:
-        return f"Правка не начата: {rel} не читается ({type(exc).__name__})."
+        return frame_language.text('forge.edit.13', v1=f'{rel}', v3=f'{type(exc).__name__}')
     conflict = hands.version_conflict(expected_sha256, digest)
     if conflict:
         return conflict
@@ -2854,28 +2864,33 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
         try:
             data = str(content or "").encode("utf-8")
         except UnicodeError:
-            return "Правка не начата: content не кодируется в UTF-8."
+            return frame_language.text('forge.edit.14')
     elif action == "replace":
         if raw is None:
-            return f"Нет файла {rel}."
+            return frame_language.text('forge.edit.15', v1=f'{rel}')
         data, refusal = hands.replace_once(raw, old, new, all=all)
         if data is None:
             return refusal
     else:
         return "action: write | replace | patch"
     result = hands.publish(p, data, digest,
-                           recheck=lambda: "" if _inside(root, path)[0] == p else "путь изменился")
+                           recheck=lambda: "" if _inside(root, path)[0] == p else frame_language.text('forge.edit.16'))
     if result["status"] != "confirmed":
-        return result["message"]
+        return EditReply(result["message"], result["status"],
+                         before_sha256=result["before_sha256"], after_sha256=result["after_sha256"])
     after = result["after_sha256"]
     _event(task_id, f"file_{action}", path=rel, before=before, after=after[:16],
            summary=f"{rel} {before or 'new'}->{after[:16]}")
-    counts = f"; replacements={raw.decode('utf-8').count(old) if all else 1}" if action == "replace" else ""
-    return f"{action}: {rel}; sha256 {before or 'new'} → {after}; {len(data)} байт.{counts}"
+    replacements = (raw.decode('utf-8').count(old) if all else 1) if action == "replace" else None
+    counts = f"; replacements={replacements}" if replacements is not None else ""
+    return EditReply(frame_language.text('forge.edit.17', v0=f'{action}', v2=f'{rel}', v4=f"{before or 'new'}", v6=f'{after}', v8=f'{len(data)}', v10=f'{counts}'), 'confirmed', before_sha256=result['before_sha256'], after_sha256=after, **({'replacements': replacements} if replacements is not None else {}))
 
 
 def _edit_outcome(reply: str) -> str:
-    """Исход правки по её ответу: у forge.edit текст и есть контракт."""
+    """Read current producer metadata, with read-only support for legacy replies."""
+    if isinstance(reply, EditReply):
+        return reply.edit_result['status']
+    # Read-only legacy compatibility. Current translated producers carry metadata.
     text = str(reply or "")
     if text.startswith('remote_edit: '):
         try:return json.loads(text[13:])['status']
@@ -2894,12 +2909,13 @@ def _edit_outcome(reply: str) -> str:
     return "refused"
 
 
+@frame_language.pinned
 def edit(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
          new: str = "", patch: str = "", expected_sha256: str = "",
          _parent_request_path: str = "", files=None, mode: str = "snapshot", _script_context=None, _typed_result=False, all: bool=False) -> str:
     if not isinstance(all, bool):
         tool_report.note(outcome='refused', target=str(path))
-        return 'Edit refused: all must be a boolean.'
+        return frame_language.text('forge.edit.18')
     out = _edit_guarded(task_id, action, path=path, content=content, old=old, new=new, patch=patch,
                         expected_sha256=expected_sha256, _parent_request_path=_parent_request_path, files=files, mode=mode, _script_context=_script_context, _typed_result=_typed_result, all=all)
     if (str(action or '').strip().lower() == 'batch' or files is not None) and not out.startswith('batch: '):
@@ -2909,6 +2925,7 @@ def edit(task_id: str, action: str, path: str = "", content: str = "", old: str 
     return out
 
 
+@frame_language.pinned
 def _edit_guarded(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
                   new: str = "", patch: str = "", expected_sha256: str = "",
                   _parent_request_path: str = "", files=None, mode: str = "snapshot", _script_context=None, _typed_result=False, all: bool=False) -> str:
@@ -2924,11 +2941,11 @@ def _edit_guarded(task_id: str, action: str, path: str = "", content: str = "", 
                 try:
                     _parent_request_path, command_unit = forge_script.validate(sys.modules[__name__],task_id,_script_context)
                 except (ValueError, OSError, TypeError) as exc:
-                    return f'Edit refused: {exc}'
+                    return frame_language.text('forge.edit.19', v1=f'{exc}')
             reason = (_admission_reason(task_id, _parent_request_path, general=True, executing_process=command_unit)
                       if command_unit else _admission_reason(task_id, _parent_request_path, general=True))
             if reason:
-                return f"Edit refused: {reason}"
+                return frame_language.text('forge.edit.20', v1=f'{reason}')
             # Правка — один вызов, ударить внутри него нечем; объявляем срок молчания
             # заранее, иначе порог бездействия снесёт замок из-под работающей руки.
             beat(_remote_step_lease(get(task_id)))
@@ -2947,9 +2964,8 @@ def _edit_guarded(task_id: str, action: str, path: str = "", content: str = "", 
                 if lock.lost_to_takeover:
                     if result.startswith('batch: '):
                         import edit_batch
-                        return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), 'Transaction ownership changed; inspect before retry.'))
-                    return ("Исход правки неизвестен: блокировка файла потеряла владельца; "
-                            "перечитай файл, не повторяй слепо.")
+                        return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), frame_language.text('forge.edit.21')))
+                    return EditReply(frame_language.text('forge.edit.22'), 'in_doubt')
                 return result
             result = _edit_unlocked(task_id, action, path=path, content=content, old=old, new=new,
                                     patch=patch, expected_sha256=expected_sha256, files=files, mode=mode,
@@ -2959,12 +2975,11 @@ def _edit_guarded(task_id: str, action: str, path: str = "", content: str = "", 
         if result is not None:
             if result.startswith('batch: '):
                 import edit_batch
-                return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), f'Lock release failed: {type(exc).__name__}.'))
+                return edit_batch.render(edit_batch.uncertain(json.loads(result[7:]), frame_language.text('forge.edit.23', v1=f'{type(exc).__name__}')))
             log.warning("task %s: замок не отпустился после правки", task_id, exc_info=True)
-            return (f"Исход правки неизвестен: замок не отпустился ({type(exc).__name__}); "
-                    f"перечитай файл, не повторяй слепо. Ответ правки: {result}")
+            return EditReply(frame_language.text('forge.edit.24', v1=f'{type(exc).__name__}', v3=f'{result}'), 'in_doubt')
         if isinstance(exc, TimeoutError):
-            return f"Правка не началась: {exc}. Файл или задача заняты; перечитай перед повтором."
+            return frame_language.text('forge.edit.25', v1=f'{exc}')
         raise
 
 

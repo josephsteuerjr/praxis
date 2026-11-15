@@ -166,7 +166,7 @@ class TheShell(unittest.TestCase):
 
     def test_timeout_is_honoured_and_bounded(self):
         out, report = self.call("sleep 5", timeout=1)
-        self.assertIn("таймауту 1s", out)
+        self.assertIn(agent.frame_language.text('helper.agent._home_command.2688', p0=1), out)
         self.assertEqual(report["outcome"], "failed")
 
     def test_schema_offers_cwd_and_timeout(self):

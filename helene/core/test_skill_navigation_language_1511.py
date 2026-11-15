@@ -1,5 +1,6 @@
 """Actual stock indexes feed the actual capability parser without live imports."""
 import ast
+import os
 from pathlib import Path
 import re
 import shutil
@@ -12,7 +13,7 @@ import frame_language
 import resident_skills
 
 CORE=Path(__file__).resolve().parent
-RESOURCES=CORE.parents[1]/'desk/resources'
+RESOURCES=Path(os.environ.get('HELENE_TEST_SOURCE_ROOT',str(CORE.parents[1])))/'desk/resources'
 
 
 def function(file,name,namespace):
