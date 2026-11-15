@@ -3460,56 +3460,55 @@ def _room_view(chat_id: str, policy: dict) -> dict:
     return view
 
 
+@frame_language.pinned
 def tool_send_email(to: str, subject: str = "", body: str = "") -> str:
-    """Отправить письмо как Praxis. Моя рука в любом ходе (решение Егора 03.08.2026);
-    отложенное письмо ПО РАСПИСАНИЮ — отдельный рычаг PRAXIS_EMAIL_AUTONOMOUS."""
-    out = mailer.send(to, subject, body)
-    # ⚠ Дневник писал «отправила» при ЛЮБОМ исходе — включая отказ сервера и «не знаю,
-    # ушло ли». Тот же корень, что «Не отправилось» про доставленное: вердикт брали не
-    # оттуда, где он живёт. Пишем ровно то, что вернул транспорт (закон 3).
-    if out.startswith("Отправлено"):
-        note = f"[почта] отправлено → {to}: {subject}"
-    elif out.startswith("НЕ ЗНАЮ"):
-        note = f"[почта] НЕ ЗНАЮ, ушло ли → {to}: {subject} — {out}"
-    else:
-        note = f"[почта] не ушло → {to}: {subject} — {out}"
+    """Send through the mail transport; journal the coded outcome, not wording."""
+    out = mailer.as_delivery_result(mailer.send(to, subject, body))
     try:
+        if out.outcome == 'accepted':
+            note = frame_language.text('mail.result.journal_accepted', to=to, subject=subject)
+        elif out.outcome == 'unknown':
+            note = frame_language.text('mail.result.journal_unknown', to=to, subject=subject, data=out)
+        else:
+            note = frame_language.text('mail.result.journal_not_sent', to=to, subject=subject, data=out)
         tool_journal(note, salience=2)
     except Exception:
-        log.debug("journal почты не удался", exc_info=True)
+        log.debug('mail journal failed', exc_info=True)
     return out
 
 
+@frame_language.pinned
 def tool_check_email(limit: int = 5, unseen_only: bool = False) -> str:
-    """Прочитать последние письма из ящика Praxis. -> сводка (новые сверху)."""
+    """Read retrieved mail; no result is not proof that the remote mailbox is empty."""
     msgs = mailer.fetch(limit=limit, unseen_only=unseen_only)
     if not msgs:
-        return "Писем нет (или почта не настроена)."
-    return "\n\n---\n".join(
-        f"От: {m['from']}\nТема: {m['subject']}\n{m['date']}\n{m['body']}" for m in msgs
-    )
+        return frame_language.text('mail.result.not_received')
+    return '\n\n---\n'.join(frame_language.text('mail.result.received', sender=m['from'],
+        subject=m['subject'] or frame_language.text('mail.result.no_subject'), date=m['date'], body=m['body'])
+        for m in msgs)
 
 
+@frame_language.pinned
 def tool_mail_read(hash: str) -> str:
-    """Тонкий тул: прочитать тело письма по хэшу из почтового индекса (только то, что в ящике)."""
+    """Read the stored message by its literal mailbox hash."""
     e = mailroom.get(hash)
     if not e:
-        return f"Нет письма с хэшем {hash} в ящике (сверься с индексом # Почтовый ящик)."
-    return (f"От: {e.get('from','')}\nТема: {e.get('subject','')}\n{e.get('date','')}\n\n"
-            f"{e.get('body','') or '(пустое тело)'}")
+        return frame_language.text('mail.result.missing', hash=hash)
+    return frame_language.text('mail.result.read', sender=e.get('from',''), subject=mailroom.subject_text(e),
+        date=e.get('date',''), body=e.get('body','') or frame_language.text('mail.result.empty_body'))
 
 
+@frame_language.pinned
 def tool_mail_draft_reply(hash: str, body: str) -> str:
-    """Тонкий тул: поставить черновик ответа на письмо по хэшу. Отправит mailroom по approve Егора."""
+    """Save a reply draft; this call does not send it."""
     e = mailroom.get(hash)
     if not e:
-        return f"Нет письма с хэшем {hash} (сверься с индексом # Почтовый ящик)."
-    if not (body or "").strip():
-        return "Пустой черновик не ставлю — напиши текст ответа."
+        return frame_language.text('mail.result.missing', hash=hash)
+    if not (body or '').strip():
+        return frame_language.text('mail.result.draft_empty')
     if mailroom.set_draft(hash, body):
-        return (f"Черновик ответа на {hash} ({e.get('subject','')}) готов. "
-                "Жду, пока Егор одобрит отправку из ящика — без его слова не шлю.")
-    return f"Не удалось поставить черновик для {hash} (возможно, письмо уже отправлено)."
+        return frame_language.text('mail.result.draft_saved', hash=hash, subject=mailroom.subject_text(e))
+    return frame_language.text('mail.result.draft_failed', hash=hash)
 
 
 @frame_language.pinned
@@ -19597,15 +19596,7 @@ def voice_turn(chat_id: str | int | None, convo_text: str, speaker: str | None =
                                orient=orient, is_dm=is_dm, scope=scope, ctx=ctx).text
 
 
-_MAIL_COMPOSE_FRAME = (
-    "\n\n---\nA letter came in and Yegor asked you to answer it. Write the reply body in your own voice "
-    "— warm, clear, a little dry, signed Praxis. One point per letter, no corporate filler, no "
-    "exclamation-mark confetti. NEVER put private or cross-channel content into a letter to an outsider. "
-    "Output ONLY the reply text itself (no preamble like «вот черновик», no subject line). Yegor approves "
-    "the send from his mailbox — you don't send."
-)
-
-
+@frame_language.pinned
 def compose_mail_reply(chash: str) -> str:
     """§1: Егор направил ответить на письмо по хэшу — составить черновик её голосом, сохранить. -> текст или ''.
 
@@ -19614,10 +19605,11 @@ def compose_mail_reply(chash: str) -> str:
     e = mailroom.get(chash)
     if not e or not llm.configured():
         return ""
-    letter = f"От: {e.get('from','')}\nТема: {e.get('subject','')}\n\n{e.get('body','')}"
+    letter = frame_language.text('mail.result.compose_letter', sender=e.get('from',''),
+        subject=mailroom.subject_text(e), body=e.get('body',''))
     try:
         draft = _voice(letter, [], speaker=None, chat_id=None, is_owner=True, known=True,
-                       extra_system=_MAIL_COMPOSE_FRAME, max_iters=1).strip()
+                       extra_system=frame_language.text('mail.result.compose_frame'), max_iters=1).strip()
     except Exception:
         log.warning("compose_mail_reply упал", exc_info=True)
         return ""

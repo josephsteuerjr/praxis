@@ -1073,13 +1073,13 @@ class MailSendTruthTests(unittest.TestCase):
         seen: list[str] = []
         with mock.patch.object(agent, "tool_journal",
                                side_effect=lambda text, **kw: seen.append(text)):
-            with mock.patch.object(agent.mailer, "send", return_value="Отправлено → a: «s»."):
+            with mock.patch.object(agent.mailer, "send", return_value=mailer.DeliveryResult('accepted',to='a@b.com',subject='s',attached=(),refused='')):
                 agent.tool_send_email("a@b.com", "s", "b")
             with mock.patch.object(agent.mailer, "send",
-                                   return_value="НЕ ЗНАЮ, ушло ли письмо → a@b.com: связь"):
+                                   return_value=mailer.DeliveryResult('unknown',to='a@b.com',subject='s',attached=(),refused='',**mailer.reason_parts('connection',400))):
                 agent.tool_send_email("a@b.com", "s", "b")
             with mock.patch.object(agent.mailer, "send",
-                                   return_value="Не отправилось (сервер отказался): 550"):
+                                   return_value=mailer.DeliveryResult('refused',stage='transfer',**mailer.reason_parts('550',400))):
                 agent.tool_send_email("a@b.com", "s", "b")
         self.assertIn("отправлено", seen[0])
         self.assertIn("НЕ ЗНАЮ", seen[1])

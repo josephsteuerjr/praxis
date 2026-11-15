@@ -31,6 +31,7 @@ import re
 from pathlib import Path
 
 import mailer
+import frame_language
 
 log = logging.getLogger("praxis-mailroom")
 
@@ -111,6 +112,7 @@ def ingest(messages: list[dict]) -> list[dict]:
             "key": key,
             "from": (msg.get("from") or "").strip(),
             "subject": (msg.get("subject") or "").strip() or "(без темы)",
+            "subject_missing": not bool((msg.get("subject") or "").strip()),
             "body": (msg.get("body") or "").strip(),
             "date": (msg.get("date") or "").strip(),
             "msg_id": (msg.get("msg_id") or "").strip(),
@@ -124,6 +126,12 @@ def ingest(messages: list[dict]) -> list[dict]:
     if added:
         _save(box)
     return added
+
+
+def subject_text(entry: dict) -> str:
+    if entry.get('subject_missing') is True:
+        return frame_language.text('mail.result.no_subject')
+    return str(entry.get('subject') or '')
 
 
 def get(h: str) -> dict | None:
@@ -197,32 +205,32 @@ def reply_address(h: str) -> str:
     return (m.group(1) if m else frm).strip()
 
 
+@frame_language.pinned
 def send_approved(h: str) -> str:
-    """По approve Егора: SMTP-отправить черновик на адрес-ответ письма, пометить sent. Token-free.
-
-    Это «толстый» путь отправки — никакого LLM. -> человекочитаемый статус."""
+    """One explicit owner-approved attempt; ledger decisions use outcome codes."""
     e = get(h)
     if not e:
-        return f"Нет письма с хэшем {h}."
-    draft = (e.get("draft") or "").strip()
+        return mailer.DeliveryResult('missing', hash=h)
+    draft = (e.get('draft') or '').strip()
     if not draft:
-        return "Нет черновика для отправки."
-    if e.get("status") == "sent":
-        return "Это письмо уже отправлено."
+        return mailer.DeliveryResult('no_draft')
+    if e.get('status') == 'sent':
+        return mailer.DeliveryResult('already_sent')
     to = reply_address(h)
-    if "@" not in to:
-        return f"Не разобрала адрес отправителя: {to!r}."
-    subj = (e.get("subject") or "").strip()
-    if not subj.lower().startswith("re:"):
-        subj = "Re: " + subj if subj else "Re:"
-    out = mailer.send(to, subj, draft)
-    if out.startswith("Отправлено"):
+    if '@' not in to:
+        return mailer.DeliveryResult('bad_reply', to=to)
+    subj = subject_text(e).strip()
+    if not subj.lower().startswith('re:'):
+        subj = 'Re: ' + subj if subj else 'Re:'
+    out = mailer.as_delivery_result(mailer.send(to, subj, draft))
+    if out.outcome == 'accepted':
         mark_sent(h)
     else:
-        log.warning("send_approved %s не ушло: %s", h, out)
+        log.warning('send_approved %s outcome=%s: %s', h, out.outcome, out)
     return out
 
 
+@frame_language.pinned
 def index_block(max_items: int = 12, *, exclude_hashes: set[str] | None = None) -> str:
     """Честный компактный индекс ящика для её контекста (хэш · от · тема · статус).
 
@@ -234,6 +242,7 @@ def index_block(max_items: int = 12, *, exclude_hashes: set[str] | None = None) 
         return ""
     lines = []
     for e in items:
-        subj = (e.get("subject") or "")[:60]
+        subject = subject_text(e)
+        subj = subject[:60] + ("…" if len(subject) > 60 else "")
         lines.append(f"- {e['hash']} · {_short_from(e.get('from',''))} · «{subj}» · {e.get('status')}")
     return "\n".join(lines)

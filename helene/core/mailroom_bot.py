@@ -34,6 +34,8 @@ import immune
 import mailer
 import selfdev
 import mailroom
+import mailer
+import interface_language
 import memory_viz
 import panel
 import praxis_app
@@ -248,7 +250,9 @@ def _praxis_viewer(request: web.Request) -> praxis_app.Viewer | None:
 
 def _preview(e: dict, n: int = 200) -> dict:
     """Компактная карточка письма для списка (без полного тела)."""
-    return {"hash": e.get("hash"), "from": e.get("from", ""), "subject": e.get("subject", ""),
+    with interface_language.use():
+        subject = mailroom.subject_text(e)
+    return {"hash": e.get("hash"), "from": e.get("from", ""), "subject": subject,
             "status": e.get("status", ""), "date": e.get("date", ""),
             "preview": (e.get("body", "") or "")[:n], "has_draft": bool((e.get("draft") or "").strip())}
 
@@ -265,13 +269,15 @@ async def api_compose(request: web.Request):
 
 
 async def api_approve(request: web.Request):
-    """Approve Егора → mailroom SMTP-шлёт черновик (token-free). Это и есть гейт отправки."""
+    """The owner-authenticated request authorizes one attempt; presentation is UI-scoped."""
     if not _owner(request):
         return _deny()
-    h = request.match_info["hash"]
-    out = await asyncio.to_thread(mailroom.send_approved, h)
-    ok = out.startswith("Отправлено")
-    return web.json_response({"hash": h, "ok": ok, "status": out},
+    h = request.match_info['hash']
+    raw = await asyncio.to_thread(mailroom.send_approved, h)
+    out = mailer.as_delivery_result(raw)
+    ok = out.outcome == 'accepted'
+    status = out.for_language(interface_language.language())
+    return web.json_response({'hash':h, 'ok':ok, 'outcome':out.outcome, 'status':str(status)},
                              status=200 if ok else 502)
 
 

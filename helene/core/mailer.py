@@ -22,6 +22,8 @@ import ssl
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from pathlib import Path
+import frame_language
+from mail_delivery import DeliveryResult, as_delivery_result, reason_parts, reason_text
 
 # Суммарный кап на вложения (байты, до base64-накрутки ~33%+). Mailfence реально
 # принимает сильно больше, но необъявленный гигантский файл в исходящем — это не
@@ -74,45 +76,23 @@ _REFUSED = (
 
 
 def _clip_reason(text: object, limit: int = _REASON_CHARS) -> str:
-    """Причина целиком до границы слова; обрыв помечен явно."""
-    value = " ".join(str(text or "").split())
-    if len(value) <= limit:
-        return value
-    head = value[:limit]
-    space = head.rfind(" ")
-    if space > limit // 2:
-        head = head[:space]
-    return head.rstrip(" ,;:.—-") + f" […обрезано, полная причина в логе praxis-mail; кап {limit} симв.]"
+    return reason_text(**reason_parts(text, limit))
 
 
+@frame_language.pinned
 def send(to: str, subject: str, body: str, attachments: list[str] | None = None) -> str:
-    """Отправить письмо. -> человекочитаемый статус.
-
-    attachments — пути файлов, которые приложить (суммарно ≤ _ATTACH_TOTAL_MAX байт).
-    Файл, который не читается/не существует, — отказ ДО соединения, весь целиком:
-    молча отправить письмо без заявленного вложения хуже, чем не отправить ничего.
-
-    ⚠ Раньше ЛЮБОЕ исключение становилось строкой «Не отправилось: <тип>: <160 символов>».
-    Две лжи в одной строке (та же болезнь, что чинили в `agent._direct_send_outcome` и
-    `agent._clip_reason`): обрезка посреди слова, о которой нигде не сказано, и вердикт
-    «не отправилось» там, где это НЕ известно. Обрыв соединения или таймаут ПОСЛЕ того,
-    как письмо ушло в DATA, — это «не знаю, ушло ли»: сервер мог принять его и не успеть
-    ответить. Повторить вслепую по такому вердикту = второе письмо живому человеку.
-    """
+    """One SMTP attempt; coded outcome plus a str-compatible localized receipt."""
     c = _cfg()
     if not configured():
-        return "Почта не настроена (нет PRAXIS_EMAIL_ADDR/PASS)."
-    to = (to or "").strip()
-    if "@" not in to:
-        return f"Не похоже на адрес: {to!r}."
+        return DeliveryResult('not_configured')
+    to = (to or '').strip()
+    if '@' not in to:
+        return DeliveryResult('bad_address', to=to)
     msg = EmailMessage()
-    msg["From"] = c["addr"]
-    msg["To"] = to
-    msg["Subject"] = subject or "(без темы)"
-    msg.set_content(body or "")
-    # Вложения проверяются ДО соединения: каждое должно существовать и читаться,
-    # суммарно влезать в кап. Любая проблема — честный отказ по всему письму
-    # (адресат не должен получить «письмо», из которого тихо выпал файл).
+    msg['From'] = c['addr']
+    msg['To'] = to
+    msg['Subject'] = subject or frame_language.text('mail.result.no_subject')
+    msg.set_content(body or '')
     attached: list[tuple[str, int]] = []
     total = 0
     for path in (attachments or []):
@@ -120,50 +100,41 @@ def send(to: str, subject: str, body: str, attachments: list[str] | None = None)
         try:
             data = p.read_bytes()
         except OSError as e:
-            return (f"Не отправилось: вложение не читается — {p} "
-                    f"({_clip_reason(f'{type(e).__name__}: {e}')}). Письмо не уходило.")
+            return DeliveryResult('attachment_unreadable', path=str(p),
+                                  **reason_parts(f'{type(e).__name__}: {e}', _REASON_CHARS))
         total += len(data)
         if total > _ATTACH_TOTAL_MAX:
-            return (f"Не отправилось: вложения суммарно {total} байт > кап "
-                    f"{_ATTACH_TOTAL_MAX} ({', '.join(str(Path(a)) for a in attachments or [])}). "
-                    f"Письмо не уходило.")
+            return DeliveryResult('attachment_cap', total=total, cap=_ATTACH_TOTAL_MAX,
+                                  paths=tuple(str(Path(a)) for a in attachments or []))
         import mimetypes
         mime, _enc = mimetypes.guess_type(p.name)
-        main, sub = (mime or "application/octet-stream").split("/", 1)
+        main, sub = (mime or 'application/octet-stream').split('/', 1)
         msg.add_attachment(data, maintype=main, subtype=sub, filename=p.name)
         attached.append((p.name, len(data)))
-    # Ветки ответа строятся из одного источника, до try: ветка исключения
-    # «закрытие соединения» обязана собрать ту же строку, что и счастливый путь.
-    _att_line = (" Вложения: " + ", ".join(f"{n} ({sz} б)" for n, sz in attached) + "." if attached else "")
-    # На какой стадии упало: до передачи письма отправки не было по построению.
-    stage = "соединение с SMTP"
+    subject_sent = str(msg['Subject'])
+    refusals = {}
+    def message_fields():
+        return dict(to=to, subject=subject_sent, attached=tuple(attached),
+                    refused=repr(refusals) if isinstance(refusals, dict) and refusals else '')
+    stage = 'connect'
     try:
         ctx = ssl.create_default_context()
-        with SMTP_SSL(c["smtp_host"], c["smtp_port"], context=ctx, timeout=30) as s:
-            stage = "логин"
-            s.login(c["addr"], c["pw"])
-            stage = "передача письма"
-            s.send_message(msg)
-            # Сервер принял DATA. Всё, что упадёт дальше (QUIT/закрытие), доставки уже
-            # не отменяет — и не имеет права выглядеть как «не отправилось».
-            stage = "закрытие соединения"
+        with SMTP_SSL(c['smtp_host'], c['smtp_port'], context=ctx, timeout=30) as s:
+            stage = 'login'
+            s.login(c['addr'], c['pw'])
+            stage = 'transfer'
+            refusals = s.send_message(msg) or {}
+            stage = 'accepted'
     except Exception as e:
-        log.warning("send упал на стадии «%s»", stage, exc_info=True)
-        reason = _clip_reason(f"{type(e).__name__}: {e}")
-        if stage == "закрытие соединения":
-            return (f"Отправлено → {to}: «{msg['Subject']}» (сервер принял письмо{_att_line[1:] if _att_line else ""}). "
-                    f"Соединение закрылось с ошибкой уже после этого ({reason}) — "
-                    f"на доставку это не влияет, повторять НЕ надо.")
-        if stage != "передача письма" or isinstance(e, _REFUSED):
-            where = ("сервер отказался принять письмо" if isinstance(e, _REFUSED)
-                     else f"упало на стадии «{stage}», до передачи письма")
-            return f"Не отправилось ({where}): {reason}"
-        # Связь оборвалась/истекло время УЖЕ в передаче: приёмку сервер не подтвердил, но
-        # и отказа не дал. Это незнание, и выглядеть оно обязано как незнание.
-        return (f"НЕ ЗНАЮ, ушло ли письмо → {to}: связь оборвалась на передаче ({reason}). "
-                f"Сервер мог принять письмо и не успеть ответить. Прежде чем повторять — "
-                f"загляни в «Отправленные» или спроси адресата: повтор может дать второе письмо.")
-    return f"Отправлено → {to}: «{msg['Subject']}»{_att_line}"
+        log.warning('send failed at stage=%s', stage, exc_info=True)
+        reason = reason_parts(f'{type(e).__name__}: {e}', _REASON_CHARS)
+        if stage == 'accepted':
+            return DeliveryResult('accepted_close', **message_fields(), **reason)
+        if stage != 'transfer' or isinstance(e, _REFUSED):
+            kind = 'refused' if isinstance(e, _REFUSED) else 'pre_send'
+            return DeliveryResult(kind, stage=stage, **reason)
+        return DeliveryResult('unknown', **message_fields(), **reason)
+    return DeliveryResult('accepted', **message_fields())
 
 
 def _extract_body(m) -> str:
