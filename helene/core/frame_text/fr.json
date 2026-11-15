@@ -2592,5 +2592,18 @@
   "native.runner.media.1477": "{p0} s",
   "native.runner.media.1481": "Seul un aperçu isolé est disponible, plutôt que l’animation complète.",
   "native.runner.media.1482": "Les images sont indisponibles pour la vision ; ne pas en deviner le contenu.",
-  "native.runner.media.1472": " [image à {p0} s]"
+  "native.runner.media.1472": " [image à {p0} s]",
+  "native.body.system._rights.1395": "droits SYSTEM",
+  "native.body.system._rights.1395.2": "droits administrateur",
+  "native.body.system._system_via_broker.1424": "execution=system est indisponible : le trajet du courtier est désactivé et la distribution Python n’installe pas son service. Un autre service peut exister ; sa présence n’a pas été vérifiée. Utiliser execution=interactive avec les droits de l’utilisateur courant.",
+  "native.body.system._system_via_broker.1428": "Aucun outil broker_request n’est disponible pour execution=system dans le jeu actuel. Cela n’établit pas si un service est installé. Utiliser execution=interactive pour les droits de l’utilisateur courant.",
+  "native.body.system._system_via_broker.1433": "run execution=system : commande vide ; aucune demande à transmettre",
+  "native.body.system._system_via_broker.1445": "Réponse broker_request à execution=system ({p0} demandés) ; déterminer l’exécution à partir du reçu :\n",
+  "native.body.system._remote_system.1453": "run execution=system : commande vide",
+  "native.body.system._remote_system.1456": "Le propriétaire n’a pas sélectionné d’ordinateur Windows.",
+  "native.body.system._remote_system.1467": "Réponse du service de l’ordinateur Windows sélectionné ; vérifier l’exécution réelle dans le reçu :\n",
+  "native.body.system._remote_system.1460": "run execution=system : délai invalide",
+  "native.body.system._remote_system.1466": "La réponse du courtier n’a pas confirmé l’ordinateur Windows sélectionné : ",
+  "native.body.system._system_via_broker.1441": "Commande de l’agent demandant {p0} (computer, execution=system)",
+  "native.body.system._remote_system.1463": "Commande sur l’ordinateur Windows sélectionné"
 }

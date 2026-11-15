@@ -2592,5 +2592,18 @@
   "native.runner.media.1477": "{p0}s",
   "native.runner.media.1481": "Only a single preview is available, rather than the full animation.",
   "native.runner.media.1482": "Visual frames are unavailable; do not guess its contents.",
-  "native.runner.media.1472": " [frame at {p0}s]"
+  "native.runner.media.1472": " [frame at {p0}s]",
+  "native.body.system._rights.1395": "SYSTEM rights",
+  "native.body.system._rights.1395.2": "administrator rights",
+  "native.body.system._system_via_broker.1424": "execution=system is unavailable: the broker route is disabled and Python delivery does not install its service. Another service may exist; its presence has not been checked. Use execution=interactive with current-user rights.",
+  "native.body.system._system_via_broker.1428": "No broker_request tool is available for execution=system in the current toolset. This does not establish whether a service is installed. Use execution=interactive for current-user execution.",
+  "native.body.system._system_via_broker.1433": "run execution=system: empty command; there is nothing to request",
+  "native.body.system._system_via_broker.1445": "broker_request response to execution=system (requested {p0}); determine execution from the receipt:\n",
+  "native.body.system._remote_system.1453": "run execution=system: empty command",
+  "native.body.system._remote_system.1456": "The owner has not selected a Windows computer.",
+  "native.body.system._remote_system.1467": "Response from the selected Windows computer’s service; check actual execution in the receipt:\n",
+  "native.body.system._remote_system.1460": "run execution=system: invalid timeout",
+  "native.body.system._remote_system.1466": "The broker response did not confirm the selected Windows computer: ",
+  "native.body.system._system_via_broker.1441": "Agent command requesting {p0} (computer, execution=system)",
+  "native.body.system._remote_system.1463": "Command on the selected Windows computer"
 }

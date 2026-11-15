@@ -2592,5 +2592,18 @@
   "native.runner.media.1477": "{p0} 秒",
   "native.runner.media.1481": "仅有单张预览，不能查看完整动画。",
   "native.runner.media.1482": "视觉画面不可用；不要猜测其内容。",
-  "native.runner.media.1472": " [第 {p0} 秒的画面]"
+  "native.runner.media.1472": " [第 {p0} 秒的画面]",
+  "native.body.system._rights.1395": "SYSTEM 权限",
+  "native.body.system._rights.1395.2": "管理员权限",
+  "native.body.system._system_via_broker.1424": "execution=system 不可用：代理路由已禁用，Python 发行版不会安装其服务。其他服务可能存在；此处未检查其存在情况。请使用当前用户权限的 execution=interactive。",
+  "native.body.system._system_via_broker.1428": "当前工具集中没有可用于 execution=system 的 broker_request。这不能确定是否已安装服务。要以当前用户权限执行，请使用 execution=interactive。",
+  "native.body.system._system_via_broker.1433": "run execution=system：命令为空，没有可提交的请求",
+  "native.body.system._system_via_broker.1445": "broker_request 对 execution=system 的响应（请求 {p0}）；请根据回执判断执行情况：\n",
+  "native.body.system._remote_system.1453": "run execution=system：命令为空",
+  "native.body.system._remote_system.1456": "所有者尚未选择 Windows 计算机。",
+  "native.body.system._remote_system.1467": "所选 Windows 计算机服务的响应；请根据回执核对实际执行情况：\n",
+  "native.body.system._remote_system.1460": "run execution=system：等待时限无效",
+  "native.body.system._remote_system.1466": "代理响应未确认所选 Windows 计算机：",
+  "native.body.system._system_via_broker.1441": "智能体命令，请求 {p0}（computer，execution=system）",
+  "native.body.system._remote_system.1463": "在所选 Windows 计算机上执行的命令"
 }

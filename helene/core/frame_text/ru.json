@@ -2592,5 +2592,18 @@
   "native.runner.media.1477": "{p0} с",
   "native.runner.media.1481": "Доступно только отдельное превью, не вся анимация.",
   "native.runner.media.1482": "Кадры для зрения недоступны; не описывай содержимое по догадке.",
-  "native.runner.media.1472": " [кадр {p0} с]"
+  "native.runner.media.1472": " [кадр {p0} с]",
+  "native.body.system._rights.1395": "права СИСТЕМЫ",
+  "native.body.system._rights.1395.2": "права администратора",
+  "native.body.system._system_via_broker.1424": "execution=system недоступен: маршрут брокера отключён, Python-поставка не устанавливает его службу. Другая служба может существовать; это не проверка её наличия. Используй execution=interactive с правами текущего пользователя.",
+  "native.body.system._system_via_broker.1428": "В текущем наборе инструментов нет доступного broker_request для execution=system. Это не проверка наличия службы. Команда с правами текущего пользователя — execution=interactive.",
+  "native.body.system._system_via_broker.1433": "run execution=system: пустая команда — нечего поручать службе",
+  "native.body.system._system_via_broker.1445": "Ответ broker_request на execution=system (запрошены {p0}); факт исполнения определяется по квитанции:\n",
+  "native.body.system._remote_system.1453": "run execution=system: пустая команда",
+  "native.body.system._remote_system.1456": "Windows-компьютер не выбран владельцем",
+  "native.body.system._remote_system.1467": "Ответ сервиса выбранного Windows-компьютера; фактическое исполнение проверь по квитанции:\n",
+  "native.body.system._remote_system.1460": "run execution=system: неверный срок ожидания",
+  "native.body.system._remote_system.1466": "Ответ брокера не подтвердил выбранный Windows-компьютер: ",
+  "native.body.system._system_via_broker.1441": "Команда агента, запрошены {p0} (computer, execution=system)",
+  "native.body.system._remote_system.1463": "Команда на выбранном Windows-компьютере"
 }

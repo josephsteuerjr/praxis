@@ -50,7 +50,8 @@ class SystemRouteTest(unittest.TestCase):
 
     def test_without_broker_says_so_in_words(self):
         out = body._system_via_broker(self._agent(None), {"command": "whoami"})
-        self.assertIn("служба не установлена", out)
+        self.assertIn("нет доступного broker_request", out)
+        self.assertIn("не проверка наличия службы", out)
         self.assertIn("execution=interactive", out)
 
     def test_empty_command_is_refused_before_asking(self):

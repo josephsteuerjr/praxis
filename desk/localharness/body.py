@@ -1385,14 +1385,12 @@ def _install_absent(agent_mod) -> None:
 
 #: Что сказать агенту про маршрут `execution=system` рядом со строкой тела.
 SYSTEM_ROUTE_NOTE = (
-    "system в Hélène — не маршрут тела: `run` с execution=system уходит поручением службе "
-    "(broker_request op=exec), и служба сразу выполняет его правами СИСТЕМЫ и отдаёт "
-    "квитанцию. Нужна служба и включённый владельцем тумблер нулевой сессии.")
+    'При поддерживаемом маршруте execution=system отправляет run службе через broker_request op=exec. Нужны установленная служба и явно включённое владельцем разрешение. Это не обычный интерактивный маршрут тела.')
 
 
-def _rights() -> str:
+def _rights(agent_mod=None) -> str:
     """Чьими правами брокер исполняет поручение на этой платформе."""
-    return "правами СИСТЕМЫ" if sys.platform == "win32" else "правами администратора"
+    return _body_word(agent_mod, 'system._rights.1395', 'права СИСТЕМЫ') if sys.platform == "win32" else _body_word(agent_mod, 'system._rights.1395.2', 'права администратора')
 
 
 def _system_shell(command: str, platform: str | None = None) -> tuple[str, list[str]]:
@@ -1409,6 +1407,18 @@ def _system_shell(command: str, platform: str | None = None) -> tuple[str, list[
     return "/bin/sh", ["-c", command]
 
 
+def _body_pinned(function):
+    from contextlib import nullcontext
+    from functools import wraps
+    @wraps(function)
+    def invoke(agent_mod, *args, **kwargs):
+        language=getattr(agent_mod,'frame_language',None)
+        with (language.pin() if getattr(agent_mod,'FRAME_TEXT_BOUNDARIES_API',0)==1 and language else nullcontext()):
+            return function(agent_mod,*args,**kwargs)
+    return invoke
+
+
+@_body_pinned
 def _system_via_broker(agent_mod, kwargs: dict) -> str:
     """`computer run execution=system` — поручением брокеру службы (1.2.3).
 
@@ -1421,16 +1431,14 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
     два пути.
     """
     if os.environ.get('HELENE_BROKER_DISABLED') == '1':
-        return 'execution=system недоступен: брокер исключён из Python-поставки. Используй execution=interactive с правами текущего пользователя.'
+        return _body_word(agent_mod, 'system._system_via_broker.1424', 'execution=system недоступен: маршрут брокера отключён, Python-поставка не устанавливает его службу. Другая служба может существовать; это не проверка её наличия. Используй execution=interactive с правами текущего пользователя.')
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     hand = impl.get("broker_request") if isinstance(impl, dict) else None
     if not callable(hand):
-        return ("Права СИСТЕМЫ в Hélène — поручением службе (broker_request op=exec), а "
-                "брокера сейчас нет: служба не установлена. Команду правами владельца — "
-                "execution=interactive.")
+        return (_body_word(agent_mod, 'system._system_via_broker.1428', 'В текущем наборе инструментов нет доступного broker_request для execution=system. Это не проверка наличия службы. Команда с правами текущего пользователя — execution=interactive.'))
     command = str(kwargs.get("command") or "").strip()
     if not command:
-        return "run execution=system: пустая команда — нечего поручать службе"
+        return _body_word(agent_mod, 'system._system_via_broker.1433', 'run execution=system: пустая команда — нечего поручать службе')
     shell, args = _system_shell(command)
     try:
         timeout_sec = max(1, int(kwargs.get("timeout_ms") or 0) // 1000) or None
@@ -1438,33 +1446,34 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
         timeout_sec = None
     ask = {"action": "ask", "op": "exec", "cmd": shell, "args": args,
            "why": str(kwargs.get("goal") or kwargs.get("why") or
-                      f"команда агента {_rights()} (рука computer, execution=system)")[:300]}
+                      _body_word(agent_mod, 'system._system_via_broker.1441', 'Команда агента, запрошены {p0} (computer, execution=system)', p0=f'{_rights(agent_mod)}'))[:300]}
     if timeout_sec:
         ask["timeout_sec"] = timeout_sec
     receipt = hand(**ask)
-    return (f"execution=system ушёл поручением службе (исполняет служба {_rights()}):\n"
+    return (_body_word(agent_mod, 'system._system_via_broker.1445', 'Ответ broker_request на execution=system (запрошены {p0}); факт исполнения определяется по квитанции:\n', p0=f'{_rights(agent_mod)}')
             + str(receipt))
 
 
-def _remote_system(kwargs: dict) -> str:
+@_body_pinned
+def _remote_system(agent_mod, kwargs: dict) -> str:
     """Windows System belongs to the selected desktop, never the VPS host broker."""
     command = str(kwargs.get('command') or '').strip()
     if not command:
-        return 'run execution=system: пустая команда'
+        return _body_word(agent_mod, 'system._remote_system.1453', 'run execution=system: пустая команда')
     device = _settings()[2]
     if not device:
-        return 'Windows-компьютер не выбран владельцем'
+        return _body_word(agent_mod, 'system._remote_system.1456', 'Windows-компьютер не выбран владельцем')
     try:
         seconds = max(1, min(90, int(kwargs.get('timeout_ms') or 60000) // 1000))
     except (ValueError, TypeError):
-        return 'run execution=system: неверный срок ожидания'
+        return _body_word(agent_mod, 'system._remote_system.1460', 'run execution=system: неверный срок ожидания')
     result = _raw_request('POST', '/v1/controller/' + device + '/broker', {
         'op': 'exec', 'shell': 'powershell', 'command': command,
-        'why': str(kwargs.get('goal') or kwargs.get('why') or 'Команда на выбранном Windows-компьютере')[:300],
+        'why': str(kwargs.get('goal') or kwargs.get('why') or _body_word(agent_mod, 'system._remote_system.1463', 'Команда на выбранном Windows-компьютере'))[:300],
         'timeout_sec': seconds}, timeout=seconds + 5)
     if result.get('host') != 'windows' or result.get('device_id') != device:
-        return 'Windows-брокер не подтвердил выполнение: ' + str(result)
-    return 'execution=system — служба выбранного Windows-компьютера:\n' + str(result.get('receipt'))
+        return _body_word(agent_mod, 'system._remote_system.1466', 'Ответ брокера не подтвердил выбранный Windows-компьютер: ') + str(result)
+    return _body_word(agent_mod, 'system._remote_system.1467', 'Ответ сервиса выбранного Windows-компьютера; фактическое исполнение проверь по квитанции:\n') + str(result.get('receipt'))
 
 
 def _body_word(agent_mod, key, legacy, **values):
@@ -1595,7 +1604,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
             if os.environ.get('HELENE_BROKER_DISABLED') == '1':
                 return _body_refusal(agent_mod,"system_disabled",'execution=system недоступен: брокер исключён из Python-поставки.')
             if isinstance(_BODY, RemoteBody):
-                return _remote_system(kwargs)
+                return _remote_system(agent_mod, kwargs)
             return _system_via_broker(agent_mod, kwargs)
         if not STATE.get("available") or _BODY is None:
             logs = ", ".join(STATE.get("logs") or []) or _body_word(agent_mod,"no_logs","нет")
