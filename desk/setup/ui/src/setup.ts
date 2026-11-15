@@ -1,10 +1,13 @@
-import { t as uiText } from "../../../lang/lang";
+import { t as uiText, locale, localePreference, type Lang } from "../../../lang/lang";
 // Состояние установки и мост к оболочке.
 //
 // Всё, что человек вводит по сценам, живёт здесь одним объектом; установка в
 // конце отдаёт его оболочке целиком. В браузерном превью оболочки нет —
 // команды отвечают заглушками, чтобы сцены можно было смотреть и править.
 import soulCanon from "../../../resources/SOUL.md?raw";
+import soulEnglish from "../../../resources/SOUL.en.md?raw";
+import soulFrench from "../../../resources/SOUL.fr.md?raw";
+import soulChinese from "../../../resources/SOUL.zh.md?raw";
 
 export type Provider = "api" | "anthropic" | "chatgpt" | "local";
 export type Effort = "" | "low" | "medium" | "high" | "xhigh";
@@ -27,6 +30,9 @@ export type AgentMode = "sandbox" | "interactive";
 export interface Setup {
   agent: string;
   owner: string;
+  lang: Lang | "";
+  frame_language: Lang;
+  living_prose: boolean;
   constitution: string;
   accepted: boolean;
   provider: Provider;
@@ -147,6 +153,9 @@ export interface Progress {
 export const setup: Setup = {
   agent: "",
   owner: "",
+  lang: localePreference(),
+  frame_language: locale(),
+  living_prose: true,
   constitution: "",
   accepted: false,
   provider: "api",
@@ -203,10 +212,12 @@ export function isMac(): boolean {
 /** Каноническая конституция с подставленными именами (тот же текст, что читает boot.py).
  *  Замена — функцией, а не строкой: в строке замены `$&`, `$\``, `$'` и `$$` —
  *  управляющие, и имя агента «$&» оставляло в принятой конституции живой {{agent}}. */
-export function constitutionFor(agent: string, owner: string): string {
-  const a = agent.trim() || "Агент";
-  const o = owner.trim() || "владелец";
-  return soulCanon.replace(/\{\{agent\}\}/g, () => a).replace(/\{\{owner\}\}/g, () => o);
+export function constitutionFor(agent: string, owner: string, language: Lang = setup.frame_language): string {
+  const stock = { ru: soulCanon, en: soulEnglish, fr: soulFrench, zh: soulChinese }[language];
+  const fallback = { ru: ["Агент", "владелец"], en: ["Agent", "owner"], fr: ["Agent", "propriétaire"], zh: ["智能体", "所有者"] }[language];
+  const a = agent.trim() || fallback[0];
+  const o = owner.trim() || fallback[1];
+  return stock.replace(/\{\{agent\}\}/g, () => a).replace(/\{\{owner\}\}/g, () => o);
 }
 
 const inTauri = "__TAURI_INTERNALS__" in window;

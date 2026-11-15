@@ -224,6 +224,12 @@ const SKIP_FROM_PAYLOAD: [&str; 6] = [
 pub struct Setup {
     pub agent: String,
     pub owner: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub living_prose: Option<bool>,
     pub constitution: String,
     pub accepted: bool,
     pub provider: String,
@@ -1160,6 +1166,15 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "setup_complete": true,
         "installed": { "version": VERSION, "service": s.wants_service() },
     });
+    if let Some(language) = &s.lang {
+        cfg["lang"] = language.clone().into();
+    }
+    if let Some(language) = &s.frame_language {
+        cfg["agent"]["frame_language"] = language.clone().into();
+    }
+    if let Some(enabled) = s.living_prose {
+        cfg["agent"]["living_prose"] = enabled.into();
+    }
     if !relay.is_null() {
         cfg["relay"] = relay;
     }
@@ -1174,9 +1189,9 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
 /// А вот блоки `sandbox` и `service` целиком визард НЕ переписывает: в них
 /// живут и чужие решения владельца (`sandbox.network`, `service.broker`).
 /// Их он сливает по одному полю ниже.
-const WIZARD_KEYS: [&str; 12] = [
+const WIZARD_KEYS: [&str; 13] = [
     "mode", "agent_mode", "python", "app", "runner", "tree", "code",
-    "agent", "owner", "model", "setup_complete", "installed",
+    "agent", "owner", "model", "setup_complete", "installed", "lang",
 ];
 
 /// Движок, который владелец поставил вместо штатного, — оставить его.
@@ -1234,7 +1249,7 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
             if (k == "tree" || k == "code") && out.get(k).and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty()) {
                 continue;
             }
-            if k == "model" {
+            if k == "model" || k == "agent" {
                 continue; // ниже, по полям
             }
             if k == "runner" && own_runner.is_some() {
@@ -1258,6 +1273,15 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
             model.insert(k.clone(), v.clone());
         }
         out.insert("model".into(), serde_json::Value::Object(model));
+    }
+    // Language/prose and extension metadata belong to the agent independently
+    // of its name. Older installer clients omit these fields.
+    if let Some(serde_json::Value::Object(fresh_agent)) = new.get("agent") {
+        let mut agent = out.get("agent").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        for (key, value) in fresh_agent {
+            agent.insert(key.clone(), value.clone());
+        }
+        out.insert("agent".into(), serde_json::Value::Object(agent));
     }
     // A non-relay voice still needs the owner's auxiliary image relay.
     match new.get("relay") {
@@ -1804,6 +1828,17 @@ pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> O
     Some(Setup {
         agent,
         owner,
+        lang: cfg.get("lang").and_then(|v| v.as_str())
+            .filter(|v| v.is_empty() || ["ru", "en", "fr", "zh"].contains(v))
+            .map(str::to_string),
+        frame_language: match cfg.get("agent").and_then(|v| v.get("frame_language")) {
+            Some(value) => value.as_str().filter(|v| ["ru", "en", "fr", "zh"].contains(v)).map(str::to_string),
+            None => Some("ru".to_string()),
+        },
+        living_prose: match cfg.get("agent").and_then(|v| v.get("living_prose")) {
+            Some(value) => value.as_bool(),
+            None => Some(true),
+        },
         constitution: soul.to_string(),
         accepted: true,
         provider: provider.to_string(),
@@ -2719,6 +2754,12 @@ pub fn remove_service(name: &str) -> Result<String, String> {
 /// своих проверок не было вовсе, и пустая конституция становилась вечной
 /// (boot.ensure_layout пишет её только когда файла НЕТ, а он есть — пустой).
 fn validate_setup(s: &Setup) -> Result<(), String> {
+    if s.lang.as_deref().is_some_and(|v| !v.is_empty() && !["ru", "en", "fr", "zh"].contains(&v)) {
+        return Err("Unsupported interface language (ru/en/fr/zh)".into());
+    }
+    if s.frame_language.as_deref().is_some_and(|v| !["ru", "en", "fr", "zh"].contains(&v)) {
+        return Err("Unsupported agent context language (ru/en/fr/zh)".into());
+    }
     if !s.accepted {
         return Err("конституция не принята".into());
     }
@@ -5296,6 +5337,9 @@ mod tests {
         Setup {
             agent: "Вера".into(),
             owner: "Егор".into(),
+            lang: None,
+            frame_language: None,
+            living_prose: None,
             constitution: "Текст".into(),
             accepted: true,
             provider: provider.into(),
@@ -5314,6 +5358,67 @@ mod tests {
             dir: String::new(),
             scope: String::new(),
             carry_from: String::new(),
+        }
+    }
+
+    #[test]
+    fn language_settings_axes_and_unowned_agent_fields_survive_merge() {
+        for ui in ["ru", "en", "fr", "zh"] {
+            for frame in ["ru", "en", "fr", "zh"] {
+                let mut s = setup_for("api");
+                s.lang = Some(ui.into());
+                s.frame_language = Some(frame.into());
+                s.living_prose = Some(false);
+                assert!(validate_setup(&s).is_ok());
+                let old = serde_json::json!({"lang":"ru","agent":{
+                    "name":"Previous","frame_language":"ru","living_prose":true,
+                    "custom":{"literal":"AUTHORED 日本語 $&"}}});
+                let merged = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+                assert_eq!(merged["lang"], ui);
+                assert_eq!(merged["agent"]["frame_language"], frame);
+                assert_eq!(merged["agent"]["living_prose"], false);
+                assert_eq!(merged["agent"]["custom"]["literal"], "AUTHORED 日本語 $&");
+            }
+        }
+        let s = setup_for("api"); // older clients omit language fields
+        let payload = serde_json::to_value(&s).unwrap();
+        for key in ["lang","frame_language","living_prose"] { assert!(payload.get(key).is_none()); }
+        let legacy: Setup = serde_json::from_value(payload).unwrap();
+        let old = serde_json::json!({"lang":"en","agent":{
+            "name":"Previous","frame_language":"fr","living_prose":false,"custom":123}});
+        let out = merge_config(Some(old), config_json(&legacy,None,RELAY_PORT), &legacy);
+        assert_eq!(out["lang"],"en");
+        assert_eq!(out["agent"]["frame_language"],"fr");
+        assert_eq!(out["agent"]["living_prose"],false);
+        assert_eq!(out["agent"]["custom"],123);
+    }
+
+    #[test]
+    fn language_settings_installed_choices_roundtrip_without_changing_soul() {
+        let mut config = config_json(&setup_for("api"),None,RELAY_PORT);
+        config["lang"]="en".into();
+        config["agent"]["frame_language"]="zh".into();
+        config["agent"]["living_prose"]=false.into();
+        let raw="AUTHORED Русский Français 中文 $&";
+        let carried=setup_from_installed(&config,raw,"synthetic-no-io").unwrap();
+        assert_eq!(carried.lang.as_deref(),Some("en"));
+        assert_eq!(carried.frame_language.as_deref(),Some("zh"));
+        assert_eq!(carried.living_prose,Some(false));
+        assert_eq!(carried.constitution,raw);
+        config["agent"].as_object_mut().unwrap().remove("frame_language");
+        config["agent"].as_object_mut().unwrap().remove("living_prose");
+        let legacy=setup_from_installed(&config,raw,"synthetic-no-io").unwrap();
+        assert_eq!(legacy.frame_language.as_deref(),Some("ru"));
+        assert_eq!(legacy.living_prose,Some(true));
+    }
+
+    #[test]
+    fn language_settings_reject_invalid_choices_before_installation() {
+        let mut s=setup_for("api");
+        s.lang=Some("de".into());assert!(validate_setup(&s).is_err());
+        s.lang=Some("".into());assert!(validate_setup(&s).is_ok());
+        for invalid in ["","zh-Hant","DE","../ru"] {
+            s.frame_language=Some(invalid.into());assert!(validate_setup(&s).is_err());
         }
     }
 

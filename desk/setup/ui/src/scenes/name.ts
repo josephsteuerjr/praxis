@@ -1,11 +1,13 @@
-import { t as uiText } from "../../../../lang/lang";
+import { t as uiText, type Lang } from "../../../../lang/lang";
 // Сцена «Имя»: как назвать агента и как зовут владельца.
 import { FormScene } from "./base";
-import { el, explain, field } from "./form";
+import { el, explain, field, toggle } from "./form";
 import { setup } from "../setup";
 
 export class NameScene extends FormScene {
   private agentInput!: HTMLInputElement;
+  private frameSelect: HTMLSelectElement;
+  private proseSwitch: HTMLButtonElement;
 
   constructor(root: HTMLElement) {
     super(root);
@@ -49,7 +51,27 @@ export class NameScene extends FormScene {
         uiText("ui.setup.ui.src.scenes.name.061c3ecd57"),
       ),
     );
-    this.mount(head, grid, signature, notes);
+    const language = el("label", "field");
+    language.append(el("span", "field-label", uiText("language.frame")));
+    this.frameSelect = el("select", "field-input");
+    this.frameSelect.setAttribute("data-control", "");
+    this.frameSelect.setAttribute("aria-label", uiText("language.frame"));
+    for (const [value, title] of [["ru", "Русский"], ["en", "English"], ["fr", "Français"], ["zh", "中文（简体）"]]) {
+      const option = el("option", "", title);option.value = value;this.frameSelect.append(option);
+    }
+    this.frameSelect.onchange = () => { setup.frame_language = this.frameSelect.value as Lang; };
+    language.append(this.frameSelect, el("span", "field-hint", uiText("language.frame_hint")));
+    const expression = el("div", "field");
+    this.proseSwitch = toggle({label: uiText("language.living_prose"), value: setup.living_prose,
+      onChange: value => { setup.living_prose = value; }});
+    expression.append(this.proseSwitch, el("span", "field-hint", uiText("language.living_prose_hint")));
+    const choices = el("div", "form-grid two");choices.append(language, expression);
+    this.mount(head, grid, signature, choices, notes);
+  }
+
+  protected beforeEnter() {
+    this.frameSelect.value = setup.frame_language;
+    this.proseSwitch.setAttribute("aria-checked", String(setup.living_prose));
   }
 
   protected onEntered() {

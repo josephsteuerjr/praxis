@@ -8,6 +8,7 @@ export class ConstitutionScene extends FormScene {
   private head: HTMLElement;
   private editor: HTMLTextAreaElement;
   private touched = false;
+  private generated: string | null = null;
   private accept: HTMLElement;
 
   constructor(root: HTMLElement) {
@@ -45,10 +46,11 @@ export class ConstitutionScene extends FormScene {
   protected beforeEnter() {
     // Имя не склоняем кодом: заголовок без него, имя живёт в самом тексте.
     this.head.replaceChildren(el("span", "line", uiText("ui.setup.ui.src.scenes.constitution.8a9346b6c0")));
-    if (!this.touched) {
+    if (!this.touched && (this.generated === null ? !setup.constitution.trim() : setup.constitution === this.generated)) {
       setup.constitution = constitutionFor(setup.agent, setup.owner);
-      this.editor.value = setup.constitution;
+      this.generated = setup.constitution;
     }
+    this.editor.value = setup.constitution;
   }
 
   validate(): string | null {
