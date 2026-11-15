@@ -15,6 +15,7 @@ room-profile может явно включить engagement=reflective: тог�
 Перед запуском нужен логин: python mtproto_login.py (см. README).
 """
 from __future__ import annotations
+import frame_language
 import asyncio, concurrent.futures, contextvars, datetime, functools, hashlib, inspect, json, logging, mimetypes, os, re, tempfile, threading, time, types
 from collections import defaultdict, deque
 from contextvars import ContextVar
@@ -4125,6 +4126,7 @@ def _one_sent_message_id(sent) -> int:
     return ids[0]
 
 
+@frame_language.pinned
 def _direct_outbox_result(entry: dict, *, label: str = "") -> str:
     """Deterministic tool receipt derived only from the durable acceptance row."""
 
@@ -4143,16 +4145,14 @@ def _direct_outbox_result(entry: dict, *, label: str = "") -> str:
         kind = str(receipt.get("media_kind")
                    or payload.get("media_kind")
                    or telegram_outbox.LEGACY_MEDIA_KIND)
-        noun = {"photo": "фото", "audio": "голосовое" if receipt.get("voice_note")
-                or payload.get("voice_note") else "аудио"}.get(kind, "документ")
+        noun = {"photo": frame_language.text('helper.mtproto_runner._direct_outbox_result.4146'), "audio": frame_language.text('helper.mtproto_runner._direct_outbox_result.4146.2') if receipt.get("voice_note")
+                or payload.get("voice_note") else frame_language.text('helper.mtproto_runner._direct_outbox_result.4147.2')}.get(kind, frame_language.text('helper.mtproto_runner._direct_outbox_result.4147'))
         return (
-            f"Отправлено: {noun} → {destination} "
-            f"(chat_id={selector}, message_id={message_id}): {filename}"
+            frame_language.text('helper.mtproto_runner._direct_outbox_result.4149', p0=f'{noun}', p1=f'{destination}', p2=f'{selector}', p3=f'{message_id}', p4=f'{filename}')
         )
     text = str((entry.get("payload") or {}).get("text") or "")
     return (
-        f"Отправлено → {destination} "
-        f"(chat_id={selector}, message_id={message_id}): {text[:60]}"
+        frame_language.text('helper.mtproto_runner._direct_outbox_result.4154', p0=f'{destination}', p1=f'{selector}', p2=f'{message_id}', p3=text[:60] + ('…' if len(text) > 60 else ''))
     )
 
 
@@ -6030,24 +6030,25 @@ def _sync_get_id(name_or_username: str):
     PASS 16.2: + кэш недавних отправителей — забаненный спамер в участниках уже не
     числится, но его id пришёл в апдейте и не должен «исчезать» для неё (инцидент 09.07:
     «видишь айди спамера? Я нет»). Глубже RAM-кэша — тул read_log."""
+    @frame_language.pinned
     async def _coro():
         try:
             ent = await _resolve_entity(name_or_username)
         except ResolveDenied as e:
             fresh = _recent_senders_hits(str(name_or_username))
             if fresh:
-                return ("Диалога нет, но среди недавних отправителей моих чатов: "
-                        + "; ".join(fresh) + ". (кэш с рестарта; глубже — read_log)")
+                return (frame_language.text('helper.mtproto_runner._coro.6039')
+                        + "; ".join(fresh) + frame_language.text('helper.mtproto_runner._coro.6040'))
             hits = await _room_participants_search(str(name_or_username))
             if hits:
-                return ("Личного диалога нет, но среди участников общих комнат: "
-                        + "; ".join(hits) + ". Для отправки нужен точный @username/id.")
+                return (frame_language.text('helper.mtproto_runner._coro.6043')
+                        + "; ".join(hits) + frame_language.text('helper.mtproto_runner._coro.6044'))
             return str(e)
         if ent is None:
             fresh = _recent_senders_hits(str(name_or_username))
             if fresh:
-                return ("В диалогах не найдено, но среди недавних отправителей: "
-                        + "; ".join(fresh) + ". (кэш с рестарта; глубже — read_log)")
+                return (frame_language.text('helper.mtproto_runner._coro.6049')
+                        + "; ".join(fresh) + frame_language.text('helper.mtproto_runner._coro.6050'))
         return _ent_label(ent) if ent is not None else None
     return _threadsafe_result(_coro, 20)
 
@@ -6056,6 +6057,7 @@ def _sync_resolve_id(ref):
     """PASS 12.0.b: тот же богатый резолвер, что и на отправке (_resolve_entity), но отдаёт id.
     Раньше постановка задачи звала только get_entity (одна попытка) — и отбивалась там, где
     отправка бы дорезолвила через int()/перебор диалогов. Теперь оба конца резолвят одинаково."""
+    @frame_language.pinned
     async def _coro():
         ent = await _resolve_entity(ref)
         return getattr(ent, "id", None) if ent is not None else None
@@ -6069,6 +6071,7 @@ def _sync_search_chats(query: str) -> str:
     строкам. Прежняя подстрочная сверка не могла совпасть между алфавитами: запрос
     «уробор» против имени «Ouroboros AI» давал «нет» при живой комнате в её же памяти.
     """
+    @frame_language.pinned
     async def _coro():
         q, out = rooms.latin_fold(query).strip(), []
         if not q:
@@ -6084,12 +6087,13 @@ def _sync_search_chats(query: str) -> str:
 
 def _sync_search_private_messages(query: str, limit: int = 20) -> str:
     """Search message text across Praxis's Telegram DMs, never groups/channels."""
+    @frame_language.pinned
     async def _coro():
         from telethon.tl.types import PeerUser
 
         q = str(query or "").strip()
         if not q:
-            return "Нужна непустая строка поиска."
+            return frame_language.text('helper.mtproto_runner._coro.6092')
         cap = max(1, min(40, int(limit or 20)))
         rows = []
         # Telegram global search may return groups as well; inspect a wider window and
@@ -6117,9 +6121,8 @@ def _sync_search_private_messages(query: str, limit: int = 20) -> str:
             if len(rows) >= cap:
                 break
         if not rows:
-            return "(в личках ничего не найдено)"
-        return ("[PRIVATE CROSS-CHAT SEARCH — внутренний материал; не цитируй чувствительные "
-                "личные сведения аудитории без права их получить]\n" + "\n".join(rows))
+            return frame_language.text('helper.mtproto_runner._coro.6120')
+        return (frame_language.text('helper.mtproto_runner._coro.6121') + "\n".join(rows))
     return _threadsafe_result(_coro, 60)
 
 
@@ -6220,6 +6223,7 @@ def _ent_label(ent) -> str:
     return f"{name} ({', '.join(bits)})"
 
 
+@frame_language.pinned
 def _book_row_label(row: dict) -> str:
     name = str(row.get("display_name") or "?").strip()
     bits = []
@@ -6231,10 +6235,11 @@ def _book_row_label(row: dict) -> str:
         days = max(0, int((time.time() - float(seen or 0)) // 86400)) if seen else None
     except (TypeError, ValueError):
         days = None
-    when = ("сегодня" if days == 0 else f"{days} дн. назад") if days is not None else "давно"
-    return f"{name} ({', '.join(bits)}; виделись {when})"
+    when = (frame_language.text('helper.mtproto_runner._book_row_label.6234.2') if days == 0 else frame_language.text('helper.mtproto_runner._book_row_label.6234.3', p0=f'{days}')) if days is not None else frame_language.text('helper.mtproto_runner._book_row_label.6234')
+    return frame_language.text('helper.mtproto_runner._book_row_label.6235', p0=f'{name}', p1=f"{', '.join(bits)}", p2=f'{when}')
 
 
+@frame_language.pinned
 def _ambiguous_book(ref: str, book: list[dict]) -> str | None:
     """Текст отказа, если по имени нашлось несколько РАВНЫХ кандидатов; иначе None.
 
@@ -6270,10 +6275,10 @@ def _ambiguous_book(ref: str, book: list[dict]) -> str | None:
         return None
     listed = ties if len(ties) >= 2 else [book[0]] + ties
     rows = "; ".join(_book_row_label(row) for row in listed[:6])
-    return (f"«{ref}» — это несколько людей в моей адресной книге, наугад не пишу: {rows}. "
-            f"Назови адресата по id или @username.")
+    return (frame_language.text('helper.mtproto_runner._ambiguous_book.6273', p0=f'{ref}', p1=f'{rows}'))
 
 
+@frame_language.pinned
 async def _resolve_entity(ref):
     """Резолв entity. Видимость (07.07, вечер): ТОЧНЫЙ адрес (id/@username) — Telegram-резолв,
     как раньше; ИМЯ — только среди СВОИХ диалогов. Раньше имя проваливалось в get_entity →
@@ -6377,8 +6382,7 @@ async def _resolve_entity(ref):
                      ref, _ent_label(ent), len(matches))
         return ent
     raise ResolveDenied(
-        f"«{ref_s}» пока нет в моей адресной книге, контактах или диалогах. Нужен один "
-        "первичный @username/id; после первого контакта имя запомню сама.")
+        frame_language.text('helper.mtproto_runner._resolve_entity.6380', p0=f'{ref_s}'))
 
 
 _TG_INVITE_RE = re.compile(r"^[A-Za-z0-9_-]{8,}$")
@@ -7379,15 +7383,16 @@ async def _leave_chat_async(target: str, *, principal_id: object = None,
     return result
 
 
+@frame_language.pinned
 def _membership_receipt(action: str, result: dict) -> str:
     status = result.get("status")
     if status == "request_sent":
-        return f"Заявка на вход отправлена → {result.get('title')} (status=request_sent)."
-    verb = "Вошла" if action == "join" else "Вышла"
+        return frame_language.text('helper.mtproto_runner._membership_receipt.7385', p0=f"{result.get('title')}")
+    verb = frame_language.text('helper.mtproto_runner._membership_receipt.7386') if action == "join" else frame_language.text('helper.mtproto_runner._membership_receipt.7386.2')
     if status == "already_joined":
-        verb = "Уже состою"
+        verb = frame_language.text('helper.mtproto_runner._membership_receipt.7388')
     elif status == "already_left":
-        verb = "Уже вышла"
+        verb = frame_language.text('helper.mtproto_runner._membership_receipt.7390')
     pending = " local_projection=pending" if result.get("projection") == "pending" else ""
     return (
         f"{verb} → {result.get('title')} "
@@ -7445,14 +7450,15 @@ def _sync_telegram_account(**arguments) -> str:
     return json.dumps(result, ensure_ascii=False, sort_keys=True)
 
 
+@frame_language.pinned
 async def _set_profile_photo_async(path: str) -> str:
     from telethon.tl.functions.photos import UploadProfilePhotoRequest
     p = Path(str(path).strip())
     if not p.is_file():
-        return f"(нет файла: {path})"
+        return frame_language.text('helper.mtproto_runner._set_profile_photo_async.7452', p0=f'{path}')
     uploaded = await client.upload_file(str(p))
     await client(UploadProfilePhotoRequest(file=uploaded))
-    return f"Аватарка обновлена ({p.name})."
+    return frame_language.text('helper.mtproto_runner._set_profile_photo_async.7455', p0=f'{p.name}')
 
 
 def _sync_set_avatar(path: str) -> str:
@@ -7462,6 +7468,7 @@ def _sync_set_avatar(path: str) -> str:
     return _threadsafe_result(lambda: _set_profile_photo_async(str(path)), 120)
 
 
+@frame_language.pinned
 async def _update_profile_async(about: str, first_name: str, last_name: str) -> str:
     from telethon.tl.functions.account import UpdateProfileRequest
 
@@ -7475,10 +7482,10 @@ async def _update_profile_async(about: str, first_name: str, last_name: str) -> 
           "last_name": _field(last_name)}
     kw = {k: v for k, v in kw.items() if v is not None}
     if not kw:
-        return "Нечего менять."
+        return frame_language.text('helper.mtproto_runner._update_profile_async.7478')
     await client(UpdateProfileRequest(**kw))
-    changed = ", ".join(f"{k}={'(очищено)' if v == '' else v}" for k, v in kw.items())
-    return f"Профиль обновлён: {changed}."
+    changed = ", ".join(f"{k}={frame_language.text('helper.mtproto_runner._update_profile_async.7480') if v == '' else v}" for k, v in kw.items())
+    return frame_language.text('helper.mtproto_runner._update_profile_async.7481', p0=f'{changed}')
 
 
 def _sync_update_profile(about: str = "", first_name: str = "", last_name: str = "") -> str:
@@ -7489,6 +7496,7 @@ def _sync_update_profile(about: str = "", first_name: str = "", last_name: str =
         lambda: _update_profile_async(about, first_name, last_name), 120)
 
 
+@frame_language.pinned
 async def _react_async(chat, message_id: int, emoji: str, remove: bool) -> str:
     from telethon.tl.functions.messages import SendReactionRequest
     from telethon.tl.types import ReactionEmoji
@@ -7499,27 +7507,29 @@ async def _react_async(chat, message_id: int, emoji: str, remove: bool) -> str:
     else:
         current = agent._active_chat()
         if current is None:
-            return "(нет текущего чата — укажи chat)"
+            return frame_language.text('helper.mtproto_runner._react_async.7502')
         route = _route_from_reference(current)
         ent = _meta.get(route.conversation_id, {}).get("entity") or await _resolve_entity(route.peer_id)
     if ent is None:
-        return f"(не найден чат: {chat or 'текущий'})"
+        return frame_language.text('helper.mtproto_runner._react_async.7506', p0=f'{chat}' if chat else frame_language.text('telegram.runner.current_chat'))
     reaction = None if remove else [ReactionEmoji(emoticon=str(emoji))]
     await client(SendReactionRequest(peer=ent, msg_id=int(message_id), reaction=reaction))
-    return (f"Реакция с #{message_id} снята." if remove
-            else f"Поставлено {emoji} на #{message_id}.")
+    return (frame_language.text('helper.mtproto_runner._react_async.7509', p0=f'{message_id}') if remove
+            else frame_language.text('helper.mtproto_runner._react_async.7510', p0=f'{emoji}', p1=f'{message_id}'))
 
 
+@frame_language.pinned
 def _sync_react(chat: str = "", message_id: int = 0, emoji: str = "", remove: bool = False) -> str:
     denied = _telegram_account_gate()
     if denied:
         return denied
     if not int(message_id or 0):
-        return "Нужен message_id (номер сообщения из контекста)."
+        return frame_language.text('helper.mtproto_runner._sync_react.7518')
     return _threadsafe_result(
         lambda: _react_async(chat, int(message_id), emoji, bool(remove)), 60)
 
 
+@frame_language.pinned
 def _sync_followups(action: str = "list", followup_id: str = "",
                     limit: int = 0, offset: int = 0) -> str:
     denied = _telegram_account_gate()
@@ -7532,8 +7542,8 @@ def _sync_followups(action: str = "list", followup_id: str = "",
             kw["limit"] = int(limit)
         return telegram_followups.LEDGER.context(**kw)
     if action == "cancel":
-        return (f"Отменён follow-up {followup_id}." if telegram_followups.LEDGER.cancel(followup_id)
-                else f"Не найден активный follow-up {followup_id}.")
+        return (frame_language.text('helper.mtproto_runner._sync_followups.7535', p0=f'{followup_id}') if telegram_followups.LEDGER.cancel(followup_id)
+                else frame_language.text('helper.mtproto_runner._sync_followups.7536', p0=f'{followup_id}'))
     if action in ("watch", "unwatch"):
         # Её рука. Отчёт Егору больше не заводится автоматически (см. _sync_send_message):
         # раз так, у неё обязана остаться возможность его ПОПРОСИТЬ — иначе снятие
@@ -7542,15 +7552,16 @@ def _sync_followups(action: str = "list", followup_id: str = "",
         on = action == "watch"
         item = telegram_followups.LEDGER.set_notice(followup_id, on, source="praxis")
         if item is None:
-            return f"Не найдена живая нить {followup_id}."
-        return (f"Отчёт Егору по {followup_id} " + (
-            "включено — когда ответят, ему уйдёт письмо; возрастной срок с нити снят."
-            if on else "выключено — нить остаётся моим следом, Егору не уйдёт."))
-    return "action должен быть list | watch | unwatch | cancel."
+            return frame_language.text('helper.mtproto_runner._sync_followups.7545', p0=f'{followup_id}')
+        return (frame_language.text('helper.mtproto_runner._sync_followups.7546', p0=f'{followup_id}') + (
+            frame_language.text('helper.mtproto_runner._sync_followups.7547')
+            if on else frame_language.text('helper.mtproto_runner._sync_followups.7548')))
+    return frame_language.text('helper.mtproto_runner._sync_followups.7549')
 
 
 def _sync_read_chat(chat_ref, limit: int = 30) -> str:
     """§3: последние сообщения соседнего диалога (по id/@username/имени)."""
+    @frame_language.pinned
     async def _coro():
         route = _route_from_reference(chat_ref)
         ent = await _resolve_entity(route.peer_id)
@@ -7564,6 +7575,7 @@ def _sync_read_chat(chat_ref, limit: int = 30) -> str:
 
 def _sync_fetch_context(chat_id, limit: int = LAST_N) -> str:
     """§4: живой контекст текущего чата из Telegram (последние N, её реплики включены)."""
+    @frame_language.pinned
     async def _coro():
         route = _route_from_reference(chat_id)
         ent = _meta.get(route.conversation_id, {}).get("entity")
@@ -7897,6 +7909,7 @@ def _accepted_after_timeout(key: str, exc: BaseException, *, grace: float | None
         time.sleep(min(remaining, max(0.05, float(poll))))
 
 
+@frame_language.pinned
 def _frozen_refusal(peer_id, who: str) -> str | None:
     """Отказ для отправки в замороженный чат, иначе None.
 
@@ -7911,10 +7924,10 @@ def _frozen_refusal(peer_id, who: str) -> str | None:
     except Exception:
         log.debug("frozen check failed for %s", peer_id, exc_info=True)
         return None
-    return (f"не отправлено: чат {who} заморожен — я с ним не разговариваю в обе стороны. "
-            f"Если это осознанно, сначала разморозь его (freeze_chat on=false).")
+    return (frame_language.text('helper.mtproto_runner._frozen_refusal.7914', p0=f'{who}'))
 
 
+@frame_language.pinned
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
@@ -7933,10 +7946,7 @@ def _sync_send_message(to, text) -> str:
         if dup is not None:
             age_min = max(0.0, (time.time() - float(dup.get("sent_at") or 0)) / 60)
             return agent.DirectSendRefusal(
-                f"Не отправлено: повтор — этому адресату уже ушла та же реплика "
-                f"({age_min:.0f} мин назад, нить {dup.get('id')}, ответа ещё не было). "
-                f"Если нужно другое — скажи то же самое другими словами; "
-                f"повтор уйдёт только после ответа или окончания окна.")
+                frame_language.text('helper.mtproto_runner._sync_send_message.7936', p0=f'{age_min:.0f}', p1=f"{dup.get('id')}"))
     except Exception:
         log.debug("follow-up дедуп не проверился [%s] — отправляю без него", to,
                   exc_info=True)
@@ -7948,7 +7958,7 @@ def _sync_send_message(to, text) -> str:
     if _floor:
         log.warning("прямая отправка придержана кред-полом: %s", _floor)
         return agent.DirectSendRefusal(
-            f"не отправлено: в тексте {_floor}; креды наружу не уходят")
+            frame_language.text('helper.mtproto_runner._sync_send_message.7951', p0=f'{_floor}'))
     execution = _direct_tool_execution(("send_message", "narrate"))
     key = _direct_tool_key(execution)
     target_route = _route_from_reference(to)
@@ -7967,7 +7977,7 @@ def _sync_send_message(to, text) -> str:
         raise
     took_resolve = time.time() - t0
     if ent is None:
-        return agent.DirectSendRefusal(f"(не найдено, кому: {to})")
+        return agent.DirectSendRefusal(frame_language.text('helper.mtproto_runner._sync_send_message.7970', p0=f'{to}'))
 
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
@@ -8003,9 +8013,9 @@ def _sync_send_message(to, text) -> str:
     try:
         pulse_ok, pulse_reason = social_pulse.allow_outbound(peer_id)
         if str(pulse_reason or "").strip():
-            pulse_note = f"\n· мой след по этому адресату: {pulse_reason}"
+            pulse_note = frame_language.text('helper.mtproto_runner._sync_send_message.8006', p0=f'{pulse_reason}')
         if existing is None and not pulse_ok:
-            return agent.DirectSendRefusal(f"Не отправлено из social pulse: {pulse_reason}.")
+            return agent.DirectSendRefusal(frame_language.text('helper.mtproto_runner._sync_send_message.8008', p0=f'{pulse_reason}'))
     except Exception:
         log.debug("след по адресату не снялся [%s]", peer_id, exc_info=True)
     entry = outbox.prepare_text(
@@ -8044,15 +8054,13 @@ def _sync_send_message(to, text) -> str:
         # 21.09: отмена хода во время ожидания — определённый отказ, а не неизвестность.
         if str(entry.get("state") or "") == "dead_letter":
             return agent.DirectSendRefusal(
-                "сообщение не отправлено: ход отменён владельцем до приёмки; "
-                "намерение закрыто без отправки (cancelled by owner before acceptance).")
+                frame_language.text('helper.mtproto_runner._sync_send_message.8047'))
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
         except Exception as journal_exc:
             reason = (
-                f"{type(exc).__name__}: {str(exc)[:200]}; retry journal failed: "
-                f"{type(journal_exc).__name__}: {str(journal_exc)[:120]}"
+                frame_language.text('helper.mtproto_runner._sync_send_message.8054', p0=f'{type(exc).__name__}', p1=f'{str(exc)[:200]}', p2=f'{type(journal_exc).__name__}', p3=f'{str(journal_exc)[:120]}')
             )
         log.warning("send_message %r: резолв ок (%.1fс, кэш был %s), ОТПРАВКА не уложилась/упала за %.1fс",
                     to, took_resolve, "холодный" if cold else "тёплый", time.time() - t1)
@@ -8066,15 +8074,9 @@ def _sync_send_message(to, text) -> str:
                 # ⚠ Про ФОРМУ, а не про права: 06.08 её текст не влез в лимит Telegram, и
                 # фраза «у меня нет права писать» была бы прямой неправдой о причине.
                 return agent.DirectSendRefusal(
-                    f"не отправлено: Telegram отверг само сообщение — "
-                    f"{type(exc).__name__}. Дело не в правах и не в адресе: этот текст "
-                    f"не проходит по форме (чаще всего — длина). Разбей на части или "
-                    f"сократи и отправь снова; повторять этот же кусок я не буду.")
+                    frame_language.text('helper.mtproto_runner._sync_send_message.8069', p0=f'{type(exc).__name__}'))
             return agent.DirectSendRefusal(
-                f"не отправлено: Telegram отказал навсегда — {type(exc).__name__}. "
-                f"Похоже, у меня нет права писать в «{to}» (частая причина: это канал, а "
-                f"не чат обсуждения, либо меня там нет). Проверь адрес и попробуй другой; "
-                f"повторять этот я не буду.")
+                frame_language.text('helper.mtproto_runner._sync_send_message.8074', p0=f'{type(exc).__name__}', p1=f'{to}'))
         # Acceptance may land after the grace's last read, while retry is journalled.
         # record_retry preserves accepted rows; that receipt is still success.
         if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
@@ -8096,9 +8098,7 @@ def _sync_send_message(to, text) -> str:
     echo = ""
     try:
         if str(text or "").strip() and agent.notes.said_recently(peer_id, str(text)):
-            echo = ("\n⚠ похоже, это я здесь недавно уже говорила. Справка, не запрет: "
-                    "сравнение идёт по ФОРМЕ (difflib, порог 0.82), поэтому перефразировку "
-                    "оно не видит — а молчание этой строки ничего не доказывает.")
+            echo = (frame_language.text('helper.mtproto_runner._sync_send_message.8099'))
     except Exception:
         log.debug("справка о повторе не снялась [%s]", peer_id, exc_info=True)
     agent.project_direct_outbox_acceptance(entry)
@@ -8107,6 +8107,7 @@ def _sync_send_message(to, text) -> str:
     return _direct_outbox_result(entry, label=who) + echo + pulse_note
 
 
+@frame_language.pinned
 def _sync_reply(chat_id, text, reply_to="") -> str:
     """Её ответ собеседнику живого хода. Та же durable-очередь, что у прямой отправки.
 
@@ -8131,7 +8132,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
     if _floor:
         log.warning("ответ придержан кред-полом: %s", _floor)
         return agent.DirectSendRefusal(
-            f"не отправлено: в тексте {_floor}; креды наружу не уходят")
+            frame_language.text('helper.mtproto_runner._sync_reply.8134', p0=f'{_floor}'))
     execution = _direct_tool_execution(("reply",))
     key = _direct_tool_key(execution)
     target_route = _route_from_reference(chat_id)
@@ -8144,7 +8145,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         log.warning("ответ %r: резолв не уложился/упал", chat_id)
         raise
     if ent is None:
-        return agent.DirectSendRefusal(f"(не найдено, куда отвечать: {chat_id})")
+        return agent.DirectSendRefusal(frame_language.text('helper.mtproto_runner._sync_reply.8147', p0=f'{chat_id}'))
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
     target_user_id = (getattr(ent, "id", None)
@@ -8191,17 +8192,13 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
         except Exception as journal_exc:
-            reason = (f"{type(exc).__name__}: {str(exc)[:200]}; retry journal failed: "
-                      f"{type(journal_exc).__name__}: {str(journal_exc)[:120]}")
+            reason = (frame_language.text('helper.mtproto_runner._sync_reply.8194', p0=f'{type(exc).__name__}', p1=f'{str(exc)[:200]}', p2=f'{type(journal_exc).__name__}', p3=f'{str(journal_exc)[:120]}'))
         if permanent:
             if agent.delivery_refusal_kind(exc) == "shape":
                 return agent.DirectSendRefusal(
-                    f"не отправлено: Telegram отверг само сообщение — {type(exc).__name__}. "
-                    f"Дело не в правах: этот текст не проходит по форме (чаще всего — "
-                    f"длина). Разбей на части и ответь снова; этот же кусок я не повторю.")
+                    frame_language.text('helper.mtproto_runner._sync_reply.8199', p0=f'{type(exc).__name__}'))
             return agent.DirectSendRefusal(
-                f"не отправлено: Telegram отказал навсегда — {type(exc).__name__}. "
-                f"Проверь, могу ли я писать в «{chat_id}»; повторять этот я не буду.")
+                frame_language.text('helper.mtproto_runner._sync_reply.8203', p0=f'{type(exc).__name__}', p1=f'{chat_id}'))
         # Acceptance may land after the grace's last read, while retry is journalled.
         # record_retry preserves accepted rows; that receipt is still success.
         if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
@@ -8233,6 +8230,7 @@ def _file_send_budget_sec(entry: dict) -> float:
     return min(120.0 + max(0, size) / 600_000.0, ceiling)
 
 
+@frame_language.pinned
 def _sync_send_file(path, caption="", to="", media_kind="document",
                     voice_note=False) -> str:
     """Durable addressed send; staging hides private blob names from Telegram.
@@ -8274,7 +8272,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     if denied:
         return denied
     if target is None:
-        return f"(не найден Telegram-адресат: {to or current_chat or OWNER_ID})"
+        return frame_language.text('helper.mtproto_runner._sync_send_file.8277', p0=f'{to or current_chat or OWNER_ID}')
     peer_id = (_marked_peer_id(target) if hasattr(target, "id") else int(route.peer_id))
     # Промежуточный пасс D1 (адверсарка round-1, P1): прямой путь доставки файла
     # (явный to= / проактивная отправка вне живого хода) шёл МИМО кред-пола — .env/
@@ -8293,7 +8291,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             _floor = _secrets.document_floor(path)
         except Exception:
             log.exception("document_floor на прямой отправке упал — держу fail-closed")
-            _floor = "unassessable (floor error)"
+            _floor = frame_language.text('helper.mtproto_runner._sync_send_file.8296')
         # Файл из-под корней хардбота не уходит наружу вообще — там чужие клиенты,
         # а не её данные (вопрос Егора 26.07). Проверка ДО кред-пола: она про
         # принадлежность файла, а не про содержимое.
@@ -8305,17 +8303,13 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         if _floor:
             log.warning("прямая send_file придержана кред-полом [%s]: %s",
                         peer_id, _floor)
-            return (f"Не отправлено: во вложении «{media_core.delivery_basename(path)}» "
-                    f"механический кред-пол увидел похожее на секрет ({_floor}). "
-                    f"Креды не уходят наружу — это единственный твёрдый предел. "
-                    f"Если это ложное срабатывание на инженерном материале — очисти "
-                    f"файл от токен-подобных строк или отправь мне (Егору) в личку.")
+            return (frame_language.text('helper.mtproto_runner._sync_send_file.8308', p0=f'{media_core.delivery_basename(path)}', p1=f'{_floor}'))
     mime = (media_core.sniff_mime(path)
             or mimetypes.guess_type(str(path))[0]
             or "application/octet-stream")
     wanted_kind = str(media_kind or telegram_outbox.LEGACY_MEDIA_KIND).strip().lower()
     if wanted_kind not in telegram_outbox.MEDIA_KINDS:
-        return f"kind должен быть {', '.join(telegram_outbox.MEDIA_KINDS)}."
+        return frame_language.text('helper.mtproto_runner._sync_send_file.8318', p0=f"{', '.join(telegram_outbox.MEDIA_KINDS)}")
     wanted_voice = bool(voice_note) and wanted_kind == "audio"
     outbox = _direct_outbox()
     entry = outbox.get(key, verify_file=True)
@@ -8391,9 +8385,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         # снова поднял бы прогон и снова привёл бы к этой же отправке.
         if str(entry.get("state") or "") == "dead_letter":
             return agent.DirectSendRefusal(
-                f"файл «{media_core.delivery_basename(path)}» не отправлен: ход "
-                f"отменён владельцем до приёмки; намерение закрыто без отправки "
-                f"(cancelled by owner before acceptance).")
+                frame_language.text('helper.mtproto_runner._sync_send_file.8394', p0=f'{media_core.delivery_basename(path)}'))
         if isinstance(exc, agent.DurableSideEffectPending):
             # A durable pause is not a failed network attempt. The queued entry
             # already owns its deadline; recording a retry here invents an attempt.
@@ -8410,21 +8402,15 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
         except Exception as journal_exc:
             reason = (
-                f"{type(exc).__name__}: {str(exc)[:200]}; retry journal failed: "
-                f"{type(journal_exc).__name__}: {str(journal_exc)[:120]}"
+                frame_language.text('helper.mtproto_runner._sync_send_file.8413', p0=f'{type(exc).__name__}', p1=f'{str(exc)[:200]}', p2=f'{type(journal_exc).__name__}', p3=f'{str(journal_exc)[:120]}')
             )
         if permanent:
             log.warning("send_file %r: постоянный отказ, повторять нечего: %s", label, exc)
             if agent.delivery_refusal_kind(exc) == "shape":
                 return agent.DirectSendRefusal(
-                    f"файл не отправлен: Telegram отверг сам запрос — "
-                    f"{type(exc).__name__}. Дело не в правах и не в адресе: не проходит "
-                    f"форма (чаще всего — длина подписи или пустое вложение). Поправь "
-                    f"подпись или файл и отправь снова; повторять этот же я не буду.")
+                    frame_language.text('helper.mtproto_runner._sync_send_file.8420', p0=f'{type(exc).__name__}'))
             return agent.DirectSendRefusal(
-                f"файл не отправлен: Telegram отказал навсегда — {type(exc).__name__}. "
-                f"Похоже, у меня нет права слать в «{label}». Проверь адрес и попробуй "
-                f"другой; повторять этот я не буду.")
+                frame_language.text('helper.mtproto_runner._sync_send_file.8425', p0=f'{type(exc).__name__}', p1=f'{label}'))
         # Acceptance may land after the grace's last read, while retry is journalled.
         # record_retry preserves accepted rows; that receipt is still success.
         if isinstance(exc, TimeoutError) and state.get("state") == "accepted":

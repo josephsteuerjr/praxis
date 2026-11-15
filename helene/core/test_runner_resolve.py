@@ -463,7 +463,7 @@ class TestNameVisibility(Base):
         fake = self.use_client(entities={"Анна Комарова": stranger})
         mtproto_runner._dialog_name_cache = [("мама", FakeEnt(2, "мама"))]
         out = mtproto_runner._sync_send_message("Анна Комарова", "привет")
-        self.assertIn("нет в моей адресной книге", out)
+        self.assertIn("не разрешён адрес", out)
         self.assertEqual(fake.sent, [])
         self.assertEqual(fake.get_entity_calls, [],
                          "имя не должно резолвиться через get_entity/session-БД — это глобальная видимость")
