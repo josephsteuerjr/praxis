@@ -17,7 +17,7 @@ from localharness.package_notice import read, write
 from deskd import control
 
 
-def wait_for(predicate, timeout=15):
+def wait_for(predicate, timeout=90):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         value = predicate()
@@ -126,7 +126,7 @@ while True:
                     wait_for(lambda:runner_startup.observe(trees['main'],second['pid'])['state']=='ready')
                     wait_for(lambda:seen and seen[-1]['agents']['main']['startup']['state']=='ready')
                 finally:
-                    stop.set();thread.join(20)
+                    stop.set();thread.join(75)
                 self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
 
 

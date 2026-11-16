@@ -1,3 +1,11 @@
+# 2.8.6 Beta
+
+- The external desktop process owner now serves supervision and restart requests before the engine finishes sandbox preparation. A slow sandbox initialization no longer silences supervision or leaves a restart request waiting inside the initializing engine.
+- The window shows the startup phase and elapsed time. Readiness still requires a fresh heartbeat from the owned engine; a live PID or a startup progress record cannot certify readiness.
+- Stop remains available during Resume and Restart. Explicit Resume allows up to ten minutes for slow initialization while preserving cancellation and the owner’s Stop and Exit controls.
+- Restart affects the selected agent. Uncertain process cleanup blocks another generation; temporary status-file sharing errors do not stop healthy children or replay the same restart request.
+- Latest Beta for Windows, macOS Apple silicon/Intel, Debian/Ubuntu, Fedora and Linux ARM64 server.
+
 # 2.8.5 Beta
 
 - Shell commands could wait minutes on the agent's personal Git. Owner backups that had entered its history made the store huge (21 GB on one machine), every self-commit started a foreground repack that never finished, and the snapshot before each command re-hashed a multi-gigabyte backup. At start Hélène now turns automatic gc/maintenance off for this repository, deletes leftover temporary packs, takes owner backups and service files out of HEAD and, when the store is large, rewrites the history without them (every other file and commit is kept, each branch's tree is verified and the store is checked before it replaces the old one).
