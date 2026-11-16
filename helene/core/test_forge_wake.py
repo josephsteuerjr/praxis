@@ -1097,7 +1097,7 @@ class TestUpstreamEye(unittest.TestCase):
             self.assertIn(self.NEW_HEAD[:8], text)
             self.assertIn("papertrade-lab", text)
             self.assertIn("ФАКТ, не задача", text)
-            self.assertIn("не склонировала", text, "увидела ≠ пошла проверять")
+            self.assertIn("Forge ничего не клонировал", text, "увидела ≠ пошла проверять")
             self.assertIn("обрезано", text, "срез её же цели виден, а не молчалив")
             # второй обход по тому же HEAD молчит: сдвиг — событие, а не состояние
             self.assertEqual(forge.check_upstreams(force=True), 0)
@@ -1175,7 +1175,7 @@ class TestUpstreamEye(unittest.TestCase):
             (self.tmp / "upstreams.json").write_text(json.dumps(data), encoding="utf-8")
             self.assertEqual(forge.check_upstreams(force=True), 1,
                              "за порогом — сказать вслух")
-            self.assertIn("ОСЛЕПЛА", self.woken[0][0][1])
+            self.assertIn("запросы не удаются с", self.woken[0][0][1])
             self.assertIn("не «ничего не менялось»", self.woken[0][0][1])
             self.assertEqual(forge.check_upstreams(force=True), 0,
                              "но не молотит одним и тем же каждый обход")
@@ -1374,7 +1374,8 @@ class TestUpstreamEye(unittest.TestCase):
 
     def test_a_word_that_is_not_an_address_is_named_and_not_swallowed(self):
         out = forge.upstream_lever("watch", arg="посмотри у Арета")
-        self.assertIn("не вижу адреса", out)
+        self.assertIn("не видно адреса git-репозитория", out)
+        self.assertIn("«посмотри у Арета»", out)
         self.assertEqual(forge._load_upstreams(), {})
 
     def test_eviction_by_the_ceiling_is_told_to_her_and_not_only_to_the_log(self):

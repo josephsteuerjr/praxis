@@ -29,6 +29,8 @@ import json
 import os
 from pathlib import Path
 
+import frame_language
+
 SCHEMA = "praxis.subagent-result.v1"
 STATUSES = ("succeeded", "failed", "timeout", "cancelled", "needs_input")
 
@@ -55,7 +57,9 @@ LINE_RECAP_CHARS = 220
 LOST_RECAP_CHARS = 900
 
 
-_CUT_MARK = " …[обрезано, ещё {} симв.]"
+def _cut_mark(dropped: int) -> str:
+    """Visible truncation marker in the current agent-context language."""
+    return " " + frame_language.text('subagents.clipped', count=f"{dropped}")
 
 
 def _clip(text, limit: int) -> str:
@@ -72,12 +76,12 @@ def _clip(text, limit: int) -> str:
         return value
     keep = limit
     for _ in range(4):
-        nxt = max(0, limit - len(_CUT_MARK.format(len(value) - keep)))
+        nxt = max(0, limit - len(_cut_mark(len(value) - keep)))
         if nxt == keep:
             break
         keep = nxt
     head = value[:keep].rstrip()
-    return head + _CUT_MARK.format(len(value) - len(head))
+    return head + _cut_mark(len(value) - len(head))
 
 
 def event_key(task_id: str, agent_id: str, suffix: str = "") -> str:
@@ -194,26 +198,8 @@ def load_unit(unit_dir: Path) -> tuple[dict | None, dict | None]:
     return _read("request.json"), _read("result.json")
 
 
-_VERBS = {"succeeded": "закончил", "failed": "упал", "timeout": "просрочен (ещё жив)",
-          "cancelled": "остановлен", "needs_input": "ждёт ответа"}
-
-_UNIT_HEAD = ("Твои субагенты завершились — это твой плод, а не повинность. Диффы, тесты и "
-              "трейсы — по task_id/agent_id через coding_agent(poll)/coding_inspect. Решение "
-              "(принять/переделать/продолжить/спросить) — твоё. Завершение исполнения не равно "
-              "приёмке: прочитай точный результат и запиши coding_agent(action='disposition', "
-              "agent_id=..., result_sha256=..., disposition='integrated'|'deferred'|'irrelevant'). "
-              "Зависимая задача ждёт integrated текущего SHA; deferred оставляет её заблокированной. "
-              "Не проси у владельца повторного разрешения на уже порученную работу.")
-
-_LOST_HEAD = (
-    "Задачи ниже ПОТЕРЯНЫ ИЗ ВИДУ: местных следов жизни нет дольше порога тишины и живых "
-    "юнитов не числится. Их никто не закрывал, не отменял и не трогал — ярлык lost снимается "
-    "первым же твоим действием по тому же id. Разбудила, чтобы решение осталось твоим: "
-    "продолжить, закрыть (coding_session(finish)) или оставить как есть.\n"
-    "⚠ В расписке у них status=failed и agent_id=«task». Это не диагноз «сломалось»: класса "
-    "«потеряна» в контракте praxis.subagent-result.v1 нет, а «task» — метка ветки жнеца, "
-    "а не воркер, и coding_agent(poll) по ней ничего не найдёт.")
-
+# Canonical receipt statuses stay exact; only their displayed verbs are localized.
+_VERBS = {status: f"subagents.verb.{status}" for status in STATUSES}
 
 def _is_lost_task(payload: dict) -> bool:
     """Ветка жнеца брошенных задач (`forge.reconcile_lost_tasks`): роль task, статус lost.
@@ -238,20 +224,29 @@ def _unit_line(payload: dict) -> str:
     # `lost` у юнита — супервизор умер, не оставив result.json. Контракт кладёт это в
     # `failed` (класса «пропал» в нём нет), но сказать ей «упал» значило бы приписать
     # падение там, где известна одна лишь пропажа.
-    verb = ("пропал без расписки — супервизор умер, result.json нет"
-            if str(payload.get("forge_status") or "").strip().lower() == "lost"
-            else _VERBS.get(status, status or "?"))
-    if str(payload.get("forge_status") or "").strip().lower() == "stalled":
-        verb = "завершил попытку без полного результата (stalled; в расписке v1 — failed)"
-    subject = "воркер" if role in ("", "worker") else f"юнит «{role}»"
+    forge_status = str(payload.get("forge_status") or "").strip().lower()
+    if forge_status == "stalled":
+        verb = frame_language.text('subagents.verb.stalled')
+    elif forge_status == "lost":
+        verb = frame_language.text('subagents.verb.lost')
+    elif status in _VERBS:
+        verb = frame_language.text(_VERBS[status])
+    else:
+        verb = status or "?"
+    subject = (frame_language.text('subagents.subject.worker') if role in ("", "worker")
+               else frame_language.text('subagents.subject.unit', role=role))
     goal = payload.get("goal") or payload.get("task_id")
     recap = _clip(" ".join(str(payload.get("recap") or payload.get("error") or "").split()),
                   LINE_RECAP_CHARS)
     tests = payload.get("tests") or {}
     passed, failed = tests.get("passed", 0), tests.get("failed", 0)
-    t = f"; тесты {passed}/{passed + failed}" if (passed or failed) else ""
-    return (f"{_mark(payload)} [{payload.get('task_id')} / {payload.get('agent_id')}] "
-            f"{subject} по «{goal}» {verb}{t}: {recap}")
+    t = ("; " + frame_language.text('subagents.tests', passed=f"{passed}",
+                                    total=f"{passed + failed}")
+         if (passed or failed) else "")
+    return frame_language.text(
+        'subagents.unit_line', mark=_mark(payload), task_id=f"{payload.get('task_id')}",
+        agent_id=f"{payload.get('agent_id')}", subject=subject, goal=f"{goal}", verb=verb,
+        tests=t, recap=recap)
 
 
 def _lost_task_lines(payload: dict) -> list[str]:
@@ -267,21 +262,23 @@ def _lost_task_lines(payload: dict) -> list[str]:
     goal = " ".join(str(payload.get("goal") or "").split())
     # Цель берётся из расписки как есть: её кап (и метку среза) уже поставил `normalize`,
     # второй срез поверх первого дал бы две разные версии одной цели в одном кадре.
-    head = (f"{_mark(payload)} [{payload.get('task_id')}] задача потеряна из виду — "
-            f"не закрыта, не отменена: "
-            + (f"«{goal}»" if goal else "цель в расписке не записана"))
+    task_id = f"{payload.get('task_id')}"
+    head = (frame_language.text('subagents.lost.head_goal', mark=_mark(payload),
+                                task_id=task_id, goal=goal) if goal else
+            frame_language.text('subagents.lost.head_nogoal', mark=_mark(payload),
+                                task_id=task_id))
     facts = []
     created = str(payload.get("started_at") or "").strip()
-    facts.append(f"открыта {created}" if created else "когда открыта — в расписке не записано")
+    facts.append(frame_language.text('subagents.lost.opened', at=created) if created
+                 else frame_language.text('subagents.lost.opened_unknown'))
     noticed = str(payload.get("finished_at") or "").strip()
     if noticed:
-        facts.append(f"потеря замечена {noticed}")
+        facts.append(frame_language.text('subagents.lost.noticed', at=noticed))
     quiet = " ".join(str(payload.get("error") or "").split())
-    facts.append(quiet or "сколько длилась тишина — в расписке не названо")
+    facts.append(quiet or frame_language.text('subagents.lost.quiet_unknown'))
     body = " ".join(str(payload.get("recap") or "").split())
     tail = (_clip(body, LOST_RECAP_CHARS) if body else
-            "Почему потеряна и чем её продолжить — в расписке не написано. Это «не знаю», "
-            "а не «нечего делать»: посмотри саму задачу по этому id.")
+            frame_language.text('subagents.lost.no_recap'))
     return [head, "   " + "; ".join(facts) + ".", "   " + tail]
 
 
@@ -300,6 +297,7 @@ def project(payload: dict, *, owner: bool = True, chat_id: str = "",
             "finished_at": payload.get("finished_at") or "", "redacted": True}
 
 
+@frame_language.pinned
 def invitation(payloads: list[dict], *, owner: bool = True, chat_id: str = "",
                audience: str = "") -> str:
     """Кадр-приглашение для её хода: плод пришёл, не повинность. С машинными id —
@@ -318,10 +316,11 @@ def invitation(payloads: list[dict], *, owner: bool = True, chat_id: str = "",
     units = [p for p in payloads if not _is_lost_task(p)]
     blocks = []
     if units:
-        blocks.append(_UNIT_HEAD + "\n" + "\n".join(_unit_line(p) for p in units))
+        blocks.append(frame_language.text('subagents.unit_head') + "\n"
+                      + "\n".join(_unit_line(p) for p in units))
     if lost:
-        blocks.append(_LOST_HEAD + "\n"
+        blocks.append(frame_language.text('subagents.lost_head') + "\n"
                       + "\n".join(line for p in lost for line in _lost_task_lines(p)))
     if redacted:
-        blocks.append(f"Forge: {redacted} completion notice(s); details remain in their original audience.")
+        blocks.append(frame_language.text('subagents.redacted', count=f"{redacted}"))
     return "\n\n".join(blocks)

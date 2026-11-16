@@ -1776,7 +1776,7 @@ def _own_report_clips_value() -> str:
                               rf"(?m)^{re.escape(name)} = (\d+)")
     mail = _neighbour_num("mailer", "_REASON_CHARS", "mailer.py",
                           r"(?m)^_REASON_CHARS = (\d+)")
-    marked = "_CUT_MARK" in _source_text(_SUBAGENTS) and "обрезано" in _source_text("mailer.py")
+    marked = "_cut_mark(" in _source_text(_SUBAGENTS) and "обрезано" in _source_text("mailer.py")
     return (f"цель субагента {_sec(num('GOAL_CHARS'), ' симв')}, его ошибка "
             f"{_sec(num('ERROR_CHARS'), ' симв')}, расписка целиком "
             f"{_sec(num('RECAP_CHARS'), ' симв')}, её хвост в строке списка "

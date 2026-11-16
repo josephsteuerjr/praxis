@@ -28,6 +28,7 @@ Stdlib + git, без новых зависимостей. Модель здес�
 from __future__ import annotations
 
 import datetime as _dt
+import frame_language
 import praxis_time
 import fnmatch
 import hashlib
@@ -40,6 +41,7 @@ import sys
 import uuid
 from pathlib import Path
 
+T = frame_language.text
 log = logging.getLogger("praxis-selfdev")
 
 # Репозиторий (git) и база памяти (в тестах уводится PRAXIS_BASE-песочницей).
@@ -194,6 +196,7 @@ def policy() -> dict:
     return dict(_DEFAULT_POLICY)
 
 
+@frame_language.pinned
 def autonomy_change(action: str, pattern: str = "") -> str:
     """Manage low-risk classification globs; all zones retain the same merge authority."""
     action = (action or "").strip().lower()
@@ -201,20 +204,20 @@ def autonomy_change(action: str, pattern: str = "") -> str:
     if action == "list":
         eff = floor()
         skipped = [p for p in PROTECTED_PATTERNS if p not in eff]
-        return "low-risk зона: " + (", ".join(pats) or "—") + \
-               f"; authority: {merge_mode()}" + \
-               f"; high-risk маркеры: {', '.join(eff) or '—'}" + \
-               (f"; снято из классификатора: {', '.join(skipped)}" if skipped else "")
+        return T('selfdev.autonomy.list', patterns=", ".join(pats) or "—",
+                 authority=f"{merge_mode()}", markers=', '.join(eff) or '—',
+                 skipped=("; " + T('selfdev.autonomy.skipped', patterns=', '.join(skipped))
+                          if skipped else ""))
     pattern = (pattern or "").strip().replace("\\", "/")
     if not pattern:
-        return "нужен pattern (glob), например workspace/* или test_*.py"
+        return T('selfdev.autonomy.need_pattern')
     if action == "add":
         if pattern in pats:
-            return f"«{pattern}» уже в low-risk зоне"
+            return T('selfdev.autonomy.already', pattern=pattern)
         pats.append(pattern)
     elif action == "remove":
         if pattern not in pats:
-            return f"«{pattern}» и так нет в low-risk зоне"
+            return T('selfdev.autonomy.absent', pattern=pattern)
         pats.remove(pattern)
     else:
         return "action: add | remove | list"
@@ -225,9 +228,10 @@ def autonomy_change(action: str, pattern: str = "") -> str:
                        encoding="utf-8")
         tmp.replace(POLICY_FILE)
     except Exception as e:
-        return f"не записалось: {e}"
-    _journal(f"я изменила low-risk классификацию ({action} {pattern}): теперь [{', '.join(pats) or '—'}]")
-    return f"low-risk зона теперь: {', '.join(pats) or '—'} (это классификация, не разрешение)"
+        return T('selfdev.autonomy.write_failed', error=f"{e}")
+    _journal(T('selfdev.autonomy.journal', action=action, pattern=pattern,
+               patterns=', '.join(pats) or '—'))
+    return T('selfdev.autonomy.now', patterns=', '.join(pats) or '—')
 
 
 def zone_for(files: list[str]) -> str:
@@ -253,13 +257,14 @@ def zone_for(files: list[str]) -> str:
 def begin(reason: str = "") -> dict:
     """Открыть предложение: ветка proposal/<id> + worktree. Живой код не трогается."""
     if not (REPO / ".git").exists():
-        return {"ok": False, "msg": "здесь нет git-репозитория — контур недоступен"}
+        return {"ok": False, "msg": T('selfdev.begin.no_git')}
     pid = uuid.uuid4().hex[:8]
     wt = worktree_path(pid)
     wt.parent.mkdir(parents=True, exist_ok=True)
     r = _git("worktree", "add", "-b", f"proposal/{pid}", str(wt), "HEAD")
     if r.returncode != 0:
-        return {"ok": False, "msg": f"worktree не создался: {(r.stderr or '').strip()[:200]}"}
+        return {"ok": False, "msg": T('selfdev.begin.worktree_failed',
+                                      error=(r.stderr or '').strip()[:200])}
     try:  # заглушка: чтобы load_dotenv в тестах не дошёл до живого /app/.env (find_dotenv идёт вверх)
         (wt / ".env").write_text("# proposal sandbox: пусто, живой .env не подхватывать\n",
                                  encoding="utf-8")
@@ -303,7 +308,7 @@ def run_tests(pid: str) -> dict:
     wt = worktree_path(pid)
     if not wt.exists():
         return {"ok": False, "status": "error", "blocking": True,
-                "summary": "нет worktree"}
+                "summary": T('selfdev.tests.no_worktree')}
     # Чистое окружение (белый список): контейнер живёт с env_file — боевые ключи и ручки
     # (почта, web_search, evaluator) не должны протекать в прогон и мимо песочницы.
     baseline = {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"}
@@ -329,7 +334,7 @@ def run_tests(pid: str) -> dict:
                            timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"ok": False, "status": "timed_out", "blocking": True,
-                "summary": f"тесты не уложились в {TEST_TIMEOUT}s — проверки нет"}
+                "summary": T('selfdev.tests.timeout', seconds=f"{TEST_TIMEOUT}")}
     combined = ((r.stderr or "") + (r.stdout or "")).strip()
     m = re.search(r"Ran (\d+) tests?", combined)
     ran = m.group(1) if m else "?"
@@ -341,7 +346,8 @@ def run_tests(pid: str) -> dict:
              if line.startswith(("FAIL:", "ERROR:"))]
     detail = "\n".join(named[:20]) if named else "\n".join(combined.splitlines()[-3:])
     return {"ok": ok, "status": "passed" if ok else "failed", "blocking": not ok,
-            "summary": (f"{ran} тестов, " + ("зелёные" if ok else "ЕСТЬ ПАДЕНИЯ")
+            "summary": (T('selfdev.tests.summary_ok' if ok else 'selfdev.tests.summary_failed',
+                          ran=f"{ran}")
                         + (f"\n{detail}" if not ok else ""))}
 
 
@@ -355,11 +361,11 @@ def _review_problem(review: str, title: str, why: str) -> str:
     """'' если ревью живое; иначе — короткая причина отказа (пустое/отписочное)."""
     r = (review or "").strip()
     if not r:
-        return "пустое"
+        return T('selfdev.review.empty')
     if len(r) < REVIEW_MIN_CHARS:
-        return f"слишком короткое ({len(r)} симв. — это отписка, не вердикт)"
+        return T('selfdev.review.short', chars=f"{len(r)}")
     if r.lower() in {(title or "").strip().lower(), (why or "").strip().lower()}:
-        return "просто повторяет title/why"
+        return T('selfdev.review.repeat')
     return ""
 
 
@@ -416,6 +422,7 @@ class SubmitReply(str):
         return value
 
 
+@frame_language.pinned
 def submit(pid: str, title: str, why: str = "", review: str = "", checked: str = "",
            override_reason: str = "", reviewer: str = "") -> str:
     """Commit, verify, classify and enact Praxis's reviewed decision.
@@ -430,16 +437,17 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     """
     t = get(pid)
     if not t:
-        return SubmitReply(f'Не вижу предложения {pid} — начни с proposal(action=start).', status='refused')
+        return SubmitReply(T('selfdev.submit.unknown', pid=pid), status='refused')
     if t["status"] not in ("building", "proposed"):
-        return SubmitReply(f"Предложение {pid} уже {t['status']} — оно закрыто.", status='merged' if t['status'] == 'merged' else 'refused')
+        return SubmitReply(T('selfdev.submit.closed', pid=pid, status=f"{t['status']}"), status='merged' if t['status'] == 'merged' else 'refused')
     wt = worktree_path(pid)
     if not wt.exists():
-        return SubmitReply(f'Рабочая копия предложения {pid} пропала — начни заново.', status='refused')
+        return SubmitReply(T('selfdev.submit.no_worktree', pid=pid), status='refused')
     problem = _review_problem(review, title, why)
     if problem:
         _deny("proposal_review", "submit", f"{pid}: ревью {problem}")
-        return SubmitReply(f'Не отправляю: ревью {problem}. Прочитай свой дифф глазами — proposal(action="diff", id="{pid}") — и передай review=: что меняется, чем рискует, почему это правильно. Твой код ревьюишь ты сама, никто за тебя.', status='refused')
+        return SubmitReply(T('selfdev.submit.review_refused', problem=problem, pid=pid),
+                           status='refused')
     main = _main_branch()
 
     _git("add", "-A", cwd=wt)
@@ -451,7 +459,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     files = [l.strip() for l in
              _git("diff", "--name-only", f"{main}...HEAD", cwd=wt).stdout.splitlines() if l.strip()]
     if not files:
-        return SubmitReply('В предложении нет изменений — нечего отправлять. Правь файлы в его копии или закрой его (reject).', status='refused')
+        return SubmitReply(T('selfdev.submit.no_changes'), status='refused')
     # Optional evidence is recorded BEFORE tests, so a crash or retry cannot
     # silently erase a critic's disagreement. Empty resubmission keeps history.
     evidence = list(t.get("reviewer_evidence") or [])
@@ -470,7 +478,8 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     if len(same_rejected) >= SAME_DIFF_REJECT_CAP and not override_reason:
         _update(pid, fingerprint=fp)
         _deny("proposal_review", "submit", f"{pid}: кап идентичных диффов ×{len(same_rejected)}")
-        return SubmitReply(f'Стоп: байт-в-байт такой же дифф уже отклонялся {len(same_rejected)} раза. Повторная подача того же — жвачка. Измени подход (другой дифф обнуляет счёт) или передай осознанный override_reason, почему именно этот вариант всё же нужен.', status='refused')
+        return SubmitReply(T('selfdev.submit.same_diff', count=f"{len(same_rejected)}"),
+                           status='refused')
     stat = _git("diff", "--stat", f"{main}...HEAD", cwd=wt).stdout.strip().splitlines()
     diffstat = stat[-1].strip() if stat else ""
     # Crash-safe: гейт ниже — минуты, а рестарты штатны (каждый мёрж сам просит рестарт).
@@ -489,17 +498,20 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
             files=files, diffstat=diffstat, tests=tests, zone=zone,
             reviewer=str(reviewer or t.get("reviewer") or ""), reviewer_evidence=evidence,
             status="proposed", notified=False)
-    _journal(f"моё ревью «{title.strip() or pid}» ({pid}): {review.strip()[:300]}"
-             + (f" | проверено: {checked.strip()[:120]}" if (checked or "").strip() else ""))
+    _journal(T('selfdev.journal.review', title=title.strip() or pid, pid=pid,
+               review=review.strip()[:300])
+             + (" | " + T('selfdev.journal.checked', checked=checked.strip()[:120])
+                if (checked or "").strip() else ""))
     log.info("proposal %s submitted: zone=%s tests_status=%s files=%d",
              pid, zone, test_status(tests), len(files))
 
     if test_status(tests) == "timed_out":
         # 24.09: таймаут — не «пропущено», а «не проверено». Предложение остаётся
         # proposed; повторный submit того же id перепрогоняет гейт и мёржит на вердикте.
-        _journal(f"«{title.strip() or pid}» ({pid}): гейт не уложился в {TEST_TIMEOUT} с — "
-                 "мёрж отложен до прогона, который успеет.")
-        return SubmitReply(f'Предложение {pid} «{title.strip()}» НЕ смёржено: тесты не уложились в {TEST_TIMEOUT} с, проверки нет. Правка, из-за которой тест виснет, даёт ровно такой исход, поэтому вслепую не вливаю. Посмотри, что грузит машину (долгие счёты, параллельные прогоны), и повтори proposal(action="submit", id="{pid}", …) с тем же ревью — гейт прогонится заново.', status='refused')
+        _journal(T('selfdev.journal.gate_timeout', title=title.strip() or pid, pid=pid,
+                   seconds=f"{TEST_TIMEOUT}"))
+        return SubmitReply(T('selfdev.submit.gate_timeout', pid=pid, title=title.strip(),
+                             seconds=f"{TEST_TIMEOUT}"), status='refused')
 
     if should_automerge(zone):
         # 26.09 immunity contract (по слову Егора): красные тесты — блок, не предупреждение.
@@ -508,33 +520,38 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
         # именованный обход блока (provenance), а не молчаливая выдача красного в master.
         state0 = test_status(tests)
         if state0 == "failed" and not override_reason:
-            _update(pid, status="proposed", reason="блок иммунитета: красные тесты без override_reason")
-            _journal(f"[иммунитет] мёрж «{title.strip() or pid}» ({pid}) заблокирован: "
-                     "тесты красные, override_reason не дан. Стоит в proposed — "
-                     "исправь тесты или дай осознанный override_reason.")
-            return SubmitReply(f'Предложение {pid} «{title.strip()}» НЕ смёржено (зона {zone}): гейт красный ({state0}). Иммунитет по слову Егора от 26.09: красные тесты блокируют автомёрж. Исправь тесты/код или передай override_reason с объяснением, почему красное в этом диффе не относится к нему.', status='refused')
+            _update(pid, status="proposed", reason=T('selfdev.reason.immunity_block'))
+            # The journal tag stays canonical: the panel recognizes it literally.
+            _journal("[иммунитет] " + T('selfdev.journal.immunity_block',
+                                        title=title.strip() or pid, pid=pid))
+            return SubmitReply(T('selfdev.submit.immunity_block', pid=pid, title=title.strip(),
+                                 zone=f"{zone}", state=f"{state0}"), status='refused')
         res = apply(pid, by="auto", override_reason=override_reason)
-        how = f"self-authority, зона {zone}"
+        how = T('selfdev.submit.how', zone=f"{zone}")
         if res["ok"]:
             state = test_status(tests)
             if state == "passed":
-                proof = "тесты зелёные"
+                proof = T('selfdev.proof.green')
                 if rg["status"] == "ok" and rg.get("verdict") == "approved":
-                    proof += ", гном approve"
+                    proof += ", " + T('selfdev.proof.reviewer_approved')
                 elif rg["status"] == "skip":
-                    proof += f", гном пропущен: {rg['note'][:80]}"
+                    proof += ", " + T('selfdev.proof.reviewer_skipped', note=rg['note'][:80])
                 elif rg["status"] == "ok":
-                    proof += (", critic BLOCKED сохранён; решение автора" if rg.get("verdict") == "blocked"
-                              else ", critic evidence сохранён (читай точный текст)")
+                    proof += ", " + (T('selfdev.proof.critic_blocked')
+                                     if rg.get("verdict") == "blocked"
+                                     else T('selfdev.proof.critic_evidence'))
                 else:
-                    proof += ", независимое ревью не запрашивалось (добровольное)"
+                    proof += ", " + T('selfdev.proof.no_reviewer')
             elif override_reason:
-                proof = f"красные тесты; объяснение: {override_reason}"
+                proof = T('selfdev.proof.red_override', reason=override_reason)
             else:
-                proof = "тесты красные; Егору уйдёт предупреждение постфактум"
-            return SubmitReply(f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржено самостоятельно. {res['msg']}", status='merged')
-        return SubmitReply(f"Предложение {pid} ({how}), но технически не смёржилось: {res['msg']}.", status='unknown')
-    return SubmitReply(f'Предложение {pid} «{title.strip()}» не получило известную risk-зону {zone!r}; это неисправность классификатора, а не запрос Егору на мёрж.', status='refused')
+                proof = T('selfdev.proof.red_notice')
+            return SubmitReply(T('selfdev.submit.merged', pid=pid, title=title.strip(), how=how,
+                                 proof=proof, msg=f"{res['msg']}"), status='merged')
+        return SubmitReply(T('selfdev.submit.merge_failed', pid=pid, how=how,
+                             msg=f"{res['msg']}"), status='unknown')
+    return SubmitReply(T('selfdev.submit.unknown_zone', pid=pid, title=title.strip(),
+                         zone=f"{zone!r}"), status='refused')
 
 
 def diff_text(pid: str, cap: int | None = 12000) -> str:
@@ -551,16 +568,17 @@ def diff_text(pid: str, cap: int | None = 12000) -> str:
         added = _git("add", "-A", cwd=wt)  # новые файлы тоже видны
         base = _git("merge-base", main, "HEAD", cwd=wt)
         if cap is None and (added.returncode != 0 or base.returncode != 0):
-            raise RuntimeError("не удалось собрать полный предмет ревью предложения")
+            raise RuntimeError(T('selfdev.diff.subject_failed'))
         mb = base.stdout.strip()
         result = _git("diff", mb or main, cwd=wt)
     else:
         result = _git("diff", f"{main}...{t['branch']}")
     if cap is None and result.returncode != 0:
-        raise RuntimeError("не удалось прочитать полный дифф предложения")
+        raise RuntimeError(T('selfdev.diff.read_failed'))
     out = result.stdout
     # Карточка ограничена; внутренний рецензент получает весь предмет (cap=None).
-    return out if cap is None else out[:cap] + ("\n… (обрезано)" if len(out) > cap else "")
+    return out if cap is None else out[:cap] + (
+        "\n" + T('selfdev.diff.cut') if len(out) > cap else "")
 
 
 def live_effect(branch: str, main: str | None = None) -> tuple[str, str]:
@@ -587,12 +605,12 @@ def live_effect(branch: str, main: str | None = None) -> tuple[str, str]:
     tree = lines[0].strip() if lines else ""
     if probe.returncode == 1:
         hit = len([x for x in lines[1:] if x.strip()])
-        return "conflict", f"против живого дерева: конфликт в {hit} файл(ах)"
+        return "conflict", T('selfdev.effect.conflict', count=f"{hit}")
     if probe.returncode != 0 or not tree:
         return "unknown", ""
     base = _git("rev-parse", f"{main}^{{tree}}").stdout.strip()
     if tree == base:
-        return "noop", "против живого дерева: пусто — мёрж ничего не изменит"
+        return "noop", T('selfdev.effect.noop')
     stat = _git("diff", "--stat", base, tree).stdout.strip().splitlines()
     return "real", (stat[-1].strip() if stat else "")
 
@@ -651,6 +669,7 @@ def _proposals_at_work() -> frozenset[str]:
         return frozenset()
 
 
+@frame_language.pinned
 def reconcile() -> dict:
     """Прибрать осиротевшие building-оболочки; восстановить титулы из бранч-коммитов.
 
@@ -676,7 +695,7 @@ def reconcile() -> dict:
                 spared += 1
                 continue
             _update(pid, status="rejected", decided_by="auto",
-                    reason="ветка предложения пропала — оболочка после рестарта")
+                    reason=T('selfdev.reason.branch_gone'))
             closed += 1
             continue
         effect, stat = live_effect(branch, main)
@@ -685,7 +704,7 @@ def reconcile() -> dict:
                 spared += 1
                 continue
             _update(pid, status="rejected", decided_by="auto",
-                    reason="мёрж не изменил бы живое дерево — изменение уже в нём")
+                    reason=T('selfdev.reason.noop'))
             closed += 1
             continue
         if effect in ("conflict", "real") and stat and not str(t.get("diffstat") or "").strip():
@@ -705,19 +724,19 @@ def reconcile() -> dict:
                 _update(pid, title=recovered)
                 restored += 1
     if closed or restored or described or spared:
-        told = (f", диффов против живого дерева записано {described}" if described else "")
+        told = (", " + T('selfdev.journal.described', count=f"{described}") if described else "")
         # Пропущенное называется вслух. Молчаливая уборка — это ровно тот случай, когда
         # «ничего не произошло» и «я снесла твою работу» печатаются одинаково.
-        kept = (f", живой работы не тронуто {spared}" if spared else "")
-        _journal(f"[selfdev] прибрала оболочки предложений: закрыто {closed} (без ветки / мёрж ничего "
-                 f"не изменит), титулов восстановлено {restored}{told}{kept} — титулованные building "
-                 f"ждут моего submit или reject")
+        kept = (", " + T('selfdev.journal.spared', count=f"{spared}") if spared else "")
+        _journal("[selfdev] " + T('selfdev.journal.reconcile', closed=f"{closed}",
+                                  restored=f"{restored}", described=told, spared=kept))
         log.info("selfdev.reconcile: closed=%d restored=%d described=%d spared=%d",
                  closed, restored, described, spared)
     return {"closed": closed, "restored": restored, "described": described,
             "spared": spared}
 
 
+@frame_language.pinned
 def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
     """Merge the reviewed proposal into the live tree and request a soft restart.
 
@@ -727,9 +746,9 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
     """
     t = get(pid)
     if not t:
-        return {"ok": False, "msg": f"нет предложения {pid}"}
+        return {"ok": False, "msg": T('selfdev.apply.unknown', pid=pid)}
     if t["status"] not in ("proposed", "building"):
-        return {"ok": False, "msg": f"предложение уже {t['status']}"}
+        return {"ok": False, "msg": T('selfdev.apply.closed', status=f"{t['status']}")}
     override_reason = str(override_reason or "").strip()
     tests = t.get("tests") or {}
     # Test evidence is preserved below and in the owner receipt. It does not own the merge:
@@ -743,11 +762,12 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
                                          reason=t.get("why") or "")
         except Exception:
             log.warning("иммунитет не отработал на %s — считаю warn", pid, exc_info=True)
-            verdict, why = "warn", "иммунитет не отработал (исключение) — след в логе"
+            verdict, why = "warn", T('selfdev.immune.failed')
         _update(pid, immune={"verdict": verdict, "why": why})
         if verdict in {"red", "warn"}:
-            _journal(f"[иммунитет] {verdict} «{t.get('title') or pid}» ({pid}): {why} — "
-                     "это второе мнение; решение и rollback остаются моими.")
+            _journal("[иммунитет] " + T('selfdev.journal.immune', verdict=f"{verdict}",
+                                        title=f"{t.get('title') or pid}", pid=pid,
+                                        why=f"{why}"))
             log.warning("иммунитет %s на %s: %s", verdict, pid, (why or "")[:120])
     # незакоммиченное живое (если есть) — снапшотим, чтобы мёрж не съел её текущие правки
     if _git("status", "--porcelain").stdout.strip():
@@ -761,34 +781,36 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
     if r.returncode != 0:
         _git("merge", "--abort")
         msg = (r.stderr or r.stdout or "").strip()[:200]
-        _update(pid, reason=f"конфликт мёржа: {msg}")
-        return {"ok": False, "msg": f"конфликт мёржа: {msg}"}
+        _update(pid, reason=T('selfdev.apply.conflict', msg=msg))
+        return {"ok": False, "msg": T('selfdev.apply.conflict', msg=msg)}
     _cleanup(pid, drop_branch=True)
     _update(pid, status="merged", decided_by=by, notified=(by != "auto"),
             override_reason=override_reason)
-    actor = "самостоятельно, после собственного review" if by == "auto" else "Егор одобрил"
-    _journal(f"«{title}» ({pid}) смёржено ({actor})"
-             + (f"; override: {override_reason}" if override_reason else "")
-             + " — перезапущусь на новом коде.")
+    actor = T('selfdev.actor.auto') if by == "auto" else T('selfdev.actor.owner')
+    shown = t.get("title") or T('selfdev.untitled')
+    _journal(T('selfdev.journal.merged', title=shown, pid=pid, actor=actor,
+               override=(f"; override: {override_reason}" if override_reason else "")))
     request_restart(f"proposal {pid} merged")
     log.info("proposal %s merged by %s", pid, by)
-    return {"ok": True, "msg": "смёржено; перезапуск на новом коде запрошен"}
+    return {"ok": True, "msg": T('selfdev.apply.merged')}
 
 
+@frame_language.pinned
 def reject(pid: str, reason: str = "", by: str = "egor") -> dict:
     """Отклонить: копия и ветка убираются, причина — ей в дневник (отказ — тоже сигнал)."""
     t = get(pid)
     if not t:
-        return {"ok": False, "msg": f"нет предложения {pid}"}
+        return {"ok": False, "msg": T('selfdev.apply.unknown', pid=pid)}
     if t["status"] in ("merged", "rejected"):
-        return {"ok": False, "msg": f"предложение уже {t['status']}"}
+        return {"ok": False, "msg": T('selfdev.apply.closed', status=f"{t['status']}")}
     _cleanup(pid, drop_branch=True)
     _update(pid, status="rejected", decided_by=by, reason=(reason or "").strip())
     title = t.get("title") or t.get("why") or pid
-    _journal(f"Егор отклонил «{title}» ({pid})" + (f": {reason.strip()}" if reason.strip() else " (без причины)")
-             + ". Это сигнал, не поражение — учту.")
+    _journal(T('selfdev.journal.rejected', title=f"{title}", pid=pid,
+               reason=(f": {reason.strip()}" if reason.strip()
+                       else " " + T('selfdev.journal.no_reason'))))
     log.info("proposal %s rejected: %s", pid, (reason or "")[:80])
-    return {"ok": True, "msg": "отклонено"}
+    return {"ok": True, "msg": T('selfdev.reject.done')}
 
 
 # --------------------------------------------------------------------------- #
@@ -811,22 +833,29 @@ def mark_notified(pid: str) -> None:
     _update(pid, notified=True)
 
 
+@frame_language.pinned
 def list_text() -> str:
     """Краткий список для её тула."""
     items = _load()
     if not items:
-        return "Предложений ещё не было."
+        return T('selfdev.list.empty')
     out = []
     for t in items[-10:]:
         tests = t.get("tests") or {}
-        mark = {"proposed": "ждёт", "merged": "смёржено", "rejected": "отклонено",
-                "building": "строится"}.get(t.get("status"), t.get("status"))
+        status = t.get("status")
+        mark = (T(f"selfdev.list.status.{status}")
+                if status in ("proposed", "merged", "rejected", "building") else status)
         state = test_status(tests)
-        test_mark = {"passed": "ок", "failed": "красные", "error": "ошибка",
-                     "timed_out": "таймаут/пропущены", "not_run": "—"}.get(state, state)
-        out.append(f"#{t['id']} [{mark}] «{t.get('title') or t.get('why') or '—'}» "
-                   f"({t.get('diffstat') or 'без диффа'}; тесты: {test_mark})"
-                   + (f" — ответ Егора: {t['reason']}" if t.get("reason") else ""))
+        test_mark = (T(f"selfdev.list.tests.{state}")
+                     if state in ("passed", "failed", "error", "timed_out")
+                     else ("—" if state == "not_run" else state))
+        # Stored reasons are recorded prose and are shown exactly as written.
+        out.append(T('selfdev.list.row', id=f"{t['id']}", status=f"{mark}",
+                     title=f"{t.get('title') or t.get('why') or '—'}",
+                     diffstat=t.get('diffstat') or T('selfdev.list.no_diff'),
+                     tests=f"{test_mark}")
+                   + (" — " + T('selfdev.list.reason', reason=f"{t['reason']}")
+                      if t.get("reason") else ""))
     return "\n".join(out)
 
 

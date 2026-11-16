@@ -631,6 +631,11 @@ def _cap(text: str, limit: int = 16000) -> str:
 def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
     task = get(task_id)
     if not task:
+        # A run/turn id (ResultRef run=, receipts) is a frequent mistaken task_id. Name the
+        # difference and the home route; never silently fall back to the home scope.
+        if re.fullmatch(r"run-[0-9A-Za-z_.:-]+", str(task_id or "")):
+            return None, None, frame_language.text('forge.io.run_id_not_task',
+                                                   task_id=f'{task_id}')
         return None, None, frame_language.text('forge.io.3', v1=f'{task_id}')
     try:
         raw_root = str(task["root"])
@@ -1042,6 +1047,7 @@ def mark_seen(keys) -> None:
     _wake_save_seen(seen)
 
 
+@frame_language.pinned
 def wake_invitation(items: list[dict]) -> str:
     """Кадр-приглашение: её плод пришёл, не повинность."""
     if not items:
@@ -1052,19 +1058,21 @@ def wake_invitation(items: list[dict]) -> str:
         # ⚠ 10.08.2026: у исхода стало три вида, а не два. «Исчерпал ходы» — это не
         # падение (работа сделана частично и лежит в diff) и не завершение.
         if c["status"] == "done":
-            verb = "закончил"
+            verb = frame_language.text('forge.wake.done')
         elif c["status"] == "stalled":
-            verb = "упёрся в потолок ходов (работа частичная, diff на месте)"
+            verb = frame_language.text('forge.wake.stalled')
         else:
-            verb = f"упал ({c['status']})"
+            verb = frame_language.text('forge.wake.failed', status=f"{c['status']}")
         goal = c["goal"] or c["task_id"]
         verdict = str(c.get("verdict_escalation") or "").strip()
-        verdict_note = f" [контракт {verdict}]" if verdict else ""
-        lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}{verdict_note}: "
-                     f"{c['summary']}")
-    return ("Твои Forge-воркеры завершились — это твой плод, а не задача-повинность. "
-            "Глянь, если хочешь: прочитай, прими работу как свою, отклони или отложи.\n"
-            + "\n".join(lines))
+        # The stored verdict stays canonical; only its displayed caption is localized.
+        verdict_note = (" " + frame_language.text(
+            'forge.wake.contract', verdict=forge_learning.format_contract_status(verdict))
+            if verdict else "")
+        lines.append(frame_language.text(
+            'forge.wake.line', mark=mark, goal=f"{goal}", task_id=f"{c['task_id']}",
+            verb=verb, contract=verdict_note, summary=f"{c['summary']}"))
+    return frame_language.text('forge.wake.header') + "\n" + "\n".join(lines)
 
 
 # ─── PASS 30 Этап 1: события вместо поллинга ─────────────────────────────────
@@ -1129,6 +1137,7 @@ def _backfill_sec() -> float:
         return 24 * 3600.0
 
 
+@frame_language.pinned
 def reconcile_subagent_events(force: bool = False) -> int:
     """Сфабриковать события, которые некому было записать. -> сколько записано.
 
@@ -1196,7 +1205,7 @@ def reconcile_subagent_events(force: bool = False) -> int:
                         continue
                     emit_unit_event(task_id, unit_id,
                                     {"status": "lost", "finished": _now(),
-                                     "error": "supervisor process died before result.json"},
+                                     "error": frame_language.text('forge.reconcile.supervisor_lost')},
                                     request=request)
                     emitted += 1
                 elif overdue_sec and age > overdue_sec:
@@ -1210,8 +1219,9 @@ def reconcile_subagent_events(force: bool = False) -> int:
                     payload = core_subagents.normalize(
                         task_id, unit_id,
                         {"status": "timed_out", "finished": _now(),
-                         "error": f"воркер жив, но работает дольше "
-                                  f"{core_subagents.overdue_minutes()} мин — сигнал, не приговор"},
+                         "error": frame_language.text(
+                             'forge.reconcile.overdue',
+                             minutes=f"{core_subagents.overdue_minutes()}")},
                         request=request, task=task,
                         unit_dir=str(unit_dir))
                     core_events.emit("subagent_result", "forge", payload=payload,
@@ -1359,6 +1369,7 @@ def live_tasks_brief() -> list[str]:
     return [line for _, line in sorted(rows)]
 
 
+@frame_language.pinned
 def reconcile_submitted_tasks() -> int:
     """Сданная задача узнаёт судьбу своего предложения. -> сколько закрыто.
 
@@ -1399,8 +1410,8 @@ def reconcile_submitted_tasks() -> int:
                     task["submission_unknown_since"] = _now()
                     _save_task(task)
                     _event(task_id, "task_submission_unknown", proposal=proposal_id,
-                           summary=f"предложения {proposal_id} нет в реестре — "
-                                   f"судьбу сдачи подтвердить нечем, статус не трогаю")
+                           summary=frame_language.text('forge.reconcile.proposal_unknown',
+                                                       proposal=proposal_id))
                 continue
             verdict = str(proposal.get("status") or "")
             if verdict not in ("merged", "rejected"):
@@ -1408,13 +1419,13 @@ def reconcile_submitted_tasks() -> int:
             decided_by = str(proposal.get("decided_by") or "").strip()
             who = f" ({decided_by})" if decided_by else ""
             if verdict == "merged":
-                result = (f"Предложение {proposal_id} смёржено{who} — работа задачи "
-                          f"лежит в дереве.")
+                result = frame_language.text('forge.reconcile.merged',
+                                             proposal=proposal_id, who=who)
             else:
                 reason = str(proposal.get("reason") or "").strip()
-                result = (f"Предложение {proposal_id} отклонено{who}"
-                          + (f": {reason[:200]}" if reason else "")
-                          + " — работа задачи в дерево не легла.")
+                result = frame_language.text(
+                    'forge.reconcile.rejected', proposal=proposal_id, who=who,
+                    reason=(f": {reason[:200]}" if reason else ""))
             task["status"] = "done"
             task["finished"] = _now()
             task["submission_status"] = verdict
@@ -1456,6 +1467,7 @@ def _task_last_trace(task_id: str, task: dict) -> float:
     return max(stamps or [0.0])
 
 
+@frame_language.pinned
 def reconcile_lost_tasks() -> int:
     """active-задача без единого местного следа жизни дольше порога → lost + ПРОБУЖДЕНИЕ.
 
@@ -1500,20 +1512,19 @@ def reconcile_lost_tasks() -> int:
                 continue
             scope = str(task.get("scope") or "self")
             remote_blind = ("" if scope == "self" else
-                            f" ⚠ scope={scope}: удалённые операции отсюда не видны — если на "
-                            "той стороне что-то ещё крутится, спроси coding_process(list), "
-                            "прежде чем считать задачу мёртвой.")
+                            " " + frame_language.text('forge.reconcile.remote_blind',
+                                                      scope=scope))
             trace_line = _last_trace_line(task_id)
             recap = (
-                f"Задача открыта {task.get('created')} и {quiet_for / 3600:.1f}ч не подаёт "
-                f"признаков: ни живых процессов, ни новых событий. Цель: "
-                f"«{str(task.get('goal') or '')[:200]}». {_root_state_line(task)} "
-                + (trace_line + " " if trace_line else "") +
-                f"Ничего не закрыто и не отменено мной — статус lost это ярлык «потеряна из "
-                f"виду» по порогу тишины {TASK_ABANDONED_SEC / 3600:.0f}ч, не приговор. "
-                f"Продолжить — теми же тулами по тому же id (первое действие вернёт "
-                f"active), закрыть — coding_session(finish), отпустить — просто оставить "
-                f"как есть." + remote_blind)
+                frame_language.text('forge.reconcile.lost_quiet',
+                                    created=f"{task.get('created')}",
+                                    hours=f"{quiet_for / 3600:.1f}",
+                                    goal=str(task.get('goal') or '')[:200])
+                + f" {_root_state_line(task)} "
+                + (trace_line + " " if trace_line else "")
+                + frame_language.text('forge.reconcile.lost_note',
+                                      threshold=f"{TASK_ABANDONED_SEC / 3600:.0f}")
+                + remote_blind)
             # ⚠ 27.07, находка ревью. Ключ был `forge:<id>:task` — один на задачу
             # НАВСЕГДА. Юнит завершается ровно раз, и для него это верно; задача же
             # теряется многократно: потерялась → разбудила → она сделала ход (задача
@@ -1527,7 +1538,8 @@ def reconcile_lost_tasks() -> int:
             payload = core_subagents.normalize(
                 task_id, "task",
                 {"status": "lost", "role": "task", "finished": _now(), "result": recap,
-                 "error": f"нет следов жизни {quiet_for / 3600:.1f}ч"},
+                 "error": frame_language.text('forge.reconcile.lost_error',
+                                              hours=f"{quiet_for / 3600:.1f}")},
                 request={"created": str(task.get("created") or "")},
                 task=task, unit_dir=str(_task_dir(task_id)))
             core_events.emit("subagent_result", "forge", payload=payload,
@@ -1535,8 +1547,8 @@ def reconcile_lost_tasks() -> int:
                                                                 suffix=f"lost{lost_count}"))
             _event(task_id, "task_lost", quiet_hours=round(quiet_for / 3600, 2),
                    lost_count=lost_count,
-                   summary=f"нет следов жизни {quiet_for / 3600:.1f}ч — потеряна из виду, "
-                           f"не закрыта")
+                   summary=frame_language.text('forge.reconcile.lost_event',
+                                               hours=f"{quiet_for / 3600:.1f}"))
             task["status"] = "lost"
             task["lost_reason"] = recap
             task["lost_count"] = lost_count
@@ -1648,7 +1660,24 @@ def _clip_seen(text: str, limit: int) -> str:
     в кадре пробуждения её же цель обрывалась на «Дать два независимых» без единого знака."""
     value = str(text or "")
     return value if len(value) <= limit else (
-        value[:limit].rstrip() + f"…[обрезано, ещё {len(value) - limit} симв.]")
+        value[:limit].rstrip()
+        + frame_language.text('forge.upstream.clipped', count=f"{len(value) - limit}"))
+
+
+# `known_source` is stored as one of these canonical (legacy Russian) markers, so the
+# registry stays readable across language changes. Only the display is localized;
+# an unknown stored value is shown exactly as recorded.
+_KNOWN_SOURCE_KEYS = {
+    "цель задачи": "forge.upstream.source.goal",
+    "первый вопрос remote, не твой взгляд": "forge.upstream.source.first_probe",
+    "сказано мной тебе": "forge.upstream.source.told",
+}
+
+
+def _known_source_label(value) -> str:
+    raw = str(value or "")
+    key = _KNOWN_SOURCE_KEYS.get(raw)
+    return frame_language.text(key) if key else raw
 
 
 # Реестр наблюдений трогают два потока: её ход (открыла задачу с репозиторием) и обход
@@ -1785,10 +1814,9 @@ def _evict_upstreams(data: dict, task_id: str = "") -> list[str]:
         row = data.pop(key, None) or {}
         for tid in {*(row.get("tasks") or []), *( [task_id] if task_id else [] )}:
             _upstream_trail(str(tid), "upstream_evicted",
-                            f"наблюдение за {row.get('url') or key} снято потолком "
-                            f"PRAXIS_FORGE_UPSTREAM_KEEP={UPSTREAM_KEEP} (вытесняется самое "
-                            f"давно не тронутое) — назови его снова "
-                            f"(coding_inspect action=watch), и оно вернётся")
+                            frame_language.text('forge.upstream.evicted',
+                                                url=f"{row.get('url') or key}",
+                                                keep=f"{UPSTREAM_KEEP}"))
     log.info("forge-наблюдения: потолок %d (PRAXIS_FORGE_UPSTREAM_KEEP) — сняты самые "
              "давние: %s", UPSTREAM_KEEP, ", ".join(dropped))
     return dropped
@@ -1815,7 +1843,7 @@ def _upstream_note(task: dict) -> str:
         else:
             # Откуда взялась точка отсчёта — часть правды: «ты это видела» и «я тебе про
             # это сказала» разные вещи, и через неделю их уже не различить по памяти.
-            src = str(row.get("known_source") or "")
+            src = _known_source_label(row.get("known_source"))
             where = (frame_language.text('forge.support.11', v1=f'{known[:8]}') + (f" ({src}" if src else " (")
                      + (frame_language.text('forge.support.12', v1=f"{row.get('checked_at')}") if row.get("checked_at")
                         else "") + ")").replace(" ()", "")
@@ -1841,17 +1869,20 @@ def _ls_remote_head(url: str) -> tuple[str, str]:
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=(UPSTREAM_PROBE_SEC or None), env=env)
     except subprocess.TimeoutExpired:
-        return "", f"remote не ответил за {UPSTREAM_PROBE_SEC:.0f}с"
+        return "", frame_language.text('forge.upstream.probe_timeout',
+                                       seconds=f"{UPSTREAM_PROBE_SEC:.0f}")
     except Exception as exc:
         return "", f"{type(exc).__name__}: {exc}"
     if r.returncode != 0:
         tail = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
-        return "", _mask_userinfo(tail[0] if tail else "git ls-remote промолчал")[:200]
+        # Raw git stderr stays exact; only our own placeholder is localized.
+        return "", _mask_userinfo(tail[0] if tail else
+                                  frame_language.text('forge.upstream.probe_silent'))[:200]
     for line in (r.stdout or "").splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[1] == "HEAD" and re.fullmatch(r"[0-9a-f]{40}", parts[0]):
             return parts[0], ""
-    return "", "в ответе remote нет HEAD"
+    return "", frame_language.text('forge.upstream.probe_no_head')
 
 
 def _arm_upstreams_from_tasks() -> int:
@@ -1877,41 +1908,37 @@ def _arm_upstreams_from_tasks() -> int:
     return added
 
 
+@frame_language.pinned
 def _upstream_wake_text(moved: list[dict], blind: list[dict]) -> str:
     """Кадр факта. Ни одного глагола действия: увидела ≠ пошла проверять."""
-    head = ("Это пробуждение поставил форж по стоячему наблюдению, а не отдельной твоей "
-            "просьбой: репозиторий назван тобой в цели coding-задачи.\n"
-            "Что произошло — ФАКТ, не задача: я ничего не склонировала, не скачала, "
-            "не смержила и ни о чём не договорилась. Что с этим делать — решаешь ты, "
-            "и «ничего» тоже решение.")
+    head = frame_language.text('forge.upstream.wake_head')
     lines = []
     for row in moved:
         known = str(row.get("known_head") or "")
-        known_src = str(row.get("known_source") or "")
-        lines.append(
-            f"• {row.get('url')}: было {known[:8] or '—'}"
-            + (f" ({known_src})" if known_src else "")
-            + f", сейчас HEAD {str(row.get('head') or '')[:8]} — замечено {row.get('checked_at')}.")
+        known_src = _known_source_label(row.get("known_source"))
+        lines.append(frame_language.text(
+            'forge.upstream.wake_moved', url=f"{row.get('url')}", known=known[:8] or '—',
+            source=(f" ({known_src})" if known_src else ""),
+            head=str(row.get('head') or '')[:8], at=f"{row.get('checked_at')}"))
         goal = " ".join(str(row.get("goal") or "").split())
         if goal:
-            lines.append(f"   ты называла его в задаче {', '.join(row.get('tasks') or []) or '—'}: "
-                         f"«{_clip_seen(goal, 160)}»")
-        lines.append("   что там за коммиты — отсюда не видно: запрошен был только HEAD. "
-                     "Посмотреть — твоими руками (clone/fetch в coding-задаче), я не ходила.")
+            lines.append("   " + frame_language.text(
+                'forge.upstream.wake_goal', tasks=', '.join(row.get('tasks') or []) or '—',
+                goal=_clip_seen(goal, 160)))
+        lines.append("   " + frame_language.text('forge.upstream.wake_commits'))
     for row in blind:
-        lines.append(
-            f"• ⚠ {row.get('url')}: я ОСЛЕПЛА с {row.get('blind_since')} — "
-            f"{row.get('error')}. Это не «ничего не менялось», это «не могу спросить»: "
-            f"последнее, что знаю, — {str(row.get('known_head') or '—')[:8]}.")
-    tail = (f"[наблюдение: спрашиваю только HEAD не чаще раза в "
-            f"{UPSTREAM_CHECK_SEC / 60:.0f} мин (PRAXIS_FORGE_UPSTREAM_MIN), ответа жду "
-            f"{UPSTREAM_PROBE_SEC:.0f}с, наблюдений держу до {UPSTREAM_KEEP} "
-            f"(PRAXIS_FORGE_UPSTREAM_KEEP, вытесняются самые давние), на один обход трачу "
-            f"не больше {UPSTREAM_PASS_SEC:.0f}с и остаток спрашиваю следующим тактом, "
-            f"про слепоту говорю через {UPSTREAM_BLIND_SEC / 3600:.0f}ч]")
+        lines.append(frame_language.text(
+            'forge.upstream.wake_blind', url=f"{row.get('url')}",
+            since=f"{row.get('blind_since')}", error=f"{row.get('error')}",
+            known=str(row.get('known_head') or '—')[:8]))
+    tail = frame_language.text(
+        'forge.upstream.wake_tail', interval=f"{UPSTREAM_CHECK_SEC / 60:.0f}",
+        probe=f"{UPSTREAM_PROBE_SEC:.0f}", keep=f"{UPSTREAM_KEEP}",
+        budget=f"{UPSTREAM_PASS_SEC:.0f}", blind=f"{UPSTREAM_BLIND_SEC / 3600:.0f}")
     return "\n".join([head, *lines, tail])
 
 
+@frame_language.pinned
 def check_upstreams(force: bool = False) -> int:
     """Один обход наблюдений: спросить HEAD, сдвиг — фактом в её пробуждение.
     -> сколько фактов отдано (сдвиги + впервые названная слепота).
@@ -2004,8 +2031,9 @@ def check_upstreams(force: bool = False) -> int:
         retired = _load_retired()
         for key, row in dropped:
             retired[key] = {"url": row.get("url"), "at": _now(),
-                            "reason": f"не ответил как git-репозиторий "
-                                      f"{_UPSTREAM_ARM_TRIES} раза подряд: {row.get('error')}"}
+                            "reason": frame_language.text(
+                                'forge.upstream.retired_not_git',
+                                tries=f"{_UPSTREAM_ARM_TRIES}", error=f"{row.get('error')}")}
         try:
             _atomic_json(_UPSTREAMS_RETIRED, retired)
         except Exception:
@@ -2015,9 +2043,10 @@ def check_upstreams(force: bool = False) -> int:
                  "(%s)", row.get("url"), _UPSTREAM_ARM_TRIES, row.get("error"))
         for task_id in (row.get("tasks") or []):
             _upstream_trail(str(task_id), "upstream_dropped",
-                            f"наблюдение за {row.get('url')} снято: не ответил как "
-                            f"git-репозиторий {_UPSTREAM_ARM_TRIES} раза подряд "
-                            f"({row.get('error')})")
+                            frame_language.text('forge.upstream.dropped',
+                                                url=f"{row.get('url')}",
+                                                tries=f"{_UPSTREAM_ARM_TRIES}",
+                                                error=f"{row.get('error')}"))
     if not moved and not blind:
         _merge_upstreams(data, touched, {k for k, _ in dropped})
         return 0
@@ -2036,8 +2065,10 @@ def check_upstreams(force: bool = False) -> int:
         for row in moved:
             for task_id in (row.get("tasks") or []):
                 _upstream_trail(str(task_id), "upstream_moved",
-                                f"{row.get('url')}: {str(row.get('known_head') or '')[:8]} → "
-                                f"{str(row.get('head') or '')[:8]} (факт, не задача)")
+                                frame_language.text('forge.upstream.moved_trail',
+                                                    url=f"{row.get('url')}",
+                                                    old=str(row.get('known_head') or '')[:8],
+                                                    new=str(row.get('head') or '')[:8]))
     _merge_upstreams(data, touched, {k for k, _ in dropped})
     return (len(moved) + len(blind)) if told else 0
 
@@ -2115,13 +2146,14 @@ def _upstream_row_line(row: dict) -> str:
     elif head and head != known:
         state = (frame_language.text('forge.overview.32', v1=f'{known[:8]}', v3=f'{head[:8]}', v5=f"{row.get('last_move_at') or frame_language.text('forge.overview.35')}"))
     else:
-        state = frame_language.text('forge.overview.33', v1=f'{known[:8]}', v3=f"{row.get('known_source') or frame_language.text('forge.overview.36')}")
+        state = frame_language.text('forge.overview.33', v1=f'{known[:8]}', v3=f"{_known_source_label(row.get('known_source')) or frame_language.text('forge.overview.36')}")
     blind = (frame_language.text('forge.overview.31', v1=f"{row.get('blind_since')}", v3=f"{row.get('error')}")
              if row.get("blind_since") else "")
     tasks = ", ".join(row.get("tasks") or []) or "—"
     return (frame_language.text('forge.overview.29', v1=f"{row.get('url')}", v3=f'{state}', v4=f'{blind}', v6=f'{tasks}', v8=f"{row.get('checked_at') or frame_language.text('forge.overview.34')}"))
 
 
+@frame_language.pinned
 def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
     """Её рука на наблюдении: перечислить | поставить | СНЯТЬ. -> что сказать ей.
 
@@ -2136,28 +2168,27 @@ def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
     action = str(action or "").strip().lower()
     arg = str(arg or "").strip()
     if UPSTREAM_CHECK_SEC <= 0 or UPSTREAM_KEEP <= 0:
-        return ("Глаз на чужие репозитории ВЫКЛЮЧЕН (PRAXIS_FORGE_UPSTREAM_MIN=0 или "
-                "PRAXIS_FORGE_UPSTREAM_KEEP=0): ни поставить, ни снять наблюдение "
-                "нечего — сдвиг чужого HEAD до меня не дойдёт вообще.")
+        return frame_language.text('forge.upstream.disabled')
     if action == "watching":
         rows = [r for r in _load_upstreams().values() if isinstance(r, dict)]
         retired = _load_retired()
-        head = (f"наблюдений {len(rows)} из {UPSTREAM_KEEP} "
-                f"(PRAXIS_FORGE_UPSTREAM_KEEP; сверх потолка вытесняется самое давно не "
-                f"тронутое); спрашиваю только HEAD не чаще раза в "
-                f"{UPSTREAM_CHECK_SEC / 60:.0f} мин, без клона и без кредов")
+        head = frame_language.text('forge.upstream.watching_head', count=f"{len(rows)}",
+                                   keep=f"{UPSTREAM_KEEP}",
+                                   interval=f"{UPSTREAM_CHECK_SEC / 60:.0f}")
         body = [_upstream_row_line(r) for r in sorted(
-            rows, key=lambda r: str(r.get("url") or ""))] or ["- пока ни одного"]
-        tail = ([f"снятые (вернутся, если назову адрес снова): "
-                 + ", ".join(f"{v.get('url') or k} — {v.get('reason') or 'снято'}"
-                             for k, v in retired.items())] if retired else [])
+            rows, key=lambda r: str(r.get("url") or ""))] or [
+            frame_language.text('forge.upstream.watching_none')]
+        # A stored retirement reason is recorded prose and is shown exactly.
+        tail = ([frame_language.text(
+            'forge.upstream.watching_retired',
+            rows=", ".join(f"{v.get('url') or k} — "
+                           f"{v.get('reason') or frame_language.text('forge.upstream.retired_default')}"
+                           for k, v in retired.items()))] if retired else [])
         return "\n".join([head, *body, *tail])
     if action in ("watch", "unwatch"):
         found = _upstream_urls(arg)
         if not found:
-            return (f"В «{arg or '—'}» я не вижу адреса git-репозитория. Нужен полный "
-                    f"адрес вида https://host/владелец/репозиторий или git@host:владелец/"
-                    f"репозиторий.")
+            return frame_language.text('forge.upstream.no_url', arg=arg or '—')
         if action == "watch":
             task = get(task_id) if task_id else None
             # Базлайн берётся из её слов ровно так же, как из цели задачи: полный SHA
@@ -2167,12 +2198,10 @@ def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
                       "updated": (task or {}).get("updated") or _now()}
             added = _arm_upstreams(pseudo, respect_retired=False)
             urls = ", ".join(u for u, _ in found)
-            return (f"Наблюдаю за {urls}"
-                    + (f" (новых {added})" if added else " (уже наблюдала)")
-                    + f". Спрашиваю только HEAD не чаще раза в "
-                      f"{UPSTREAM_CHECK_SEC / 60:.0f} мин; сдвиг придёт мне пробуждением "
-                      f"как ФАКТ, без клона и без следствий. Снимаю тем же тулом: "
-                      f"action=unwatch.")
+            state = (frame_language.text('forge.upstream.watch_new', count=f"{added}")
+                     if added else frame_language.text('forge.upstream.watch_existing'))
+            return frame_language.text('forge.upstream.watch_added', urls=urls, state=state,
+                                       interval=f"{UPSTREAM_CHECK_SEC / 60:.0f}")
         gone, missing = [], []
         with _UPSTREAMS_LOCK:
             data = _load_upstreams()
@@ -2183,7 +2212,7 @@ def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
                     missing.append(url)
                     continue
                 retired[key] = {"url": row.get("url") or url, "at": _now(),
-                                "reason": "снято по своему решению (coding_inspect action=unwatch)"}
+                                "reason": frame_language.text('forge.upstream.unwatch_reason')}
                 gone.append(url)
             if gone:
                 _save_upstreams(data)
@@ -2196,13 +2225,12 @@ def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
                 log.info("forge-наблюдение снято её рукой: %s", url)
         parts = []
         if gone:
-            parts.append(f"Наблюдение снято: {', '.join(gone)} — больше не спрашиваю и "
-                         f"пробуждений по нему не будет. Назову этот адрес снова "
-                         f"(action=watch или в цели новой задачи) — вернётся.")
+            parts.append(frame_language.text('forge.upstream.unwatched', urls=', '.join(gone)))
         if missing:
-            parts.append(f"Не наблюдала: {', '.join(missing)} — снимать нечего.")
+            parts.append(frame_language.text('forge.upstream.not_watched',
+                                             urls=', '.join(missing)))
         return " ".join(parts)
-    return "action наблюдения: watching | watch | unwatch."
+    return frame_language.text('forge.upstream.actions')
 
 
 def task_origin(task_id: str) -> str:
