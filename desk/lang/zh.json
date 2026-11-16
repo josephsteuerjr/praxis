@@ -4311,5 +4311,6 @@
   "native.mcp.consent_text": "智能体即将接管这台电脑的鼠标和键盘。\n\n现在允许吗？如果你不回答而继续使用电脑，控制权仍在你手中。此窗口将在 {seconds} 秒后自动关闭。",
   "ui.ui.kit.steps.preview_thinking": "模型生成过程中的思考（{p0} 个字符）",
   "ui.ui.kit.steps.preview_reply": "正在写回复——已 {p0} 个字符，尚未发送",
-  "ui.ui.kit.steps.preview_text": "正在写文字——已 {p0} 个字符，尚未发送"
+  "ui.ui.kit.steps.preview_text": "正在写文字——已 {p0} 个字符，尚未发送",
+  "ui.ui.kit.usage.fresh_input": "未缓存 {p0}"
 }

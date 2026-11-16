@@ -4311,5 +4311,6 @@
   "native.mcp.consent_text": "The agent is about to take control of this computer's mouse and keyboard.\n\nAllow now? If you keep using the computer without answering, you stay in control. This window closes by itself in {seconds} s.",
   "ui.ui.kit.steps.preview_thinking": "Model's thinking while it generates ({p0} characters)",
   "ui.ui.kit.steps.preview_reply": "Writing the reply — {p0} characters so far, not sent yet",
-  "ui.ui.kit.steps.preview_text": "Writing text — {p0} characters so far, not sent yet"
+  "ui.ui.kit.steps.preview_text": "Writing text — {p0} characters so far, not sent yet",
+  "ui.ui.kit.usage.fresh_input": "{p0} fresh"
 }

@@ -13,6 +13,13 @@ interface Usage {
   models: Counts[]; roles: Counts[];
   days: (Counts & { day: string; recorded: boolean })[];
 }
+/** Uncached part of the input under the current counting rules (input includes the cache). */
+export function freshInput(row: Counts): string {
+  if (row.legacy_semantics || row.input_tokens == null || !(row.cache_read_tokens > 0)) return "";
+  const fresh = Math.max(0, row.input_tokens - row.cache_read_tokens);
+  return `<small class="usage-fresh">${esc(uiText("ui.ui.kit.usage.fresh_input", {p0: num(fresh)}))}</small>`;
+}
+
 interface Allowance {
   name: string; status: string; reason?: string; observed_at: number;
   windows: { label: string; used_percent: number | null; remaining_percent: number | null;
@@ -82,7 +89,7 @@ function countsHTML(data: Usage): string {
   const today = data.today_total, week = data.week_total;
   const max = Math.max(1, ...data.days.map(d => d.calls));
   const daily = data.days.map(d => uiText("ui.ui.kit.usage.dffbe17a79", {p0: String(esc(d.day)), p1: String(exact(d.calls)), p2: String(exact(d.total_tokens)), p3: String(d.calls ? Math.max(5, d.calls / max * 100) : 0), p4: String(esc(d.day.slice(8)))})).join("");
-  const rows = (data.models.length ? data.models : data.roles).map(row => `<tr><th scope="row">${esc(row.name || uiText("ui.ui.kit.usage.a0137daf33"))}</th><td>${num(row.calls)}</td><td>${num(row.input_tokens)}</td><td>${num(row.output_tokens)}</td><td>${row.cache_percent == null ? "—" : num(row.cache_percent) + "%"}</td></tr>`).join("");
+  const rows = (data.models.length ? data.models : data.roles).map(row => `<tr><th scope="row">${esc(row.name || uiText("ui.ui.kit.usage.a0137daf33"))}</th><td>${num(row.calls)}</td><td>${num(row.input_tokens)}${freshInput(row)}</td><td>${num(row.output_tokens)}</td><td>${row.cache_percent == null ? "—" : num(row.cache_percent) + "%"}</td></tr>`).join("");
   return uiText("ui.ui.kit.usage.70d57f77ff", {p0: String(exact(today.total_tokens)), p1: String(num(today.total_tokens)), p2: String(num(today.calls)), p3: String(exact(week.total_tokens)), p4: String(num(week.total_tokens)), p5: String(num(week.calls)), p6: String(week.cache_percent == null ? uiText("ui.ui.kit.usage.990290fe4e") : num(week.cache_percent) + uiText("ui.ui.kit.usage.0e01799b87")), p7: String(esc(data.days.map(d => d.day + ': ' + d.calls).join('; '))), p8: String(daily), p9: String(data.models.length || data.roles.length), p10: String(rows), p11: String(week.legacy_semantics ? uiText("ui.ui.kit.usage.f6b234f043") : uiText("ui.ui.kit.usage.085fd39ca6"))});
 }
 

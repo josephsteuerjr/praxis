@@ -77,3 +77,6 @@
   .usage-brief small { font-size: 11px; }
   .usage-expanded { padding: 18px 16px; }
 }
+
+/* Fresh (uncached) input under the per-model input total. */
+.usage-fresh { display: block; color: var(--muted); font-size: .85em; }

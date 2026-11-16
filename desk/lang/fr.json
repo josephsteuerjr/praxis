@@ -4311,5 +4311,6 @@
   "native.mcp.consent_text": "L’agent est sur le point de prendre le contrôle de la souris et du clavier de cet ordinateur.\n\nAutoriser maintenant ? Si vous continuez à utiliser l’ordinateur sans répondre, vous gardez le contrôle. Cette fenêtre se ferme d’elle-même dans {seconds} s.",
   "ui.ui.kit.steps.preview_thinking": "Réflexion du modèle pendant la génération ({p0} caractères)",
   "ui.ui.kit.steps.preview_reply": "Rédige la réponse — {p0} caractères pour l’instant, pas encore envoyée",
-  "ui.ui.kit.steps.preview_text": "Rédige du texte — {p0} caractères pour l’instant, pas encore envoyé"
+  "ui.ui.kit.steps.preview_text": "Rédige du texte — {p0} caractères pour l’instant, pas encore envoyé",
+  "ui.ui.kit.usage.fresh_input": "{p0} hors cache"
 }
