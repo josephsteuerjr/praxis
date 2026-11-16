@@ -1,0 +1,26 @@
+name: Upload exact Hélène 2.8.6 archives
+on:
+  push:
+    branches: [codex/helene286-upload-allos-1611]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-arm
+          path: native/43968730069/server-arm
+          run-id: 43968730069
+          github-token: ${{ github.token }}
+      - name: Reconstruct, verify and upload to the draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 upload_allos.py
