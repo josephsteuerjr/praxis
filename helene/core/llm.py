@@ -1295,7 +1295,16 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
     has_answer = bool(out.text.strip()) or any(
         (b or {}).get("type") in {"tool_use", "tool_use_fragment"}
         for b in (out.blocks or ()))
-    if out.continuation.get("payload") and (
+    payload = out.continuation.get("payload")
+    # Whitespace-only ordinary text carries no opaque provider state. Preserve
+    # thinking/signature/unknown blocks on the non-retryable partial path.
+    meaningful_payload = payload
+    if out.continuation.get("format") == "anthropic" and isinstance(payload, list):
+        meaningful_payload = [b for b in payload if not (
+            isinstance(b, dict) and b.get("type") == "text"
+            and not str(b.get("text") or "").strip()
+            and set(b) <= {"type", "text"})]
+    if meaningful_payload and (
             str(out.stop_reason or "") == "error" or not has_answer):
         # A normal terminal status does not make received opaque output empty.
         # Keep its evidence on the non-retryable partial-response path.
