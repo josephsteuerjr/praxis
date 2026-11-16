@@ -1,7 +1,7 @@
 
 from pathlib import Path
 import hashlib,json,os,platform,shutil,subprocess,sys,tarfile
-R=Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification';E=R/'equipment';S=R/'source';O=R/'evidence';O.mkdir(exist_ok=True)
+R=Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification';E=R/'equipment';S=R/'source';O=R/'evidence';O.mkdir(parents=True,exist_ok=True)
 def sha(p):return hashlib.file_digest(Path(p).open('rb'),'sha256').hexdigest()
 prepared=json.loads(Path('PREPARED.json').read_bytes());assert sha('inputs.tar.gz')==prepared['archive_sha256']
 if '--embedded' not in sys.argv:

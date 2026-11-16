@@ -31,7 +31,26 @@ jobs:
           mkdir -p "$RUNNER_TEMP/helene-case/qualification/evidence"
           cp driver.log "$RUNNER_TEMP/helene-case/qualification/evidence/driver.log" || true
           tail -60 driver.log || true
+          tail -35 "$RUNNER_TEMP/helene-case/qualification/evidence/native-suite.log" || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,tarfile
+          root=Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification/evidence'
+          with tarfile.open('intel-resume-proof.tar.gz','w:gz') as z:
+            for p in sorted(root.rglob('*')):
+              if not p.is_file():continue
+              q=p.relative_to(root)
+              if q.parts[0]=='package' or any(n in q.parts for n in ('regression-source','edition','test-home')):continue
+              if q.parts[:2]==('native','core-work') and not(len(q.parts)==3 and p.suffix=='.json'):continue
+              if q.parts[:3]==('native','relay-device','tree'):continue
+              z.add(p,arcname='evidence/'+q.as_posix(),recursive=False)
+          PY
           tar -czf native-macos-intel.tar.gz -C "$RUNNER_TEMP/helene-case/qualification" evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-macos-intel-proof
+          path: intel-resume-proof.tar.gz
       - uses: actions/upload-artifact@v4
         if: always()
         with:
