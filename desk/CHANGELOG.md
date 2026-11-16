@@ -1,3 +1,11 @@
+# 2.8.3 Beta
+
+- A maximized window no longer keeps the 5-pixel resize strips over the screen edge, so the scrollbar, header and close corner reach the very edge. The shell reports the window's own maximized state; resizing and header drags are ignored while maximized, the maximized size follows the monitor the window is on, and a double click on the header maximizes or restores.
+- Nested hand calls (`h.hand(...)` from Python) in Telegram groups: when the owner wrote in a group, every nested call ended "in doubt" before it started. The authority re-check compared the owner with a core variable the edition never sets; it now uses the configured Telegram owner and the bot's own admission rules. The same gap blocked resuming the owner's paused group turns. A nested call without a receipt now names its cause.
+- Telegram documents (ZIP, PDF, any file): the bytes were stored but the turn saw only "no visual preview" without a path. A received file is now copied into the agent's media folder under its own name, and the turn sees its path, size and SHA-256; before the bytes arrive it says the file has not been received yet.
+- The agent's personal Git no longer tracks `retained-assets/` and `backups/`. After a move to a new programme folder the owner's backup folder could sit inside the agent's data, so weekly multi-gigabyte backups went into the snapshot taken before every command, which then timed out. Existing homes are healed at the next start; files and history are kept.
+- Windows prerelease only; stable Latest remains 2.7.2.
+
 # 2.8.2 Beta
 
 - Fix Windows edge and corner resizing of the frameless window. The 2.8.0 fix compared the bridge platform with `win32`, but the bridge reports `windows`, so the handles were never installed on Windows.
