@@ -956,7 +956,7 @@ class TestCapabilitiesReachHer(unittest.TestCase):
         обязана падать вместе со схемой, а не переживать её."""
         line = self.cap._room_levers_line()
         self.assertIn("mode", str(self.cap._room_tool_spec()))
-        for word in ("режим комнаты ставлю себе сама", "disclosure", "визитку"):
+        for word in ("режим комнаты ставлю себе сама", "disclosure", "визитке"):
             self.assertIn(word, line)
         self.assertNotIn("⚠", line)
 
