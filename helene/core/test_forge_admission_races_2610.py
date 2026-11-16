@@ -144,7 +144,7 @@ class AdmissionRaces(unittest.TestCase):
             self.assertEqual(forge.tick_queued(self.tid), [])
         refresh.assert_called_once()
         self.assertEqual(len([c for c in snapshots.call_args_list if c.args[1] == prerequisite.name]), 1)
-        self.assertIn('dependency result revision changed', forge._read_json(dependent / 'request.json')['queued_reason'])
+        self.assertIn(forge.frame_language.text('forge.swarm.20'), forge._read_json(dependent / 'request.json')['queued_reason'])
         self.assertEqual(self.spawn.call_count, 1)
         self.accept(prerequisite)
         self.assertEqual(forge.tick_queued(self.tid)[0]['agent_id'], dependent.name)

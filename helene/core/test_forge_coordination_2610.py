@@ -353,7 +353,7 @@ class Coordination(unittest.TestCase):
         node = forge_swarm.load(self.directory)["nodes"][0]
         self.assertEqual(node["previous_unit_id"], d.name)
         self.assertEqual(node["attempts"][0]["result_sha256"], digest)
-        self.assertIn("already exists", forge.swarm(self.tid, "plan", plan='[{"brief":"replace"}]'))
+        self.assertIn(forge.frame_language.text('forge.swarm.11'), forge.swarm(self.tid, "plan", plan='[{"brief":"replace"}]'))
         self.assertEqual(forge._result_identity(d / "result.json"), digest)
         forge.swarm(self.tid, "tick")
         updated = forge_swarm.load(self.directory)["nodes"][0]

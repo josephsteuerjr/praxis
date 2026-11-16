@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import Callable
 
+import frame_language
+
 
 KINDS = {"finding", "question", "blocker", "contract", "result", "claim", "release"}
 
@@ -44,35 +46,36 @@ def _node_id(value: str) -> str:
     return clean[:64]
 
 
+@frame_language.pinned
 def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 8) -> dict:
     if load(task_dir):
-        raise ValueError("a durable plan already exists; use rework, not replacement")
+        raise ValueError(frame_language.text('forge.swarm.11'))
     if isinstance(raw_plan, str):
         try:
             raw_plan = json.loads(raw_plan)
         except ValueError as exc:
-            raise ValueError(f"plan is not valid JSON: {exc}") from exc
+            raise ValueError(frame_language.text('forge.swarm.12', v1=f'{exc}')) from exc
     if isinstance(raw_plan, dict):
         raw_nodes = raw_plan.get("nodes") or []
     else:
         raw_nodes = raw_plan or []
     if not isinstance(raw_nodes, list) or not raw_nodes:
-        raise ValueError("plan needs a non-empty nodes list")
+        raise ValueError(frame_language.text('forge.swarm.13'))
     nodes = []
     ids: set[str] = set()
     for index, item in enumerate(raw_nodes):
         if not isinstance(item, dict):
-            raise ValueError(f"node {index + 1} is not an object")
+            raise ValueError(frame_language.text('forge.swarm.14', v1=f'{index + 1}'))
         nid = _node_id(item.get("id") or f"step-{index + 1}")
         if not nid or nid in ids:
-            raise ValueError(f"duplicate/empty node id: {nid!r}")
+            raise ValueError(frame_language.text('forge.swarm.15', v1=f'{nid!r}'))
         ids.add(nid)
         role = str(item.get("role") or "worker").strip().lower()
         if role not in {"scout", "worker", "reviewer"}:
-            raise ValueError(f"node {nid}: role must be scout|worker|reviewer")
+            raise ValueError(frame_language.text('forge.swarm.16', v1=f'{nid}'))
         brief = str(item.get("brief") or "").strip()
         if not brief:
-            raise ValueError(f"node {nid}: brief is required")
+            raise ValueError(frame_language.text('forge.swarm.17', v1=f'{nid}'))
         deps = [_node_id(dep) for dep in (item.get("deps") or [])]
         owns = [str(path).replace("\\", "/") for path in (item.get("owns") or []) if str(path).strip()]
         nodes.append({"id": nid, "role": role, "brief": brief, "deps": deps,
@@ -82,16 +85,16 @@ def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 8
     for node in nodes:
         missing = [dep for dep in node["deps"] if dep not in ids]
         if missing:
-            raise ValueError(f"node {node['id']}: unknown deps {missing}")
+            raise ValueError(frame_language.text('forge.swarm.18', v1=f"{node['id']}", v3=f'{missing}'))
         if node["id"] in node["deps"]:
-            raise ValueError(f"node {node['id']}: self dependency")
+            raise ValueError(frame_language.text('forge.swarm.19', v1=f"{node['id']}"))
     graph = {node["id"]: node["deps"] for node in nodes}
     visiting: set[str] = set()
     visited: set[str] = set()
 
     def visit(nid: str) -> None:
         if nid in visiting:
-            raise ValueError(f"cycle at {nid}")
+            raise ValueError(frame_language.text('forge.swarm.177', v1=f'{nid}'))
         if nid in visited:
             return
         visiting.add(nid)
@@ -108,15 +111,17 @@ def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 8
     return plan
 
 
+@frame_language.pinned
 def dependency_reason(node: dict, by_id: dict) -> str:
     """Eligibility of the EXACT prerequisite revisions consumed by this attempt."""
     bound = node.get("dependency_results") or {}
     stale = [dep for dep in node.get("deps") or []
              if by_id.get(dep, {}).get("status") != "done" or not bound.get(dep)
              or bound[dep] != by_id.get(dep, {}).get("accepted_sha256")]
-    return "dependency result revision changed: " + ",".join(stale) if stale else ""
+    return frame_language.text('forge.swarm.20') + ",".join(stale) if stale else ""
 
 
+@frame_language.pinned
 def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
     """Read/modify/write; callers serialize with Forge's task mutation mutex."""
     plan = load(task_dir)
@@ -131,7 +136,7 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
         for node in plan.get('nodes') or []:
             if (node.get('status') == 'blocked' and not node.get('agent_id')
                     and not node.get('reserved_agent_id') and not node.get('attempts')):
-                node.update(status='pending', finished='', queued_reason='awaiting accepted dependencies')
+                node.update(status='pending', finished='', queued_reason=frame_language.text('forge.swarm.21'))
         plan['version'] = 2
     for node in plan.get("nodes") or []:
         aid = str(node.get("agent_id") or "")
@@ -170,7 +175,7 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
         if node.get("status") == "done" and node.get("deps"):
             if dependency_reason(node, by_id):
                 node.update(status="stale_dependencies", accepted_sha256="",
-                            queued_reason="dependency result revision changed")
+                            queued_reason=frame_language.text('forge.swarm.22'))
         for child in children[nid]:
             remaining[child] -= 1
             if not remaining[child]:
@@ -181,6 +186,7 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
     return plan
 
 
+@frame_language.pinned
 def ready_nodes(plan: dict) -> list[dict]:
     nodes = plan.get("nodes") or []
     accepted = {node.get("id"): node.get("status") == "done"
@@ -204,20 +210,21 @@ def ready_nodes(plan: dict) -> list[dict]:
         else:
             # A repair can satisfy this dependency later. Do not terminalize the
             # dependent simply because the first execution failed or was deferred.
-            node["queued_reason"] = "awaiting accepted dependencies: " + ",".join(
+            node["queued_reason"] = frame_language.text('forge.swarm.23') + ",".join(
                 dep for dep in deps if not accepted.get(dep))
     return ready[:slots]
 
 
+@frame_language.pinned
 def rework(task_dir: Path, node_id: str, brief: str, result_sha256: str) -> dict:
     """Keep the logical DAG node but retain every immutable previous unit/result."""
     plan = load(task_dir)
     node = next((n for n in plan.get("nodes", []) if n.get("id") == node_id), None)
     if not node or not node.get("agent_id") or not brief.strip():
-        raise ValueError("rework needs an existing executed node and a concrete correction brief")
+        raise ValueError(frame_language.text('forge.swarm.24'))
     if (node.get("status") in {"starting", "running", "queued", "unknown"}
             or not result_sha256 or node.get("result_sha256") != result_sha256):
-        raise ValueError("rework needs the current exact terminal result hash")
+        raise ValueError(frame_language.text('forge.swarm.25'))
     prior = {key: value for key, value in node.items() if key != "attempts"}
     node.setdefault("attempts", []).append(prior)
     node.update(previous_unit_id=node["agent_id"], previous_result_sha256=result_sha256,
@@ -233,6 +240,7 @@ def save(task_dir: Path, plan: dict) -> None:
     _atomic(_plan_path(task_dir), plan)
 
 
+@frame_language.pinned
 def signal(task_dir: Path, *, node_id: str = "", agent_id: str = "", kind: str,
            message: str, files: list[str] | None = None) -> dict:
     kind = str(kind or "finding").strip().lower()
@@ -242,7 +250,7 @@ def signal(task_dir: Path, *, node_id: str = "", agent_id: str = "", kind: str,
            "kind": kind, "message": str(message or "").strip()[:12000],
            "files": [str(path).replace("\\", "/") for path in (files or [])][:100]}
     if not row["message"] and kind not in {"claim", "release"}:
-        raise ValueError("message is required")
+        raise ValueError(frame_language.text('forge.swarm.26'))
     mailbox = task_dir / "mailbox.jsonl"
     mailbox.parent.mkdir(parents=True, exist_ok=True)
     with mailbox.open("a", encoding="utf-8") as fh:
@@ -282,9 +290,10 @@ def mailbox(task_dir: Path, limit: int = 100) -> list[dict]:
     return out
 
 
+@frame_language.pinned
 def summary(plan: dict, messages: list[dict] | None = None) -> str:
     if not plan:
-        return "У задачи нет swarm-плана."
+        return frame_language.text('forge.swarm.27')
     lines = [f"swarm max_parallel={plan.get('max_parallel')} updated={plan.get('updated')}"]
     for node in plan.get("nodes") or []:
         deps = ",".join(node.get("deps") or []) or "-"
