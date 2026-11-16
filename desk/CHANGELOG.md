@@ -1,3 +1,15 @@
+# 2.8.0 Beta
+
+Independent interface and agent-context languages (Russian, English, French and
+Chinese), translated factory materials, resident skills and optional living prose.
+Adds exact argv commands, code navigation, source-message turn titles, generation
+progress and selected-turn reset. Optional Windows MCP, stronger Forge process
+custody, journal/epoch fixes and Windows local-model corrections are included.
+The bundled relay can switch ChatGPT subscriptions when a slot exhausts its quota.
+
+Windows prerelease; 2.7.2 remains the stable Latest. Read the
+[changes and qualification limits](docs/RELEASE-2.8.0.md).
+
 # 2.7.2 Beta
 
 Fix ChatGPT subscription sign-in on the desktop: browser and device-code logins
