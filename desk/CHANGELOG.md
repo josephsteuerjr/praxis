@@ -1,3 +1,9 @@
+# 2.8.1 Beta
+
+- Fix Windows clean upgrades from 2.7.2: the standalone runner now imports first-start policy through its package. The owner-stop latch remains active and startup can publish its readiness heartbeat. The previous import error caused restart loops and a startup timeout while preserving the old programme.
+- Add regressions for both packaged and standalone owner-stop imports, including the selected Windows user latch.
+- Windows prerelease only; stable Latest remains 2.7.2.
+
 # 2.8.0 Beta
 
 Independent interface and agent-context languages (Russian, English, French and
