@@ -29,7 +29,7 @@ STEPS = (KIT / "steps.ts").read_text(encoding="utf-8")
 # Видимый текст: без комментариев (там законно цитируется то, что было неправдой).
 # Строки TS рвутся конкатенацией `" +` — склеиваем, чтобы фразу было видно целиком.
 CATALOG = json.loads((DESK / 'lang/ru.json').read_text(encoding='utf8'))
-LEARN = re.sub(r'uiText\("([^"\n]+)"\)', lambda match: json.dumps(CATALOG[match.group(1)], ensure_ascii=False), LEARN)
+LEARN = re.sub(r'uiText\("([^"\n]+)"', lambda match: 'uiText(' + json.dumps(CATALOG[match.group(1)], ensure_ascii=False), LEARN)
 LEARN = re.sub(r'"\s*\+\s*\n\s*"', "", LEARN)
 LEARN_TEXT = re.sub(r"(?m)^\s*//.*$", "", re.sub(r"/\*.*?\*/", "", LEARN, flags=re.S))
 
@@ -130,14 +130,16 @@ class TabSaysOnlyWhatIsTrue(unittest.TestCase):
     def test_sleep_is_local_clock_quiet_and_mute(self):
         self.assertNotIn("когда оно снова открыто", LEARN_TEXT)
         self.assertNotIn("пока окно открыто", LEARN_TEXT)
-        self.assertIn("по часам этого компьютера", LEARN)
-        self.assertIn("агент не отвечает", LEARN)
+        sleep = CATALOG['ui.ui.kit.window.views.learn.8c087eb7b0']
+        self.assertIn("по местным часам", sleep)
+        self.assertIn("в тихое время", sleep)
+        self.assertIn("Сообщения ждут окончания сна", sleep)
         self.assertIn("function sleepBand", LEARN)
         self.assertNotIn("left:${(4 / 24) * 100}%", LEARN, "полоса сна — по ручкам, не 4–6")
 
     def test_stale_key_and_platform_lines(self):
         self.assertNotIn("шапка не ловит", LEARN_TEXT)
-        self.assertIn("после первого неудачного вызова", LEARN)
+        self.assertIn("Ошибка провайдера может проявиться только при вызове модели", LEARN)
         self.assertIn("isMacPlatform(S.platform)", LEARN)
         self.assertIn("Запись экрана", LEARN)
 

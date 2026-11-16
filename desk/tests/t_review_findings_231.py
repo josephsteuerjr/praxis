@@ -23,7 +23,7 @@ class Findings(unittest.TestCase):
         remote = self.host()
         forge.control(self.tid, 'pause')
         self.assertIn('отклонён', forge.process(self.tid, ' Start ', command='echo test'))
-        self.assertIn('отклонён', forge.verify(self.tid, ' Start ', commands='echo test'))
+        self.assertIn('Проверка отклонена', forge.verify(self.tid, ' Start ', commands='echo test'))
         remote.call.assert_not_called()
         remote.process.assert_not_called()
 
