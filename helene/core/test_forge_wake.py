@@ -198,7 +198,7 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
                 pass
         text = str(ctx.exception)
         self.assertIn(str(int(forge.LOCK_IDLE_ABANDONED_SEC)), text)
-        self.assertIn("бездействи", text.lower())
+        self.assertIn(forge.frame_language.text('forge.lifecycle.57', v1=f'{forge.LOCK_IDLE_ABANDONED_SEC:.0f}'), text)
 
     def test_the_holder_heartbeat_keeps_a_long_transaction_alive(self):
         """Удар из САМОГО рабочего потока: работа любой длины порога не касается."""
@@ -272,7 +272,7 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
                     self.fail("вошли под работающим держателем — это last-writer-wins")
             th.join()
         # Правило 3: работающая рука не выдаётся за замолчавшую («молчит -28с»).
-        self.assertIn("объявил долгий шаг", str(ctx.exception))
+        self.assertIn(forge.frame_language.text('forge.lifecycle.60', v1='{lease}').split('{lease}')[0], str(ctx.exception))
         self.assertNotIn("молчит -", str(ctx.exception))
         self.assertTrue(holder_done.is_set(), "держатель доработал до конца")
 
@@ -486,7 +486,7 @@ class TestZeroMeansOffNotOneSecond(unittest.TestCase):
                 with forge._mutation_lock("t1", timeout=0.3):
                     self.fail("порог выключен — живого держателя снимать нечем")
         text = str(ctx.exception)
-        self.assertIn("ВЫКЛЮЧЕН", text, "правило 2: выключенный порог назван, а не молчит")
+        self.assertIn(forge.frame_language.text('forge.lifecycle.58'), text, 'disabled threshold remains explicit')
         self.assertIn("PRAXIS_FORGE_LOCK_IDLE_SEC", text)
 
     def test_a_disabled_reaper_is_off_not_six_times_more_eager(self):

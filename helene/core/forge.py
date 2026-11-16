@@ -256,113 +256,107 @@ def _mutation_lock(task_id: str, timeout: float = 60.0):
     объявляется заранее: beat(lease_sec) ставит метку в будущее — «не жди меня раньше».
     -> контекст отдаёт beat(lease_sec=0.0).
     """
-    path = _task_dir(task_id) / ".mutation.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    token = f"{os.getpid()}:{_proc_started_at(os.getpid())}:{uuid.uuid4().hex}"
-    deadline = time.monotonic() + max(.1, float(timeout))
-    owner_pid, idle_sec, legacy = 0, 0.0, False
-    while True:
-        try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(token)
-            break
-        except PermissionError as exc:
-            # Windows can report a delete-pending/sharing race instead of EEXIST.
-            # Retry only within the existing acquisition deadline; never remove
-            # an unreadable lock or reinterpret access denial as a dead owner.
-            if os.name != "nt":
-                raise
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"task {task_id}: mutation lock access remained unavailable") from exc
-            time.sleep(.03)
-        except FileExistsError:
-            stale, raw, why, legacy = False, None, "", False
+    with frame_language.pin():
+        path = _task_dir(task_id) / ".mutation.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        token = f"{os.getpid()}:{_proc_started_at(os.getpid())}:{uuid.uuid4().hex}"
+        deadline = time.monotonic() + max(.1, float(timeout))
+        owner_pid, idle_sec, legacy = 0, 0.0, False
+        while True:
             try:
-                raw = path.read_text(encoding="utf-8")
-                parts = raw.split(":")
-                owner_pid = int(parts[0])
-                idle_sec = time.time() - path.stat().st_mtime
-                if len(parts) >= 3:
-                    if not _owner_alive(owner_pid, parts[1]):
-                        stale, why = True, "держатель мёртв"
-                    elif LOCK_IDLE_ABANDONED_SEC > 0 and idle_sec > LOCK_IDLE_ABANDONED_SEC:
-                        stale, why = True, (f"держатель жив, но не подаёт признаков "
-                                            f"{idle_sec:.0f}с (порог {LOCK_IDLE_ABANDONED_SEC:.0f}с)")
-                else:
-                    # Токен старого образца (pid:uuid) — тождества не доказывает, а после
-                    # рестарта номер могли переиспользовать. Молчит дольше своего порога —
-                    # считаем брошенным: короткая транзакция мутации столько не живёт.
-                    legacy = True
-                    if not _owner_alive(owner_pid):
-                        stale, why = True, "держатель мёртв (номер свободен)"
-                    elif idle_sec > LOCK_LEGACY_IDLE_SEC:
-                        stale, why = True, (f"токен без метки рождения, молчит {idle_sec:.0f}с "
-                                            f"(его порог {LOCK_LEGACY_IDLE_SEC:.0f}с)")
-            except Exception:
-                legacy = True
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(token)
+                break
+            except PermissionError as exc:
+                # Windows can report a delete-pending/sharing race instead of EEXIST.
+                # Retry only within the existing acquisition deadline; never remove
+                # an unreadable lock or reinterpret access denial as a dead owner.
+                if os.name != "nt":
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(frame_language.text('forge.lifecycle.49', v1=f'{task_id}')) from exc
+                time.sleep(.03)
+            except FileExistsError:
+                stale, raw, why, legacy = False, None, "", False
                 try:
-                    stale = time.time() - path.stat().st_mtime > LOCK_LEGACY_IDLE_SEC
-                    why = ("токен замка не прочитался, файл старше "
-                           f"{LOCK_LEGACY_IDLE_SEC:.0f}с")
-                except OSError:
-                    stale, why = True, "замок исчез"
-            if stale and _break_stale_lock(path, raw):
-                log.warning("task %s: снимаю брошенный замок мутации (%s)", task_id, why)
-                continue
-            if time.monotonic() >= deadline:
-                # Текст обязан называть тот порог, который применён К ЭТОМУ замку: у
-                # легаси-токена он свой (см. LOCK_LEGACY_IDLE_SEC) и раньше она читала
-                # здесь чужие 300с при реальных 120.
-                if legacy:
-                    rule = (f"У этого замка токен СТАРОГО образца (без метки рождения, писался "
-                            f"до 27.07): его порог — {LOCK_LEGACY_IDLE_SEC:.0f}с тишины, а не "
-                            f"{LOCK_IDLE_ABANDONED_SEC:.0f}с, и PRAXIS_FORGE_LOCK_IDLE_SEC его не "
-                            f"выключает: за таким токеном может не стоять вообще никого")
-                elif LOCK_IDLE_ABANDONED_SEC > 0:
-                    rule = (f"Брошенным считаю после {LOCK_IDLE_ABANDONED_SEC:.0f}с ТИШИНЫ — "
-                            "порог по бездействию, работа любой длины его не задевает")
-                else:
-                    rule = ("Порог по бездействию ВЫКЛЮЧЕН (PRAXIS_FORGE_LOCK_IDLE_SEC=0): "
-                            "живого держателя не снимаю совсем, только доказанно мёртвого — "
-                            "значит этот замок отпустится сам или не отпустится вовсе")
-                # Отрицательная «тишина» — это не молчание, а объявленный заранее долгий
-                # шаг (лизинг ставит метку в будущее). Печатать «молчит -235с» значило бы
-                # выдавать работающую руку за замолчавшую.
-                state = (f"молчит {idle_sec:.0f}с" if idle_sec >= 0 else
-                         f"объявил долгий шаг, обещал вернуться через {-idle_sec:.0f}с")
-                raise TimeoutError(
-                    f"task {task_id}: замок мутации занят (держатель pid {owner_pid}, "
-                    f"{state}). {rule}")
-            time.sleep(.03)
+                    raw = path.read_text(encoding="utf-8")
+                    parts = raw.split(":")
+                    owner_pid = int(parts[0])
+                    idle_sec = time.time() - path.stat().st_mtime
+                    if len(parts) >= 3:
+                        if not _owner_alive(owner_pid, parts[1]):
+                            stale, why = True, "держатель мёртв"
+                        elif LOCK_IDLE_ABANDONED_SEC > 0 and idle_sec > LOCK_IDLE_ABANDONED_SEC:
+                            stale, why = True, (f"держатель жив, но не подаёт признаков "
+                                                f"{idle_sec:.0f}с (порог {LOCK_IDLE_ABANDONED_SEC:.0f}с)")
+                    else:
+                        # Токен старого образца (pid:uuid) — тождества не доказывает, а после
+                        # рестарта номер могли переиспользовать. Молчит дольше своего порога —
+                        # считаем брошенным: короткая транзакция мутации столько не живёт.
+                        legacy = True
+                        if not _owner_alive(owner_pid):
+                            stale, why = True, "держатель мёртв (номер свободен)"
+                        elif idle_sec > LOCK_LEGACY_IDLE_SEC:
+                            stale, why = True, (f"токен без метки рождения, молчит {idle_sec:.0f}с "
+                                                f"(его порог {LOCK_LEGACY_IDLE_SEC:.0f}с)")
+                except Exception:
+                    legacy = True
+                    try:
+                        stale = time.time() - path.stat().st_mtime > LOCK_LEGACY_IDLE_SEC
+                        why = ("токен замка не прочитался, файл старше "
+                               f"{LOCK_LEGACY_IDLE_SEC:.0f}с")
+                    except OSError:
+                        stale, why = True, "замок исчез"
+                if stale and _break_stale_lock(path, raw):
+                    log.warning("task %s: снимаю брошенный замок мутации (%s)", task_id, why)
+                    continue
+                if time.monotonic() >= deadline:
+                    # Текст обязан называть тот порог, который применён К ЭТОМУ замку: у
+                    # легаси-токена он свой (см. LOCK_LEGACY_IDLE_SEC) и раньше она читала
+                    # здесь чужие 300с при реальных 120.
+                    if legacy:
+                        rule = (frame_language.text('forge.lifecycle.56', v1=f'{LOCK_LEGACY_IDLE_SEC:.0f}', v3=f'{LOCK_IDLE_ABANDONED_SEC:.0f}'))
+                    elif LOCK_IDLE_ABANDONED_SEC > 0:
+                        rule = (frame_language.text('forge.lifecycle.57', v1=f'{LOCK_IDLE_ABANDONED_SEC:.0f}'))
+                    else:
+                        rule = (frame_language.text('forge.lifecycle.58'))
+                    # Отрицательная «тишина» — это не молчание, а объявленный заранее долгий
+                    # шаг (лизинг ставит метку в будущее). Печатать «молчит -235с» значило бы
+                    # выдавать работающую руку за замолчавшую.
+                    state = (frame_language.text('forge.lifecycle.59', v1=f'{idle_sec:.0f}') if idle_sec >= 0 else
+                             frame_language.text('forge.lifecycle.60', v1=f'{-idle_sec:.0f}'))
+                    raise TimeoutError(
+                        frame_language.text('forge.lifecycle.61', v1=f'{task_id}', v3=f'{owner_pid}', v5=f'{state}', v7=f'{rule}'))
+                time.sleep(.03)
 
-    def beat(lease_sec: float = 0.0) -> None:
-        """«Я жива и работаю» — отметка от самого рабочего потока. lease_sec>0 —
+        def beat(lease_sec: float = 0.0) -> None:
+            """«Я жива и работаю» — отметка от самого рабочего потока. lease_sec>0 —
         честно объявленный долгий шаг (метка ставится в будущее)."""
-        try:
-            stamp = time.time() + max(0.0, float(lease_sec))
-            os.utime(path, (stamp, stamp))
-        except OSError:
-            pass
-
-    try:
-        yield beat
-    finally:
-        # Contenders read the owner token. Windows may briefly refuse deletion
-        # while that reader is open. Ignoring release strands a live-PID lock.
-        # Recheck our token on EVERY retry; never unlink a successor's lock.
-        for attempt in range(21):
             try:
-                if path.read_text(encoding="utf-8") == token:
-                    path.unlink()
-                break
-            except PermissionError:
-                if os.name != "nt" or attempt == 20:
-                    log.error("task %s: mutation lock release unconfirmed", task_id, exc_info=True)
-                    break
-                time.sleep(.01)
+                stamp = time.time() + max(0.0, float(lease_sec))
+                os.utime(path, (stamp, stamp))
             except OSError:
-                break
+                pass
+
+        try:
+            yield beat
+        finally:
+            # Contenders read the owner token. Windows may briefly refuse deletion
+            # while that reader is open. Ignoring release strands a live-PID lock.
+            # Recheck our token on EVERY retry; never unlink a successor's lock.
+            for attempt in range(21):
+                try:
+                    if path.read_text(encoding="utf-8") == token:
+                        path.unlink()
+                    break
+                except PermissionError:
+                    if os.name != "nt" or attempt == 20:
+                        log.error("task %s: mutation lock release unconfirmed", task_id, exc_info=True)
+                        break
+                    time.sleep(.01)
+                except OSError:
+                    break
 
 
 # Из чего складывается объявленный лизинг — чтобы его можно было пересчитать, а не
@@ -482,6 +476,7 @@ def _event(task_id: str, kind: str, **data: Any) -> None:
         _revive_if_lost(task_id)
 
 
+@frame_language.pinned
 def _revive_if_lost(task_id: str) -> None:
     """Ярлык «потеряна из виду» снимается сам, как только она снова работает по задаче.
 
@@ -496,7 +491,7 @@ def _revive_if_lost(task_id: str) -> None:
         task["lost_reason"] = ""
         _save_task(task)
         _event(task_id, "task_reopened",
-               summary="снова работаю по задаче — ярлык «потеряна» снят")
+               summary=frame_language.text('forge.lifecycle.62'))
     except Exception:
         log.debug("revive %s не отработал", task_id, exc_info=True)
 
@@ -806,6 +801,7 @@ def _contract_evidence(task: dict, verification_rows: list[dict]) -> dict:
             "verify": {"met": met, "unmet": unmet, "unknown": unknown}}
 
 
+@frame_language.pinned
 def _coordinator_state(task: dict) -> dict:
     task_id = str(task["id"])
     checkpoint = _read_json(_task_dir(task_id) / "coordinator-checkpoint.json", {}) or {}
@@ -817,7 +813,7 @@ def _coordinator_state(task: dict) -> dict:
     return {"goal": task.get("goal"), "success_criteria": task.get("success_criteria") or [],
             "verify_commands": task.get("verify_commands") or [], "pending_results": pending,
             "unresolved_reviews": checkpoint.get("unresolved_reviews") or [],
-            "checkpoint": checkpoint, "next_action": checkpoint.get("next_action") or "coordinator decision required"}
+            "checkpoint": checkpoint, "next_action": checkpoint.get("next_action") or frame_language.text('forge.lifecycle.65')}
 
 
 @frame_language.pinned
@@ -2232,10 +2228,11 @@ def _task_run_context(task_id: str) -> dict:
     return replace(context, forge_task_id=task_id).to_dict() if context else {}
 
 
+@frame_language.pinned
 def _worker_slots(value: int) -> int:
     slots = int(value)
     if not 1 <= slots <= MAX_WORKERS:
-        raise ValueError(f"max_active_workers must be between 1 and {MAX_WORKERS}")
+        raise ValueError(frame_language.text('forge.lifecycle.124', v1=f'{MAX_WORKERS}'))
     return slots
 
 
@@ -3729,12 +3726,13 @@ def _worker_tree(task_id: str) -> list[dict]:
     return rows
 
 
+@frame_language.pinned
 def _unit_counts(rows: list[dict]) -> str:
     counts: dict[str, int] = {}
     for row in rows:
         status = str(row.get("status") or "?")
         counts[status] = counts.get(status, 0) + 1
-    return ", ".join(f"{k} {v}" for k, v in counts.items()) or "нет"
+    return ", ".join(f"{k} {v}" for k, v in counts.items()) or frame_language.text('forge.lifecycle.143')
 
 
 def _windows_job_name() -> str:
@@ -4374,25 +4372,26 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
     return "action: plan | start | poll | stop | list"
 
 
+@frame_language.pinned
 def source_update_task(task_id: str, root: str, plan_id: str, input_sha256: str,
                        worker_script: str, max_active_workers: int = 1) -> dict:
     """Trusted coordinator-only isolated merge registration, never a general worker."""
     if not re.fullmatch(r"code-[0-9a-f]{8}", task_id):
-        raise ValueError("invalid source-update task id")
+        raise ValueError(frame_language.text('forge.lifecycle.150'))
     if not all(re.fullmatch(r"[0-9a-f]{64}", value or "") for value in (plan_id, input_sha256)):
-        raise ValueError("source-update requires full plan/input hashes")
+        raise ValueError(frame_language.text('forge.lifecycle.151'))
     if int(max_active_workers) != 1:
-        raise ValueError("source-update has exactly one isolated root worker")
+        raise ValueError(frame_language.text('forge.lifecycle.152'))
     try:
         from localharness import source_update_worker
     except ImportError:
         import source_update_worker
     script = Path(worker_script).resolve()
     if script != Path(source_update_worker.__file__).resolve() or not script.is_file():
-        raise ValueError("source-update requires the installed localharness worker adapter")
+        raise ValueError(frame_language.text('forge.lifecycle.153'))
     directory = Path(root).resolve()
     if not directory.is_dir():
-        raise ValueError("source-update frozen material directory missing")
+        raise ValueError(frame_language.text('forge.lifecycle.154'))
     metadata = {"schema": 1, "root": str(directory), "plan_id": plan_id,
                 "input_sha256": input_sha256, "worker_script": str(script),
                 "runtime_code_dir": str(REPO.resolve())}
@@ -4400,29 +4399,30 @@ def source_update_task(task_id: str, root: str, plan_id: str, input_sha256: str,
         prior = get(task_id)
         if prior:
             if prior.get("source_update") != metadata:
-                raise ValueError("source-update task identity already has another subject")
+                raise ValueError(frame_language.text('forge.lifecycle.155'))
             return prior
         task = {"id": task_id, "root": str(directory), "source_root": str(directory),
-                "goal": "Isolated source-update conflict resolution", "isolation": "frozen-source-update",
+                "goal": frame_language.text('forge.lifecycle.156'), "isolation": "frozen-source-update",
                 "status": "active", "priority": "normal", "created": _now(),
                 "max_active_workers": 1, "run_context": None, "source_update": metadata}
         _save_task(task)
         return task
 
 
+@frame_language.pinned
 def self_review_task(task_id: str, root: str, subject_sha256: str,
                      worker_script: str, max_active_workers: int = 1) -> dict:
     if not re.fullmatch(r"code-[0-9a-f]{8}", task_id):
-        raise ValueError("invalid self-review task id")
+        raise ValueError(frame_language.text('forge.lifecycle.157'))
     if not re.fullmatch(r"[0-9a-f]{64}", subject_sha256):
-        raise ValueError("invalid self-review subject hash")
+        raise ValueError(frame_language.text('forge.lifecycle.158'))
     script = Path(worker_script).resolve()
     try:
         from localharness import self_review_worker
     except ImportError:
         import self_review_worker
     if script != Path(self_review_worker.__file__).resolve() or not script.is_file():
-        raise ValueError("self-review requires the installed localharness worker adapter")
+        raise ValueError(frame_language.text('forge.lifecycle.159'))
     metadata = {"schema": 1, "root": str(Path(root).resolve()),
                 "subject_sha256": subject_sha256, "worker_script": str(script),
                 "runtime_code_dir": str(REPO.resolve())}
@@ -4430,10 +4430,10 @@ def self_review_task(task_id: str, root: str, subject_sha256: str,
         prior = get(task_id)
         if prior:
             if prior.get("self_review") != metadata:
-                raise ValueError("self-review task identity already has another subject")
+                raise ValueError(frame_language.text('forge.lifecycle.160'))
             return prior
         task = {"id": task_id, "root": metadata["root"], "source_root": metadata["root"],
-                "goal": "Independent source-only self-review", "isolation": "frozen-code",
+                "goal": frame_language.text('forge.lifecycle.161'), "isolation": "frozen-code",
                 "status": "active", "priority": "normal", "created": _now(),
                 "max_active_workers": _worker_slots(max_active_workers),
                 "run_context": None, "self_review": metadata}
@@ -4442,6 +4442,7 @@ def self_review_task(task_id: str, root: str, subject_sha256: str,
 
 
 
+@frame_language.pinned
 def _worker_script(task: dict) -> Path:
     if task.get("source_update"):
         try:
@@ -4461,7 +4462,7 @@ def _worker_script(task: dict) -> Path:
     if (script != Path(adapter.__file__).resolve() or not script.is_file()
             or metadata.get("runtime_code_dir") != str(REPO.resolve())
             or metadata.get("root") != str(Path(task["root"]).resolve())):
-        raise ValueError("trusted adapter identity drifted")
+        raise ValueError(frame_language.text('forge.lifecycle.162'))
     return script
 
 
@@ -5061,7 +5062,7 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     with _mutation_lock(task_id):
         task = get(task_id)
         if not task:
-            return {"status": "refused", "reason": "task missing"}
+            return {"status": "refused", "reason": frame_language.text('forge.lifecycle.178')}
         if agent_id:
             import forge_runtime
             progress = forge_runtime.read_progress(_unit_dir(task_id, "agents", agent_id))
