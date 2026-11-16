@@ -1,0 +1,76 @@
+{
+  "format": "helene-windows-startup-hotfix-evidence.v1",
+  "version": "2.8.1",
+  "source_commit": "ac52fd294f0256b5ca0cd44c5cac43524fb73e47",
+  "source_tree_sha256": "7cd1233fce91b798384150ff34831fb40d6b2d41e348d838aa09fa16195f11b8",
+  "raw_git_files": 3734,
+  "archive_sha256": "30ea4dbaee39a1a14148ca60d660eb4ba48840e8c10854ffe58b7d21139e385a",
+  "archive_bytes": 531281075,
+  "all_member_sha_and_crc": true,
+  "fix": {
+    "regression_reproduced_before_fix": true,
+    "native_regression_cases": 2,
+    "packaged_latch_and_resume_cases": 9,
+    "owner_marker_enforced": true,
+    "owner_controls_changed": false
+  },
+  "current": {
+    "targeted_desk_modules": 8,
+    "node_tests": 176,
+    "frontends_built": 5,
+    "frontend_outputs": 127,
+    "bootstrap_kernel_cases": 4,
+    "actual_embedded_python": "3.14.5",
+    "prior_upgrade": "2.7.2 to2.8.1,actual restricted medium token",
+    "packaged_mcp_tools": 21,
+    "relay_login_marker_preserved": true,
+    "component_transfer_passed": true
+  },
+  "retained_qualification": {
+    "baseline_version": "2.8.0",
+    "baseline_commit": "d8bf6f2535fe776388d2b91f801ac44745c18d55",
+    "pure_core_bytes_identical": true,
+    "runtime_and_native_executables_identical": true,
+    "relay_bytes_identical": true,
+    "frontend_127_outputs_identical": true,
+    "retained_browser_checks": {
+      "cases": 32,
+      "retention_passed": true,
+      "basis": "exact unchanged built bytes"
+    },
+    "last_full_core": {
+      "version": "2.8.0",
+      "tests": 8003,
+      "inherited_red": 163,
+      "new_red": 0,
+      "fresh_rerun": false
+    },
+    "last_full_desk": {
+      "version": "2.8.0",
+      "modules": 491,
+      "pytest": 0,
+      "fresh_rerun": false
+    }
+  },
+  "all_core_green": false,
+  "privacy": {
+    "all_3734_source_files": true,
+    "actual_local_owner_values": true,
+    "actual_server_values": true,
+    "secret_values_serialized": false
+  },
+  "publication": {
+    "prerelease": true,
+    "make_latest": false,
+    "stable_latest": "v2.7.2",
+    "platforms": [
+      "windows-x86_64"
+    ]
+  },
+  "limits": [
+    "Physical owner update and Tim Windows10 acceptance not performed by this release job",
+    "macOS/Linux not published",
+    "No owner installation/update/restart or production Praxis mutation by Codex",
+    "No paid provider calls; microphone/CUDA/public ACME/account consent acceptance separate"
+  ]
+}
