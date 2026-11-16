@@ -4307,5 +4307,6 @@
   "machine.caveat.edit": "task_id 选择 Forge 作用域；主目录路径和批次中的每个文件都会校验",
   "machine.caveat.files": "task_id 选择自己的 Forge 作用域",
   "native.first.local_key_optional": "本机或局域网中的服务器通常不需要密钥。如果服务器不要求，请留空。",
-  "notice.closed_unspoken": "⋯ 本轮已结束，窗口中没有回复：步骤中有文字，但没有通过 reply 发送。"
+  "notice.closed_unspoken": "⋯ 本轮已结束，窗口中没有回复：步骤中有文字，但没有通过 reply 发送。",
+  "native.mcp.consent_text": "智能体即将接管这台电脑的鼠标和键盘。\n\n现在允许吗？如果你不回答而继续使用电脑，控制权仍在你手中。此窗口将在 {seconds} 秒后自动关闭。"
 }

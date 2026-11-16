@@ -4307,5 +4307,6 @@
   "machine.caveat.edit": "task_id choisit un périmètre Forge ; les chemins du domicile et chaque fichier du lot sont vérifiés",
   "machine.caveat.files": "task_id choisit son propre périmètre Forge",
   "native.first.local_key_optional": "Un serveur sur cet ordinateur ou sur votre réseau local n’a généralement pas besoin de clé. Laissez le champ vide si le serveur n’en demande pas.",
-  "notice.closed_unspoken": "⋯ Le tour s’est terminé sans réponse pour la fenêtre : il y a du texte dans les étapes, mais il n’a pas été envoyé avec reply."
+  "notice.closed_unspoken": "⋯ Le tour s’est terminé sans réponse pour la fenêtre : il y a du texte dans les étapes, mais il n’a pas été envoyé avec reply.",
+  "native.mcp.consent_text": "L’agent est sur le point de prendre le contrôle de la souris et du clavier de cet ordinateur.\n\nAutoriser maintenant ? Si vous continuez à utiliser l’ordinateur sans répondre, vous gardez le contrôle. Cette fenêtre se ferme d’elle-même dans {seconds} s."
 }

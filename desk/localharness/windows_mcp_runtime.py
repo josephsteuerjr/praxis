@@ -115,7 +115,10 @@ class Manager:
             env = permanent_environment()
             env.update(WINDOWS_MCP_AUTH_KEY=key, ANONYMIZED_TELEMETRY='false', POSTHOG_API_KEY='',
                        WINDOWS_MCP_WATCHDOG='false', HELENE_WINDOWS_MCP_STATE=str(state),
-                       PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+                       PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8',
+                       # The control consent prompt speaks the owner's interface language.
+                       HELENE_WINDOWS_MCP_CONSENT_TITLE='Hélène · Windows-MCP',
+                       HELENE_WINDOWS_MCP_CONSENT_TEXT=words.text(self.owner.root,'consent_text',seconds='{seconds}'))
             argv = [interpreter(directory(self.owner.root)), '-B',
                     str(Path(__file__).with_name('windows_mcp_entry.py')), 'serve',
                     '--transport', 'streamable-http', '--host', '127.0.0.1', '--port', str(port), '--stateless-http']

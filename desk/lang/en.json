@@ -4307,5 +4307,6 @@
   "machine.caveat.edit": "task_id selects a Forge scope; home paths and every batch file are checked",
   "machine.caveat.files": "task_id selects its own Forge scope",
   "native.first.local_key_optional": "A server on this computer or your local network usually needs no key. Leave it empty if the server does not ask for one.",
-  "notice.closed_unspoken": "⋯ The turn closed without a reply for the window: there is text in the steps, but it was not sent with reply."
+  "notice.closed_unspoken": "⋯ The turn closed without a reply for the window: there is text in the steps, but it was not sent with reply.",
+  "native.mcp.consent_text": "The agent is about to take control of this computer's mouse and keyboard.\n\nAllow now? If you keep using the computer without answering, you stay in control. This window closes by itself in {seconds} s."
 }

@@ -31,7 +31,7 @@ class MCPInterfaceLanguage(unittest.TestCase):
 
     def test_all_owned_code_parameters_match_in_every_interface_catalog(self):
         keys={key for key in ui_language._catalog('ru') if key.startswith('native.mcp.')}
-        self.assertEqual(len(keys),24)
+        self.assertEqual(len(keys),25)  # +consent_text (native prompt, 16.11)
         for ui in ('ru','en','fr','zh'):
             self.config(ui,'zh' if ui!='zh' else 'ru')
             catalog=ui_language._catalog(ui)
