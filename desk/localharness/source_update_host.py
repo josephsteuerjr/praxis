@@ -185,6 +185,9 @@ def coordinate(old, new, directory, cancel_file):
     # No dotenv or imports from the authored source. The same profile model
     # settings remain in memory/llm.json; only trusted distribution code runs.
     boot.apply_env(boot.env_knobs(agent['value']), where='isolated update review')
+    # The coordinator can start from the desktop rather than the selected
+    # agent's runner. Bind its frame language to that exact profile explicitly.
+    os.environ['HELENE_CONFIG'] = str(agent['config'])
     os.environ['PRAXIS_BASE'] = str(tree)
     os.environ['PYTHONNOUSERSITE'] = '1'
     # Review may read an older settings schema, but must not migrate the live
