@@ -3529,5 +3529,6 @@
   "selfdev.list.row": "#{id} [{status}] “{title}” ({diffstat}; tests: {tests})",
   "selfdev.list.no_diff": "no diff",
   "selfdev.list.reason": "reason: {reason}",
-  "forge.io.run_id_not_task": "“{task_id}” is a run (turn) id from a ResultRef or receipt, not a coding task. task_id selects only a Forge coding task opened with coding_session (ids like code-…, hcode-…, wcode-…); a run id is only for read_run_result. To read or list files in your home — including attachments under memory/runs/…/files — call this tool again without task_id."
+  "forge.io.run_id_not_task": "“{task_id}” is a run (turn) id from a ResultRef or receipt, not a coding task. task_id selects only a Forge coding task opened with coding_session (ids like code-…, hcode-…, wcode-…); a run id is only for read_run_result. To read or list files in your home — including attachments under memory/runs/…/files — call this tool again without task_id.",
+  "helper.agent.devnull_denied": "[The sandbox on this Windows version cannot open /dev/null (the NUL device), so the command with that redirection did not run. Redirect to a file instead, for example 2>\"$TMP/err.txt\", or drop the redirection.]"
 }

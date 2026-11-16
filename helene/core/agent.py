@@ -2527,6 +2527,20 @@ def tool_shell(command: str, cwd: str = "", timeout: int = 0) -> str:
     return _home_command(command, cwd, timeout)
 
 
+# busybox-w32 message when the sandbox cannot open the NUL device for a redirection.
+_SANDBOX_DEVNULL_DENIED = "can't create /dev/null: Permission denied"
+
+
+@frame_language.pinned
+def _with_sandbox_shell_note(out: str, *, windows: bool) -> str:
+    """Some Windows builds deny the AppContainer the NUL device, so busybox fails the
+    redirection before the command runs. Raw output stays exact; an owned note names the
+    cause and a working alternative."""
+    if windows and _SANDBOX_DEVNULL_DENIED in str(out or ""):
+        return str(out) + "\n" + frame_language.text('helper.agent.devnull_denied')
+    return out
+
+
 
 
 @frame_language.pinned
@@ -2685,6 +2699,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
             _tool_trace_event("tool_execution", receipt={"kind":"process", "requested_argv":argv,
                 **result.get('execution', {}), "status":"timed_out" if result["killed"] else "returned", "exit_code":code})
             out = _decode_shell_output(result["out"]) or ""
+            out = _with_sandbox_shell_note(out, windows=(os.name == "nt"))
             if result["killed"] and program_argv is None:
                 out += frame_language.text('helper.agent._home_command.2688', p0=f'{seconds}')
             exit_note = f"\n[exit {code}]"

@@ -66,7 +66,7 @@ export function runControlNote(value: unknown): string {
 const NOTICE_FIELDS: Record<string, readonly string[]> = {
   speech_failed:[], speech_unknown:[], turn_incomplete:[], files_pending:["count","run"],
   paused:["run"], turn_failed:["run"], silence:["agent"], silence_reason:["agent","reason"],
-  closed:[], closed_file:[], tree_busy:["agent","pid"], birth_silent:["agent"], birth_failed:["tries"],
+  closed:[], closed_file:[], closed_unspoken:[], tree_busy:["agent","pid"], birth_silent:["agent"], birth_failed:["tries"],
   resume_refused:["reason"], note_gave_up:["name","tries","path"], note_rejected:["name","reason"],
 };
 

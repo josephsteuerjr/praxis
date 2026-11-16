@@ -3529,5 +3529,6 @@
   "selfdev.list.row": "#{id} [{status}] « {title} » ({diffstat} ; tests : {tests})",
   "selfdev.list.no_diff": "sans diff",
   "selfdev.list.reason": "raison : {reason}",
-  "forge.io.run_id_not_task": "« {task_id} » est un id de tour (run) issu d’un ResultRef ou d’un reçu, pas une tâche de code. task_id ne sélectionne qu’une tâche Forge ouverte avec coding_session (ids comme code-…, hcode-…, wcode-…) ; un id de run sert uniquement à read_run_result. Pour lire ou lister des fichiers de ton espace — y compris les pièces jointes sous memory/runs/…/files —, rappelle cet outil sans task_id."
+  "forge.io.run_id_not_task": "« {task_id} » est un id de tour (run) issu d’un ResultRef ou d’un reçu, pas une tâche de code. task_id ne sélectionne qu’une tâche Forge ouverte avec coding_session (ids comme code-…, hcode-…, wcode-…) ; un id de run sert uniquement à read_run_result. Pour lire ou lister des fichiers de ton espace — y compris les pièces jointes sous memory/runs/…/files —, rappelle cet outil sans task_id.",
+  "helper.agent.devnull_denied": "[Sur cette version de Windows, le bac à sable ne peut pas ouvrir /dev/null (le périphérique NUL) : la commande avec cette redirection ne s’est pas exécutée. Redirige plutôt vers un fichier, par exemple 2>\"$TMP/err.txt\", ou supprime la redirection.]"
 }

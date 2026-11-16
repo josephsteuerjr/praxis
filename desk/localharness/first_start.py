@@ -1139,6 +1139,20 @@ def create_agent(root,values,*,places=None,progress=None):
     with guard:return _create_agent(root,values,places=places,progress=progress)
 
 
+def keyless_local_endpoint(base_url)->bool:
+    """True only for an http(s) address on loopback, a private network or *.local."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:parts=urlsplit(str(base_url or '').strip());host=(parts.hostname or '').lower()
+    except ValueError:return False
+    if parts.scheme not in ('http','https') or parts.username or parts.password or not host:return False
+    if host=='localhost' or host.endswith(('.localhost','.local')):return True
+    try:address=ipaddress.ip_address(host)
+    except ValueError:return False
+    return (address.is_loopback or address.is_private or address.is_link_local
+            or (address.version==4 and address in ipaddress.ip_network('100.64.0.0/10')))
+
+
 def _create_agent(root,values,*,places,progress=None):
     places=places or Places.current();root=plain(root)
     if not ready(root,places):raise NativeValueError('first_preparation_needed', 'Сначала нужно завершить подготовку')
@@ -1153,7 +1167,12 @@ def _create_agent_locked(root,values,*,places,progress=None):
     provider=values.get('provider');model=str(values.get('model') or '').strip();key=str(values.get('key') or '').strip()
     if not name or not model or provider not in ('openai','anthropic','chatgpt'):
         raise NativeValueError('first_agent_fields', 'Введи имя агента и модель, выбери подключение')
-    if provider!='chatgpt' and not key:raise NativeValueError('first_api_key', 'Введи ключ доступа к API')
+    if provider!='chatgpt' and not key:
+        # An unauthenticated OpenAI-compatible server on this machine or the local network
+        # (llama.cpp, Ollama, LM Studio) needs no key. Store the same placeholder the
+        # settings page uses for its local provider; public endpoints still require a key.
+        if provider=='openai' and keyless_local_endpoint(values.get('base_url')):key='local'
+        else:raise NativeValueError('first_api_key', 'Введи ключ доступа к API')
     previous=load(root/'helene.json');config=creation_config(previous,values)
     # Explicit birth choice lives with the profile, even while subscription
     # sign-in is pending and before the first runner has created soul/SOUL.md.

@@ -21518,5 +21518,15 @@
     "en": "9af608ab",
     "fr": "9af608ab",
     "zh": "9af608ab"
+  },
+  "native.first.local_key_optional": {
+    "en": "0c397bae",
+    "fr": "0c397bae",
+    "zh": "0c397bae"
+  },
+  "notice.closed_unspoken": {
+    "en": "6dba4f07",
+    "fr": "6dba4f07",
+    "zh": "6dba4f07"
   }
 }

@@ -4302,5 +4302,7 @@
   "machine.caveat.proposal": "提案操作在其 worktree 中执行，位于主目录沙盒之外",
   "machine.caveat.python": "task_id 选择 Forge 作用域；普通主目录执行通过沙盒",
   "machine.caveat.edit": "task_id 选择 Forge 作用域；主目录路径和批次中的每个文件都会校验",
-  "machine.caveat.files": "task_id 选择自己的 Forge 作用域"
+  "machine.caveat.files": "task_id 选择自己的 Forge 作用域",
+  "native.first.local_key_optional": "本机或局域网中的服务器通常不需要密钥。如果服务器不要求，请留空。",
+  "notice.closed_unspoken": "⋯ 本轮已结束，窗口中没有回复：步骤中有文字，但没有通过 reply 发送。"
 }

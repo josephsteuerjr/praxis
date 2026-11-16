@@ -269,6 +269,9 @@ class Application:
                 return None
             if action == "close" and self.window is None:
                 self.stopping.set()
+            if action == "resize_edge":
+                resize_edge(self, args)
+                return None
             if self.window is not None:
                 if action == "minimize":
                     self.window.minimize()
@@ -561,6 +564,30 @@ def window_geometry(screen):
     return {"width": width, "height": height,
             "x": left + (available_width - width) // 2,
             "y": top + (available_height - height) // 2}
+
+
+RESIZE_EDGES = frozenset(("n", "s", "e", "w", "ne", "nw", "se", "sw"))
+MIN_WINDOW_SIZE = (640, 420)
+
+
+def resize_edge(app, args):
+    """Resize the frameless window from one edge, keeping the opposite side fixed.
+
+    pywebview's frameless WinForms/Qt window has no native resize border; the renderer's
+    handles (ui-kit/window/native-resize.ts) send the requested outer size in logical
+    pixels. A maximized or absent window is left as it is.
+    """
+    edge, width, height = args.get("edge"), args.get("width"), args.get("height")
+    if (edge not in RESIZE_EDGES or type(width) is not int or type(height) is not int
+            or not 0 < width <= 32768 or not 0 < height <= 32768):
+        return False  # only our renderer sends this; a malformed request changes nothing
+    if app.window is None or getattr(app, "window_maximized", False):
+        return False
+    from webview.window import FixPoint
+    fix = ((FixPoint.SOUTH if "n" in edge else FixPoint.NORTH)
+           | (FixPoint.EAST if "w" in edge else FixPoint.WEST))
+    app.window.resize(max(MIN_WINDOW_SIZE[0], width), max(MIN_WINDOW_SIZE[1], height), fix)
+    return True
 
 
 def close_without_tray(app):

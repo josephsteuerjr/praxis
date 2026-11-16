@@ -4302,5 +4302,7 @@
   "machine.caveat.proposal": "Les opérations de proposition s’exécutent dans leur worktree hors du bac à sable du domicile",
   "machine.caveat.python": "task_id choisit un périmètre Forge ; l’exécution au domicile passe par le bac à sable",
   "machine.caveat.edit": "task_id choisit un périmètre Forge ; les chemins du domicile et chaque fichier du lot sont vérifiés",
-  "machine.caveat.files": "task_id choisit son propre périmètre Forge"
+  "machine.caveat.files": "task_id choisit son propre périmètre Forge",
+  "native.first.local_key_optional": "Un serveur sur cet ordinateur ou sur votre réseau local n’a généralement pas besoin de clé. Laissez le champ vide si le serveur n’en demande pas.",
+  "notice.closed_unspoken": "⋯ Le tour s’est terminé sans réponse pour la fenêtre : il y a du texte dans les étapes, mais il n’a pas été envoyé avec reply."
 }

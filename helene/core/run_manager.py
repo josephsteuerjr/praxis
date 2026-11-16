@@ -145,6 +145,21 @@ def _ensure_dir(path: Path) -> None:
     _chmod(path, 0o700)
 
 
+def _make_run_dir(run_dir: Path, *, windows: bool) -> None:
+    """Create one new run directory; an existing one raises FileExistsError.
+
+    Python 3.13+ turns mkdir(mode=0o700) into a protected owner-only DACL on Windows.
+    That dropped the sandbox grant the data tree passes to memory/**, so the agent's own
+    sandboxed shell could not read attachments staged under files/. On Windows the run
+    directory inherits the tree ACL, which already encodes the sandbox policy (secret
+    paths keep their explicit denials). POSIX keeps the owner-only mode.
+    """
+    if windows:
+        run_dir.mkdir()
+    else:
+        run_dir.mkdir(mode=0o700)
+
+
 def _atomic_bytes(path: Path, payload: bytes, mode: int = 0o600) -> None:
     _ensure_dir(path.parent)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
@@ -729,7 +744,7 @@ class RunManager:
         run_dir = self.root / self._month(created_at) / run_id
         _ensure_dir(run_dir.parent)
         try:
-            run_dir.mkdir(mode=0o700)
+            _make_run_dir(run_dir, windows=(os.name == "nt"))
         except FileExistsError as exc:
             raise RunConflict(f"run already exists: {run_id}") from exc
         _chmod(run_dir, 0o700)

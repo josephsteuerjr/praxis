@@ -3529,5 +3529,6 @@
   "selfdev.list.row": "4e8e4e5ef6574e30",
   "selfdev.list.no_diff": "17da54221bd41700",
   "selfdev.list.reason": "e514eb1b2409b7c9",
-  "forge.io.run_id_not_task": "90e08e48e96b7c7c"
+  "forge.io.run_id_not_task": "90e08e48e96b7c7c",
+  "helper.agent.devnull_denied": "04527f52a4e1afc5"
 }

@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import os
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Iterable
@@ -22,8 +23,26 @@ def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
+# Scripts written without spaces: a run becomes overlapping character pairs.
+_CJK_RUN = re.compile("[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]+")
+
+
 def _tokens(text: str) -> set[str]:
-    return {token.casefold() for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9_.-]{3,}", text or "")}
+    """Recall tokens for any script.
+
+    Letters of every alphabet count (French diacritics no longer split a word); Chinese,
+    Japanese and Korean runs give character pairs. ASCII and Cyrillic tokens are the same
+    as before, so lessons recorded earlier keep matching.
+    """
+    value = unicodedata.normalize("NFKC", text or "")
+    out: set[str] = set()
+    for run in _CJK_RUN.findall(value):
+        if len(run) == 1:
+            out.add(run)
+        out.update(run[index:index + 2] for index in range(len(run) - 1))
+    rest = _CJK_RUN.sub(" ", value)
+    out.update(token.casefold() for token in re.findall(r"[\w.-]{3,}", rest))
+    return out
 
 
 def _append(path: Path, row: dict) -> None:

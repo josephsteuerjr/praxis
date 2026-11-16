@@ -447,6 +447,12 @@ export function start(opts: WindowOptions): void {
       const action = b.dataset.win as "minimize" | "maximize" | "close";
       b.addEventListener("click", () => bridge.win(action));
     }
+    // The frameless pywebview window has no native resize border on Windows/Linux.
+    if (bridge.shell === "python" && bridge.presentation !== "miniapp"
+        && (bridge.platform === "win32" || bridge.platform === "linux")) {
+      import("./native-resize").then(({ installNativeResize }) =>
+        installNativeResize((command, args) => bridge.invoke(command, args)));
+    }
   } else if (inTauri) {
     document.documentElement.classList.add("native");
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {

@@ -867,7 +867,8 @@ def _compact(chat_id: str) -> None:
 
 
 def _close_run(envelope, chat_id: str, *, delivered_text: str = "",
-               spoken_by_hand: int = 0, media_count: int = 0) -> None:
+               spoken_by_hand: int = 0, media_count: int = 0,
+               declared_silence: bool = False) -> None:
     """Закрыть durable-прогон так, как это делает живой раннер на границе.
 
     Без этого карточка хода вечно оставалась `running`, и КАЖДЫЙ старт руннера
@@ -889,9 +890,15 @@ def _close_run(envelope, chat_id: str, *, delivered_text: str = "",
             _agent.run_delivery_text_accepted(run_id, text=delivered_text)
             _agent.run_delivery_finalize_recovered(run_id)
         else:
-            reason = (f"reply hand delivered {spoken_by_hand} message(s); "
-                      "boundary carries no text") if spoken_by_hand else \
-                "agent chose silence"
+            # Silence is a decision only when stay_silent declared it. Text written without
+            # reply is an internal note: the receipt must not call that a chosen silence.
+            if spoken_by_hand:
+                reason = (f"reply hand delivered {spoken_by_hand} message(s); "
+                          "boundary carries no text")
+            elif declared_silence:
+                reason = "agent chose silence"
+            else:
+                reason = "turn ended without a reply hand (not a declared silence)"
             _agent.run_delivery_completed(run_id, silent=True,
                                           silent_reason=reason)
     except Exception:
@@ -1260,13 +1267,19 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
             # «повтор» не обещается: «повтор или отказ» — два честных исхода очереди.
             product_notices.deliver(desk, 'files_pending', count=_pending_media, run=run_id ,source_id=source_id)
         ending, word = ("", "")
+        unspoken_note = False
         if not spoken and not text:
             # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
             # со снимком экрана отдал в окно один «[файл]», а весь отчёт остался в
             # заметке хода — прежнее условие `and not media_count` считало файл
             # словом. Читаем запись хода: там либо её слово (заметка), либо её
             # решение молчать, либо ничего.
-            ending, word = boundary_word(_turn_record(room))
+            record = _turn_record(room)
+            ending, word = boundary_word(record)
+            # The model wrote text but did not send it with reply. It stays an internal
+            # note (never published); the owner is told that it exists in the steps.
+            unspoken_note = (str(record.get("held") or "") == "unspoken"
+                             and bool(str(record.get("note") or "").strip()))
             if ending == WORD and (birth or _deliver_unspoken):
                 # Слово написано текстом, а не рукой reply: под поднятым рычагом это
                 # заметка себе, и до окна она не дошла бы. Продукт по умолчанию
@@ -1304,10 +1317,13 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                 # При рождении плашку кладёт _maybe_birth — со своими словами.
                 log.info("ход %s: закрыт без слова для окна%s", run_id,
                          " (только файл)" if media_count else "")
-                product_notices.deliver(desk, ('closed_file' if media_count else 'closed') ,source_id=source_id, kind='silence')
+                product_notices.deliver(desk, ('closed_file' if media_count else
+                                               'closed_unspoken' if unspoken_note else 'closed'),
+                                        source_id=source_id, kind='silence')
         _close_run(envelope, room,
                    delivered_text=(text if not spoken else ""),
-                   spoken_by_hand=len(spoken), media_count=media_count)
+                   spoken_by_hand=len(spoken), media_count=media_count,
+                   declared_silence=(ending == SILENCE))
     log.info("ход %s [окно%s]: %.1f с, реплик рукой %d%s", run_id or "—",
              "" if room == STREAM else f" {room}", time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
@@ -1648,7 +1664,8 @@ def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_sourc
                          run_id, chat_id)
         if plan is None:
             _close_run(envelope, chat_id, delivered_text=delivered_boundary,
-                       spoken_by_hand=len(spoken), media_count=media_count)
+                       spoken_by_hand=len(spoken), media_count=media_count,
+                       declared_silence=(ending == SILENCE))
     log.info("ход %s [бот %s]: %.1f с, реплик рукой %d%s", run_id or "—", chat_id,
              time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")

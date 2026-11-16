@@ -4302,5 +4302,7 @@
   "machine.caveat.proposal": "Proposal operations run in its worktree outside the home sandbox",
   "machine.caveat.python": "task_id selects a Forge scope; ordinary home execution goes through the sandbox",
   "machine.caveat.edit": "task_id selects a Forge scope; home paths and every batch file are checked",
-  "machine.caveat.files": "task_id selects its own Forge scope"
+  "machine.caveat.files": "task_id selects its own Forge scope",
+  "native.first.local_key_optional": "A server on this computer or your local network usually needs no key. Leave it empty if the server does not ask for one.",
+  "notice.closed_unspoken": "⋯ The turn closed without a reply for the window: there is text in the steps, but it was not sent with reply."
 }

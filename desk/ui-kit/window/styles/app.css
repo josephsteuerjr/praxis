@@ -4451,3 +4451,17 @@ body.first-run #state {
 @media(max-width:560px) { #view .settings .fast-mode .choice:not(.stack) { grid-template-columns:1fr; } }
 
 .fast-mode[hidden], [data-service-tier-field][hidden] { display:none; }
+
+/* Edge and corner resizing of the frameless pywebview window (native-resize.ts). */
+.native-resize { position:fixed; z-index:2147483000; background:transparent; touch-action:none; }
+.native-resize-n, .native-resize-s { left:10px; right:10px; height:5px; cursor:ns-resize; }
+.native-resize-n { top:0; }
+.native-resize-s { bottom:0; }
+.native-resize-e, .native-resize-w { top:10px; bottom:10px; width:5px; cursor:ew-resize; }
+.native-resize-e { right:0; }
+.native-resize-w { left:0; }
+.native-resize-ne, .native-resize-nw, .native-resize-se, .native-resize-sw { width:10px; height:10px; }
+.native-resize-ne { top:0; right:0; cursor:nesw-resize; }
+.native-resize-sw { bottom:0; left:0; cursor:nesw-resize; }
+.native-resize-nw { top:0; left:0; cursor:nwse-resize; }
+.native-resize-se { bottom:0; right:0; cursor:nwse-resize; }
