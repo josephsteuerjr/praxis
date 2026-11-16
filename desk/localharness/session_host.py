@@ -189,7 +189,7 @@ class SessionClient(Controller):
     def invoke(self, command, args):
         result = self._request('invoke', {'command': command, 'arguments': args,
                                          'observer': self.observer},
-            timeout=240 if command=='owner_control' and args.get('action')=='resume' else 180)
+            timeout=610 if command=='owner_control' and args.get('action')=='resume' else 180)
         if command == 'switch_agent' and isinstance(result, dict):
             self.selected = result['id']
         return result

@@ -59,6 +59,7 @@ def bundle(root,agent):
              'stops':stops,
              'data':str(agent.tree),'session':session,'reader':reader,'sources':[]}
     context['build']=selected(Path(root)/'python-app.json',('version','target','delivery'))
+    context['startup']=selected(agent.tree/'memory/.state/runner-startup.json',('pid','phase','at'))
     context['retirement']=selected(Path(root)/'.helene/retirement.json',('state','mode','error','removed','owner'))
     context['components']={name:selected(Path(root)/'.helene/component-jobs'/(name+'.json'),
         ('state','stage','error','error_type','started_at','updated_at','bytes','total_bytes','files_done','total_files'))

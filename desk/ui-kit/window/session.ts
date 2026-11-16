@@ -1,6 +1,7 @@
 import { t as uiText } from "../../lang/lang";
 /** Observable lifecycle contracts. No timers, DOM or inferred text state here. */
 export interface OwnerState {
+  startup?: RunnerStartup;
   agent_id?: string;
   supported: boolean;
   stopped: boolean;
@@ -13,6 +14,18 @@ export interface OwnerState {
   /** Служебная ли установка (1.4.1): гашение/подъём исполняет служба, и окно
    *  говорит об этом вместо молчаливого «горит». */
   service?: boolean;
+}
+
+export interface RunnerStartup { state: string; phase: string; elapsed: number }
+export function startupWords(startup?: RunnerStartup): string {
+  if (!startup || startup.state === "ready" || startup.state === "stopped") return "";
+  const phases: Record<string,string> = {
+    launch: uiText("supervisor.startup.launch"), layout: uiText("supervisor.startup.layout"),
+    code: uiText("supervisor.startup.code"), sandbox: uiText("supervisor.startup.sandbox"),
+    services: uiText("supervisor.startup.services"), recovery: uiText("supervisor.startup.recovery"),
+    ready: uiText("supervisor.startup.unconfirmed")
+  };
+  return uiText("supervisor.startup.elapsed", {phase: phases[startup.phase] || phases.launch, seconds: String(startup.elapsed)});
 }
 
 export interface EngineOperation {
@@ -37,6 +50,11 @@ export function engineOperationObserved(op: EngineOperation, owner: OwnerState |
 }
 
 export function engineWords(owner: OwnerState | null, op: EngineOperation | null): string {
+  if (!owner?.stopped && op?.action !== 'stop' && owner?.startup && owner.startup.state !== 'ready') {
+    const progress = startupWords(owner.startup);
+    if (progress) return progress;
+  }
+  if (op?.action === 'restart' && owner?.startup) return uiText('supervisor.restart.running');
   // Restart — не мгновенное действие: движок принимает просьбу и выходит на
   // границе ТЕКУЩЕГО хода (06.10, живая жалоба владельца «харнесс не
   // торопится»). Молчаливое «Перезапускается…» в это время неотличимо от

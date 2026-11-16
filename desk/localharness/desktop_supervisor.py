@@ -39,6 +39,8 @@ if __package__:
     from .relay_network import environment as relay_environment
     from .xtts_install import runtime_for
 else:
+    # The direct CLI entry shares the same package helpers as the window owner.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from agents import BASE_ID, raisable, read_config
     import owner_stop
     if os.name == 'nt':
@@ -315,7 +317,7 @@ def _specs(config: Path, *, session_host: bool = False,
         if runner_required(cfg, agent_id):
             specs[f"{agent_id}:runner"] = Spec("runner", (str(runner_python), "-u", str(runner),
                                                 "--config", str(config)), runner.parent,
-                                    dict(common, HELENE_HOST="127.0.0.1"), tree / "runner.log", port)
+                                    dict(common, HELENE_HOST="127.0.0.1", HELENE_SUPERVISOR="python-owner"), tree / "runner.log", port)
     install_base = base if agent_id == BASE_ID else base.parent.parent
     selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient,
                                 allow_missing=True)
@@ -472,12 +474,14 @@ def _tree_hold(tree: Path):
 
 def _desktop_observation(nonce, seq, ack, installed, active):
     """A fresh observation of handles owned by this loop, not desired config."""
+    from localharness import runner_startup
     return {"schema": 1, "nonce": nonce, "seq": seq, "ack": ack,
             "agents": {agent: {"raised": f"{agent}:channel" in active,
+                               "startup": runner_startup.observe(agent_tree, active[f"{agent}:runner"].pid if f"{agent}:runner" in active else None),
                                "roles": sorted(spec.role for key, spec in specs.items() if key in active),
                                "problems": {spec.role:spec.unavailable for spec in specs.values() if spec.unavailable},
                                "pids": {spec.role:active[key].pid for key,spec in specs.items() if key in active}}
-                       for agent, (_, specs) in installed.items()}}
+                       for agent, (agent_tree, specs) in installed.items()}}
 
 
 def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
@@ -550,6 +554,8 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         pending_ack = None
         export_problem = None
         uncertain = False
+        from localharness.desktop_control import Control
+        controls = Control(stop_children, ChildState)
         def retire(agent_id: str) -> None:
             selected = {key: child for key, child in active.items()
                         if key.startswith(agent_id + ':')}
@@ -570,6 +576,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
             installed.pop(agent_id)
         try:
             while not stopped():
+                control_refresh = controls.tick(installed, active, policy, stopped)
                 request = None
                 if commands is not None and (pending_ack is None or status_observer is not None):
                     try:
@@ -577,7 +584,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     except Empty:
                         pass
                 refresh = session_host or desktop_roster
-                if refresh and (request is not None or time.monotonic() - last_refresh >= 2.0):
+                if refresh and (control_refresh or request is not None or time.monotonic() - last_refresh >= 2.0):
                     last_refresh = time.monotonic()
                     # Re-read the actual roster/config, not a startup snapshot.
                     # Failure to read the base is terminal rather than an empty

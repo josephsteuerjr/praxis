@@ -4312,5 +4312,17 @@
   "ui.ui.kit.steps.preview_thinking": "Réflexion du modèle pendant la génération ({p0} caractères)",
   "ui.ui.kit.steps.preview_reply": "Rédige la réponse — {p0} caractères pour l’instant, pas encore envoyée",
   "ui.ui.kit.steps.preview_text": "Rédige du texte — {p0} caractères pour l’instant, pas encore envoyé",
-  "ui.ui.kit.usage.fresh_input": "{p0} hors cache"
+  "ui.ui.kit.usage.fresh_input": "{p0} hors cache",
+  "supervisor.restart.invalid": "Demande de redémarrage invalide.",
+  "supervisor.restart.failed": "Le nettoyage des processus n’est pas confirmé ; un nouveau lancement est bloqué : {detail}",
+  "supervisor.restart.accepted": "Les processus précédents sont arrêtés. Redémarrage avec les paramètres enregistrés ; la disponibilité n’est pas encore confirmée.",
+  "supervisor.startup.launch": "Démarrage du moteur",
+  "supervisor.startup.layout": "Préparation du dossier de données",
+  "supervisor.startup.code": "Chargement du code de l’agent",
+  "supervisor.startup.sandbox": "Préparation du bac à sable et des droits d’accès",
+  "supervisor.startup.services": "Connexion des outils",
+  "supervisor.startup.recovery": "Récupération des tours interrompus",
+  "supervisor.startup.unconfirmed": "Le moteur ne confirme plus la liaison ; le redémarrage est disponible",
+  "supervisor.startup.elapsed": "{phase} · {seconds} s",
+  "supervisor.restart.running": "Redémarrage…"
 }

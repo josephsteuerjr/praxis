@@ -2084,8 +2084,8 @@ def _start_supervisor(tree: Path) -> bool:
     реле» и отвечала «реле держит не движок», а записку надзора перебивала своей каждые
     две секунды — окно видело то его детей, то одного движка.
     """
-    if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
-        log.info("надзор: serverboot — просьбы окна берёт он, движок стол не трогает")
+    if os.environ.get("HELENE_SUPERVISOR") in ("serverboot", "python-owner"):
+        log.info("надзор: %s — просьбы окна берёт он", os.environ["HELENE_SUPERVISOR"])
         return False
     import threading
     threading.Thread(target=_supervisor_forever, args=(tree,), name="supervisor",
@@ -3589,6 +3589,8 @@ def main() -> None:
         raise SystemExit(TREE_BUSY_EXIT_CODE)
 
     # Birth and proposal writes belong to the ONE runner holding this tree.
+    from localharness import runner_startup
+    runner_startup.phase(tree, 'layout')
     # Formerly layout ran above claim_tree: the losing runner could still seed
     # soul or publish a proposal/decision pointer before it learned it lost.
     try:
@@ -3600,6 +3602,7 @@ def main() -> None:
         raise SystemExit(3)
 
     code_raw = str(cfg.get("code") or "../../live")
+    runner_startup.phase(tree, 'code')
     code_dir = Path(code_raw)
     if not code_dir.is_absolute():
         code_dir = (config_path.parent / code_dir).resolve()
@@ -3749,12 +3752,14 @@ def main() -> None:
     # анатомии, продукт работает дальше.
     try:
         import fence
+        runner_startup.phase(tree, 'sandbox')
         fence.install(agent, tree, cfg, config_path=config_path,
                       program_root=Path(__file__).resolve().parents[2])
     except Exception:
         log.exception("песочница не поднялась — руки без ограды")
     # Рука окон — ПОСЛЕ ограды: тело живёт снаружи контейнера, а разрешение
     # владельца (четыре права) перечитывается из того же helene.json на ходу.
+    runner_startup.phase(tree, 'services')
     try:
         body.install(agent, tree, cfg, config_path=config_path)
     except Exception:
@@ -3898,6 +3903,7 @@ def main() -> None:
     try:
         # Здесь только структурное восстановление WAL. Модель и доставка
         # продолжаются ниже, отдельным шагом того же последовательного цикла.
+        runner_startup.phase(tree, 'recovery')
         recovered = agent.recover_durable_state(run_ids=startup_run_ids)
         if recovered:
             log.warning("восстановлено прерванных ходов: %d", len(recovered))
@@ -3939,6 +3945,7 @@ def main() -> None:
     _refresh_care = refresh_care.RefreshCare(
         memory_life, cooldown=float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)).start()
     atexit.register(_refresh_care.stop)
+    runner_startup.phase(tree, 'ready')
     _start_supervisor(tree)
     if not updates.on_server():
         try:

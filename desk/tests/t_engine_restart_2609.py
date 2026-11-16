@@ -32,6 +32,12 @@ import voice  # noqa: E402
 
 
 class EngineAnswersTheRestartRequest(unittest.TestCase):
+    def test_external_python_owner_is_the_only_supervisor_writer(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, HELENE_SUPERVISOR='python-owner'), patch('threading.Thread') as thread:
+            self.assertFalse(runner._start_supervisor(Path('unused')))
+            thread.assert_not_called()
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="helene-restart-")
         self.addCleanup(self._tmp.cleanup)

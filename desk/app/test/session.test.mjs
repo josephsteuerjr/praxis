@@ -39,6 +39,13 @@ assert.equal(engineWords({...owner, enabled: false, service: false}, null),
 assert.equal(engineWords({...owner, enabled: false, stopped: true, runner_alive: false}, null), "Движок остановлен");
 // старая оболочка без полей — прежнее поведение, никаких новых слов
 assert.equal(engineWords({...owner}, null), "");
+const startup = {state:'starting', phase:'sandbox', elapsed:183};
+assert.equal(engineWords({...owner, startup:{state:'ready',phase:'ready',elapsed:0}}, op), 'Перезапускается…');
+assert.equal(engineWords({...owner, startup}, {...op, action:'resume'}),
+  'Подготовка песочницы и прав доступа · 183 с');
+assert.equal(engineWords({...owner, startup}, {...op, action:'stop'}), 'Останавливается…');
+assert.equal(engineOperationObserved({...op, action:'resume'}, {...owner, startup}, true, false, 100), false,
+  'a live process preparing sandbox permissions is not a ready agent');
 assert.equal(activityWords(null), "");
 assert.equal(activityWords({phase: "model"}), "Думает...");
 assert.equal(activityWords({phase: "tool"}), "Работает...");

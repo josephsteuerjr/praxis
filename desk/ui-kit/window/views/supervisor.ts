@@ -16,6 +16,7 @@ import { t as uiText, locale } from "../../../lang/lang";
 //     рисует `update-card.ts`, и там «Подтвердить» есть только у плана, который он
 //     уже сверил и показал. Нет исполнителя — команды названы словами.
 import { api, post } from "../api";
+import { startupWords } from "../session";
 import { esc, fmtTime } from "../lib";
 import { updateActive, updateCardHTML, type UpdateState } from "./update-card";
 import { mountAutonomy, type AutonomyState } from "../../autonomy";
@@ -24,6 +25,9 @@ import { FAST_MODE_HINT, serviceTierChoices, serviceTierReceipt } from "../../se
 import { bindBrainModelControls, brainModelProblem, tierClearedByRoute, type ModelCatalog } from "../../model-controls";
 
 export interface SupervisorChild {
+  state?: string;
+  phase?: string;
+  elapsed?: number;
   id: string;
   name: string;
   alive: boolean;
@@ -76,7 +80,8 @@ function childRow(c: SupervisorChild): string {
     : c.alive
       ? uiText("ui.ui.kit.window.views.supervisor.bdb78f6e9e", {p0: String(c.pid ?? "?")})
       : uiText("ui.ui.kit.window.views.supervisor.6331a74875");
-  return `<tr><td><b>${esc(c.name)}</b></td><td>${state}</td>
+  const progress = c.state ? startupWords({state:c.state,phase:c.phase || 'launch',elapsed:c.elapsed || 0}) : '';
+  return `<tr><td><b>${esc(c.name)}</b></td><td>${state}${progress ? '<br>' + esc(progress) : ''}</td>
     <td class="muted">${c.since_utc ? esc(fmtTime(c.since_utc)) : ""}</td>
     <td class="muted">${c.falls ? esc(String(c.falls)) + uiText("ui.ui.kit.window.views.supervisor.f560af2035") : ""}</td></tr>`;
 }

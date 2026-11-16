@@ -189,7 +189,7 @@ export function start(opts: WindowOptions): void {
       powerButton.title = ownerState?.stopped ? uiText("ui.ui.kit.window.main.bb294fee13") : uiText("ui.ui.kit.window.main.0641d4f8e0");
       powerButton.classList.toggle("emergency-stop", !ownerState?.stopped);
     }
-    powerButton.disabled = !!engineOperation;
+    powerButton.disabled = engineOperation?.action === "stop";
     restartButton.hidden = foreignHarness();
     restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
     restartButton.title = ownerState?.stopped ? uiText("ui.ui.kit.window.main.8575c5d179") : uiText("ui.ui.kit.window.main.5fef4b795f");
@@ -219,7 +219,8 @@ export function start(opts: WindowOptions): void {
       unconfirmedOperation = null;
       engineFailure = "";
       toast(op.action === "stop" ? uiText("ui.ui.kit.window.main.9782bf486b") : op.action === "resume" ? uiText("ui.ui.kit.window.main.0042a140e5") : uiText("ui.ui.kit.window.main.3781602f31"));
-    } else if (engineOperation && op?.accepted && Date.now() - op.started > 60_000) {
+    } else if (engineOperation && op?.accepted && Date.now() - op.started >
+        (ownerState?.startup?.state === "starting" ? 600_000 : 60_000)) {
       unconfirmedOperation = op;
       engineOperation = null;
       // Слово обязано объяснить, ЧТО именно тянется (06.10): движок выходит на
@@ -232,7 +233,7 @@ export function start(opts: WindowOptions): void {
   }
 
   async function controlEngine(action: EngineOperation["action"]) {
-    if (engineOperation) return;
+    if (engineOperation && action !== "stop") return;
     if (ownerState?.stopped && action === "restart") { toast(uiText("ui.ui.kit.window.main.8575c5d179")); return; }
     const op: EngineOperation = { action, agent_id: ownerState?.agent_id, started: Date.now(),
       previousPid: S.agentState?.runner?.pid || ownerState?.pid || 0, accepted: false };

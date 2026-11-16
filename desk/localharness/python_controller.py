@@ -255,6 +255,7 @@ class Controller:
         while True:
             if self.stop.is_set() or (cancelled is not None and cancelled()):
                 raise InterruptedError('Startup cancelled before readiness confirmation')
+            state = {}
             try:
                 state=self.status().get('agents',{}).get(target.id,{})
                 who=json.load(http.open(base+'/api/who',timeout=2))
@@ -274,7 +275,7 @@ class Controller:
                     reader=load(target.tree/'memory/.control/desk_inbox/.reader.json')
                     code=Path(str(cfg.get('code') or '../../live'))
                     code=(code if code.is_absolute() else target.config.parent/code).resolve()
-                    if reader.get('pid')!=state.get('pids',{}).get('runner') or time.time()-reader.get('at',0)>15:
+                    if reader.get('pid')!=state.get('pids',{}).get('runner') or not 0 <= time.time()-reader.get('at',0)<15:
                         raise RuntimeError('Runner ownership heartbeat unconfirmed')
                     if Path(reader.get('code','')).resolve()!=code:
                         raise ValueError('Runner did not import the preserved source')
@@ -282,6 +283,9 @@ class Controller:
                 return proof
             except (OSError, RuntimeError) as exc:
                 last=str(exc)
+                startup=state.get('startup',{}) if isinstance(state,dict) else {}
+                if require_runner and startup.get('state') == 'starting':
+                    last += f" (startup: {startup.get('phase')}, {startup.get('elapsed',0)}s)"
             if time.monotonic()>=end: raise TimeoutError(last)
             time.sleep(.2)
 

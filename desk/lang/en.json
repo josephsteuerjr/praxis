@@ -4312,5 +4312,17 @@
   "ui.ui.kit.steps.preview_thinking": "Model's thinking while it generates ({p0} characters)",
   "ui.ui.kit.steps.preview_reply": "Writing the reply — {p0} characters so far, not sent yet",
   "ui.ui.kit.steps.preview_text": "Writing text — {p0} characters so far, not sent yet",
-  "ui.ui.kit.usage.fresh_input": "{p0} fresh"
+  "ui.ui.kit.usage.fresh_input": "{p0} fresh",
+  "supervisor.restart.invalid": "Invalid restart request.",
+  "supervisor.restart.failed": "Process cleanup is unconfirmed; another launch is blocked: {detail}",
+  "supervisor.restart.accepted": "The previous processes have stopped. Restarting with saved settings; readiness is not yet confirmed.",
+  "supervisor.startup.launch": "Starting the engine",
+  "supervisor.startup.layout": "Preparing the data folder",
+  "supervisor.startup.code": "Loading agent code",
+  "supervisor.startup.sandbox": "Preparing the sandbox and access permissions",
+  "supervisor.startup.services": "Connecting tools",
+  "supervisor.startup.recovery": "Recovering interrupted turns",
+  "supervisor.startup.unconfirmed": "The engine stopped confirming contact; restart is available",
+  "supervisor.startup.elapsed": "{phase} · {seconds} s",
+  "supervisor.restart.running": "Restarting…"
 }

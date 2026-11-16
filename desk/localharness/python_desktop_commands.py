@@ -117,6 +117,7 @@ def invoke(owner, command, args):
         return {'agent_id':agent.id,'supported':True,'stopped':owner_stop.stopped(),
                 'runner_alive':'runner' in state.get('roles',[]),'pid':state.get('pids',{}).get('runner'),
                 'enabled':agent.enabled,'service':False,
+                'startup':state.get('startup'),
                 'note':owner.error or '; '.join(dict.fromkeys(state.get('problems',{}).values()))}
     if command=='owner_control':
         from . import owner_stop
@@ -136,9 +137,9 @@ def invoke(owner, command, args):
             from . import owner_resume,startup_diagnostics
             try:
                 removed=owner_resume.clear(cancelled=lambda:getattr(owner,'exiting',False))
-                deadline=time.monotonic()+30
+                deadline=time.monotonic()+600
                 owner.start()
-                proof=owner.readiness(timeout=30,require_runner=True,
+                proof=owner.readiness(timeout=600,require_runner=True,
                     cancelled=lambda:getattr(owner,'exiting',False) or owner_stop.stopped())
                 if cfg.get('mode','local')=='local' and (cfg.get('relay') or {}).get('enabled'):
                     while True:

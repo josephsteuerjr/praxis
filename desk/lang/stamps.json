@@ -21568,5 +21568,65 @@
     "en": "dbb89088",
     "fr": "dbb89088",
     "zh": "dbb89088"
+  },
+  "supervisor.restart.invalid": {
+    "en": "b9a69931",
+    "fr": "b9a69931",
+    "zh": "b9a69931"
+  },
+  "supervisor.restart.failed": {
+    "en": "96ef736a",
+    "fr": "96ef736a",
+    "zh": "96ef736a"
+  },
+  "supervisor.restart.accepted": {
+    "en": "b6b782b8",
+    "fr": "b6b782b8",
+    "zh": "b6b782b8"
+  },
+  "supervisor.startup.launch": {
+    "en": "eb0a69f0",
+    "fr": "eb0a69f0",
+    "zh": "eb0a69f0"
+  },
+  "supervisor.startup.layout": {
+    "en": "bfdbad01",
+    "fr": "bfdbad01",
+    "zh": "bfdbad01"
+  },
+  "supervisor.startup.code": {
+    "en": "005e5805",
+    "fr": "005e5805",
+    "zh": "005e5805"
+  },
+  "supervisor.startup.sandbox": {
+    "en": "eb83e5ac",
+    "fr": "eb83e5ac",
+    "zh": "eb83e5ac"
+  },
+  "supervisor.startup.services": {
+    "en": "3818b286",
+    "fr": "3818b286",
+    "zh": "3818b286"
+  },
+  "supervisor.startup.recovery": {
+    "en": "d3c12593",
+    "fr": "d3c12593",
+    "zh": "d3c12593"
+  },
+  "supervisor.startup.unconfirmed": {
+    "en": "3e8d7dba",
+    "fr": "3e8d7dba",
+    "zh": "3e8d7dba"
+  },
+  "supervisor.startup.elapsed": {
+    "en": "675cccab",
+    "fr": "675cccab",
+    "zh": "675cccab"
+  },
+  "supervisor.restart.running": {
+    "en": "1174ff36",
+    "fr": "1174ff36",
+    "zh": "1174ff36"
   }
 }

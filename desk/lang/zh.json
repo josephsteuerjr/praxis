@@ -4312,5 +4312,17 @@
   "ui.ui.kit.steps.preview_thinking": "模型生成过程中的思考（{p0} 个字符）",
   "ui.ui.kit.steps.preview_reply": "正在写回复——已 {p0} 个字符，尚未发送",
   "ui.ui.kit.steps.preview_text": "正在写文字——已 {p0} 个字符，尚未发送",
-  "ui.ui.kit.usage.fresh_input": "未缓存 {p0}"
+  "ui.ui.kit.usage.fresh_input": "未缓存 {p0}",
+  "supervisor.restart.invalid": "重启请求无效。",
+  "supervisor.restart.failed": "进程清理尚未确认，已阻止再次启动：{detail}",
+  "supervisor.restart.accepted": "原进程已停止。正在按已保存的设置重启，尚未确认就绪。",
+  "supervisor.startup.launch": "正在启动引擎",
+  "supervisor.startup.layout": "正在准备数据文件夹",
+  "supervisor.startup.code": "正在加载智能体代码",
+  "supervisor.startup.sandbox": "正在准备沙盒和访问权限",
+  "supervisor.startup.services": "正在连接工具",
+  "supervisor.startup.recovery": "正在恢复中断的轮次",
+  "supervisor.startup.unconfirmed": "引擎已停止确认连接，可以重启",
+  "supervisor.startup.elapsed": "{phase} · {seconds} 秒",
+  "supervisor.restart.running": "正在重启…"
 }
