@@ -1,3 +1,13 @@
+# 2.8.2 Beta
+
+- Fix Windows edge and corner resizing of the frameless window. The 2.8.0 fix compared the bridge platform with `win32`, but the bridge reports `windows`, so the handles were never installed on Windows.
+- Windows MCP: mouse and keyboard tools (Move, Click, Type…) failed with `CONTROL_UNAVAILABLE` while the status said `ready`. The upstream consent prompt needs tkinter, which the embedded runtime lacks. The prompt now opens as a native Windows window with the same allow / deny / timeout answers, in the interface language; a failure never grants control.
+- Live words of a running model call in the steps: the reasoning (when the provider streams it) as a fold, the reply being written and plain text, all marked "not sent yet". Useful for slow local models.
+- A turn stopped by the `max_tokens` limit, an unknown step outcome or a cancel no longer says it is waiting for a confirmation; each has its own notice. Only a real checkpoint does.
+- A tool call with an extra argument now says to remove that field and names the required ones, instead of asking for all required arguments again.
+- Settings: the ChatGPT sign-in buttons of the images card are a separate group. Usage: the note explains that input sums the whole context of every call, and each model row shows its uncached part.
+- Windows prerelease only; stable Latest remains 2.7.2.
+
 # 2.8.1 Beta
 
 - Fix Windows clean upgrades from 2.7.2: the standalone runner now imports first-start policy through its package. The owner-stop latch remains active and startup can publish its readiness heartbeat. The previous import error caused restart loops and a startup timeout while preserving the old programme.
