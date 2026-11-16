@@ -1,8 +1,9 @@
-# 2.8.4 Beta
+# 2.8.5 Beta
 
 - Shell commands could wait minutes on the agent's personal Git. Owner backups that had entered its history made the store huge (21 GB on one machine), every self-commit started a foreground repack that never finished, and the snapshot before each command re-hashed a multi-gigabyte backup. At start Hélène now turns automatic gc/maintenance off for this repository, deletes leftover temporary packs, takes owner backups and service files out of HEAD and, when the store is large, rewrites the history without them (every other file and commit is kept, each branch's tree is verified and the store is checked before it replaces the old one).
 - The snapshot before each command no longer runs `git add -A` over the whole tree: it stages only what `git status` reports, starting from the real index, and never ignored files or files over 50 MB. Self-commits follow the same rules, so an untracked service file is no longer added back on every command.
-- Windows prerelease only; stable Latest remains 2.7.2.
+- The macOS and Linux process guardian allows 60 seconds for cold preparation, including OS security scans on newly unpacked runtimes. Missing admission replies still refuse launch and request cleanup.
+- Latest Beta for Windows, macOS Apple silicon/Intel, Debian/Ubuntu, Fedora and Linux ARM64 server; includes all changes since 2.7.2. Version 2.8.4 was not published.
 
 # 2.8.3 Beta
 

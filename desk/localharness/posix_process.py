@@ -18,6 +18,12 @@ import sys
 import time
 
 
+# A freshly unpacked isolated Python can spend tens of seconds in cold imports
+# and OS security scans (notably Gatekeeper/XProtect on Intel Macs). This is
+# the admission budget only; timeout still refuses launch and requests cleanup.
+GUARDIAN_START_TIMEOUT_SECONDS = 60
+
+
 class CustodyFault(RuntimeError):
     """Physical cleanup is unknown; never admit a replacement generation."""
 
@@ -102,7 +108,7 @@ class PosixChild:
         child = cls(process)
         try:
             child._send({'argv': list(argv), 'cwd': str(cwd), 'env': env, 'log': str(log)})
-            message = child._message(10)
+            message = child._message(GUARDIAN_START_TIMEOUT_SECONDS)
             if not message or message.get('state') != 'ready':
                 raise RuntimeError('guardian preparation failed: '+str(message))
             if stopped():
@@ -110,7 +116,7 @@ class PosixChild:
                 process.wait(10)
                 raise RuntimeError('owner Stop before child release')
             child._send({'action':'start'})
-            message = child._message(10)
+            message = child._message(GUARDIAN_START_TIMEOUT_SECONDS)
             if not message or message.get('state') != 'started':
                 raise RuntimeError('child launch refused: '+str(message))
             child.pid = message['pid']

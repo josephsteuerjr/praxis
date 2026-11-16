@@ -46,13 +46,13 @@ class DarwinChild(_posix.PosixChild):
         child = cls(process)
         try:
             child._send({'argv': list(argv), 'cwd': str(cwd), 'env': env, 'log': str(log)})
-            ready = child._message(10)
+            ready = child._message(_posix.GUARDIAN_START_TIMEOUT_SECONDS)
             if not ready or ready.get('state') != 'ready':
                 raise RuntimeError('Darwin guardian preparation failed: ' + str(ready))
             if stopped():
                 raise RuntimeError('owner Stop before shim preparation')
             child._send({'action': 'start'})
-            prepared = child._message(10)
+            prepared = child._message(_posix.GUARDIAN_START_TIMEOUT_SECONDS)
             if not prepared or prepared.get('state') != 'prepared':
                 raise RuntimeError('Darwin shim preparation failed: ' + str(prepared))
             child.pid = prepared['pid']
@@ -62,7 +62,7 @@ class DarwinChild(_posix.PosixChild):
             if stopped():
                 raise RuntimeError('owner Stop before target release')
             child._send({'action': 'release-target'})
-            started = child._message(10)
+            started = child._message(_posix.GUARDIAN_START_TIMEOUT_SECONDS)
             if not started or started.get('state') != 'started':
                 raise RuntimeError('Darwin target release unconfirmed: ' + str(started))
             return child

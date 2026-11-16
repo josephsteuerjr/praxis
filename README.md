@@ -23,7 +23,7 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
-## Included in 2.8.4 Beta
+## Included in 2.8.5 Beta
 
 Shell commands no longer stall on the agent's personal Git: at start Hélène removes
 owner backups and service files from its history, deletes leftover temporary packs and
@@ -38,9 +38,10 @@ The interface and agent context each support Russian, English, French and Chines
 with independent settings. Includes resident skills, optional living prose,
 Windows MCP, exact program arguments, code navigation and stronger process custody.
 The bundled relay can switch ChatGPT subscriptions on quota exhaustion.
-This is a [Windows prerelease](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.4);
-2.7.2 remains the stable Latest for the updater. See the
-[changes and qualification limits](desk/docs/RELEASE-2.8.4.md).
+This is the [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.5).
+On cold macOS and Linux starts, the process guardian now allows up to 60 seconds
+for preparation while keeping launch refusal and cleanup on timeout. See the
+[changes and qualification limits](desk/docs/RELEASE-2.8.5.md).
 
 ## Included in 2.7.2 Beta
 

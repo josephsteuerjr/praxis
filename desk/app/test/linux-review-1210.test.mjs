@@ -16,6 +16,7 @@ const hooks=registerHooks({resolve(specifier,context,next){
 }});
 globalThis.window={DESK_CONFIG_OVERRIDE:{},addEventListener(){}};
 const { liveLine }=await import('../src/computer.ts');
+const { t }=await import('../../lang/lang.ts');
 
 let hostCalls=0, panicCalls=0, readyCalls=0;
 const never=()=>{readyCalls++; return new Promise(()=>{});};
@@ -30,7 +31,7 @@ ready(); assert.equal(await resume,'host'); assert.equal(hostCalls,1);
 await assert.rejects(forwardLaunchWhenReady(['helene','--resume'],async()=>{},async()=>{throw new Error('transfer busy');},async()=>{}),/transfer busy/);
 for(const console of [undefined,null]) {
   const line=liveLine({enabled:true,available:true,connected:true,platform:'linux',console},true,true);
-  assert.equal(line.ok,null); assert.match(line.text,/ещё не проверен/);
+  assert.equal(line.ok,null); assert.equal(line.text,t('ui.app.src.computer.3a3db14e03',{p0:''}));
 }
 assert.equal(liveLine({enabled:true,connected:true,platform:'linux',console:false},true,true).ok,false);
 assert.equal(liveLine({enabled:true,connected:true,platform:'linux',console:true},true,true).ok,true);
