@@ -5010,9 +5010,9 @@
     "zh": "f6b234f0"
   },
   "ui.ui.kit.usage.085fd39ca6": {
-    "en": "085fd39c",
-    "fr": "085fd39c",
-    "zh": "085fd39c"
+    "en": "1055b474",
+    "fr": "1055b474",
+    "zh": "1055b474"
   },
   "ui.ui.kit.usage.9d4f1d28a3": {
     "en": "9d4f1d28",
@@ -21528,5 +21528,20 @@
     "en": "6dba4f07",
     "fr": "6dba4f07",
     "zh": "6dba4f07"
+  },
+  "notice.turn_cut": {
+    "en": "1e4e589c",
+    "fr": "1e4e589c",
+    "zh": "1e4e589c"
+  },
+  "notice.run_in_doubt": {
+    "en": "a6efa7cf",
+    "fr": "a6efa7cf",
+    "zh": "a6efa7cf"
+  },
+  "notice.run_stopped": {
+    "en": "4cb9af4c",
+    "fr": "4cb9af4c",
+    "zh": "4cb9af4c"
   }
 }

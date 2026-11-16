@@ -16,7 +16,7 @@ try{
  globalThis.window={addEventListener(){}};globalThis.localStorage={getItem(){return null},setItem(){}};
  const {text,language}=await import(pathToFileURL(join(temporary,'actual.mjs')).href);
  const catalogs=Object.fromEntries(['ru','en','fr','zh'].map(code=>[code,JSON.parse(readFileSync(resolve(desk,'lang/'+code+'.json'),'utf8'))]));
- const raw='Literal Русский 中文 **{agent}** </script>',fields={speech_failed:[],speech_unknown:[],turn_incomplete:[],files_pending:['count','run'],paused:['run'],turn_failed:['run'],silence:['agent'],silence_reason:['agent','reason'],closed:[],closed_file:[],closed_unspoken:[],tree_busy:['agent','pid'],birth_silent:['agent'],birth_failed:['tries'],resume_refused:['reason'],note_gave_up:['name','tries','path'],note_rejected:['name','reason']};
+ const raw='Literal Русский 中文 **{agent}** </script>',fields={speech_failed:[],speech_unknown:[],turn_incomplete:[],files_pending:['count','run'],paused:['run'],turn_failed:['run'],turn_cut:['run'],run_in_doubt:['run'],run_stopped:['run'],silence:['agent'],silence_reason:['agent','reason'],closed:[],closed_file:[],closed_unspoken:[],tree_busy:['agent','pid'],birth_silent:['agent'],birth_failed:['tries'],resume_refused:['reason'],note_gave_up:['name','tries','path'],note_rejected:['name','reason']};
  const messages=Object.entries(fields).map(([kind,keys])=>({system:true,text:raw,display_notice:{schema:'helene.product-notice.v1',kind,values:Object.fromEntries(keys.map(key=>[key,raw]))}})),before=JSON.stringify(messages),byUI=new Map();
  for(const ui of ['ru','en','fr','zh'])for(const frame of ['ru','en','fr','zh']){
   globalThis.DESK_CONFIG_OVERRIDE={agent:{frame_language:frame}};language.setLocale(ui);
@@ -37,5 +37,5 @@ try{
   {...valid,display_notice:{...valid.display_notice,values:{agent:raw,reason:{}}}},
   {...valid,display_notice:{...valid.display_notice,extra:raw}}])assert.equal(text.systemNoticeText(bad),'');
  language.setLocale('en');const first=text.systemNoticeText(valid);language.setLocale('fr');assert.notEqual(text.systemNoticeText(valid),first);
- console.log(JSON.stringify({ok:true,codes:17,pairs:16,rawPreserved:true}));
+ console.log(JSON.stringify({ok:true,codes:20,pairs:16,rawPreserved:true}));
 }finally{rmSync(temporary,{recursive:true,force:true});}

@@ -74,5 +74,32 @@ class WindowResize(unittest.TestCase):
             self.assertEqual(app.window.calls, [])
 
 
+class HandlesInstallForTheBridgePlatform(unittest.TestCase):
+    """2.8.0/2.8.1 shipped a guard against "win32" while the bridge says "windows".
+
+    Found by the owner's agent on his own Windows machine (16.11): the drag changed nothing
+    because no handle existed. The renderer's list must name the bridge's actual words.
+    """
+
+    def test_renderer_list_names_the_bridge_platform_words(self):
+        from localharness import python_platform
+        source = (Path(__file__).resolve().parents[1] / 'ui-kit/window/native-resize.ts').read_text('utf-8')
+        import re
+        match = re.search(r'NATIVE_RESIZE_PLATFORMS[^=]*=\s*\[([^\]]*)\]', source)
+        self.assertIsNotNone(match)
+        listed = set(re.findall(r'"([^"]+)"', match.group(1)))
+        reported = set()
+        for internal in ('win32', 'linux'):
+            with patch.object(python_platform.sys, 'platform', internal):
+                reported.add(python_platform.desktop_identity()['platform'])
+        self.assertEqual(reported, {'windows', 'linux'})
+        self.assertEqual(listed, reported)
+        with patch.object(python_platform.sys, 'platform', 'darwin'):
+            self.assertNotIn(python_platform.desktop_identity()['platform'], listed)
+        main = (Path(__file__).resolve().parents[1] / 'ui-kit/window/main.ts').read_text('utf-8')
+        self.assertIn('NATIVE_RESIZE_PLATFORMS.includes(String(bridge.platform))', main)
+        self.assertNotIn('"win32"', main[main.index('native-resize') - 400:main.index('native-resize') + 400])
+
+
 if __name__ == '__main__':
     unittest.main()

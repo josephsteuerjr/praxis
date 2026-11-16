@@ -6,6 +6,7 @@ from . import ui_language
 FIELDS={
     'speech_failed':(), 'speech_unknown':(), 'turn_incomplete':(),
     'files_pending':('count','run'), 'paused':('run',), 'turn_failed':('run',),
+    'turn_cut':('run',), 'run_in_doubt':('run',), 'run_stopped':('run',),
     'silence':('agent',), 'silence_reason':('agent','reason'),
     'closed':(), 'closed_file':(), 'closed_unspoken':(), 'tree_busy':('agent','pid'),
     'birth_silent':('agent',), 'birth_failed':('tries',),

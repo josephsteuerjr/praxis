@@ -38,6 +38,7 @@
 .images-options .choice-item { min-width: 0; }
 .images-options .choice-title { font-weight: 600; }
 .images-options .choice-text { line-height: 1.45; }
+.images-options > .images-login { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
 
 .composer-meta { max-width: 800px; margin: 0 auto 8px; padding: 0 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; min-height: 22px; }
 .composer-meta .composer-target { position: static; flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; padding: 0; font-size: 13px; line-height: 1.45; letter-spacing: 0; color: var(--ink-2); font-weight: 600; text-transform: none; }

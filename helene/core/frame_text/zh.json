@@ -3530,5 +3530,8 @@
   "selfdev.list.no_diff": "无 diff",
   "selfdev.list.reason": "原因：{reason}",
   "forge.io.run_id_not_task": "“{task_id}”是来自 ResultRef 或回执的运行（轮次）id，不是编程任务。task_id 只用于选择通过 coding_session 打开的 Forge 编程任务（形如 code-…、hcode-…、wcode-… 的 id）；运行 id 只用于 read_run_result。要读取或列出你自己空间中的文件——包括 memory/runs/…/files 下的附件——请不带 task_id 再次调用此工具。",
-  "helper.agent.devnull_denied": "[此 Windows 版本的沙箱无法打开 /dev/null（NUL 设备），因此带有该重定向的命令没有运行。请改为重定向到文件，例如 2>\"$TMP/err.txt\"，或去掉该重定向。]"
+  "helper.agent.devnull_denied": "[此 Windows 版本的沙箱无法打开 /dev/null（NUL 设备），因此带有该重定向的命令没有运行。请改为重定向到文件，例如 2>\"$TMP/err.txt\"，或去掉该重定向。]",
+  "tool.args.extra": "[参数未被接受] 调用 `{name}` 未执行：多余的字段 {extra} 不在该工具的 schema 中。外部没有任何改变。删除这些字段，按 schema 重新调用（必填：{required}）。",
+  "tool.args.missing": "[参数未被接受] 调用 `{name}` 未执行：缺少必填字段 {missing}。外部没有任何改变。补上这些字段后重新调用。",
+  "tool.args.other": "[参数未被接受] 调用 `{name}` 未执行：{error}。外部没有任何改变。请核对该工具的 schema 后重新调用。"
 }

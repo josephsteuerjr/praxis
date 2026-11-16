@@ -3530,5 +3530,8 @@
   "selfdev.list.no_diff": "sans diff",
   "selfdev.list.reason": "raison : {reason}",
   "forge.io.run_id_not_task": "« {task_id} » est un id de tour (run) issu d’un ResultRef ou d’un reçu, pas une tâche de code. task_id ne sélectionne qu’une tâche Forge ouverte avec coding_session (ids comme code-…, hcode-…, wcode-…) ; un id de run sert uniquement à read_run_result. Pour lire ou lister des fichiers de ton espace — y compris les pièces jointes sous memory/runs/…/files —, rappelle cet outil sans task_id.",
-  "helper.agent.devnull_denied": "[Sur cette version de Windows, le bac à sable ne peut pas ouvrir /dev/null (le périphérique NUL) : la commande avec cette redirection ne s’est pas exécutée. Redirige plutôt vers un fichier, par exemple 2>\"$TMP/err.txt\", ou supprime la redirection.]"
+  "helper.agent.devnull_denied": "[Sur cette version de Windows, le bac à sable ne peut pas ouvrir /dev/null (le périphérique NUL) : la commande avec cette redirection ne s’est pas exécutée. Redirige plutôt vers un fichier, par exemple 2>\"$TMP/err.txt\", ou supprime la redirection.]",
+  "tool.args.extra": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : les champs en trop {extra} ne figurent pas dans le schéma de cet outil. Rien n’a changé à l’extérieur. Retirez ces champs et recommencez selon le schéma (obligatoires : {required}).",
+  "tool.args.missing": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : les champs obligatoires {missing} manquent. Rien n’a changé à l’extérieur. Recommencez l’appel en les ajoutant.",
+  "tool.args.other": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : {error}. Rien n’a changé à l’extérieur. Vérifiez le schéma de l’outil et recommencez l’appel."
 }

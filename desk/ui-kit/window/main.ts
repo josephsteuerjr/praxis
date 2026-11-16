@@ -448,10 +448,11 @@ export function start(opts: WindowOptions): void {
       b.addEventListener("click", () => bridge.win(action));
     }
     // The frameless pywebview window has no native resize border on Windows/Linux.
-    if (bridge.shell === "python" && bridge.presentation !== "miniapp"
-        && (bridge.platform === "win32" || bridge.platform === "linux")) {
-      import("./native-resize").then(({ installNativeResize }) =>
-        installNativeResize((command, args) => bridge.invoke(command, args)));
+    if (bridge.shell === "python" && bridge.presentation !== "miniapp") {
+      import("./native-resize").then(({ installNativeResize, NATIVE_RESIZE_PLATFORMS }) => {
+        if (NATIVE_RESIZE_PLATFORMS.includes(String(bridge.platform)))
+          installNativeResize((command, args) => bridge.invoke(command, args));
+      });
     }
   } else if (inTauri) {
     document.documentElement.classList.add("native");

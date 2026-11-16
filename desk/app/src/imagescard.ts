@@ -41,7 +41,9 @@ export function imagesCard(draft: Config, login: () => void) {
     try { const state = await shell<string>("relay_status"); status.textContent = state === "authorized" ? uiText("ui.app.src.imagescard.3358405cf3") : state === "pending" ? uiText("ui.app.src.imagescard.db6d9d455a") : uiText("ui.app.src.imagescard.7eeab6504a"); }
     catch (error) { status.textContent = humanError(error).text; }
   };
-  const actions = el("div", "actions");
+  // Its own group: the login buttons sat flush under the last background choice and read
+  // as part of that card (Tim, 2.7.2 settings screenshot).
+  const actions = el("div", "actions images-login");
   actions.append(button(uiText("ui.app.src.imagescard.59624437c6"), "quiet", login), button(uiText("ui.app.src.imagescard.8b02fe4085"), "quiet", () => void refresh()), status);
   body.append(actions);
   return {

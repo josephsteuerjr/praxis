@@ -426,8 +426,16 @@ class TurnEnvelope:
     # Durable server-side run which produced this envelope.  Transport uses it only to
     # append delivery receipts; it grants no authority and is never sent to Telegram.
     run_id: str = ""
+    # Why a deferred run stopped: the durable status RunStopped observed (paused, blocked,
+    # in_doubt, failed, cancelled) and its reason.  Only "paused"/"blocked" wait at a
+    # checkpoint; a max_tokens cut, an unknown effect or an owner's cancel do not, and the
+    # window must not tell the owner to wait for a confirmation nobody can give (Tim, 2.7.2).
+    stop_status: str = ""
+    stop_reason: str = ""
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "stop_status", str(self.stop_status or ""))
+        object.__setattr__(self, "stop_reason", str(self.stop_reason or "")[:300])
         object.__setattr__(self, "text", str(self.text or ""))
         object.__setattr__(self, "outbound", tuple(self.outbound or ()))
         object.__setattr__(self, "media", tuple(self.media or ()))

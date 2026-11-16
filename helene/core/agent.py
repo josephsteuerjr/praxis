@@ -379,6 +379,10 @@ class UndeliverableAuthoredOutput(DurableExecutionError):
     """The immutable run context cannot address its authored output."""
 
 
+# The desk runner names a max_tokens stop by this word in RunStopped.reason (stopped_notice).
+MAX_TOKENS_STOP_REASON = "model response cut by max_tokens; no automatic replay"
+
+
 class RunStopped(DurableExecutionError):
     """The durable run was paused, blocked, cancelled or made in-doubt."""
 
@@ -16968,6 +16972,36 @@ MALFORMED_JSON_REPAIR = (
 )
 
 
+def _args_refusal(name: str, impl, call_input: dict, exc: BaseException) -> str:
+    """Repair text for a call whose arguments did not bind: name WHAT is wrong.
+
+    Tim (2.7.2, local Gemma): after «unexpected keyword argument 'brief'» the old text said
+    «повтори с полным набором обязательных аргументов» and sent the model the wrong way.
+    An extra field must be removed; a missing one added; anything else read from the error.
+    """
+    import inspect
+    names = ", ".join
+    try:
+        params = inspect.signature(impl).parameters
+    except (TypeError, ValueError):
+        params = None
+    given = list(dict(call_input or {}))
+    if params is not None:
+        open_kwargs = any(p.kind is p.VAR_KEYWORD for p in params.values())
+        named = [p for p in params.values()
+                 if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+        required = [p.name for p in named if p.default is p.empty]
+        extra = [] if open_kwargs else [k for k in given if k not in {p.name for p in named}]
+        missing = [k for k in required if k not in given]
+        need = names(required) or "—"
+        if extra and not missing:
+            return frame_language.text('tool.args.extra', name=name, extra=names(extra), required=need)
+        if missing and not extra:
+            return frame_language.text('tool.args.missing', name=name, missing=names(missing))
+    return frame_language.text('tool.args.other', name=name,
+                               error=f"{type(exc).__name__}: {exc}"[:400])
+
+
 def _tool_args_mismatch(impl, call_input: dict) -> str:
     """Чего не хватает вызову руки по её сигнатуре — словами; пусто, если всё сходится.
 
@@ -17257,9 +17291,7 @@ def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     except (TypeError, ValueError) as exc:
         log.warning("call %s: аргументы не привязались к сигнатуре: %s", name, exc)
         tool_report.note(outcome="refused")
-        return (f"[аргументы не приняты] Вызов `{name}` НЕ выполнен: {type(exc).__name__}: "
-                f"{exc}. Снаружи ничего не изменилось. Повтори вызов с полным набором "
-                f"обязательных аргументов.")
+        return _args_refusal(name, impl, call_input, exc)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись
     # исполнения из contextvars, а новый поток их сам по себе не наследует.
     ctx = contextvars.copy_context()
@@ -17759,7 +17791,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
         if resp.stop_reason == "max_tokens":
             # _model_call has already persisted the incomplete output. Never execute
             # even a parseable tool prefix, continue the work loop, or report done.
-            reason = "model response cut by max_tokens; no automatic replay"
+            reason = MAX_TOKENS_STOP_REASON
             current = run_context.current_run()
             if current is not None:
                 try:
@@ -19195,6 +19227,22 @@ def _store_outbound_guard_receipt(run_id: str, *, draft: str, guarded: str,
     return value
 
 
+def _stopped_turn_envelope(exc: BaseException, *, retry_media: bool, run_id: str) -> "media.TurnEnvelope":
+    """Envelope of a turn that ended by exception.
+
+    RunStopped is deferred and carries the durable status/reason it observed, so the window
+    can tell a checkpoint (paused/blocked) from a max_tokens cut, an unknown effect or a
+    cancel. Anything else is a failure.
+    """
+    stopped = exc if isinstance(exc, RunStopped) else None
+    return media.TurnEnvelope(
+        retry_media=retry_media, deferred=stopped is not None, failed=stopped is None,
+        run_id=run_id,
+        stop_status=stopped.status if stopped else "",
+        stop_reason=stopped.reason if stopped else "",
+    )
+
+
 def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str | None = None,
                         is_owner: bool = False, known: bool = True, orient: str = "",
                         is_dm: bool = True, scope: str | None = None,
@@ -19360,11 +19408,7 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                 _finish_durable_run(
                     durable_id, "failed", reason=f"{type(exc).__name__}: {exc}",
                 )
-        return media.TurnEnvelope(
-            retry_media=bool(media_refs), deferred=isinstance(exc, RunStopped),
-            failed=not isinstance(exc, RunStopped),
-            run_id=durable_id,
-        )
+        return _stopped_turn_envelope(exc, retry_media=bool(media_refs), run_id=durable_id)
     finally:
         _KEAT_ORIGINAL_INGRESS.reset(ingress_token)
         _KEAT_PROJECTION.reset(projection_token)

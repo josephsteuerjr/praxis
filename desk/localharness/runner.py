@@ -1204,6 +1204,26 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
         _INITIAL_FILES.reset(token)
 
 
+def stopped_notice(envelope) -> str:
+    """Notice kind for a deferred run, from the durable status the core observed.
+
+    Only a checkpoint (paused/blocked) waits for a confirmation. Before 2.8.2 every stop,
+    including a max_tokens cut, said «ждёт подтверждения» and offered nothing to confirm.
+    An envelope from an older core carries no status and keeps the old checkpoint words.
+    """
+    status = str(getattr(envelope, "stop_status", "") or "")
+    reason = str(getattr(envelope, "stop_reason", "") or "")
+    if "max_tokens" in reason:
+        return "turn_cut"
+    if status in ("", "paused", "blocked"):
+        return "paused"
+    if status == "in_doubt":
+        return "run_in_doubt"
+    if status == "failed":
+        return "turn_failed"
+    return "run_stopped"
+
+
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                     room: str = STREAM, origin_text: str = "",
                     media_refs: tuple = (), trigger_kind: str = "") -> str:
@@ -1290,9 +1310,10 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                 log.info("%s: слово пришло заметкой хода — доставляю на границе",
                          "рождение" if birth else "ход")
         if getattr(envelope, "deferred", False):
-            # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
-            # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
-            product_notices.deliver(desk, 'paused', run=run_id ,source_id=source_id)
+            # Ход остановлен durable-статусом. Молчать об этом нельзя: окно выглядело бы
+            # зависшим. Но «ждёт подтверждения» — только чекпойнт (paused/blocked); обрыв
+            # max_tokens, неизвестный исход и отмена подтверждения не ждут (Тим, 2.7.2).
+            product_notices.deliver(desk, stopped_notice(envelope), run=run_id ,source_id=source_id)
         elif getattr(envelope, "failed", False):
             product_notices.deliver(desk, 'turn_failed', run=run_id ,source_id=source_id)
         elif not spoken and text:
@@ -1615,11 +1636,14 @@ def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_sourc
         if getattr(envelope, "deferred", False) or getattr(envelope, "failed", False):
             # Чужим людям внутренности не выкладываем — как в живом раннере: сбой
             # виден в карточке хода и логе, владельцу в личке — словами.
-            state = "приостановлен" if getattr(envelope, "deferred", False) else "не состоялся"
+            deferred = getattr(envelope, "deferred", False)
+            state = "приостановлен" if deferred else "не состоялся"
             log.warning("ход %s [бот %s]: %s", run_id or "—", chat_id, state)
             if is_dm and owner:
                 try:
-                    _bot.deliver_text(chat_id, f"⚠ ход {state} (запуск {run_id}).")
+                    _bot.deliver_text(chat_id, product_notices.legacy(product_notices.recipe(
+                        stopped_notice(envelope), run=run_id)) if deferred
+                        else f"⚠ ход {state} (запуск {run_id}).")
                 except Exception:
                     log.exception("не доложила владельцу о сбое хода")
         if not spoken and not text:

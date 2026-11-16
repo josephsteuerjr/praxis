@@ -8,6 +8,12 @@
  */
 export type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 export const EDGES: readonly Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+/**
+ * Platform names exactly as the python shell's bridge reports them
+ * (`localharness/python_platform.desktop_identity`: "windows", not sys.platform's "win32").
+ * 2.8.0/2.8.1 compared against "win32", so the handles were never installed on Windows.
+ */
+export const NATIVE_RESIZE_PLATFORMS: readonly string[] = ["windows", "linux"];
 export const MIN_WIDTH = 640;
 export const MIN_HEIGHT = 420;
 

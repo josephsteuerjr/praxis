@@ -3530,5 +3530,8 @@
   "selfdev.list.no_diff": "no diff",
   "selfdev.list.reason": "reason: {reason}",
   "forge.io.run_id_not_task": "“{task_id}” is a run (turn) id from a ResultRef or receipt, not a coding task. task_id selects only a Forge coding task opened with coding_session (ids like code-…, hcode-…, wcode-…); a run id is only for read_run_result. To read or list files in your home — including attachments under memory/runs/…/files — call this tool again without task_id.",
-  "helper.agent.devnull_denied": "[The sandbox on this Windows version cannot open /dev/null (the NUL device), so the command with that redirection did not run. Redirect to a file instead, for example 2>\"$TMP/err.txt\", or drop the redirection.]"
+  "helper.agent.devnull_denied": "[The sandbox on this Windows version cannot open /dev/null (the NUL device), so the command with that redirection did not run. Redirect to a file instead, for example 2>\"$TMP/err.txt\", or drop the redirection.]",
+  "tool.args.extra": "[arguments not accepted] The call `{name}` was NOT executed: extra fields {extra} are not in this tool's schema. Nothing changed outside. Remove these fields and repeat according to the schema (required: {required}).",
+  "tool.args.missing": "[arguments not accepted] The call `{name}` was NOT executed: required fields {missing} are missing. Nothing changed outside. Repeat the call with them added.",
+  "tool.args.other": "[arguments not accepted] The call `{name}` was NOT executed: {error}. Nothing changed outside. Check the tool's schema and repeat the call."
 }
