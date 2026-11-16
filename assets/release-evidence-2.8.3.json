@@ -1,0 +1,50 @@
+{
+  "format": "helene-windows-prerelease-evidence.v1",
+  "version": "2.8.3",
+  "source_commit": "4df43cded372011526be961ff3f56da331e97bea",
+  "source_tree_sha256": "5b978741447c7acd53ba10ffc04df72998248f040415c35bf8c9e52a550b3dbe",
+  "raw_git_files": 3747,
+  "archive_sha256": "afe1022137008aab5a2f161621ad57a1b69226cdb807a0743587da43f17039af",
+  "archive_bytes": 531399679,
+  "all_member_sha_and_crc": true,
+  "core_gate": {
+    "tests": 8019,
+    "inherited_red": 163,
+    "common_new_red": 0,
+    "new_test_red": 0,
+    "composed_at": "49951ab8d75991912a0b71ca74f66a76fa5cea3b",
+    "difference_to_release": "fixture ids in desk/tests/t_telegram_authority_1611.py only"
+  },
+  "current": {
+    "node_tests": 178,
+    "frontends_built": 5,
+    "frontend_outputs": 127,
+    "launcher_rebuilt": true,
+    "bootstrap_kernel_cases": 4,
+    "packaged_mcp_tools": 21,
+    "packaged_owner_latch_cases": 9,
+    "packaged_desk_tests": 75,
+    "prior_upgrade": "2.7.2 to 2.8.3, actual restricted medium token"
+  },
+  "all_core_green": false,
+  "privacy": {
+    "all_source_files": 3747,
+    "actual_local_owner_values": true,
+    "actual_server_values": true,
+    "secret_values_serialized": false
+  },
+  "publication": {
+    "prerelease": true,
+    "make_latest": false,
+    "stable_latest": "v2.7.2",
+    "platforms": [
+      "windows-x86_64"
+    ]
+  },
+  "limits": [
+    "Physical acceptance of the maximized window and nested hands in a real group turn on the owner machine not performed by this job",
+    "macOS/Linux not published",
+    "No owner installation/update/restart or production Praxis mutation",
+    "No paid provider calls"
+  ]
+}
