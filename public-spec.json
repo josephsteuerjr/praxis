@@ -1,0 +1,11 @@
+{
+  "release_id": 447613663,
+  "refs_before": {
+    "heads/main": "ce94dd664af7bbd17a0c9648f5fb56d925685430",
+    "tags/v2.7.2": "263be187acffa81b04815d67bb8848819ba7574a",
+    "tags/v2.8.0": "d8bf6f2535fe776388d2b91f801ac44745c18d55",
+    "tags/v2.8.1": "ac52fd294f0256b5ca0cd44c5cac43524fb73e47",
+    "tags/v2.8.2": "7eede2c1a2082859107e0a8b8cd0b61085281747",
+    "tags/v2.8.3": "4df43cded372011526be961ff3f56da331e97bea"
+  }
+}
