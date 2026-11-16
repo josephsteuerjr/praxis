@@ -226,7 +226,7 @@ class PrivateDossierLinesStayInRooms(unittest.TestCase):
             self.assertIn("развёлся в марте", block)
             self.assertIn("[private]", block, "пометка остаётся — она видит, что это приватное")
             self.assertIn('остаются моим внутренним знанием', block)
-            self.assertIn("решение владельца, 25.09", block)
+            self.assertIn("по решению владельца", block)
             self.assertNotIn("приватных записей снято", block)
             self.assertFalse(frame_layout.snapshot().get("head_stable_private"))
 

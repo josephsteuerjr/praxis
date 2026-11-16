@@ -1002,7 +1002,7 @@ class TestAddressFrame(unittest.TestCase):
             import frame_language
             with frame_language.use("en"):
                 frame = agent._presence_frame(ctx)
-        self.assertIn("captured Telegram message #77", frame)
+        self.assertIn("captured snapshot at Telegram message #77", frame)
         self.assertIn("mention", frame)
         self.assertIn("180 seconds ago", frame)
         self.assertIn("original snapshot ends there", frame)

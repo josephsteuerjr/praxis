@@ -91,7 +91,7 @@ class TheWalkHasCeilings(SearchBase):
         with mock.patch.object(workshop, "SEARCH_SCAN_CAP", 12), \
              mock.patch.object(workshop, "SEARCH_SECONDS", 0.0):
             out = workshop.fs_search(r"игол\w+", glob="**/*.txt")
-        self.assertIn('просмотрено путей 12', out, "обход оборвался молча")
+        self.assertIn('просмотрено 12 путей', out, "обход оборвался молча")
         self.assertIn('путей', out)
 
     def test_the_clock_stops_the_walk_and_says_so(self):
@@ -111,7 +111,7 @@ class TheWalkHasCeilings(SearchBase):
              mock.patch.object(workshop, "SEARCH_SECONDS", 0.0):
             out = workshop.fs_search(r"бет\w+", glob="**/*.txt")
         self.assertIn('Ничего не найдено', out)
-        self.assertIn('просмотрено путей 3', out,
+        self.assertIn('просмотрено 3 путей', out,
                       "она решит, что искомого нет, а мы просто не дошли")
 
     def test_zero_removes_the_ceiling_completely(self):

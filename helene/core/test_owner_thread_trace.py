@@ -114,10 +114,7 @@ class RepeatEchoIsAdviceNotFenceTests(unittest.TestCase):
 
         import mtproto_runner as runner
 
-        import frame_language
         src = inspect.getsource(runner._sync_send_message)
-        self.assertIn("helper.mtproto_runner._sync_send_message.8099", src)
-        src = frame_language.text("helper.mtproto_runner._sync_send_message.8099")
         self.assertIn("said_recently", src)
         self.assertLess(src.index("said_recently"),
                         src.index("project_direct_outbox_acceptance(entry)"),
@@ -143,10 +140,7 @@ class RepeatEchoIsAdviceNotFenceTests(unittest.TestCase):
 
         import mtproto_runner as runner
 
-        import frame_language
         src = inspect.getsource(runner._sync_send_message)
-        self.assertIn("helper.mtproto_runner._sync_send_message.8099", src)
-        src = frame_language.text("helper.mtproto_runner._sync_send_message.8099")
         self.assertIn("pulse_note", src)
         self.assertLess(src.index("allow_outbound"), src.index("existing is None and not pulse_ok"),
                         "справку снова снимают только внутри ветки отказа")

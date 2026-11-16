@@ -173,7 +173,7 @@ class TestGroupVoice(Base):
             if isinstance(self.fc.last["system"], list) else self.fc.last["system"]
         self.assertNotIn('живая группа, в которой ты участвуешь', text,
                          "DM не должен получать групповой фрейм")
-        self.assertIn("PRIVATE conversation", text, "DM-фрейм (бывшая perceive-преамбула)")
+        self.assertIn("ЛИЧНЫЙ разговор", text, "DM-фрейм (бывшая perceive-преамбула)")
 
     def test_group_silence_sentinel_writes_note(self):
         self._client("[молчу]")

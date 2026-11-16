@@ -830,7 +830,7 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         jr = self._journal()
         self.assertIn("[пульт]", jr)
         self.assertIn('disclosure=open', jr)
-        self.assertIn("визитке", jr, "она должна прочесть, ЧТО именно у неё изменили")
+        self.assertIn("визитку", jr, "она должна прочесть, ЧТО именно у неё изменили")
         # Обратно — и об этом ей тоже говорят, а не молча закрывают.
         back = panel.room_set("-100777", "disclosure")
         self.assertEqual(back.get("disclosure"), "standard", back)
@@ -844,7 +844,7 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         self.assertIn('понизил режим комнаты', jr)
         self.assertIn("normal -> quiet".replace("->", "→"), jr)
         # Обратимость названа в той же строке: её рычаг никуда не делся.
-        self.assertIn("обычно", jr)
+        self.assertIn("mode=normal", jr)
         panel.room_set("-100777", "raise")
         self.assertEqual(self._rooms.effective_mode("-100777"), "normal")
         self.assertIn("поднял режим комнаты", self._journal())
@@ -956,7 +956,7 @@ class TestCapabilitiesReachHer(unittest.TestCase):
         обязана падать вместе со схемой, а не переживать её."""
         line = self.cap._room_levers_line()
         self.assertIn("mode", str(self.cap._room_tool_spec()))
-        for word in ("режим комнаты ставлю себе сама", "disclosure", "визитке"):
+        for word in ("режим комнаты ставлю себе сама", "disclosure", "визитку"):
             self.assertIn(word, line)
         self.assertNotIn("⚠", line)
 

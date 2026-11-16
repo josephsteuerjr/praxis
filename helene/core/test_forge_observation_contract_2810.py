@@ -114,10 +114,10 @@ class ObservationContract(unittest.TestCase):
         (parent / 'stop.json').unlink()
         for action in ('stop', 'pause'):
             self.put(self.folder / 'control.json', {'action': action})
-            self.assertIn('fenced', forge._admission_reason(self.task_id, request))
+            self.assertIn('закрыта для новых действий', forge._admission_reason(self.task_id, request))
         (self.folder / 'control.json').unlink()
         self.put(child / 'handoff.json', {'state': 'waiting', 'child_unit_id': 'agent-grandchild'})
-        self.assertIn('yielded', forge._admission_reason(self.task_id, request))
+        self.assertIn('передал владение', forge._admission_reason(self.task_id, request))
 
 
 class WorkerResultContract(unittest.TestCase):

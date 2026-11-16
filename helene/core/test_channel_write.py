@@ -41,7 +41,7 @@ class WritingIsRecordedApartFromForumEpochs(unittest.TestCase):
         telegram_routes.note_writing("-100777", broadcast=True)
         line = telegram_routes.writing_line("-100777")
         self.assertIn('писать через этот маршрут — нет', line)
-        self.assertIn("не знаю", line, "незнание адреса выдано за знание")
+        self.assertIn("пока не известно", line, "незнание адреса выдано за знание")
 
     def test_a_channel_with_a_discussion_names_the_address(self):
         telegram_routes.note_writing("-1001341326876", broadcast=True,

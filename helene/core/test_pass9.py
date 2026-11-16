@@ -968,7 +968,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
         self.assertIn("Намечено #", out)
         self.assertIn("уже прошёл", out, "прошедший срок обязан быть назван громко")
         self.assertIn('не отправляется автоматически', out)
-        self.assertIn("решу заново", out)
+        self.assertIn("пересмотр намерения перед отдельным решением", out)
         t = tasks_mod.list_open()[-1]
         self.assertEqual(t["when"], past, "срок не переписывается за её спиной")
 

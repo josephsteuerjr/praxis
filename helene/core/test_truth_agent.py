@@ -1480,7 +1480,7 @@ class SilenceContourTests(unittest.TestCase):
             back = agent.tool_stay_silent(cancel=True)
         finally:
             agent._TURN_SILENCE.reset(token)
-        self.assertIn("уйдёт", back)
+        self.assertIn("снова проходят обычную исходящую обработку", back)
         out = agent._guard_outbound("Отвечаю на второй вопрос.", ctx=self._owner_dm(),
                                     turn={}, silence=holder)
         self.assertEqual(out, "Отвечаю на второй вопрос.",

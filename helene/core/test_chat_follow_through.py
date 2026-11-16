@@ -106,7 +106,7 @@ class AnAnnouncedActionDoesNotEndTheTurn(unittest.TestCase):
                 kind="chat_turn", hands=0, spent=0)
         self.assertTrue(keep)
         self.assertIn('ещё не сделано', note)
-        self.assertIn("Могу сделать прямо сейчас", note)
+        self.assertIn("Могу сейчас вызвать инструмент", note)
 
     def test_the_живой_случай_from_the_dm_is_caught(self):
         """Дословно из лички 12.08 — тот самый ход, который кончился обещанием."""

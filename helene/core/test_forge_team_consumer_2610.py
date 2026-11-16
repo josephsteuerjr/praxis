@@ -66,7 +66,7 @@ def deep_provider(request,results):
             for ancestor in (parent,grandparent):
                 pp=forge._unit_dir(request['task_id'],'agents',ancestor)/'request.json'
                 denied=forge.edit(request['task_id'],'write',path='unsafe-deep.txt',content='overlap',_parent_request_path=str(pp))
-                assert 'yielded' in denied,denied
+                assert 'передал владение' in denied,denied
             peers=[r for r in forge._units(request['task_id'],'agents') if r.get('brief')=='deep-peer']
             assert len(peers)==1 and peers[0]['status']=='queued',peers
             return tool('edit',action='replace',path='deep.txt',old='RM',new='RML')
@@ -134,7 +134,7 @@ def provider(*args, **kwargs):
             pp = forge._unit_dir(request["task_id"], "agents", request["parent_unit_id"]) / "request.json"
             denied = forge.edit(request["task_id"], "write", path="unsafe.txt", content="no",
                                 _parent_request_path=str(pp))
-            assert "yielded" in denied, denied
+            assert "передал владение" in denied, denied
             return tool("edit", action="replace", path="serial.txt", old="P", new="PC")
         return reply("child complete")
     raise AssertionError("unexpected test brief: " + brief)
