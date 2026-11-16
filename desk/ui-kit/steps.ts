@@ -48,6 +48,8 @@ export interface RunDetail {
     text_ref?: string;
     text_truncated?: boolean;
     usage?: { in?: number; cache_read?: number; out?: number };
+    /** Words of the still-running call (core model_preview): thinking, plain text, reply being written. */
+    preview?: { text?: string; thinking?: string; reply?: string; text_chars?: number; thinking_chars?: number; reply_chars?: number; at?: string };
     tools?: Array<{
       call_id?: string; seq?: number; at?: string; finished_at?: string; status?: string; error?: string;
       outcome?: string; target?: string; nested?: unknown[]; nested_cut?: boolean;
@@ -489,6 +491,19 @@ export function modelProgressLabel(it: NonNullable<RunDetail["iterations"]>[numb
   return uiText("ui.ui.kit.steps.389a300c57", {p0: String(label), p1: decimal((p.argument_bytes || 0) / 1024), p2: decimal((p.attempt_ms || 0) / 60000)});
 }
 
+/** Live words of a running model call (Tim: local models at a few tokens/s). Thinking folds;
+ *  the reply being written and plain text show as they grow. Nothing here is sent yet. */
+export function modelPreviewHTML(it: NonNullable<RunDetail["iterations"]>[number], key: string, live: boolean): string {
+  const p = it.preview;
+  if (!p || !live || it.text || it.status === "failed" || it.status === "completed") return "";
+  const out: string[] = [];
+  const count = (value: number | undefined, text: string) => String(Number.isFinite(value) ? value : text.length);
+  if (p.thinking) out.push(`<details class="action-details model-preview-thinking" data-detail="${esc("thinking:" + key)}"><summary>${esc(uiText("ui.ui.kit.steps.preview_thinking", {p0: count(p.thinking_chars, p.thinking)}))}</summary><pre>${esc(p.thinking)}</pre></details>`);
+  if (p.reply) out.push(`<div class="model-preview" data-model-preview="reply"><div class="step-meta">${esc(uiText("ui.ui.kit.steps.preview_reply", {p0: count(p.reply_chars, p.reply)}))}</div><pre class="model-preview-text">${esc(p.reply)}</pre></div>`);
+  if (p.text) out.push(`<div class="model-preview" data-model-preview="text"><div class="step-meta">${esc(uiText("ui.ui.kit.steps.preview_text", {p0: count(p.text_chars, p.text)}))}</div><pre class="model-preview-text">${esc(p.text)}</pre></div>`);
+  return out.join("");
+}
+
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   const steps: string[] = [];
   const L = opts.lesson;
@@ -514,6 +529,7 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     parts.push(uiText("ui.ui.kit.steps.21931b9dc9", {p0: String(n), p1: String(meta ? `<span class="step-meta">${esc(meta)}</span>` : ""), p2: String(status ? `<span class="action-status">${esc(status)}</span>` : "")}));
     const progress = thinking ? modelProgressLabel(it) : "";
     if (progress) parts.push(`<div class="step-meta" data-model-progress>${esc(progress)}</div>`);
+    parts.push(modelPreviewHTML(it, key, live));
     parts.push(details("model:" + key, [[uiText("ui.ui.kit.steps.f3bdf7cce3"), it.model || ""], [uiText("ui.ui.kit.steps.6711f073ab"), seconds],
       [uiText("ui.ui.kit.steps.98b7dc4147"), u.in != null ? uiText("ui.ui.kit.steps.74ec630d1f", {p0: String(fmtK(total)), p1: String(cached ? uiText("ui.ui.kit.steps.bd22fee03c", {p0: String(share)}) : ""), p2: String(fmtK(u.out || 0))}) : ""],
       [uiText("ui.ui.kit.steps.065a18f569"), cut ? uiText("ui.ui.kit.steps.dcdb345a29") : ""], [uiText("ui.ui.kit.steps.bf22dfeeba"), it.error || ""]], uiText("ui.ui.kit.steps.3c17ab48d8")));

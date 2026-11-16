@@ -1354,7 +1354,27 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
     # stop_reason на месте). Фейки без .stream (легаси-тесты) идут через create.
     streamer = getattr(getattr(cli, "messages", None), "stream", None)
     if callable(streamer):
+        import model_preview
         with streamer(**kw) as st:
+            if model_preview.active() and callable(getattr(st, "__iter__", None)):
+                # The window watches this call: read the deltas as they arrive. The
+                # SDK accumulates the same events, so get_final_message is unchanged.
+                model_preview.restart()
+                names = {}
+                for event in st:
+                    etype = getattr(event, "type", "")
+                    if etype == "content_block_start":
+                        block = getattr(event, "content_block", None)
+                        names[getattr(event, "index", None)] = getattr(block, "name", "") if getattr(block, "type", "") == "tool_use" else ""
+                        continue
+                    delta = getattr(event, "delta", None) if etype == "content_block_delta" else None
+                    kind = getattr(delta, "type", "")
+                    if kind == "text_delta":
+                        model_preview.feed("text", getattr(delta, "text", None))
+                    elif kind == "thinking_delta":
+                        model_preview.feed("thinking", getattr(delta, "thinking", None))
+                    elif kind == "input_json_delta" and names.get(getattr(event, "index", None)) == "reply":
+                        model_preview.feed("reply_args", getattr(delta, "partial_json", None))
             resp = st.get_final_message()
     else:
         resp = cli.messages.create(**kw)
@@ -2497,6 +2517,8 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
     observations = provider_observation.Collector()
     actual_tier = None
     transport_error = None
+    import model_preview
+    model_preview.restart()
     try:
         for chunk in stream:
             if _service_tier_present(chunk):
@@ -2535,12 +2557,14 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
                     value = getattr(d, key, None)
                     if isinstance(value, str):
                         reasoning[key].append(value)
+                        model_preview.feed("thinking", value)
                 details = getattr(d, "reasoning_details", None)
                 if isinstance(details, list):
                     reasoning_details.extend(_wire_value(details))
                 c = getattr(d, "content", None)
                 if c:
                     parts.append(c)
+                    model_preview.feed("text", c)
                 for tc in getattr(d, "tool_calls", None) or []:
                     idx = int(getattr(tc, "index", 0) or 0)
                     slot = tools_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
@@ -2552,6 +2576,8 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
                             slot["name"] = fn.name
                         if getattr(fn, "arguments", None):
                             slot["args"] += fn.arguments
+                            if slot["name"] == "reply":
+                                model_preview.feed("reply_args", fn.arguments)
             if getattr(ch, "finish_reason", None):
                 finish = ch.finish_reason
     except Exception as exc:
@@ -3859,6 +3885,8 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
     items = {}
     final = None
     actual_tier = None
+    import model_preview
+    model_preview.restart()
     try:
         for event in stream:
             if _service_tier_present(event):
@@ -3875,12 +3903,17 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
             elif kind == "response.function_call_arguments.delta":
                 item = items.setdefault(index, {"type": "function_call", "arguments": ""})
                 item["arguments"] = item.get("arguments", "") + event.delta
+                if item.get("name") == "reply":
+                    model_preview.feed("reply_args", event.delta)
             elif kind == "response.output_text.delta":
                 item = items.setdefault(index, {"type": "message", "role": "assistant", "content": []})
                 content_index = int(getattr(event, "content_index", 0) or 0)
                 while len(item["content"]) <= content_index:
                     item["content"].append({"type": "output_text", "text": ""})
                 item["content"][content_index]["text"] += event.delta
+                model_preview.feed("text", event.delta)
+            elif kind in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
+                model_preview.feed("thinking", getattr(event, "delta", None))
             elif kind == "error":
                 partial = _responses_result({"status": "failed", "output": list(items.values())}, model, scope)
                 partial.service_tier = actual_tier

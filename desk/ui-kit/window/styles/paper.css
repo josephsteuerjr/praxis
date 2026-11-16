@@ -668,3 +668,12 @@ select.field-input:disabled { cursor: not-allowed; opacity: .55; }
   background: color-mix(in srgb, var(--ink) 55%, var(--paper));
 }
 
+
+/* Live words of a running model call (steps.ts modelPreviewHTML): grows in place, nothing sent yet. */
+.model-preview { margin-top: 6px; }
+.model-preview-text, .model-preview-thinking > pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto;
+  margin: 4px 0 0; padding: 6px 8px; border-left: 2px solid var(--line); color: var(--ink-2);
+  font: inherit; font-size: .92em; line-height: 1.45;
+}
+.model-preview-thinking > pre { color: var(--muted); }

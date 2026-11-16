@@ -21548,5 +21548,20 @@
     "en": "1bfd28b7",
     "fr": "1bfd28b7",
     "zh": "1bfd28b7"
+  },
+  "ui.ui.kit.steps.preview_thinking": {
+    "en": "68dc939a",
+    "fr": "68dc939a",
+    "zh": "68dc939a"
+  },
+  "ui.ui.kit.steps.preview_reply": {
+    "en": "9260638a",
+    "fr": "9260638a",
+    "zh": "9260638a"
+  },
+  "ui.ui.kit.steps.preview_text": {
+    "en": "cb16e2b3",
+    "fr": "cb16e2b3",
+    "zh": "cb16e2b3"
   }
 }

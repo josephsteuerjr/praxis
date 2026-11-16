@@ -12483,6 +12483,49 @@ def _chat_cancellable(role: str, **kwargs):
         on_abandon=llm.abandon_call, on_settle=llm.settle_call)
 
 
+MODEL_PREVIEW_FILE = "live-preview.json"
+
+
+def _model_preview_paths(current) -> tuple[Path, Path] | None:
+    if current is None:
+        return None
+    try:
+        directory = Path(_runs().path(current.run_id))
+    except Exception:
+        return None
+    return directory / MODEL_PREVIEW_FILE, directory / f".{MODEL_PREVIEW_FILE}.{os.getpid()}.tmp"
+
+
+def _model_preview_sink(current, call_id: str, secrets: tuple[str, ...]):
+    """Rewrite the live preview of this model call next to its run (model_preview.py).
+
+    The window reads it only while the call runs; the durable words stay in model_output.
+    Known critical values are scrubbed exactly as in the durable model records.
+    """
+    paths = _model_preview_paths(current)
+    if paths is None:
+        return None
+    target, temp = paths
+
+    def write(snapshot: dict) -> None:
+        data = {"schema": "helene.model-preview.v1", "call_id": call_id,
+                "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                **{key: _scrub_critical_value(value, secrets) if isinstance(value, str) else value
+                   for key, value in snapshot.items()}}
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(temp, target)
+    return write
+
+
+def _clear_model_preview(current) -> None:
+    paths = _model_preview_paths(current)
+    for path in paths or ():
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass  # a reader holds it; the window ignores a preview of a finished call
+
+
 def _model_call_impl(system: str, messages: list[dict], tools: list | None = None):
     """Call the voice model while journaling the full model phase into the bound run."""
     started = time.monotonic()
@@ -12666,10 +12709,14 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         frame_continuation.dispatch(system=system, messages=provider_messages,
                                     tools=tools, critical=bool(prior_secrets))
         addressed_replies.safe_dispatch(current.run_id if current is not None else '', provider_messages)
-        import model_progress
-        with model_progress.observe(lambda metrics: _run_event("model_progress", call_id=call_id, metrics=metrics)):
-            response = _chat_cancellable(
-                "voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        import model_progress, model_preview
+        preview = _model_preview_sink(current, call_id, prior_secrets)
+        try:
+            with model_progress.observe(lambda metrics: _run_event("model_progress", call_id=call_id, metrics=metrics)),                     model_preview.observe(preview):
+                response = _chat_cancellable(
+                    "voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        finally:
+            _clear_model_preview(current)
         frame_continuation.observe(system=system, messages=provider_messages,
                                    tools=tools, critical=bool(prior_secrets),
                                    provider_route=[getattr(response, 'account_route', '') or getattr(response, 'framework', ''),

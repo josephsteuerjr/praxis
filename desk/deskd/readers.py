@@ -1100,6 +1100,33 @@ def _run_words(run_id: str) -> dict:
     return _RUN_WORDS_CACHE["value"].get(run_id, {})
 
 
+MODEL_PREVIEW_FILE = "live-preview.json"   # helene/core/agent.py MODEL_PREVIEW_FILE
+
+
+def _attach_model_preview(path: Path, iterations: list[dict]) -> None:
+    """Words the running model call has generated so far (core model_preview.py).
+
+    Only the still-running iteration of the same call gets it; once model_output arrives the
+    durable text replaces the preview. Thinking is shown only if the provider streams it;
+    `reply` is the text argument of a reply call being generated (what the person receives).
+    """
+    preview = _load_json(path / MODEL_PREVIEW_FILE)
+    if not isinstance(preview, dict) or preview.get("schema") != "helene.model-preview.v1":
+        return
+    call_id = preview.get("call_id")
+    target = next((it for it in reversed(iterations) if call_id and it.get("call_id") == call_id), None)
+    if target is None or target.get("status") != "running" or target.get("text"):
+        return
+    safe = {key: preview[key][-4000:] for key in ("text", "thinking", "reply")
+            if isinstance(preview.get(key), str) and preview[key]}
+    safe.update({key: preview[key] for key in ("text_chars", "thinking_chars", "reply_chars")
+                 if type(preview.get(key)) is int and 0 <= preview[key] <= 2**53 - 1})
+    if isinstance(preview.get("at"), str):
+        safe["at"] = preview["at"][:40]
+    if safe.get("text") or safe.get("thinking") or safe.get("reply"):
+        target["preview"] = safe
+
+
 def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     path = run_dir(run_id)
     if path is None:
@@ -1276,6 +1303,7 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
         elif kind == "status_changed":
             status_flow.append({"at": row.get("at"), "from": row.get("from_status"),
                                 "to": row.get("to_status")})
+    _attach_model_preview(path, iterations)
     recap = ""
     try:
         recap = (path / "RECAP.md").read_text(encoding="utf-8", errors="replace")[:120_000]
