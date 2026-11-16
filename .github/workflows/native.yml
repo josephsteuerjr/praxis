@@ -1,0 +1,49 @@
+name: Helene 2.8.4 native qualification
+on:
+  push:
+    branches: [claude/helene284-native-r3arm-1611]
+permissions:
+  contents: read
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            runner: macos-14
+            asset: Helene-2.7.2-macos-arm64.zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download the qualified 2.7.2 runtime and prepare a case-sensitive workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v2.7.2 --repo josephsteuerjr/praxis --pattern '${{ matrix.asset }}' --dir donor
+          hdiutil create -size 20g -type SPARSE -fs "Case-sensitive APFS" -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,tarfile
+          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
+          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
+          with tarfile.open(p) as z:z.extractall(Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification',filter='data')
+          PY
+      - name: Build and qualify the native package
+        run: python3 -B "$RUNNER_TEMP/helene-case/qualification/equipment/mac_final.py" --target ${{ matrix.target }} --donors "$PWD/donor" > driver.log 2>&1
+      - name: Collect evidence
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/helene-case/qualification/evidence"
+          cp driver.log "$RUNNER_TEMP/helene-case/qualification/evidence/driver.log" || true
+          tail -60 driver.log || true
+          tar -czf 'native-${{ matrix.target }}.tar.gz' -C "$RUNNER_TEMP/helene-case/qualification" evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ matrix.target }}
+          path: native-${{ matrix.target }}.tar.gz
