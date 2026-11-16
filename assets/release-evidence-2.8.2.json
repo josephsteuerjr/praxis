@@ -1,0 +1,60 @@
+{
+  "format": "helene-windows-prerelease-evidence.v1",
+  "version": "2.8.2",
+  "source_commit": "7eede2c1a2082859107e0a8b8cd0b61085281747",
+  "source_tree_sha256": "e7c7edac11318ea51c1532f26ea2156ab315c7d7250bd9a77acdeecf16a27649",
+  "raw_git_files": 3745,
+  "archive_sha256": "e458897a9c8f0eb717f59345cca473a67cea0ba8d897c63afc9652065cfc10cc",
+  "archive_bytes": 531374551,
+  "all_member_sha_and_crc": true,
+  "core_gate": {
+    "tests": 8019,
+    "inherited_red": 163,
+    "common_new_red": 0,
+    "flaky_new_test": {
+      "test": "test_edition_workers_1411.EditionWorkers.test_parallel_reset",
+      "full_gate": "r282b on 7eede2c core: the only candidate_new_test_red; common_new_red 0",
+      "isolated_reruns_1cpu": {
+        "r282a (fe9b4b8, before live model preview)": "1 of 5 OK",
+        "r282b (7eede2c core)": "2 of 5 OK"
+      },
+      "assertion": "two parallel model worker bodies did not both start within 8 s",
+      "conclusion": "timing-sensitive under one CPU; fails as often without this release's changes; not a regression",
+      "containers_removed": true
+    }
+  },
+  "current": {
+    "node_tests": 178,
+    "frontends_built": 5,
+    "frontend_outputs": 127,
+    "launcher_rebuilt": true,
+    "bootstrap_kernel_cases": 4,
+    "packaged_mcp_tools": 21,
+    "packaged_owner_latch_cases": 9,
+    "packaged_desk_tests": 52,
+    "prior_upgrade": "2.7.2 to 2.8.2, actual restricted medium token",
+    "native_consent_prompt": "timeout and allow observed on a real desktop",
+    "appcontainer_attachment": "2.8 run folder readable, 2.7.2 denied"
+  },
+  "all_core_green": false,
+  "privacy": {
+    "all_source_files": 3745,
+    "actual_local_owner_values": true,
+    "actual_server_values": true,
+    "secret_values_serialized": false
+  },
+  "publication": {
+    "prerelease": true,
+    "make_latest": false,
+    "stable_latest": "v2.7.2",
+    "platforms": [
+      "windows-x86_64"
+    ]
+  },
+  "limits": [
+    "Physical acceptance of resizing and the consent prompt on the owner and Tim machines not performed by this job",
+    "macOS/Linux not published",
+    "No owner installation/update/restart or production Praxis mutation",
+    "No paid provider calls"
+  ]
+}

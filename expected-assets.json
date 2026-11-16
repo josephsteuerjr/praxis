@@ -1,0 +1,26 @@
+{
+  "Helene-2.8.2-source.zip": {
+    "sha256": "199c6407ec2e163bdd0ceac789515b851cedd3d2b63db96843074b60a13cea93",
+    "size": 23397129
+  },
+  "Helene-2.8.2.zip": {
+    "sha256": "e458897a9c8f0eb717f59345cca473a67cea0ba8d897c63afc9652065cfc10cc",
+    "size": 531374551
+  },
+  "Helene-2.8.2.zip.sha256": {
+    "sha256": "ff68abfc07e53f11f3ff06c1a79bf70970531a0c1d1a59db002ded7fdd1909fb",
+    "size": 84
+  },
+  "release-evidence-2.8.2.json": {
+    "sha256": "a60b66738ff6733d29fac71399b1df91153402b4dd2fbfea2300468581ab7d08",
+    "size": 2244
+  },
+  "RELEASE-NOTES.md": {
+    "sha256": "2948a50eabcf0d9cce9200c2469ae48f3f08b4e875bf76ad0ddac7548f1f0533",
+    "size": 4175
+  },
+  "SHA256SUMS": {
+    "sha256": "15c49e0ff22b1bb17fb5683cb8258ab08913c2cb3fe500c25e0de7f2adeb5a57",
+    "size": 445
+  }
+}
