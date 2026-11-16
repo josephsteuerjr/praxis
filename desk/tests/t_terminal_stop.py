@@ -304,7 +304,7 @@ class Wiring(unittest.TestCase):
         # решение, и тогда он обязан снова идти через сторожа.
         self.assertNotIn('_chat_cancellable("evaluator"', src,
                          "судья приватности вернулся — проверь, что он под сторожем стопа")
-        self.assertIn('_chat_cancellable("voice", system=_SCOUT_FRAME',
+        self.assertIn("_chat_cancellable(\"voice\", system=frame_language.text('prompt.scout')",
                       src, "разведчик снова пережидает стоп в своей сети")
 
 

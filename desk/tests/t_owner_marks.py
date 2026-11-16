@@ -104,14 +104,14 @@ class ClearTool(unittest.TestCase):
     def test_list_and_clear_leave_text_intact(self):
         listed = self.agent.tool_clear_owner_marks()
         self.assertIn("memory/notes/a.md", listed)
-        self.assertIn("1 марк", listed)
+        self.assertIn("маркеров 1", listed)
         cleared = self.agent.tool_clear_owner_marks(action="clear")
         self.assertIn("убраны", cleared)
         self.assertEqual((self.tree / "memory/notes/a.md").read_text(encoding="utf8"),
                          "# A\n\nТекст.\n")
         self.assertEqual((self.tree / "soul/SOUL.md").read_text(encoding="utf8"),
                          "# Душа\n\nОснова.\n")
-        self.assertIn("нет ни в одном файле", self.agent.tool_clear_owner_marks())
+        self.assertIn("не найдено в проверенных файлах", self.agent.tool_clear_owner_marks())
 
     def test_clear_single_path_only_that_file(self):
         (self.tree / "soul/VOICE.md").write_text(
@@ -125,7 +125,7 @@ class ClearTool(unittest.TestCase):
 
     def test_escape_and_foreign_paths_are_refused(self):
         self.assertIn("..", self.agent.tool_clear_owner_marks(action="clear", path="../x.md"))
-        self.assertIn("не .md", self.agent.tool_clear_owner_marks(action="clear", path="memory/notes"))
+        self.assertIn("не существующий .md файл", self.agent.tool_clear_owner_marks(action="clear", path="memory/notes"))
 
 
 if __name__ == "__main__":

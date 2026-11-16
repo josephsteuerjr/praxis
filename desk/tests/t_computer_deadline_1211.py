@@ -10,13 +10,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'helene/core')]
 import body_client
+import frame_language
 
 
 def public_hand():
     # Execute the actual public function without starting the full agent runtime.
     source = ast.parse((ROOT / 'helene/core/agent.py').read_text(encoding='utf-8'))
     function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == 'tool_computer')
-    scope = {'body_client': body_client, 'json': json, '_computer_allowed': lambda _: True,
+    scope = {'frame_language': frame_language, 'body_client': body_client, 'json': json, '_computer_allowed': lambda _: True,
              '_is_sovereign_actor': lambda: True,
              '_COMPUTER_ACTION_SCOPES': dict.fromkeys(('run', 'poll', 'stop', 'read_window', 'activate'), 'computer.process')}
     exec(compile(ast.Module(body=[function], type_ignores=[]), '<actual Computer hand>', 'exec'), scope)

@@ -62,7 +62,7 @@ class ResumeNoteUnderSeedStop(unittest.TestCase):
             runner._handle_note(note, "/resume", self.processed)
         # движок не упал (мы дошли до сюда), владелец получил записку-ошибку…
         self.assertEqual(len(said), 1, "записка-ошибка не легла в окно")
-        self.assertIn("не прошёл", said[0])
+        self.assertIn("не подтверждён", said[0])
         self.assertIn("Resume", said[0])
         # …и записка помечена разобранной: replay не будет терзать её трижды
         marks = list(self.processed.glob("*.done"))

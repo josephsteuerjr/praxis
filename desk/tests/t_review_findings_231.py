@@ -22,8 +22,8 @@ class Findings(unittest.TestCase):
     def test_whitespace_start_cannot_bypass_pause(self):
         remote = self.host()
         forge.control(self.tid, 'pause')
-        self.assertIn('refused', forge.process(self.tid, ' Start ', command='echo test'))
-        self.assertIn('refused', forge.verify(self.tid, ' Start ', commands='echo test'))
+        self.assertIn('отклонён', forge.process(self.tid, ' Start ', command='echo test'))
+        self.assertIn('отклонён', forge.verify(self.tid, ' Start ', commands='echo test'))
         remote.call.assert_not_called()
         remote.process.assert_not_called()
 
@@ -50,7 +50,7 @@ class Findings(unittest.TestCase):
         forge._atomic_json(parent/'stop.json', {'state':'settled',
             'result_sha256':forge._result_identity(parent/'result.json')})
         self.patch('_pid_alive', lambda *args: False)
-        self.assertIn('shared-root writer', forge._agent_capacity(self.tid, {'id':'agent-new', 'role':'worker'}))
+        self.assertIn('общий корень занят исполнителем записи', forge._agent_capacity(self.tid, {'id':'agent-new', 'role':'worker'}))
         self.assertEqual(forge.control(self.tid, 'stop')['status'], 'settled')
         self.assertTrue(stopped)
         self.assertEqual(forge._units(self.tid, 'processes')[0]['status'], 'stopped')

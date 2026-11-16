@@ -46,7 +46,7 @@ class Cancellation(unittest.TestCase):
 
         def kill(*args, **kwargs):
             alive['value'] = False
-            return 'остановлен'
+            return self.forge.KillTreeReply('остановлен', status='stopped')
 
         with mock.patch.object(self.forge, '_pid_alive', side_effect=lambda *args: alive['value']), \
              mock.patch.object(self.forge, '_kill_tree', side_effect=kill), \

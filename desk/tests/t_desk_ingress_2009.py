@@ -144,7 +144,7 @@ class ReplayProcessed(unittest.TestCase):
         done = (processed / (note.name + ".done")).read_text(encoding="utf-8")
         self.assertIn("gave-up", done)
         room.deliver.assert_called_once()
-        self.assertIn("не дошла до агента", room.deliver.call_args.args[0])
+        self.assertIn("Обработка записки", room.deliver.call_args.args[0])
         self.assertTrue(room.deliver.call_args.kwargs.get("system"), "плашка — системная")
 
     def test_retries_wait_their_pause(self):

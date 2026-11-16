@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+import json
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,8 @@ LEARN = (KIT / "window" / "views" / "learn.ts").read_text(encoding="utf-8")
 STEPS = (KIT / "steps.ts").read_text(encoding="utf-8")
 # Видимый текст: без комментариев (там законно цитируется то, что было неправдой).
 # Строки TS рвутся конкатенацией `" +` — склеиваем, чтобы фразу было видно целиком.
+CATALOG = json.loads((DESK / 'lang/ru.json').read_text(encoding='utf8'))
+LEARN = re.sub(r'uiText\("([^"\n]+)"\)', lambda match: json.dumps(CATALOG[match.group(1)], ensure_ascii=False), LEARN)
 LEARN = re.sub(r'"\s*\+\s*\n\s*"', "", LEARN)
 LEARN_TEXT = re.sub(r"(?m)^\s*//.*$", "", re.sub(r"/\*.*?\*/", "", LEARN, flags=re.S))
 

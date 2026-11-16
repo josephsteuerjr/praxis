@@ -226,7 +226,7 @@ class CleanAttached(unittest.TestCase):
     def test_clean_form_has_no_code_preservation_choice(self):
         text=(Path(__file__).resolve().parents[1]/'resources/python-migration.html').read_text('utf8')
         self.assertNotIn('id="source-mode"',text);self.assertNotIn("$('source-mode')",text)
-        self.assertNotIn('value="preserve"',text);self.assertIn("sourceMode:pythonUpdate?'preserve':'clean'",text)
+        self.assertNotIn('value="preserve"',text);self.assertIn("sourceMode:$('mode').value!=='fresh'&&pythonUpdate?'preserve':'clean'",text)
 
     @unittest.skipUnless(os.name=='nt','Windows early bootstrap diagnostic')
     def test_preimport_error_is_logged_even_before_the_main_handler_exists(self):

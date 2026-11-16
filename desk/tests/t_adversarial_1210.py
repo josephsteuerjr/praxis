@@ -26,6 +26,12 @@ import package_notice
 def extract(path, name, namespace):
     parsed = ast.parse(path.read_text(encoding='utf8'))
     node = next(n for n in parsed.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    namespace.setdefault('_agent', None)
+    namespace.setdefault('contextlib', __import__('contextlib'))
+    for helper in ('_frame_word', '_frame_pinned'):
+        if helper not in namespace:
+            definition = next(n for n in parsed.body if isinstance(n, ast.FunctionDef) and n.name == helper)
+            exec(compile(ast.Module(body=[definition], type_ignores=[]), 'runner-language-boundary', 'exec'), namespace)
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec'), namespace)
     return namespace[name]
 

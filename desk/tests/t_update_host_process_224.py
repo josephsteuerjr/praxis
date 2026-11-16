@@ -270,6 +270,7 @@ while True:time.sleep(.1)
             write(old/'python-app.json',{'version':'2.1.1','delivery':'portable'})
             write(new/'python-app.json',{'version':'2.2.4','delivery':'portable'})
             write(old/'helene.json',{'tree':str(home),'code':str(code),'runner':'','setup_complete':True,
+                                      'agent':{'frame_language':'en'},
                                       'self_review':{'max_parallel':8}})
             from localharness import update_source
             if not button:

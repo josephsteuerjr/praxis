@@ -16,6 +16,8 @@ import emergency
 import owner_context
 import owner_stop
 import update_inspection
+sys.path.insert(0, str(DESK.parent/'helene/core'))
+import frame_language
 from tests import t_body
 
 
@@ -41,7 +43,7 @@ class WorkPC(unittest.TestCase):
     def test_reported_body_argument_kind_is_refused_without_executing_the_body(self):
         source = ast.parse((DESK.parent/'helene/core/agent.py').read_text(encoding='utf8'))
         node = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'tool_computer')
-        namespace = {}; exec(compile(ast.Module(body=[node],type_ignores=[]), 'agent.py', 'exec'), namespace)
+        namespace = {'frame_language':frame_language}; exec(compile(ast.Module(body=[node],type_ignores=[]), 'agent.py', 'exec'), namespace)
         ground = t_body.Ground(t_body._cfg()); self.addCleanup(ground.close)
         agent = t_body._fake_agent([]); agent.TOOL_IMPL['computer'] = namespace['tool_computer']
         with patch.object(body, '_BODY', Mock()), patch.dict(body.STATE, {'available':True,'connected':True}), \

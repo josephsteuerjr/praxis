@@ -15,6 +15,8 @@ DESK=Path(__file__).resolve().parents[1]
 CORE=DESK.parent/'helene/core'
 sys.path[:0]=[str(DESK),str(DESK/'localharness'),str(CORE)]
 import boot
+import frame_language
+import interface_language
 import fence
 
 class PortableHands(unittest.TestCase):
@@ -125,6 +127,7 @@ class PortableHands(unittest.TestCase):
                 ('panel.py','log_tail',{'LOGS_DIR':logsink.LOGS_DIR,'LOG_NAMES':('praxis',)},{'name':'praxis'})):
                 module=ast.parse((CORE/filename).read_text(encoding='utf8'))
                 fn=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name==function)
+                namespace.update(frame_language=frame_language,interface_language=interface_language)
                 exec(compile(ast.Module(body=[fn],type_ignores=[]),filename,'exec'),namespace)
                 self.assertIn('PORTABLE-LOG-TAIL-PROBE',str(namespace[function](**args)))
 

@@ -32,7 +32,7 @@ class IncidentStarterSkills(unittest.TestCase):
             text = skill.read_text(encoding='utf-8')
             self.assertEqual(skill.read_bytes(), (STOCK/'before_sending.md').read_bytes())
             self.assertIn('write_skill', text)
-            self.assertIn('законный ответ', text)
+            self.assertIn('прямо сказать, что факт не проверен', text)
             index=(tree/'soul/skills/INDEX.md').read_text(encoding='utf-8')
             self.assertEqual(index.count('](before_sending.md)'),1)
             authored = '# A synthetic later norm\n\nI did not check; I say so.\n'

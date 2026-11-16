@@ -12,6 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'helene/core'), str(ROOT/'praxis')]
 import authored_notes
+import frame_language
 spec=importlib.util.spec_from_file_location('helene_notice_notes_test', ROOT/'helene/core/core/notices.py')
 notices=importlib.util.module_from_spec(spec);spec.loader.exec_module(notices)
 
@@ -28,7 +29,7 @@ class LinkedNotes(unittest.TestCase):
                     origin_chat='window',result_ref={'path':'result.json','sha256':'abc'})
                 text=notices._line(row,owner_context=True,fresh=True)
                 self.assertIn(note['id'],text);self.assertIn('Investigating window',text)
-                self.assertIn('Full result (separate evidence)',text)
+                self.assertIn('Полный результат (отдельное свидетельство)',text)
                 self.assertNotIn('OTHER WORK PRIVATE',text)
                 public=notices._line(row,owner_context=False,fresh=True)
                 for secret in (note['id'],'Investigating window','result.json','run:fixture'):
@@ -44,7 +45,7 @@ class LinkedNotes(unittest.TestCase):
             note=ledger.write('OWNER ONLY',work_ref='forge:code-aaaaaaaa',chat_id='private')
             ctx=types.SimpleNamespace(owner_audience=False,origin_message_id=1)
             lessons=types.SimpleNamespace(chain=Mock(),decline=Mock())
-            namespace={'authored_notes':authored_notes,'BASE':Path(directory),'run_context':types.SimpleNamespace(current_run=lambda:None),
+            namespace={'frame_language':frame_language,'authored_notes':authored_notes,'BASE':Path(directory),'run_context':types.SimpleNamespace(current_run=lambda:None),
                        '_TURN_CHANNEL':types.SimpleNamespace(get=lambda:ctx),'_active_chat':lambda:'public','lessons':lessons}
             exec(compile(ast.Module(body=[function],type_ignores=[]),'agent.py','exec'),namespace)
             tool=namespace['tool_manage_notes']

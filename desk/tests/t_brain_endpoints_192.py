@@ -44,7 +44,7 @@ class Endpoints(unittest.TestCase):
         self.configure();cfg=llm._config();cfg['frameworks']['evaluator_primary']['base_url']=cfg['frameworks']['voice_fallback']['base_url'];llm.save_config(cfg)
         with patch.object(llm,'_available_models',side_effect=lambda fw:['ambiguous'] if fw in ('voice_fallback','evaluator_primary') else []),patch.object(llm,'ping') as ping:
             before=copy.deepcopy(llm._config());reply=brain.switch('voice','ambiguous',why='fixture')
-            self.assertFalse(reply['ok']);self.assertIn('several configured accounts',reply['error']);self.assertEqual(llm._config(),before);ping.assert_not_called()
+            self.assertFalse(reply['ok']);self.assertIn('настроено несколько аккаунтов',reply['error']);self.assertEqual(llm._config(),before);ping.assert_not_called()
     def test_catalog_keeps_account_identity_not_credentials(self):
         self.configure();result=brain.catalog()
         self.assertIn('voice_fallback',result['frameworks']);self.assertIn('evaluator_primary',result['frameworks'])

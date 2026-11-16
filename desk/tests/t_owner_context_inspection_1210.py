@@ -20,6 +20,12 @@ import update_inspection
 def function(name, globals):
     source = ast.parse((DESK / "localharness/runner.py").read_text(encoding="utf8"))
     node = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    globals.setdefault('_agent', None)
+    globals.setdefault('contextlib', __import__('contextlib'))
+    for helper in ('_frame_word', '_frame_pinned'):
+        if helper not in globals:
+            definition = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == helper)
+            exec(compile(ast.Module(body=[definition], type_ignores=[]), 'runner-language-boundary', 'exec'), globals)
     exec(compile(ast.Module(body=[node], type_ignores=[]), "runner.py", "exec"), globals)
     return globals[name]
 

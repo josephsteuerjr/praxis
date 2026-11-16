@@ -195,7 +195,7 @@ class ReviewTests(unittest.TestCase):
     def test_forge_admits_only_reviewers_and_only_installed_adapter(self):
         row = self.request()
         self.service.tick()
-        self.assertIn("read-only", self.forge.agent(row["task_id"], "spawn", role="worker", brief="edit"))
+        self.assertIn("доступом на чтение", self.forge.agent(row["task_id"], "spawn", role="worker", brief="edit"))
         spoof = self.root / "localharness/self_review_worker.py"
         spoof.parent.mkdir()
         spoof.write_text("raise Exception('not trusted')", encoding="utf-8")
