@@ -449,9 +449,11 @@ export function start(opts: WindowOptions): void {
     }
     // The frameless pywebview window has no native resize border on Windows/Linux.
     if (bridge.shell === "python" && bridge.presentation !== "miniapp") {
-      import("./native-resize").then(({ installNativeResize, NATIVE_RESIZE_PLATFORMS }) => {
-        if (NATIVE_RESIZE_PLATFORMS.includes(String(bridge.platform)))
-          installNativeResize((command, args) => bridge.invoke(command, args));
+      import("./native-resize").then(({ installNativeResize, installHeaderToggle, NATIVE_RESIZE_PLATFORMS }) => {
+        if (!NATIVE_RESIZE_PLATFORMS.includes(String(bridge.platform))) return;
+        installNativeResize((command, args) => bridge.invoke(command, args));
+        // The same selector as the shell's drag region (python_app: DRAG_REGION_SELECTOR).
+        installHeaderToggle(() => bridge.win("maximize"), "#chrome, .chrome-drag, .rail-sign");
       });
     }
   } else if (inTauri) {

@@ -155,4 +155,43 @@ class Media(unittest.TestCase):
         bot._ingest({'edited_message':message})
         self.assertFalse(bot.rooms.attach_media('-77','23',old,{'media_path':'stale.webp'}))
 
+    def test_received_zip_reaches_the_turn_with_a_path_and_its_exact_bytes(self):
+        """16.11, AbstractDL: the ZIP was stored, but the turn saw no path and an empty inbox."""
+        import hashlib, io, zipfile
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w') as archive_file: archive_file.writestr('README.md','baseline')
+        payload=buffer.getvalue()
+        bot=botapi.BotTransport(types.SimpleNamespace(),self.tree,None,{'agent':{'name':'Лира'},'telegram':{}})
+        bot.client=self.api;bot.me={'id':99};bot.username='lyra'
+        message=self.message('document',file_name='paper-trading-baseline.zip',mime_type='application/zip',file_size=len(payload))
+        message.update(chat={'id':-77,'type':'group','title':'Room'},**{'from':{'id':11,'first_name':'Пракс'}})
+        self.api.download_media.side_effect=OSError('offline')
+        bot._ingest({'message':message})
+        spool=media.MediaSpool(self.tree/'workspace/media')
+        ctx=types.SimpleNamespace(owner=False,is_dm=False,known=True,scope='group',chat_id='-77')
+        with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:spool)):
+            refs,notes=runner._telegram_media_refs('-77',ctx)
+        self.assertEqual(refs,[])
+        self.assertEqual(len(notes),1)
+        self.assertIn('paper-trading-baseline.zip',notes[0])
+        self.assertIn('байтов пока нет',notes[0])
+        self.assertIn('Не ищи его по диску',notes[0])
+        self.api.download_media.side_effect=lambda message,path:path.write_bytes(payload)
+        with patch.object(tm.time,'time',return_value=10**12):tm.recover(self.tree,self.api,bot.rooms)
+        runner._DOCUMENT_COPIES.clear();self.addCleanup(runner._DOCUMENT_COPIES.clear)
+        with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:spool)):
+            refs,notes=runner._telegram_media_refs('-77',ctx)
+            _,again=runner._telegram_media_refs('-77',ctx)
+        self.assertEqual(refs,[])  # a document is not an image for vision
+        self.assertEqual(len(notes),1)
+        digest=hashlib.sha256(payload).hexdigest()
+        self.assertIn(digest,notes[0]);self.assertIn(f'{len(payload)} байт',notes[0]);self.assertIn('Пракс',notes[0])
+        copy=Path(notes[0].split('Рабочая копия: ',1)[1].split('. Копия живёт',1)[0])
+        self.assertTrue(copy.is_relative_to(self.tree/'workspace/media/inbound/group'))
+        self.assertTrue(copy.name.endswith('-paper-trading-baseline.zip'))
+        self.assertEqual(copy.read_bytes(),payload)
+        self.assertEqual(again,notes)  # the next turn reuses the same copy
+        self.assertEqual(len([p for p in copy.parent.iterdir() if p.suffix=='.zip']),1)
+        with zipfile.ZipFile(copy) as opened: self.assertEqual(opened.read('README.md'),b'baseline')
+
 if __name__=='__main__': unittest.main()

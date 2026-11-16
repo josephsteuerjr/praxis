@@ -4465,3 +4465,5 @@ body.first-run #state {
 .native-resize-sw { bottom:0; left:0; cursor:nesw-resize; }
 .native-resize-nw { top:0; left:0; cursor:nwse-resize; }
 .native-resize-se { bottom:0; right:0; cursor:nwse-resize; }
+/* A maximized window has no edges to drag: the screen edge belongs to the content again. */
+html.window-maximized .native-resize { display:none; }

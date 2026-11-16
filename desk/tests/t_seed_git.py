@@ -99,6 +99,35 @@ class SeedGit(unittest.TestCase):
             self.assertNotIn('.desktop-owner.lock',tracked)
         finally:release_file_lock(held)
 
+    def test_owner_backups_moved_into_the_home_leave_the_index_not_the_disk(self) -> None:
+        """2.8.3: a migrated `backup.dir` put 5 GB zips under retained-assets/ in the home.
+
+        `add -A` before every agent command then timed out (Jarvis, 252 times since 08.11).
+        An old home is healed at the next start: ignored and dropped from the index only.
+        """
+        ignore = self.tmp / ".gitignore"
+        old_text = ignore.read_text(encoding="utf-8")
+        old_text = old_text.replace("retained-assets/\n", "").replace("backups/\n", "")
+        ignore.write_text(old_text, encoding="utf-8", newline="\n")
+        backup = self.tmp / "retained-assets" / "a786" / "backups" / "auto.zip"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"PK\x05\x06" + bytes(18))
+        (self.tmp / "backups").mkdir()
+        (self.tmp / "backups" / "manual.zip").write_bytes(b"PK\x05\x06" + bytes(18))
+        git(self.tmp, "add", "-A")
+        git(self.tmp, "commit", "-q", "-m", "old home tracked the backups")
+        before = git(self.tmp, "rev-list", "--count", "HEAD").strip()
+        boot.seed_git(self.tmp, CFG)
+        tracked = git(self.tmp, "ls-files").split()
+        self.assertFalse([f for f in tracked if f.startswith(("retained-assets/", "backups/"))])
+        self.assertTrue(backup.is_file(), "the owner's backup stays on disk")
+        self.assertEqual(git(self.tmp, "rev-list", "--count", "HEAD").strip(), before, "history is not rewritten")
+        self.assertIn("retained-assets/", ignore.read_text(encoding="utf-8"))
+        git(self.tmp, "commit", "-q", "-m", "untrack")
+        status = git(self.tmp, "status", "--porcelain")
+        self.assertNotIn("retained-assets", status)
+        self.assertNotIn("backups", status)
+
 
 class IgnoreTopUp(unittest.TestCase):
     """`.gitignore` пишется ОДИН раз, а список растёт — старый дом надо лечить.
@@ -130,6 +159,11 @@ class IgnoreTopUp(unittest.TestCase):
     def test_модели_голоса_в_обязательном_списке(self):
         self.assertIn("models/", boot._IGNORE_MUST)
         self.assertIn("models/", boot._GIT_IGNORE)
+
+    def test_бэкапы_в_обязательном_списке(self):
+        for item in ("retained-assets/", "backups/"):
+            self.assertIn(item, boot._IGNORE_MUST)
+            self.assertIn(item, boot._GIT_IGNORE)
 
 
 if __name__ == "__main__":

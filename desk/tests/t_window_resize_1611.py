@@ -74,6 +74,72 @@ class WindowResize(unittest.TestCase):
             self.assertEqual(app.window.calls, [])
 
 
+class MaximizedWindowKeepsItsEdges(unittest.TestCase):
+    """2.8.2 (owner, 16.11): resize "worked even maximized" and the screen edge was a strip.
+
+    The maximized state is the window's own (IsZoomed), not pywebview's event mirror; a
+    maximized window refuses edge resizes and header moves, and the renderer can ask.
+    """
+
+    def setUp(self):
+        module = types.ModuleType('webview.window')
+        module.FixPoint = FixPoint
+        self.enterContext(patch.dict(sys.modules, {'webview.window': module}))
+
+    def zoomed(self, value):
+        user32 = SimpleNamespace(IsZoomed=lambda handle: value)
+        return patch.object(python_app.sys, 'platform', 'win32'), patch('ctypes.windll', SimpleNamespace(user32=user32), create=True)
+
+    def test_windows_answer_comes_from_the_window_not_the_event_mirror(self):
+        for zoomed, mirror in ((1, False), (0, True)):
+            app = SimpleNamespace(window=Window(), window_handle=0x2906, window_maximized=mirror)
+            platform, windll = self.zoomed(zoomed)
+            with platform, windll:
+                self.assertIs(python_app.window_is_maximized(app), bool(zoomed))
+                changed = python_app.resize_edge(app, {'edge': 'e', 'width': 900, 'height': 700})
+            self.assertIs(changed, not zoomed)
+            self.assertEqual(len(app.window.calls), 0 if zoomed else 1)
+
+    def test_without_a_native_handle_the_mirror_decides(self):
+        self.assertTrue(python_app.window_is_maximized(SimpleNamespace(window=Window(), window_maximized=True)))
+        self.assertFalse(python_app.window_is_maximized(SimpleNamespace(window=Window())))
+        self.assertFalse(python_app.window_is_maximized(SimpleNamespace(window=None, window_maximized=True)))
+
+    def test_header_drag_does_not_move_a_maximized_window(self):
+        moves = []
+        window = SimpleNamespace(move=lambda x, y: moves.append((x, y)))
+        app = SimpleNamespace(window=window, window_maximized=True)
+        python_app.guard_maximized_move(app)
+        window.move(40, 50)
+        self.assertEqual(moves, [])
+        app.window_maximized = False
+        window.move(40, 50)
+        self.assertEqual(moves, [(40, 50)])
+
+    def test_bind_window_state_installs_the_move_guard(self):
+        class Hook:
+            def __iadd__(self, handler):
+                return self
+        moves = []
+        window = SimpleNamespace(move=lambda x, y: moves.append((x, y)),
+                                 events=SimpleNamespace(maximized=Hook(), restored=Hook(), shown=Hook(), closing=Hook()))
+        app = SimpleNamespace(window=window, window_maximized=True)
+        python_app.bind_window_state(app)
+        window.move(1, 2)
+        self.assertEqual(moves, [])
+
+    def test_renderer_reads_the_state_through_python_window(self):
+        app = object.__new__(python_app.Application)
+        app.root = app.program = Path(__file__).resolve().parent
+        app.window = Window()
+        app.window_maximized = True
+        self.assertEqual(app.invoke('python_window', {'action': 'state'}), {'maximized': True})
+        app.window_maximized = False
+        self.assertEqual(app.invoke('python_window', {'action': 'state'}), {'maximized': False})
+        app.window = None
+        self.assertEqual(app.invoke('python_window', {'action': 'state'}), {'maximized': False})
+
+
 class HandlesInstallForTheBridgePlatform(unittest.TestCase):
     """2.8.0/2.8.1 shipped a guard against "win32" while the bridge says "windows".
 

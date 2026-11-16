@@ -272,13 +272,19 @@ class Application:
             if action == "resize_edge":
                 resize_edge(self, args)
                 return None
+            if action == "state":
+                return {"maximized": window_is_maximized(self)}
             if self.window is not None:
                 if action == "minimize":
                     self.window.minimize()
                 elif action == "maximize":
-                    if self.window_maximized:
+                    if window_is_maximized(self):
                         self.window.restore()
                     else:
+                        try:
+                            fit_maximized_bounds(self)
+                        except Exception as error:
+                            self.event('window-error', {'error': str(error)})
                         self.window.maximize()
                 elif action == "close" and self.tray is not None and not self.exiting:
                     self.window.hide()
@@ -570,6 +576,66 @@ RESIZE_EDGES = frozenset(("n", "s", "e", "w", "ne", "nw", "se", "sw"))
 MIN_WINDOW_SIZE = (640, 420)
 
 
+def window_is_maximized(app) -> bool:
+    """Whether the window itself is maximized right now.
+
+    On Windows the answer is the window's own WS_MAXIMIZE state (IsZoomed): pywebview's
+    maximized/restored events are only a mirror of WinForms' WindowState changes. Elsewhere,
+    and before the native handle is known, the event mirror is all there is.
+    """
+    if getattr(app, "window", None) is None:
+        return False
+    handle = getattr(app, "window_handle", 0)
+    if sys.platform == "win32" and handle:
+        import ctypes
+        return bool(ctypes.windll.user32.IsZoomed(ctypes.c_void_p(handle)))
+    return bool(getattr(app, "window_maximized", False))
+
+
+def fit_maximized_bounds(app):
+    """Maximize onto the work area of the monitor the window is on now.
+
+    A frameless WinForms window would cover the taskbar, so MaximizedBounds names the work
+    area. WM_GETMINMAXINFO takes that position relative to the monitor, not the virtual
+    screen; 2.8.2 set it once at start from the absolute WorkingArea, which is right only
+    on a primary monitor whose work area starts at 0,0. Recomputed before each maximize.
+    """
+    if sys.platform != "win32" or getattr(app, "window", None) is None:
+        return
+    from System import Action
+    from System.Drawing import Rectangle
+    from System.Windows.Forms import Screen
+    native = app.window.native
+
+    def apply():
+        screen = Screen.FromHandle(native.Handle)
+        work, monitor = screen.WorkingArea, screen.Bounds
+        native.MaximizedBounds = Rectangle(work.X - monitor.X, work.Y - monitor.Y,
+                                           work.Width, work.Height)
+        app.window_handle = int(native.Handle.ToInt64())
+
+    native.Invoke(Action(apply))
+
+
+def guard_maximized_move(app):
+    """A header drag must not slide a maximized window off its work area.
+
+    pywebview's drag region moves the window with SetWindowPos whatever its state, so a
+    drag on the header of a maximized window left it "maximized" but shifted, with gaps
+    at the screen edges. While maximized the drag is ignored; the maximize button, a
+    double click on the header or Win+Down restore it.
+    """
+    window = app.window
+    original = window.move
+
+    def move(x, y):
+        if window_is_maximized(app):
+            return None
+        return original(x, y)
+
+    window.move = move
+
+
 def resize_edge(app, args):
     """Resize the frameless window from one edge, keeping the opposite side fixed.
 
@@ -581,7 +647,7 @@ def resize_edge(app, args):
     if (edge not in RESIZE_EDGES or type(width) is not int or type(height) is not int
             or not 0 < width <= 32768 or not 0 < height <= 32768):
         return False  # only our renderer sends this; a malformed request changes nothing
-    if app.window is None or getattr(app, "window_maximized", False):
+    if app.window is None or window_is_maximized(app):
         return False
     from webview.window import FixPoint
     fix = ((FixPoint.SOUTH if "n" in edge else FixPoint.NORTH)
@@ -603,12 +669,7 @@ def bind_window_state(app):
     def shown():
         if sys.platform == "win32":
             try:
-                from System import Action
-                from System.Windows.Forms import Screen
-                native = app.window.native
-                def set_bounds():
-                    native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
-                native.Invoke(Action(set_bounds))
+                fit_maximized_bounds(app)
                 set_window_icon(app)
             except Exception as error:
                 app.event('window-error', {'error': str(error)})
@@ -632,6 +693,7 @@ def bind_window_state(app):
     app.window.events.maximized += maximized
     app.window.events.restored += restored
     app.window.events.shown += shown
+    guard_maximized_move(app)
     if sys.platform.startswith('linux'):
         app.window.events.closing += lambda:close_without_tray(app)
 

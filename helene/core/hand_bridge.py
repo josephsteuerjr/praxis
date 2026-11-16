@@ -5,6 +5,7 @@ import contextvars
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -210,8 +211,13 @@ class Bridge:
                 images=response.pop('images',())
                 self.images.extend(images)
                 response['image_count']=len(images)
-            except BaseException:
-                response=uncertain
+            except BaseException as exc:
+                # The intent stays durable and is never replayed. Name the cause: a bare
+                # InDoubt hid a refused authority check for days (Jarvis, 15-16.11).
+                logging.getLogger('praxis.hand_bridge').warning(
+                    'nested %s %s ended without a receipt', name, request_id, exc_info=True)
+                response=dict(uncertain,cause=type(exc).__name__,
+                              message=uncertain['message']+f' Cause: {type(exc).__name__}: {str(exc)[:300]}')
             finally:
                 with self.state_lock:
                     self.inflight-=1;self.active.pop(request_id,None)

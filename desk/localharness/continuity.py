@@ -54,6 +54,39 @@ class Continuity:
                 or snapshot['authority'].get('helene_telegram_owner') != expected):
             raise self.agent.DurableExecutionError('Telegram owner binding is absent or changed; delivery retained')
 
+    def verify_telegram_speaker(self, runtime) -> bool:
+        """The Telegram cases the core would check against PRAXIS_OWNER_ID and known_ids.
+
+        The edition never sets PRAXIS_OWNER_ID: its owner is telegram.owner_id in helene.json,
+        and who may start a turn is the bot's own gate (allow_from, allowed_ids, admitted).
+        Before 2.8.3 only the owner's private chat had an edition check here, so the owner
+        writing in a group fell through to the core and was refused as "no longer the
+        configured owner". Every nested h.hand from such a turn failed before it started,
+        and the script saw InDoubt (Jarvis in AbstractDL, 15-16.11). A paused group turn of
+        the owner could not resume for the same reason.
+
+        Returns True when the edition decided; False leaves the core's own rules.
+        """
+        context = runtime.plan.context
+        channel = runtime.channel
+        room = str(context.delivery_chat_id or '')
+        if transport.is_room(room):
+            return False
+        if channel.owner:
+            cfg = json.loads(self.config_path.read_text(encoding='utf-8-sig'))
+            owner = str((cfg.get('telegram') or {}).get('owner_id') or '').strip()
+            if not owner.isdecimal() or int(owner) <= 0 or str(context.principal_id) != owner:
+                raise self.agent.DurableExecutionError(
+                    'Telegram turn no longer belongs to the configured owner')
+            return True
+        if channel.known and not channel.family:
+            bot = self.telegram() if self.telegram else None
+            if bot is None or not bot.is_allowed(context.principal_id):
+                raise self.agent.DurableExecutionError(
+                    'Telegram sender is no longer admitted by this installation')
+            return True
+        return False
+
     def owner_stamp(self) -> str:
         # Повторная проверка при resume: смена владельца не наследует доверие
         # прежнего. Это provenance локальной установки, не Telegram-id.
@@ -138,6 +171,8 @@ class Continuity:
                 return
             if runtime.channel.owner and runtime.channel.is_dm:
                 self.verify_delivery_owner(runtime.plan.run_id, context)
+                return
+            if self.verify_telegram_speaker(runtime):
                 return
             return original_authority(runtime)
 

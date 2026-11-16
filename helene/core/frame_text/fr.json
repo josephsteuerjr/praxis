@@ -3533,5 +3533,8 @@
   "helper.agent.devnull_denied": "[Sur cette version de Windows, le bac à sable ne peut pas ouvrir /dev/null (le périphérique NUL) : la commande avec cette redirection ne s’est pas exécutée. Redirige plutôt vers un fichier, par exemple 2>\"$TMP/err.txt\", ou supprime la redirection.]",
   "tool.args.extra": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : les champs en trop {extra} ne figurent pas dans le schéma de cet outil. Rien n’a changé à l’extérieur. Retirez ces champs et recommencez selon le schéma (obligatoires : {required}).",
   "tool.args.missing": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : les champs obligatoires {missing} manquent. Rien n’a changé à l’extérieur. Recommencez l’appel en les ajoutant.",
-  "tool.args.other": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : {error}. Rien n’a changé à l’extérieur. Vérifiez le schéma de l’outil et recommencez l’appel."
+  "tool.args.other": "[arguments refusés] L’appel `{name}` n’a PAS été exécuté : {error}. Rien n’a changé à l’extérieur. Vérifiez le schéma de l’outil et recommencez l’appel.",
+  "native.runner.media.document_ready": "[Fichier Telegram : {p0} de {p1}, message {p2} ; {p3} octets, SHA-256 {p4}. Copie de travail : {p5}. La copie dure environ une journée ; déplace-la dans ton propre dossier pour un travail plus long.]",
+  "native.runner.media.document_pending": "[Fichier Telegram : {p0}, message {p1} — pas encore d'octets : {p2} Ne le cherche pas sur le disque : le chemin apparaîtra ici une fois le téléchargement terminé.]",
+  "native.runner.media.document_failed": "[Fichier Telegram : {p0}, message {p1} : les octets sont arrivés, mais la copie de travail n'a pas pu être créée ({p2}). Ne pas en deviner le contenu.]"
 }

@@ -598,6 +598,9 @@ workspace/.tmp/
 workspace/mnt/
 workspace/media/
 __pycache__/
+# Бэкапы и сохранённые при переезде файлы владельца: zip по нескольку гигабайт.
+retained-assets/
+backups/
 """
 
 
@@ -605,9 +608,15 @@ __pycache__/
 #: Проверяются и в СУЩЕСТВУЮЩЕМ файле: он пишется один раз при заведении
 #: репозитория, а список с тех пор пополнялся — и у того, кто поставил продукт
 #: раньше, в снимки уехали бы гигабайты моделей голоса (снимок делает `add -A`).
+#: 2.8.3: `retained-assets/` и `backups/`. Переезд в новую папку программы кладёт
+#: папку бэкапов владельца в `retained-assets/<id>/backups` и переводит туда
+#: `backup.dir`, то есть еженедельный zip на 5 ГБ ложился в рабочее дерево личного
+#: git. `add -A` перед каждой командой агента упирался в 30-секундный потолок
+#: (252 раза с 08.11 у Джарвиса, ход ждал до 4,5 минут), а репозиторий вырос до 11 ГБ.
 _IGNORE_MUST = ("memory/", "relay/", "telegram/", "body/", "models/", ".desktop-owner.lock",
                 ".python-desktop-status", ".python-desktop-status.*.tmp",
-                "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/")
+                "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
+                "retained-assets/", "backups/")
 
 
 def _top_up_ignore(path: Path) -> list[str]:
@@ -750,8 +759,9 @@ def seed_git(tree: Path, cfg: dict) -> bool:
                 ignore.write_text(_GIT_IGNORE, encoding="utf-8", newline="\n")
             else:
                 _top_up_ignore(ignore)
-            done = git("rm", "--cached", "--ignore-unmatch", "-f", "--",
-                       ".desktop-owner.lock", ".python-desktop-status")
+            done = git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "-f", "--",
+                       ".desktop-owner.lock", ".python-desktop-status",
+                       "retained-assets", "backups")
             if done.returncode:
                 log.warning("личный git: служебные файлы остались в индексе: %s",
                             (done.stderr or done.stdout or "").strip()[:300])

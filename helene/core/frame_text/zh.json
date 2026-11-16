@@ -3533,5 +3533,8 @@
   "helper.agent.devnull_denied": "[此 Windows 版本的沙箱无法打开 /dev/null（NUL 设备），因此带有该重定向的命令没有运行。请改为重定向到文件，例如 2>\"$TMP/err.txt\"，或去掉该重定向。]",
   "tool.args.extra": "[参数未被接受] 调用 `{name}` 未执行：多余的字段 {extra} 不在该工具的 schema 中。外部没有任何改变。删除这些字段，按 schema 重新调用（必填：{required}）。",
   "tool.args.missing": "[参数未被接受] 调用 `{name}` 未执行：缺少必填字段 {missing}。外部没有任何改变。补上这些字段后重新调用。",
-  "tool.args.other": "[参数未被接受] 调用 `{name}` 未执行：{error}。外部没有任何改变。请核对该工具的 schema 后重新调用。"
+  "tool.args.other": "[参数未被接受] 调用 `{name}` 未执行：{error}。外部没有任何改变。请核对该工具的 schema 后重新调用。",
+  "native.runner.media.document_ready": "[Telegram 文件：{p0}，来自 {p1}，消息 {p2}；{p3} 字节，SHA-256 {p4}。工作副本：{p5}。副本约保留一天；如需长期使用，请移到你自己的文件夹。]",
+  "native.runner.media.document_pending": "[Telegram 文件：{p0}，消息 {p1}——尚未收到字节：{p2} 不要在磁盘上搜索它：下载完成后路径会出现在这里。]",
+  "native.runner.media.document_failed": "[Telegram 文件：{p0}，消息 {p1}：字节已收到，但无法创建工作副本（{p2}）。不要猜测其内容。]"
 }

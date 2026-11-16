@@ -3533,5 +3533,8 @@
   "helper.agent.devnull_denied": "04527f52a4e1afc5",
   "tool.args.extra": "eac593630c63ed8c",
   "tool.args.missing": "f4f5259b14ae2c69",
-  "tool.args.other": "b72e84132588254f"
+  "tool.args.other": "b72e84132588254f",
+  "native.runner.media.document_ready": "1fa31303878552ba",
+  "native.runner.media.document_pending": "16f9b9a25612c436",
+  "native.runner.media.document_failed": "d4b9adaea1044242"
 }

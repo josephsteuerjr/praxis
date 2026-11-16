@@ -1412,6 +1412,58 @@ def _room_title(chat_id: str) -> str:
     return label if label != peer else ""
 
 
+# One working copy per received file and process: every turn re-reads the same tail.
+_DOCUMENT_COPIES: dict = {}
+
+
+def _telegram_document(row) -> bool:
+    """A Telegram document: stored as kind "file", or still waiting for its bytes."""
+    if row.get('source')=='window':
+        return False
+    if row.get('media_kind'):
+        return row.get('media_kind')=='file'
+    return isinstance((row.get('media_source') or {}).get('document'),dict)
+
+
+def _telegram_document_note(row, chat_id, scope, spool, owned) -> str:
+    """A received Telegram document as the turn sees it: path, size and SHA, or why not.
+
+    16.11 (AbstractDL): Praxis sent Jarvis a ZIP three times. The bytes were in
+    memory/telegram-media/<hash>.bin, but the frame only said "no visual preview", with no
+    path, so he searched the workspace and found an empty folder. Images already went into
+    the scoped media spool (workspace/media/inbound/...); a document now goes there too,
+    under its own name, and the note names the copy. Before the bytes arrive the note
+    says so instead of sending the agent to search the disk.
+    """
+    sent=(row.get('media_source') or {}).get('document') or {}
+    name=str(row.get('media_name') or (sent.get('file_name') if isinstance(sent,dict) else '')
+             or _frame_word('native.runner.media.attachment', 'вложение'))
+    message=str(row.get('source_message_id') or '?')
+    stored=str(row.get('media_path') or '')
+    if not stored:
+        return _frame_word('native.runner.media.document_pending',
+            '[Файл из Telegram: {p0}, сообщение {p1} — байтов пока нет: {p2} Не ищи его по диску: путь появится здесь, когда загрузка завершится.]',
+            p0=name, p1=message, p2=str(row.get('media_error') or ''))
+    try:
+        source=(Path(_tree)/stored).resolve()
+        if not owned(source,row) or not source.is_file():
+            raise FileNotFoundError(stored)
+        key=(str(chat_id),message,stored,source.stat().st_size)
+        ref=_DOCUMENT_COPIES.get(key)
+        if ref is None or not Path(ref.path).is_file():
+            ref=spool.ingest_path(source,kind='document',chat_id=chat_id,
+                message_id=str(row.get('source_message_id') or ''),scope=scope,filename=name,move=False)
+            _DOCUMENT_COPIES[key]=ref
+    except Exception as exc:
+        return _frame_word('native.runner.media.document_failed',
+            '[Файл из Telegram: {p0}, сообщение {p1}: байты получены, но рабочая копия не создалась ({p2}). Не описывай содержимое по догадке.]',
+            p0=name, p1=message, p2=type(exc).__name__)
+    return _frame_word('native.runner.media.document_ready',
+        '[Файл из Telegram: {p0} от {p1}, сообщение {p2}; {p3} байт, SHA-256 {p4}. Рабочая копия: {p5}. Копия живёт около суток — для долгой работы перенеси её в свою папку.]',
+        p0=name, p1=str(row.get('sender_name') or _frame_word('native.runner.media.person', 'Собеседник')),
+        p2=message, p3=str(ref.size), p4=ref.sha256, p5=str(ref.path))
+
+
 @_frame_pinned
 def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
     if _tree is None: return [], []
@@ -1466,6 +1518,9 @@ def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
             notes.append(_frame_word('native.runner.media.1437', '{p0} (голосовое, сообщение {p1}): {p2}', p0=f"{row.get('sender_name') or _frame_word('native.runner.media.person', 'Собеседник')}", p1=f"{row.get('source_message_id') or '?'}", p2=f'{heard}'))
             continue
         rel=row.get('media_preview_path')
+        if _telegram_document(row):
+            notes.append(_telegram_document_note(row,chat_id,scope,spool,owned))
+            if not rel: continue
         if index not in eligible:
             if not rel and (row.get('media_path') or row.get('media_error')):
                 notes.append(_frame_word('native.runner.media.1442', '[Медиа из Telegram: {p0}. Превью для зрения недоступно; не описывай содержимое по догадке.]', p0=f"{row.get('media_name') or _frame_word('native.runner.media.attachment', 'вложение')}"))

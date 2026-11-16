@@ -3533,5 +3533,8 @@
   "helper.agent.devnull_denied": "[The sandbox on this Windows version cannot open /dev/null (the NUL device), so the command with that redirection did not run. Redirect to a file instead, for example 2>\"$TMP/err.txt\", or drop the redirection.]",
   "tool.args.extra": "[arguments not accepted] The call `{name}` was NOT executed: extra fields {extra} are not in this tool's schema. Nothing changed outside. Remove these fields and repeat according to the schema (required: {required}).",
   "tool.args.missing": "[arguments not accepted] The call `{name}` was NOT executed: required fields {missing} are missing. Nothing changed outside. Repeat the call with them added.",
-  "tool.args.other": "[arguments not accepted] The call `{name}` was NOT executed: {error}. Nothing changed outside. Check the tool's schema and repeat the call."
+  "tool.args.other": "[arguments not accepted] The call `{name}` was NOT executed: {error}. Nothing changed outside. Check the tool's schema and repeat the call.",
+  "native.runner.media.document_ready": "[Telegram file: {p0} from {p1}, message {p2}; {p3} bytes, SHA-256 {p4}. Working copy: {p5}. The copy lasts about a day; move it into your own folder for longer work.]",
+  "native.runner.media.document_pending": "[Telegram file: {p0}, message {p1} — no bytes yet: {p2} Do not search the disk for it: the path appears here once the download completes.]",
+  "native.runner.media.document_failed": "[Telegram file: {p0}, message {p1}: the bytes arrived, but the working copy could not be created ({p2}). Do not guess its contents.]"
 }
