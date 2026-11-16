@@ -121,9 +121,12 @@ class SeedGit(unittest.TestCase):
         tracked = git(self.tmp, "ls-files").split()
         self.assertFalse([f for f in tracked if f.startswith(("retained-assets/", "backups/"))])
         self.assertTrue(backup.is_file(), "the owner's backup stays on disk")
-        self.assertEqual(git(self.tmp, "rev-list", "--count", "HEAD").strip(), before, "history is not rewritten")
+        # 2.8.4: one service commit takes them out of HEAD too (git_hygiene.drop_from_head);
+        # the small store keeps its history, and automatic gc is off.
+        self.assertEqual(int(git(self.tmp, "rev-list", "--count", "HEAD")), int(before) + 1)
+        self.assertEqual(git(self.tmp, "ls-tree", "-r", "--name-only", "HEAD", "--", "retained-assets", "backups"), "")
+        self.assertEqual(git(self.tmp, "config", "--get", "gc.auto").strip(), "0")
         self.assertIn("retained-assets/", ignore.read_text(encoding="utf-8"))
-        git(self.tmp, "commit", "-q", "-m", "untrack")
         status = git(self.tmp, "status", "--porcelain")
         self.assertNotIn("retained-assets", status)
         self.assertNotIn("backups", status)

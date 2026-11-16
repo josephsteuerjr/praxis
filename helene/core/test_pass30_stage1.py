@@ -617,6 +617,50 @@ class SafetyPointTests(unittest.TestCase):
     def test_snapshot_paths_empty_noop(self):
         self.assertIsNone(selfgit.snapshot_paths([], "x"))
 
+    def test_huge_and_ignored_files_never_enter_snapshots_or_history(self):
+        """16.11 (Jarvis): a 4.8 GB owner backup in the home was re-hashed by `add -A` before
+        every command; an untracked service file kept coming back through `commit -- path`."""
+        (self.tmp / ".gitignore").write_text("status.json\nbackups/\n", encoding="utf-8")
+        (self.tmp / "status.json").write_text("{}", encoding="utf-8")
+        self._git("add", "-f", ".gitignore", "status.json")
+        self._git("commit", "-q", "-m", "tracked before it was ignored")
+        self._git("rm", "-q", "--cached", "status.json")      # untracked in the index only
+        (self.tmp / "status.json").write_text('{"tick": 2}', encoding="utf-8")
+        (self.tmp / "backups").mkdir()
+        (self.tmp / "backups" / "auto.zip").write_bytes(b"PK" + bytes(64))
+        (self.tmp / "big.bin").write_bytes(bytes(2048))
+        (self.tmp / "a.py").write_text("x = 5\n", encoding="utf-8")
+        before = self._git("diff", "--cached", "--name-status").stdout
+        with mock.patch.object(selfgit, "MAX_FILE_BYTES", 1024):
+            sha = selfgit.safety_point("safety before shell")
+            self.assertIsNotNone(sha)
+            listed = self._git("ls-tree", "-r", "--name-only", sha).stdout.split()
+            self.assertIn("a.py", listed)
+            for name in ("big.bin", "backups/auto.zip", "status.json"):
+                self.assertNotIn(name, listed)
+            self.assertEqual(self._git("show", f"{sha}:a.py").stdout, "x = 5\n")
+            self.assertEqual(self._git("diff", "--cached", "--name-status").stdout, before,
+                             "the real index is untouched")
+            commit = selfgit.snapshot_paths(["status.json", "big.bin", "a.py"], "self-edit")
+        self.assertIsNotNone(commit)
+        tracked = self._git("ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+        self.assertIn("a.py", tracked)
+        self.assertNotIn("big.bin", tracked)
+        # HEAD keeps its old copy until git_hygiene removes it at start; the self-commit must
+        # not re-add the live file (2.8.3 committed it again on every command).
+        self.assertEqual(self._git("show", "HEAD:status.json").stdout, "{}")
+        self.assertIn("D  status.json", self._git("status", "--porcelain").stdout)
+
+    def test_untracked_directory_expands_so_a_huge_file_inside_is_caught(self):
+        (self.tmp / "work").mkdir()
+        (self.tmp / "work" / "note.md").write_text("ok\n", encoding="utf-8")
+        (self.tmp / "work" / "dump.bin").write_bytes(bytes(4096))
+        with mock.patch.object(selfgit, "MAX_FILE_BYTES", 1024):
+            self.assertIsNotNone(selfgit.snapshot_paths(["work/"], "self-edit: work/"))
+        tracked = self._git("ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+        self.assertIn("work/note.md", tracked)
+        self.assertNotIn("work/dump.bin", tracked)
+
     def test_autocommit_pre_dirt_skips_foreign_dirt_and_foreign_deletion(self):
         """Дверь судьи-9: fs_write/fs_edit-путь тоже не приписывает ей чужую грязь;
         чужое УДАЛЕНИЕ (файла не было уже до команды) — тоже не её."""

@@ -765,6 +765,13 @@ def seed_git(tree: Path, cfg: dict) -> bool:
             if done.returncode:
                 log.warning("личный git: служебные файлы остались в индексе: %s",
                             (done.stderr or done.stdout or "").strip()[:300])
+            # 2.8.4: gc off, stale tmp packs gone, backups/service files out of HEAD and,
+            # for a bloated store, out of the history (git_hygiene; never raises).
+            try:
+                from . import git_hygiene
+            except ImportError:
+                from localharness import git_hygiene
+            git_hygiene.heal(tree)
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("личный git: проверка служебных файлов не завершена: %s", exc)
         return False
@@ -789,6 +796,10 @@ def seed_git(tree: Path, cfg: dict) -> bool:
             # фоновая сборка мусора не отцепляется в отдельный процесс: под
             # оградой он пережил бы задание и остался в контейнере навсегда
             ("config", "gc.autoDetach", "false"),
+            # 2.8.4: and no automatic gc/maintenance at all. In the foreground it ran
+            # inside a self-commit's 30-second limit and never finished (git_hygiene).
+            ("config", "gc.auto", "0"),
+            ("config", "maintenance.auto", "false"),
             ("add", "-A"),
             ("commit", "-q", "--no-verify", "-m", "день ноль: дом собран"),
         )

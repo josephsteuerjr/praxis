@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 import logging
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -29,6 +30,77 @@ def _git(*args: str):
     return subprocess.run(["git", "-C", str(BASE), *args],
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=TIMEOUT)
+
+
+#: Никогда не класть в её историю файл больше этого. 16.11: бэкап владельца на 4,8 ГБ
+#: оказался в рабочем дереве, и `add -A` перед каждой командой хэшировал его до таймаута
+#: (у Джарвиса команды ждали по пять минут), а история выросла до 21 ГБ.
+MAX_FILE_BYTES = max(1, int(os.environ.get("PRAXIS_SELFGIT_MAX_FILE_MB", "50") or 50)) * 1024 * 1024
+#: Сколько путей страхует один снимок: огромный неотслеживаемый каталог — не её работа.
+SNAPSHOT_MAX_PATHS = 2000
+
+
+def _status_entries() -> list[tuple[str, str]]:
+    """(XY, путь) из `git status --porcelain -z --untracked-files=all`.
+
+    Статус идёт по кэшу настоящего индекса (stat), поэтому неизменённые файлы не
+    хэшируются; для переименования берётся новый путь.
+    """
+    r = _git("status", "--porcelain=v1", "-z", "--untracked-files=all")
+    items = r.stdout.split("\0")
+    out, k = [], 0
+    while k < len(items):
+        entry = items[k]
+        k += 1
+        if len(entry) < 4:
+            continue
+        xy, path = entry[:2], entry[3:]
+        if xy[0] in "RC":
+            k += 1  # следом идёт прежний путь
+        out.append((xy, path))
+    return out
+
+
+def _admissible(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Какие пути можно класть в историю: не под .gitignore (даже если когда-то попали
+    в учёт) и не больше MAX_FILE_BYTES. -> (годные, пропущенные)."""
+    if not paths:
+        return [], []
+    r = subprocess.run(["git", "-C", str(BASE), "check-ignore", "--no-index", "-z", "--stdin"],
+                       input="\0".join(paths) + "\0", capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=TIMEOUT)
+    ignored = {x for x in r.stdout.split("\0") if x}
+    keep, skipped = [], []
+    for path in paths:
+        if path in ignored:
+            skipped.append(path)
+            continue
+        try:
+            target = BASE / path
+            if target.is_file() and target.stat().st_size > MAX_FILE_BYTES:
+                skipped.append(path)
+                continue
+        except OSError:
+            pass
+        keep.append(path)
+    if skipped:
+        log.info("в историю не кладём (игнор или больше %d МБ): %s", MAX_FILE_BYTES // (1024 * 1024),
+                 ", ".join(skipped[:5]) + (" …" if len(skipped) > 5 else ""))
+    return keep, skipped
+
+
+def _stage(paths: list[str], env: dict | None = None) -> bool:
+    """`add -A` ровно по этим путям (буквально, без глобов): правки, новые и удаления."""
+    if not paths:
+        return True
+    r = subprocess.run(["git", "--literal-pathspecs", "-C", str(BASE), "add", "-A",
+                        "--pathspec-from-file=-", "--pathspec-file-nul"],
+                       input="\0".join(paths) + "\0", capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=TIMEOUT, env=env)
+    if r.returncode != 0:
+        log.warning("add по списку не удался: %s", (r.stderr or "")[:200])
+        return False
+    return True
 
 
 def repo_ready() -> bool:
@@ -113,12 +185,21 @@ def safety_point(message: str) -> str | None:
 
         # Коды возврата проверяются: усечённый снапшот, молча притворяющийся полной
         # страховкой, хуже честного отсутствия снапшота.
-        if _giti("read-tree", "HEAD").returncode != 0:
-            log.warning("safety_point: read-tree не удался")
-            return None
-        add = _giti("add", "-A")
-        if add.returncode != 0:
-            log.warning("safety_point: add -A не удался: %s", (add.stderr or "")[:200])
+        # 2.8.4: не `add -A` по всему дереву с пустым индексом. Статус настоящего индекса
+        # называет изменённое, в снимок идёт только оно (без игнорируемого и огромного),
+        # а временный индекс начинается с копии настоящего — с его stat-кэшем.
+        changed, _ = _admissible([path for _, path in _status_entries()])
+        if not changed:
+            return None  # дерево чистое — страховать нечего
+        changed = changed[:SNAPSHOT_MAX_PATHS]
+        real_index = Path(git_dir) / "index"
+        try:
+            shutil.copyfile(real_index, tmp_index)
+        except OSError:
+            if _giti("read-tree", "HEAD").returncode != 0:
+                log.warning("safety_point: read-tree не удался")
+                return None
+        if not _stage(changed, env=env):
             return None
         tree = _giti("write-tree").stdout.strip()
         head_tree = _git("rev-parse", "HEAD^{tree}").stdout.strip()
@@ -155,11 +236,20 @@ def snapshot_paths(paths: list[str], message: str) -> str | None:
     if not repo_ready() or not paths:
         return None
     try:
-        _git("add", "--", *paths[:200])  # untracked становятся известными
+        # Каталог из статуса (`?? dir/`) раскрывается в файлы, чтобы большой файл внутри
+        # не проскочил проверку размера; игнорируемое не коммитится никогда — иначе
+        # `commit -- путь` вернул бы в учёт уже снятый служебный файл.
+        wanted = [p.rstrip("/") for p in paths]
+        files = [path for _, path in _status_entries()
+                 if any(path == w or path.startswith(w + "/") for w in wanted)]
+        files, _ = _admissible(files or paths)
+        files = files[:200]
+        if not files or not _stage(files):
+            return None
         c = subprocess.run(
-            ["git", "-C", str(BASE),
+            ["git", "--literal-pathspecs", "-C", str(BASE),
              "-c", "user.name=Praxis", "-c", "user.email=praxis@local",
-             "commit", "-q", "-m", message, "--", *paths[:200]],
+             "commit", "-q", "-m", message, "--", *files],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT,
         )
         if c.returncode != 0:
@@ -178,7 +268,9 @@ def snapshot(message: str) -> str | None:
     if not repo_ready():
         return None
     try:
-        _git("add", "-A")
+        files, _ = _admissible([path for _, path in _status_entries()])
+        if not files or not _stage(files[:SNAPSHOT_MAX_PATHS]):
+            return None
         if _git("diff", "--cached", "--quiet").returncode == 0:
             return None  # нечего коммитить
         c = subprocess.run(
