@@ -1,0 +1,8 @@
+{
+  "product_source_unchanged": true,
+  "original_observer_sha256": "8f2e44d66ce7c5bd7a2b14840de05d1851eea2abe7d2af64d43019a0e34dbc14",
+  "external_observer_sha256": "bb2ecf63b723d3481d1bdbde17fc318e8f10707ea916449ea02f71e676237fe3",
+  "change": "Wait for result metadata as well as terminal status; retain the original20s observer limit,5s command deadline,4.9-10s duration bounds and actual descendant cleanup checks",
+  "original_failure": "call22 timed_out with result=null; call23 same operation result.duration_ms=5679",
+  "original_ci_run": 43949032981
+}

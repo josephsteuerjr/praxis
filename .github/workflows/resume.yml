@@ -1,0 +1,39 @@
+name: Resume exact Hélène 2.8.5 Intel qualification
+on:
+  push:
+    branches: [codex/helene285-intel-resume-1711]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  mac:
+    runs-on: macos-26-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-intel
+          path: prior-artifact
+          run-id: 43949032981
+          github-token: ${{ github.token }}
+      - name: Prepare case-sensitive workspace
+        run: |
+          hdiutil create -size 20g -type SPARSE -fs "Case-sensitive APFS" -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
+      - name: Requalify the exact archive with settled-result observation
+        run: python3 -B resume.py > driver.log 2>&1
+      - name: Collect exact package and evidence
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/helene-case/qualification/evidence"
+          cp driver.log "$RUNNER_TEMP/helene-case/qualification/evidence/driver.log" || true
+          tail -60 driver.log || true
+          tar -czf native-macos-intel.tar.gz -C "$RUNNER_TEMP/helene-case/qualification" evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-macos-intel
+          path: native-macos-intel.tar.gz
