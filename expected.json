@@ -1,0 +1,34 @@
+{
+  "Helene-components-whisper.zip": {
+    "size": 111474754,
+    "sha256": "ef435231303937fa4f49fbf865915fbc1a8d9625022a2fbab36d3b6924580c93"
+  },
+  "Helene-components-whisper.zip.sha256": {
+    "size": 97,
+    "sha256": "d730a490667fca4c43987a7c69f29ea066f3d23bf650354402d9cc5ee9e4bffe"
+  },
+  "Helene-components-xtts-model.zip": {
+    "size": 1740279196,
+    "sha256": "4d1165ceb9d10fe503324bc777b0bcdbe56b73970cc29ce319c0c966b393b8ce"
+  },
+  "Helene-components-xtts-model.zip.sha256": {
+    "size": 100,
+    "sha256": "a7b9f0a6a3da9a13c45b630323544d01b9cf02b2ddd4e62fdfeb9bc78acf3ad2"
+  },
+  "Helene-components-xtts-runtime.zip": {
+    "size": 445699527,
+    "sha256": "7eb174f3f7e825e9ed316be8b38da664f7bb154100d3ff25b65c95bb79b88b06"
+  },
+  "Helene-components-xtts-runtime.zip.sha256": {
+    "size": 102,
+    "sha256": "5335d4c2831699132e942d511ebe5e117d0f5b404c4b2c4702ef2a8737507c20"
+  },
+  "SHA256SUMS": {
+    "size": 299,
+    "sha256": "26b0ec71c153c7f8c8192e34614ad988c83512bcee97de8d784d299a18193e0d"
+  },
+  "voice-components.json": {
+    "size": 1300,
+    "sha256": "4d9ffd94fcaa0d7c7c798abfb8cfbce9dd25305dc6246940b99fb1df9171a706"
+  }
+}

@@ -1,0 +1,20 @@
+name: Verify current Helene shared voice resources
+on:
+  push:
+    branches: [codex/helene286-shared-voice-verify-1711]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 verify.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: current-voice-verification
+          path: PUBLIC-VOICE-VERIFIED.json
