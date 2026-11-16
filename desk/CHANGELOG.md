@@ -1,3 +1,9 @@
+# 2.8.4 Beta
+
+- Shell commands could wait minutes on the agent's personal Git. Owner backups that had entered its history made the store huge (21 GB on one machine), every self-commit started a foreground repack that never finished, and the snapshot before each command re-hashed a multi-gigabyte backup. At start Hélène now turns automatic gc/maintenance off for this repository, deletes leftover temporary packs, takes owner backups and service files out of HEAD and, when the store is large, rewrites the history without them (every other file and commit is kept, each branch's tree is verified and the store is checked before it replaces the old one).
+- The snapshot before each command no longer runs `git add -A` over the whole tree: it stages only what `git status` reports, starting from the real index, and never ignored files or files over 50 MB. Self-commits follow the same rules, so an untracked service file is no longer added back on every command.
+- Windows prerelease only; stable Latest remains 2.7.2.
+
 # 2.8.3 Beta
 
 - A maximized window no longer keeps the 5-pixel resize strips over the screen edge, so the scrollbar, header and close corner reach the very edge. The shell reports the window's own maximized state; resizing and header drags are ignored while maximized, the maximized size follows the monitor the window is on, and a double click on the header maximizes or restores.
