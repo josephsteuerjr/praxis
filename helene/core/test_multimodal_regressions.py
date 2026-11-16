@@ -378,6 +378,10 @@ class TestRunnerRetryRegressions(RegressionBase):
             patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
+            # The room gate rereads its live profile before and after the lock.
+            # This media-retry fixture requires an open room regardless of a
+            # previous module's persisted mode for the shared synthetic id777.
+            patch.object(runner, "_resolve_room_mode", return_value=("normal", False)),
             patch.object(runner, "_last_n_text",
                          side_effect=AssertionError("group wake must not fetch moving live history")),
             patch.object(runner, "_maybe_compact", side_effect=fake_compact),

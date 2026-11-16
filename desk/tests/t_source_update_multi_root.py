@@ -155,7 +155,8 @@ class MultiRootTests(unittest.TestCase):
         import python_migrate
         active = []; steps = []; transport_active = []
         binding = self.f.operation['coordinator']
-        agent = {'tree': str(self.f.tree), 'code': str(self.f.local), 'value': {'mode': 'local'}}
+        agent = {'config': str(self.f.old/'helene.json'), 'tree': str(self.f.tree),
+                 'code': str(self.f.local), 'value': {'mode': 'local'}}
         self.ready(self.f.directory)
         @contextmanager
         def serving(*args):
@@ -221,6 +222,7 @@ class MultiRootTests(unittest.TestCase):
              patch.object(source_update_transport, 'review_transport', side_effect=transport_context), \
              patch.object(pipeline, '_LOCK', CrossingLock() if race else mutex):
             host.coordinate(self.f.old, self.f.program, self.f.directory, self.f.root/'unused-cancel')
+            self.assertEqual(host.os.environ['HELENE_CONFIG'], agent['config'])
         self.assertEqual(steps, ['review_requested'] if race else ['ready_to_apply', 'ready_to_apply', 'waiting_agent'])
         self.assertEqual(active, [])
         pipeline.validate_ready(self.f.directory)
