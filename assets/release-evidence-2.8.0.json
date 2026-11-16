@@ -1,0 +1,119 @@
+{
+  "format": "helene-windows-prerelease-evidence.v1",
+  "version": "2.8.0",
+  "source_commit": "d8bf6f2535fe776388d2b91f801ac44745c18d55",
+  "source_tree_sha256": "0dd4a91ea576ec3717498387eede06cbcc191d2775a6335d99a7d61446874e79",
+  "raw_git_files": 3732,
+  "archive_sha256": "27f503ccbe154aebf9a7489c8dfac8f1784f14d98833c1ed6cf28cc04e3cddcb",
+  "archive_bytes": 531278068,
+  "full_zip_crc_and_sha": true,
+  "core": {
+    "tests": 8003,
+    "new_common_red": 0,
+    "new_test_red": 0,
+    "inherited_red": 163,
+    "baseline_tests": 7398,
+    "baseline_red": 255,
+    "all_core_green": false
+  },
+  "desk": {
+    "modules": 491,
+    "failed": 0,
+    "pytest": 0,
+    "unchanged_modules_admitted": 490,
+    "corrected_fixture_module_requalified": true
+  },
+  "node": {
+    "tests": 176,
+    "failed": 0
+  },
+  "frontends": {
+    "built": 5,
+    "outputs": 127
+  },
+  "browser": {
+    "language_pairs_and_surfaces": 32,
+    "retention_passed": true,
+    "visual_reviewed": true
+  },
+  "windows": {
+    "actual_embedded_python": "3.14.5",
+    "native_bootstrap_cases": 4,
+    "nonadmin_cases": 269,
+    "nonadmin_skips": [
+      [
+        "t_cleanup_without_admin_1111.PosixProgramFiles.test_file_in_a_read_only_folder_stays_named",
+        "POSIX permission refusal needs a non-root user"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_absolute_internal_alias_survives_whole_directory_move",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_broken_file_alias_keeps_original_tree_intact",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_conflicting_primary_blob_does_not_rebind_incoming_alias",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_directory_alias_is_not_traversed_or_moved",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_external_file_alias_is_rejected_before_any_data_move",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_merge_internal_file_alias_without_copying_blob_twice",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_readonly_shared_blob_keeps_its_attributes_and_one_transferred_copy",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_retry_after_partial_move_keeps_the_remaining_alias_readable",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ],
+      [
+        "t_first_start_links_3110.DataLinks.test_snapshot_measures_internal_alias_as_logical_file_bytes",
+        "Fixture creation requires Windows symlink privilege; migration itself does not"
+      ]
+    ],
+    "prior_version": "2.7.2",
+    "history_and_authored_files_preserved": true,
+    "mcp_tools": 21,
+    "mcp_jobs_closed": true,
+    "relay_login_marker_preserved": true,
+    "no_paid_provider_calls": true
+  },
+  "runtime_qualification": {
+    "tested_archive_sha256": "197879fe743a79ed95c9ab2ddb3f72d34c31d88626e335c6a140c14ead25a180",
+    "final_runtime_identical": true,
+    "differences": "Two test fixtures and their integrity metadata only; all production runtime bytes identical"
+  },
+  "privacy": {
+    "full_actual_values_gate": true,
+    "source_passed": true,
+    "local_owner_values_passed": true,
+    "server_values_passed": true,
+    "actual_secret_values_serialized": false
+  },
+  "publication": {
+    "prerelease": true,
+    "make_latest": false,
+    "stable_latest": "v2.7.2",
+    "published_platforms": [
+      "windows-x86_64"
+    ]
+  },
+  "limits": [
+    "Physical Tim Windows10 acceptance not performed",
+    "No owner installation/update/restart",
+    "No production Praxis mutation",
+    "macOS and Linux artifacts not published",
+    "No physical microphone/CUDA/paid-provider or account-consent acceptance"
+  ]
+}

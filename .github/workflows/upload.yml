@@ -1,0 +1,19 @@
+name: Upload exact Hélène 2.8.0 Windows prerelease
+on:
+  push:
+    branches: [codex/helene280-windows-exact-1611]
+permissions:
+  contents: write
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reconstruct and verify exact Windows bytes, upload to draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 exact_upload_ci.py
