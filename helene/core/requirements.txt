@@ -19,7 +19,8 @@ pillow>=10
 trafilatura>=1.12
 charset-normalizer>=3.3
 pypdf>=4.3
-brotli>=1.1
+brotli>=1.2.1
+certifi>=2026.10.19
 
 # Таблицы: pandas для анализа, два зрелых OOXML writer/reader и быстрый Rust-backed
 # calamine для чтения больших xls/xlsx/xlsb/ods. Это разные, дополняющие друг друга роли.
