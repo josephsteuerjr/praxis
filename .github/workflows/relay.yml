@@ -1,0 +1,60 @@
+name: Hélène 2.8.4 relay 8ba23b8 native builds
+on:
+  push:
+    branches: [claude/helene284-relay-1611]
+permissions:
+  contents: read
+jobs:
+  relay:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: linux-x86_64
+            runner: ubuntu-24.04
+          - key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - key: macos-arm64
+            runner: macos-15
+          - key: macos-x86_64
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Unpack the exact relay source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,zipfile
+          spec=json.loads(Path('RELAY-SOURCE.json').read_text())
+          assert hashlib.sha256(Path('source.zip').read_bytes()).hexdigest()==spec['sha256']
+          zipfile.ZipFile('source.zip').extractall('relay')
+          PY
+      - name: Test and build in the Debian 12 image
+        if: startsWith(matrix.key, 'linux')
+        run: |
+          cd relay
+          docker build -t relay-build -f packaging/Dockerfile.linux .
+          docker run --rm -v "$PWD:/source" -e CARGO_BUILD_JOBS=4 relay-build bash -ec '
+            cargo test --locked -- --test-threads=1
+            cargo build --release --locked --bin praxis-relay-headless
+            python3 tests/accept_headless.py target/release/praxis-relay-headless
+            python3 tests/accept_unix.py target/release/praxis-relay-headless
+            ldd --version | head -1'
+      - name: Test and build on macOS
+        if: startsWith(matrix.key, 'macos')
+        run: |
+          cd relay
+          cargo test --locked -- --test-threads=1
+          cargo build --release --locked --bin praxis-relay-headless
+          python3 tests/accept_headless.py target/release/praxis-relay-headless
+          python3 tests/accept_unix.py target/release/praxis-relay-headless
+          file target/release/praxis-relay-headless
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.key }}
+          path: relay/target/release/praxis-relay-headless
+          if-no-files-found: error
