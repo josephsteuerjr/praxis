@@ -60,8 +60,9 @@ def client_file():
     if os.name != 'nt': return seed_file()
     selected=os.environ.get('HELENE_USER_DATA')
     if selected:
-        if __package__:from .first_start import Places,normalized
-        else:from first_start import Places,normalized
+        # runner.py imports this module bare, while first_start and its
+        # localized dependencies belong to the localharness package.
+        from localharness.first_start import Places,normalized
         expected=Places.current().data
         if normalized(selected)==normalized(expected):return expected/'owner-stop.json'
     return legacy_client_file()
