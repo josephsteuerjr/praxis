@@ -70,7 +70,7 @@ class ForgeCase(unittest.TestCase):
         orientation = forge.inspect(task_id, "orientation")
         self.assertIn("Python 1", orientation)
         self.assertIn("README.md", orientation)
-        self.assertIn("git status", orientation)
+        self.assertIn('состояние git', orientation)
         self.assertIn(task_id, forge.list_tasks())
 
     def test_hash_aware_replace_rejects_stale_worker(self):
@@ -141,7 +141,7 @@ new file mode 100644
                             command=f'"{sys.executable}" -c "print(\'FORGE_PROCESS_OK\')"',
                             name="probe")
         proc_id = re.search(r"(proc-[0-9a-f]+)", out).group(1)
-        self.assertIn("Стартовал", out)
+        self.assertIn('Запущен супервизор процесса', out)
         polled = ""
         # Poll the actual receipt with a bounded startup budget. Three seconds
         # is not a contract for an instrumented child under all-core QA load.

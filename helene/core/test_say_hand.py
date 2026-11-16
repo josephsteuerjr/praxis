@@ -48,7 +48,7 @@ class ItMirrorsAndStagesNothingElse(unittest.TestCase):
         self.assertIn("shell", out)
 
     def test_with_no_prior_hands_it_says_so_plainly(self):
-        self.assertIn("Руки не вызывались", agent.tool_say("Голос — DeepSeek."))
+        self.assertIn('инструменты не вызывались', agent.tool_say("Голос — DeepSeek."))
 
     def test_an_empty_draft_asks_instead_of_staging(self):
         out = agent.tool_say("   ")

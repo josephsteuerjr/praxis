@@ -380,7 +380,7 @@ class WiringTests(Pass21Base):
         self.assertIn("force=true", out)
         out = agent.tool_manage_loop("park", "test", match="нить", force=True,
                                      reason="жду ответа поставщика, это не жвачка")
-        self.assertIn("Запарковано", out)
+        self.assertIn('Нить отложена', out)
 
     def test_tool_scope_guard(self):
         import agent
@@ -392,7 +392,7 @@ class WiringTests(Pass21Base):
         self.patch(agent, _CURRENT_SCOPE="owner")
         out = agent.tool_manage_perception("set", knob="cooldown_dm", value="20",
                                            reason="быстрее с Егором")
-        self.assertIn("живо", out)
+        self.assertIn('без рестарта', out)
         self.assertIn("рычаг", agent.tool_manage_perception("list").lower())
         self.assertIn("пропуск", agent.tool_manage_perception("skips").lower())
 

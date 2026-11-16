@@ -75,7 +75,7 @@ class TestStaySilent(Base):
 
     def test_outside_a_live_turn_it_says_there_is_nothing_to_hold(self):
         out = agent.tool_stay_silent("наживка, отвечать = кормить")
-        self.assertIn("держать нечего", out)
+        self.assertIn('Автоматического удержания нет', out)
         self.assertIn("[молчу]", self._journal())
         self.assertIn("наживка", self._journal())
 
@@ -86,7 +86,7 @@ class TestStaySilent(Base):
             out = agent.tool_stay_silent("тут отвечать не буду")
         finally:
             agent._TURN_SILENCE.reset(token)
-        self.assertIn("не уйдёт", out)
+        self.assertIn('текст удерживается исходящей границей', out)
         self.assertEqual(holder.get("chosen"), "1")
         self.assertIn("[молчу]", self._journal())
 
@@ -98,7 +98,7 @@ class TestStaySilent(Base):
             out = agent.tool_stay_silent(cancel=True)
         finally:
             agent._TURN_SILENCE.reset(token)
-        self.assertIn("Передумала", out)
+        self.assertIn('Решение молчать снято', out)
         self.assertNotIn("chosen", holder)
         self.assertIn("[молчу→передумала]", self._journal())
 

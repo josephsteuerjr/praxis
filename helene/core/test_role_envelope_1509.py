@@ -97,7 +97,7 @@ class OneLine(unittest.TestCase):
         for line in (group_context._format_message(row),
                      group_context._format_message(row, as_self=True)):
             self.assertIn("deleted=2026-09-15T15:40:00Z", line)
-            self.assertIn("[message deleted in Telegram]", line)
+            self.assertIn('[сообщение удалено в Telegram]', line)
 
 
 class Rows(unittest.TestCase):

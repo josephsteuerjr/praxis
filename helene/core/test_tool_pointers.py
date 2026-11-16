@@ -253,7 +253,7 @@ class TestDispatch(PointerBase):
         self.assertIn('"input_schema"', text)
         self.assertIn('"name": "fs_read"', text)
         self.assertIn("nosuch_hand", text)
-        self.assertIn("нет", text)
+        self.assertIn('Неизвестные инструменты', text)
 
     def test_dispatcher_schemas_survive_openai_strict_translation(self):
         for tool in (agent.CALL_TOOL, agent.DESCRIBE_TOOL):

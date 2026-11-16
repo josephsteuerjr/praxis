@@ -91,8 +91,8 @@ class TheWalkHasCeilings(SearchBase):
         with mock.patch.object(workshop, "SEARCH_SCAN_CAP", 12), \
              mock.patch.object(workshop, "SEARCH_SECONDS", 0.0):
             out = workshop.fs_search(r"игол\w+", glob="**/*.txt")
-        self.assertIn("обошла 12 путей", out, "обход оборвался молча")
-        self.assertIn("путей обошла", out)
+        self.assertIn('просмотрено путей 12', out, "обход оборвался молча")
+        self.assertIn('путей', out)
 
     def test_the_clock_stops_the_walk_and_says_so(self):
         # Файлы БЕЗ искомого: иначе потолок совпадений оборвал бы обход раньше часов,
@@ -101,8 +101,8 @@ class TheWalkHasCeilings(SearchBase):
         with mock.patch.object(workshop, "SEARCH_SECONDS", 1e-6), \
              mock.patch.object(workshop, "SEARCH_SCAN_CAP", 0):
             out = workshop.fs_search(r"игол\w+", glob="**/*.txt")
-        self.assertIn("искала 0с", out, "часы не остановили обход")
-        self.assertIn("Ничего не нашла", out)
+        self.assertIn('поиск остановлен через 0с', out, "часы не остановили обход")
+        self.assertIn('Ничего не найдено', out)
 
     def test_an_interrupted_walk_never_reports_nothing_found(self):
         """Самая опасная ложь: «ничего не нашла» после оборванного обхода."""
@@ -110,8 +110,8 @@ class TheWalkHasCeilings(SearchBase):
         with mock.patch.object(workshop, "SEARCH_SCAN_CAP", 3), \
              mock.patch.object(workshop, "SEARCH_SECONDS", 0.0):
             out = workshop.fs_search(r"бет\w+", glob="**/*.txt")
-        self.assertIn("Ничего не нашла", out)
-        self.assertIn("обошла 3 путей", out,
+        self.assertIn('Ничего не найдено', out)
+        self.assertIn('просмотрено путей 3', out,
                       "она решит, что искомого нет, а мы просто не дошли")
 
     def test_zero_removes_the_ceiling_completely(self):

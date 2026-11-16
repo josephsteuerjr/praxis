@@ -1507,15 +1507,15 @@ class SilenceContourTests(unittest.TestCase):
             agent._TURN_SILENCE.reset(token)
         self.assertEqual(holder.get("chosen"), "1")
         self.assertEqual(holder.get("why"), "им сейчас не до меня")
-        self.assertIn("не уйдёт", out)
+        self.assertIn('текст удерживается исходящей границей', out)
 
     def test_outside_a_live_turn_it_promises_nothing(self):
         # Обещать механизм там, где его нет, — та же ложь, что и молчаливый гейт.
         self.assertIsNone(agent._TURN_SILENCE.get(),
                           "держатель не переживает ход и не течёт в следующий")
         out = agent.tool_stay_silent("фоновый проход")
-        self.assertIn("держать нечего", out)
-        self.assertNotIn("не уйдёт", out, "механизм не обещается там, где его нет")
+        self.assertIn('Автоматического удержания нет', out)
+        self.assertNotIn('текст удерживается исходящей границей', out, "механизм не обещается там, где его нет")
 
     def test_a_long_reason_is_clipped_for_the_turn_record_and_says_so(self):
         # Закон 2: усечение обязано быть названо там, где она его видит. Граница, не
@@ -1529,7 +1529,7 @@ class SilenceContourTests(unittest.TestCase):
             finally:
                 agent._TURN_SILENCE.reset(token)
             self.assertEqual(len(holder["why"]), min(length, cap))
-            self.assertEqual("обрезана" in out, must_say, f"длина {length}")
+            self.assertEqual('сокращена' in out, must_say, f"длина {length}")
             self.assertIn("я" * length, self.journal[-1],
                           "в дневник причина уходит целиком")
 

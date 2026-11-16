@@ -100,7 +100,7 @@ class CompleteForgeCase(unittest.TestCase):
         self.assertTrue(plan["checks"])
         with mock.patch.object(forge, "_spawn_runner", return_value=4242):
             out = forge.verify(task_id, "start", commands="python -m py_compile app.py\npython -m unittest -q test_app")
-        self.assertIn("Стартовала матрица", out)
+        self.assertIn('Запущен супервизор матрицы', out)
         units = list((forge._task_dir(task_id) / "verifications").glob("*/request.json"))
         request = json.loads(units[0].read_text(encoding="utf-8"))
         self.assertEqual(len(request["checks"]), 2)

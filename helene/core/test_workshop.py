@@ -49,7 +49,7 @@ class TestFsEdit(Base):
         p = self.tmp / "workspace" / "a.py"
         p.write_text("x = 1\ny = 2\n", encoding="utf-8")
         out = workshop.fs_edit("workspace/a.py", "y = 2", "y = 3")
-        self.assertIn("Поправила", out)
+        self.assertIn('Исправлен файл', out)
         self.assertIn("y = 3", p.read_text(encoding="utf-8"))
 
     def test_zero_matches_refused_with_hint(self):
@@ -68,11 +68,11 @@ class TestFsEdit(Base):
         p = self.tmp / "soul" / "note.md"
         p.write_text("— тире и «ёлочки», ёж\n", encoding="utf-8")
         out = workshop.fs_edit("soul/note.md", "«ёлочки», ёж", "«ёлочки», уж")
-        self.assertIn("Поправила", out)
+        self.assertIn('Исправлен файл', out)
         self.assertIn("уж", p.read_text(encoding="utf-8"))
 
     def test_fs_write_only_new(self):
-        self.assertIn("Записала", workshop.fs_write("workspace/new.txt", "привет"))
+        self.assertIn('Записан файл', workshop.fs_write("workspace/new.txt", "привет"))
         out = workshop.fs_write("workspace/new.txt", "второй раз")
         self.assertIn("существует", out)
 
@@ -92,7 +92,7 @@ class TestZones(Base):
         selfdev.worktree_path = lambda pid: self.tmp / ".proposals" / pid
         try:
             out = workshop.fs_edit("core.py", "VALUE = 1", "VALUE = 42", proposal_id="abc123")
-            self.assertIn("Поправила", out)
+            self.assertIn('Исправлен файл', out)
             self.assertIn("VALUE = 42", (wt / "core.py").read_text(encoding="utf-8"))
             self.assertEqual((self.tmp / "core.py").read_text(encoding="utf-8"),
                              "VALUE = 1\n", "живое ядро не тронуто")

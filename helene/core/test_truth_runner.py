@@ -478,7 +478,7 @@ class BackfillHeadOfLineTests(_BackfillHarness):
         self.assertEqual(len(rows), 1, [row["detail"] for row in rows])
         self.assertEqual(rows[0]["class"], "отложила")
         self.assertIn(str(runner.BACKFILL_ROOMS_PER_TICK), rows[0]["detail"])
-        self.assertIn(f"{outside} комнат вне окна", rows[0]["detail"])
+        self.assertIn(f"вне окна {outside}", rows[0]["detail"])
         self.assertIn(f"через {len(peers)} тиков", rows[0]["detail"])
 
     async def test_a_list_that_fits_the_window_says_nothing_about_it(self):
@@ -534,7 +534,7 @@ class BackfillSkipVisibilityTests(_BackfillHarness):
         self.assertEqual(rows[0]["chat"], "-100500")
         # Срок назван числом, и это ПЕРВАЯ отсрочка — минута, а не 15.
         self.assertIn("1 мин", rows[0]["detail"])
-        self.assertIn("промах 1", rows[0]["detail"])
+        self.assertIn('1 промахов', rows[0]["detail"])
 
     async def test_the_resolve_cap_is_named_where_she_reads_it_too(self):
         peers = [f"-100{n}" for n in range(10)]
@@ -542,7 +542,7 @@ class BackfillSkipVisibilityTests(_BackfillHarness):
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             await runner._group_context_backfill_once()
         cap = [row for row in self._skip_rows()
-               if row["stage"] == "group_backfill" and "кап" in row["detail"]]
+               if row["stage"] == "group_backfill" and 'Лимит' in row["detail"]]
         self.assertEqual(len(cap), 1)
         self.assertIn(str(runner.BACKFILL_RESOLVES_PER_TICK), cap[0]["detail"])
         self.assertEqual(cap[0]["class"], "отложила")

@@ -72,7 +72,7 @@ class TestChannelContext(unittest.TestCase):
         self.assertTrue(cc.owner_audience)
         self.assertFalse(cc.owner, "destination must not forge human-owner actor authority")
         self.assertTrue(cc.praxis_self)
-        self.assertIn("with Yegor", agent._presence_frame(cc))
+        self.assertIn('с владельцем', agent._presence_frame(cc))
         _, dynamic = agent.build_system_parts(speaker="Егор", ctx=cc)
         self.assertIn(agent.frame_language.text("owned.agent.267672350827").strip(), dynamic)
 

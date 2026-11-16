@@ -110,7 +110,7 @@ class ObservationContract(unittest.TestCase):
         child = self.unit('agent-child', parent=parent.name)
         request = str(child / 'request.json')
         self.put(parent / 'stop.json', {'state': 'unresolved'})
-        self.assertIn('stop-fenced', forge._admission_reason(self.task_id, request))
+        self.assertIn('закрыт для новых действий командой Stop', forge._admission_reason(self.task_id, request))
         (parent / 'stop.json').unlink()
         for action in ('stop', 'pause'):
             self.put(self.folder / 'control.json', {'action': action})

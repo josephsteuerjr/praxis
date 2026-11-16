@@ -274,7 +274,7 @@ class AgentComputerAccessTests(unittest.TestCase):
         with mock.patch.object(agent, "_computer_allowed", return_value=True), \
                 mock.patch("body_client.desktop_input_perform") as perform:
             self.assertIn("x/y", agent.tool_computer("scroll", steps=-2))
-            self.assertIn("кратен 120", agent.tool_computer(
+            self.assertIn('кратен120', agent.tool_computer(
                 "scroll", delta=-1, x=10, y=20,
             ))
         perform.assert_not_called()
@@ -305,7 +305,7 @@ class AgentComputerAccessTests(unittest.TestCase):
         try:
             with mock.patch("body_client.desktop_window_list") as windows:
                 result = agent.tool_computer("windows", execution="system")
-            self.assertIn("Session 0", result)
+            self.assertIn('execution=interactive', result)
             windows.assert_not_called()
         finally:
             agent._TURN_CHANNEL.reset(token)

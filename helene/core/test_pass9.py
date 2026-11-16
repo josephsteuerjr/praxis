@@ -894,7 +894,7 @@ class TestMessageTaskResolve(TaskTargetBase):
     def test_unresolved_honest_error_no_task(self):
         agent._TELETHON["find_telegram_id"] = lambda ref: (_ for _ in ()).throw(ValueError("нет такого"))
         out = agent.tool_remind_self("message", "привет", "in 1h", "@nosuch")
-        self.assertIn("Не нахожу", out)
+        self.assertIn('не смог разрешить адресата', out)
         self.assertEqual(tasks_mod.list_open(), [], "тихий провал в планировщике — запрещён")
 
     def test_alias_cannot_override_a_different_telegram_binding(self):
@@ -941,7 +941,7 @@ class TestMessageTaskResolve(TaskTargetBase):
     def test_empty_target_refused(self):
         agent._TELETHON["find_telegram_id"] = lambda ref: 1
         out = agent.tool_remind_self("message", "привет", "", "")
-        self.assertIn("нужен адресат", out)
+        self.assertIn('нужен target', out)
 
     def test_other_kinds_untouched(self):
         out = agent.tool_remind_self("note", "не забыть про бэкап", "in 1h")
@@ -967,7 +967,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
         out = agent.tool_remind_self("message", "поздравь с релизом", past, "@vasya")
         self.assertIn("Намечено #", out)
         self.assertIn("уже прошёл", out, "прошедший срок обязан быть назван громко")
-        self.assertIn("не уйдёт автоматически", out)
+        self.assertIn('не отправляется автоматически', out)
         self.assertIn("решу заново", out)
         t = tasks_mod.list_open()[-1]
         self.assertEqual(t["when"], past, "срок не переписывается за её спиной")
@@ -996,7 +996,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
             with self.subTest(when=when):
                 before = tasks_mod._load()
                 out = agent.tool_remind_self("note", "only at the requested time", when)
-                self.assertIn("Не распознала срок", out)
+                self.assertIn('не распознан; намерение не создано', out)
                 self.assertEqual(tasks_mod._load(), before)
 
     def test_explicit_now_spellings_still_create_immediate_tasks(self):

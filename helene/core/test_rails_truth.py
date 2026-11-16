@@ -1672,7 +1672,7 @@ class TestCapabilitiesTellTheTruth(Base):
         self.assertNotIn("owner-тулы (в личке с Егором)", text,
                          "список описывает РУКИ, а скобка описывала аудиторию — "
                          "с 26.07 эти руки при ней в любом канале")
-        line = next(l for l in text.splitlines() if l.startswith("- сверх моих рук только у Егора"))
+        line = next(l for l in text.splitlines() if l.startswith('- сверх моих рук только у владельца'))
         self.assertTrue(line.endswith(": ничего"), line)
 
     def test_human_only_line_is_the_difference_of_the_two_sets(self):
@@ -1723,7 +1723,7 @@ class TestCapabilitiesTellTheTruth(Base):
         with mock.patch.object(capabilities, "snapshot", return_value=fake):
             text = capabilities.describe("group", offered=[mine, human[0], "recall"])
         line = next(l for l in text.splitlines() if l.startswith("- руки В ЭТОМ ходе"))
-        head, marker, tail = line.partition("плюс делегированное Егором")
+        head, marker, tail = line.partition('плюс делегированное владельцем')
         self.assertTrue(marker, "делегированный тул в ходе есть, а назван не был")
         self.assertNotIn(human[0], head, "делегирование доверия Егора выдано за мою руку")
         self.assertIn(human[0], tail)
@@ -1763,7 +1763,8 @@ class TestCapabilitiesTellTheTruth(Base):
         # обещать проверку, которой нет.
         snap_source = inspect.getsource(capabilities.snapshot)
         self.assertNotIn("outbound-советник", snap_source)
-        self.assertIn("только кред-пол", snap_source)
+        self.assertIn("owned.capabilities.e0904c61ad36", snap_source)
+        self.assertIn("кред-пол", capabilities.snapshot()["reflexes"]["evaluator"])
 
 
 class TestHostOutputIsCutTwice(Base):

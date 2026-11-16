@@ -458,7 +458,7 @@ class EpochDossiers(unittest.TestCase):
         for frame in (guest, owner):
             self.assertNotIn("ПРИВАТНОЕ ИЗ ДОСЬЕ", frame)
             self.assertNotIn("приватных записей снято", frame)
-            self.assertIn("оставлены в кадре", frame)
+            self.assertIn('остаются моим внутренним знанием', frame)
 
     def test_private_lines_travel_inline_in_owner_dm(self):
         # 17.09: в owner-DM (личка, scope=owner) приватные строки и раньше не резались —

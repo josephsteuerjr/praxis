@@ -161,7 +161,7 @@ class TestReadTools(Base):
     def test_read_context_needs_current_chat(self):
         agent._TELETHON["fetch_context"] = lambda cid, limit: f"ctx {cid} {limit}"
         agent._CURRENT_CHAT = None
-        self.assertIn("не вижу", agent.tool_read_context().lower())
+        self.assertIn('текущий чат не определён', agent.tool_read_context().lower())
         agent._CURRENT_CHAT = "777"
         self.assertEqual(agent.tool_read_context(20), "ctx 777 20")
 

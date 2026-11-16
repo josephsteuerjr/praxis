@@ -273,7 +273,7 @@ class AgentSeams(unittest.TestCase):
              mock.patch.object(agent.run_context, "current_run", return_value=None):
             word = agent.tool_journal("решили: mr_ifub больше не поднимаю", decision=True)
             plain = agent.tool_journal("просто запись")
-        self.assertIn("увидят все живые окна", word)
+        self.assertIn('в уведомления о решениях владельца для живых окон', word)
         self.assertEqual(plain, "Записано в дневник.")
         kinds = [r["kind"] for r in core_notices.pending()]
         self.assertEqual(kinds, ["owner_decision"])

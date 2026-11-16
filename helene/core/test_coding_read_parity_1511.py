@@ -69,7 +69,7 @@ class ExactArchivedReads(unittest.TestCase):
             patch.object(forge,'_in_subtree',return_value=False),
         ):
             refused=agent.tool_coding_agent(self.task,'payload',agent_id=self.unit,kind='result',payload_sha256=digest)
-        self.assertNotIn(RAW,refused);self.assertIn('sibling',refused)
+        self.assertNotIn(RAW,refused);self.assertIn('соседней веткой',refused)
         path.write_text(RAW+' changed',encoding='utf-8')
         value=json.loads(agent.tool_coding_agent(self.task,'payload',agent_id=self.unit,kind='result',payload_sha256=digest))
         self.assertFalse(value['ok']);self.assertNotIn('text',value)

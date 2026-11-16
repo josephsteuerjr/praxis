@@ -138,13 +138,13 @@ class RemoteAdmission(unittest.TestCase):
         self.assertIn('refused', forge.run(self.tid, 'echo test'))
         remote.run.assert_not_called(); remote.call.assert_not_called()
         forge.control(self.tid, 'stop')
-        self.assertIn('terminal', forge.run(self.tid, 'echo test'))
+        self.assertIn('задача завершена или отсутствует', forge.run(self.tid, 'echo test'))
         remote.call.assert_not_called()
 
     def test_ancestor_stop_admits_no_remote_command(self):
         remote = self.host(); d = self.unit()
         forge._atomic_json(d/'stop.json', {'requested': True})
-        self.assertIn('stop-fenced', forge.run(self.tid, 'echo test', _parent_request_path=str(d/'request.json')))
+        self.assertIn('закрыт для новых действий командой Stop', forge.run(self.tid, 'echo test', _parent_request_path=str(d/'request.json')))
         remote.call.assert_not_called()
 
     def test_group_stop_reaches_owned_remote_id_while_run_is_waiting(self):

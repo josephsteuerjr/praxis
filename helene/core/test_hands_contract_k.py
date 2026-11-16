@@ -50,7 +50,7 @@ class TheContractIsInK(unittest.TestCase):
 
     def test_numbers_are_the_real_limits(self):
         text = agent._hands_contract_text()
-        for value in (f"{workshop.SEARCH_SECONDS:.0f} с", f"{workshop.SEARCH_CAP} совпадений",
+        for value in (f"{workshop.SEARCH_SECONDS:.0f}с", f"{workshop.SEARCH_CAP} совпадений",
                       f"{workshop.SEARCH_SCAN_CAP} путей"):
             self.assertIn(value, text)
 
@@ -77,18 +77,18 @@ class TheDescriptionsSpeak(unittest.TestCase):
 
     def test_writers_name_the_version_and_three_outcomes(self):
         for name in ("edit",):
-            for word in ("expected_sha256", "confirmed", "refused", "outcome unknown", "NEVER retry blind"):
+            for word in ("expected_sha256", "confirmed", "refused", 'исход неизвестен', 'НИКОГДА не повторяй вслепую'):
                 self.assertIn(word, self.text(name), f"{name}: {word}")
 
     def test_search_says_incomplete_is_not_absent(self):
-        self.assertIn("UNKNOWN, not absent", self.text("fs_search"))
+        self.assertIn('UNKNOWN, не отсутствие', self.text("fs_search"))
         self.assertIn(str(workshop.SEARCH_CAP), self.text("fs_search"))
 
     def test_coding_edit_names_the_unknown_outcome(self):
-        self.assertIn("NEVER retry blind", self.text("edit"))
+        self.assertIn('НИКОГДА не повторяй вслепую', self.text("edit"))
 
     def test_shell_names_what_is_missing(self):
-        self.assertIn("NOT installed", self.text("shell"))
+        self.assertIn('фактические возможности текущей установки', self.text("shell"))
 
 
 if __name__ == "__main__":

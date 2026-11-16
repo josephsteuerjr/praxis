@@ -47,5 +47,5 @@ class MainModelPagedRead(PagedRead):
         remote = mock.Mock()
         with mock.patch.object(agent.forge, "_remote_client", return_value=remote):
             for kwargs in ({"start_char": 8}, {"expected_sha256": "abc"}):
-                self.assertIn("No read was performed", self.read(**kwargs))
+                self.assertIn('Чтение не выполнялось', self.read(**kwargs))
         remote.workspace_inspect.assert_not_called()

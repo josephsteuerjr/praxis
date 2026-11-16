@@ -136,7 +136,7 @@ class TestUnifiedResolver(TaskResolveBase):
     def test_exhausted_resolver_names_protocol_limit(self):
         agent._TELETHON["resolve_entity"] = lambda ref: None
         out = agent.tool_remind_self("message", "напиши Вике", "in 1h", "999999")
-        self.assertIn("Не нахожу", out)
+        self.assertIn('не смог разрешить адресата', out)
         self.assertIn("@", out, "честно: нужен точный @ник (ограничение протокола, не наше)")
         self.assertEqual(tasks_mod.list_open(), [], "тихого провала в планировщике нет")
 

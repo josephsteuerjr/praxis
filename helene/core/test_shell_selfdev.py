@@ -144,7 +144,7 @@ class TestRestartSelf(Base):
         finally:
             agent._schedule_exit = orig
         self.assertEqual(calls, [1], "выход не запланирован")
-        self.assertIn("Перезапускаюсь", out)
+        self.assertIn('Запланирован выход для перезапуска', out)
         jtext = "".join(p.read_text(encoding="utf-8") for p in agent.JOURNAL_DIR.glob("*.md"))
         self.assertIn("restart", jtext.lower())
 

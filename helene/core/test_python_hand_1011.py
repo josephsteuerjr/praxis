@@ -91,7 +91,7 @@ class PythonHand(unittest.TestCase):
         with patch.object(forge,'_task_root',return_value=({'scope':'host'},Path('/host'),'')), \
              patch.object(forge,'_remote_client',return_value=remote):
             out=agent.tool_python('raise AssertionError("must not execute")',task_id='hcode-fixture')
-        self.assertIn('refused before execution',out)
+        self.assertIn('отклонён до исполнения',out)
 
     def test_shell_can_still_use_an_absolute_directory_outside_home(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,7 +106,7 @@ class PythonHand(unittest.TestCase):
         child='import time,pathlib;time.sleep(3);pathlib.Path('+repr(marker.as_posix())+').write_text("late")'
         parent='import subprocess,sys,time;subprocess.Popen([sys.executable,"-c",'+repr(child)+']);time.sleep(8)'
         out=agent.tool_shell(shlex.quote(sys.executable)+' -c '+shlex.quote(parent),cwd=str(self.root),timeout=1)
-        self.assertIn('таймауту 1s',out)
+        self.assertIn('таймауту 1 с',out)
         self.assertNotIn('SyntaxError',out)
         time.sleep(3)
         self.assertFalse(marker.exists())

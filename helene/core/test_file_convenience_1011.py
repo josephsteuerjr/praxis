@@ -73,7 +73,7 @@ class FileConvenience(unittest.TestCase):
         self.assertEqual((self.home/'a').read_bytes(),b'a a z')
         self.assertEqual((self.home/'b').read_bytes(),b'aaa')
         data,error=edit_batch.replacements(b'a a',[dict(old='a',new='b',all=True),dict(old='a a',new='bad')])
-        self.assertIsNone(data);self.assertIn('Overlapping',error)
+        self.assertIsNone(data);self.assertIn('Замены перекрываются',error)
 
     def test_task_all_uses_same_editor_receipt_and_version(self):
         version=self.put('task/a',b'x x\n')
@@ -101,7 +101,7 @@ class FileConvenience(unittest.TestCase):
         self.assertIsInstance(result,agent.ToolObservation);self.assertEqual(result.images,({'pixel':'kept'},))
         for token in ['--- workspace/a ---',v,'--- workspace/missing ---','Нет файла','--- workspace/photo ---']:
             self.assertIn(token,result.text)
-        self.assertIn('--- workspace/inaccessible ---\nRead unavailable: PermissionError',result.text)
+        self.assertIn('--- workspace/inaccessible ---\nЧтение недоступно: PermissionError',result.text)
 
     def test_task_file_hands_route_to_task_and_refuse_escape(self):
         v=self.put('task/a.py',b'needle\n');self.put('workspace/a.py',b'wrong home\n')

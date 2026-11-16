@@ -164,14 +164,14 @@ class TestGroupVoice(Base):
         agent.voice_turn("-100", "вася: погода", speaker="вася", is_dm=False)
         sysm = self.fc.last["system"]
         text = "".join(b["text"] for b in sysm) if isinstance(sysm, list) else sysm
-        self.assertIn("live group in which you participate", text,
+        self.assertIn('живая группа, в которой ты участвуешь', text,
                       "в группе нет presence-фрейма")
         self.assertIn("[молчу]", text)
         self._client("ответ2")
         agent.voice_turn("777", "егор: привет", speaker="Егор", is_owner=True, is_dm=True)
         text = "".join(b["text"] for b in self.fc.last["system"]) \
             if isinstance(self.fc.last["system"], list) else self.fc.last["system"]
-        self.assertNotIn("live group in which you participate", text,
+        self.assertNotIn('живая группа, в которой ты участвуешь', text,
                          "DM не должен получать групповой фрейм")
         self.assertIn("PRIVATE conversation", text, "DM-фрейм (бывшая perceive-преамбула)")
 
@@ -245,7 +245,7 @@ class TestWindowTool(Base):
     def test_opens_focus_window_now(self):
         import tasks
         out = agent.tool_focus("код: скрипт для Егора")
-        self.assertIn("ближайшем тике", out)
+        self.assertIn('ближайший тик', out)
         self.assertNotIn("скрипт", out, "подтверждение — краткое, без деталей (видно и в группе)")
         open_ = [t for t in tasks.list_open() if t["kind"] == "window"]
         self.assertTrue(open_, "фокус-окно не поставлено")
@@ -277,7 +277,7 @@ class TestRest(Base):
     def test_rest_opens_private_window_authored_by_her(self):
         import tasks
         out = agent.tool_rest("дать шуму улечься")
-        self.assertIn("к себе", out.lower())
+        self.assertIn('отдых запланирован', out.lower())
         win = [t for t in tasks.list_open() if t["kind"] == "window"]
         self.assertTrue(win, "приватное окно сна не поставлено")
         t = win[-1]

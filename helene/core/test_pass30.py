@@ -208,7 +208,7 @@ class ObserveFileTests(unittest.TestCase):
             result = agent.tool_computer("observe", path=r"C:\\movie.mp4")
         fetch.assert_not_called()
         self.assertIsInstance(result, str)
-        self.assertIn("больше капа", result)
+        self.assertIn('превышает предел', result)
 
     def test_observe_with_path_is_hers_regardless_of_the_speakers_grant(self):
         import agent
@@ -294,7 +294,7 @@ class TransportStatusTests(unittest.TestCase):
         }):
             answer = agent.tool_read_chat("@somebody")
         read.assert_not_called()
-        self.assertIn("фокус-окно", answer)
+        self.assertIn('фокус-окна', answer)
         self.assertNotIn("не смогла прочитать", answer)
 
     def test_search_chats_reports_real_disconnect_as_channel_failure(self):

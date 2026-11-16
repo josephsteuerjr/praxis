@@ -44,7 +44,7 @@ class RememberWritesEdge(unittest.TestCase):
     def test_remember_with_relates_to(self):
         out = agent.tool_remember("Вика", "работает юристом", relates_to="Егор", relation="коллега")
         self.assertIn("Запись", out)
-        self.assertIn("Связала", out)
+        self.assertIn('Создана связь', out)
         self.assertTrue(graph.edges())
 
     def test_remember_without_relates_is_unchanged(self):
@@ -64,7 +64,7 @@ class ConnectionsScopeGate(unittest.TestCase):
     def test_group_refused(self):
         for scope in ("group", "known", "unknown"):
             agent._CURRENT_SCOPE = scope
-            self.assertIn("не для этого канала", agent.tool_connections("Егор"))
+            self.assertIn('недоступна в этом канале', agent.tool_connections("Егор"))
 
 
 class StateShowsProposals(unittest.TestCase):

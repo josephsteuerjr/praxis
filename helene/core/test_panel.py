@@ -829,7 +829,7 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         self.assertEqual(self._rooms.profile_read("-100777")["disclosure_set_by"], "owner")
         jr = self._journal()
         self.assertIn("[пульт]", jr)
-        self.assertIn("раскрытие", jr)
+        self.assertIn('disclosure=open', jr)
         self.assertIn("визитке", jr, "она должна прочесть, ЧТО именно у неё изменили")
         # Обратно — и об этом ей тоже говорят, а не молча закрывают.
         back = panel.room_set("-100777", "disclosure")
@@ -841,7 +841,7 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         panel.room_set("-100777", "lower")
         self.assertEqual(self._rooms.effective_mode("-100777"), "quiet")
         jr = self._journal()
-        self.assertIn("опустил режим комнаты", jr)
+        self.assertIn('понизил режим комнаты', jr)
         self.assertIn("normal -> quiet".replace("->", "→"), jr)
         # Обратимость названа в той же строке: её рычаг никуда не делся.
         self.assertIn("обычно", jr)

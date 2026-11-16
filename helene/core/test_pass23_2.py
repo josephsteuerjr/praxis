@@ -144,7 +144,7 @@ class RoutingCase(unittest.TestCase):
                 self.assertEqual(started['remote_id'], 'op-detached123')
                 self.assertTrue(started['remote'])
                 self.assertEqual(len(forge._units(task_id, 'processes')), 2)
-                self.assertIn('shared-root', forge.checkpoint(task_id, "busy"))
+                self.assertIn('общий корень занят исполнителем записи', forge.checkpoint(task_id, "busy"))
                 polled = __import__('json').loads(forge.process(task_id, "poll", process_id=started['id']))
                 self.assertEqual(polled['status'], 'done')
                 self.assertEqual(forge.checkpoint(task_id, "cp"), "checkpointed")

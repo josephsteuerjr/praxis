@@ -275,7 +275,7 @@ class TestOutgoingTextHasACredentialFloor(Base):
         with mock.patch.dict(agent._TELETHON, {"send_message": mock.Mock()}) as hooks:
             out = agent.tool_send_message("999", "вот ключ: sk-ant-api03-" + "a" * 40)
         self.assertIn("Не отправлено", out)
-        self.assertIn("твёрдое правило", out, "отказ называет, почему")
+        self.assertIn('Учётные данные не отправляются наружу', out, "отказ называет, почему")
 
     def test_ordinary_text_still_goes(self):
         self._enter(STRANGER)

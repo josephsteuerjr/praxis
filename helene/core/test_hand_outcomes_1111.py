@@ -85,7 +85,7 @@ class Reply(unittest.TestCase):
         with Slot() as report, mock.patch.object(agent, "_direct_outbox_state",
                                                  return_value={"state": "accepted", "receipt": {"message_id": 7}}):
             text = agent._direct_send_outcome("Ответ", RuntimeError("x"))
-        self.assertIn("ДОСТАВЛЕНО", text)
+        self.assertIn('Telegram ПРИНЯЛ', text)
         self.assertEqual(outcome(report), "ok")
 
     def test_plain_transport_failure_is_failed(self):
@@ -99,7 +99,7 @@ class MemoryCompact(unittest.TestCase):
     def test_unknown_action_is_refused(self):
         with Slot() as report:
             text = agent.tool_memory_compact("nope", place="1")
-        self.assertIn("действие: list / read / rewrite", text)
+        self.assertIn('action: prepare / fold / list / read / rewrite', text)
         self.assertEqual(outcome(report), "refused")
 
 
