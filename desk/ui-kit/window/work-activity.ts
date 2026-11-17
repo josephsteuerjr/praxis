@@ -44,8 +44,15 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean; he
   const editBody=node('div','work-detail');editSummary.append(editBadge,editTitle,editCount);editing.append(editSummary,editBody);
   root.append(editing,tests,heading,roster,error);
   const rows=new Map<string,{row:HTMLDetailsElement;name:HTMLElement;state:HTMLElement;body:HTMLElement}>();
-  let operation='';
+  let operation='', painted='';
   return (value: WorkActivity) => {
+    // 2.8.7: the state poll repaints this every 1.5-2 s. An identical repaint still rewrote
+    // every text node and hidden flag (a style and accessibility update each); only a change,
+    // or the ticking clock of a live reviewer (once a second), paints now.
+    const ticking=(value.reviewers || []).some(row=>row.live && !row.finished_at);
+    const signature=locale()+JSON.stringify(value)+(ticking ? '@'+Math.floor(Date.now()/1000) : '');
+    if (signature===painted) return;
+    painted=signature;
     const update=value.update, t=update?.tests;
     if (operation!==(update?.id || '')) {operation=update?.id || '';tests.open=false;editing.open=false;}
     const reviewers=value.reviewers || [];

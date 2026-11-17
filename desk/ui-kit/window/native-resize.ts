@@ -18,6 +18,15 @@ export const EDGES: readonly Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw
  * 2.8.0/2.8.1 compared against "win32", so the handles were never installed on Windows.
  */
 export const NATIVE_RESIZE_PLATFORMS: readonly string[] = ["windows", "linux"];
+/**
+ * Where the shell hands drags to the window manager (python_app.begin_native_drag): the
+ * header and the edges start the system's own move/size loop instead of the renderer
+ * streaming positions. 2.8.7, after "окно не успевает за курсором" (Tim, Windows 10).
+ */
+export const NATIVE_DRAG_PLATFORMS: readonly string[] = ["windows"];
+/** Two presses on the header within this time and distance are a double click. */
+export const DOUBLE_PRESS_MS = 500;
+export const DOUBLE_PRESS_PX = 4;
 export const MIN_WIDTH = 640;
 export const MIN_HEIGHT = 420;
 /** Set on <html> while the shell reports the window maximized. */
@@ -50,8 +59,11 @@ export async function syncMaximized(invoke: Invoke, doc: Document = document): P
   return maximized;
 }
 
-/** Adds the handles once. Requests are coalesced to one per animation frame. */
-export function installNativeResize(invoke: Invoke, doc: Document = document): void {
+/**
+ * Adds the handles once. Requests are coalesced to one per animation frame. With `system`
+ * (NATIVE_DRAG_PLATFORMS) a press hands the whole resize to the system's size loop instead.
+ */
+export function installNativeResize(invoke: Invoke, doc: Document = document, system = false): void {
   if (doc.querySelector(".native-resize")) return;
   const view = doc.defaultView || window;
   for (const edge of EDGES) {
@@ -63,6 +75,11 @@ export function installNativeResize(invoke: Invoke, doc: Document = document): v
       if (event.button !== 0) return;
       if (doc.documentElement.classList.contains(MAXIMIZED_CLASS)) return;
       event.preventDefault();
+      if (system) {
+        // No pointer capture: the system loop takes the mouse from here.
+        void invoke("python_window", { action: "begin_drag", edge }).catch((error) => console.error(error));
+        return;
+      }
       handle.setPointerCapture(event.pointerId);
       const start: Start = { width: view.outerWidth, height: view.outerHeight };
       const origin = { x: event.screenX, y: event.screenY };
@@ -120,5 +137,30 @@ export function installHeaderToggle(toggle: () => void, selector: string, doc: D
     if (event.button !== 0 || !target || typeof target.matches !== "function" || !target.matches(selector)) return;
     event.preventDefault();
     toggle();
+  });
+}
+
+/**
+ * Windows: a press on the header's drag area starts the system move loop (the window follows
+ * the cursor like any titled window). That loop takes the release, so the page never sees a
+ * dblclick: a second press within DOUBLE_PRESS_MS / DOUBLE_PRESS_PX toggles maximize instead.
+ * `selector` is the header's drag area; only a direct hit counts, as with the renderer drag.
+ */
+export function installNativeDrag(invoke: Invoke, toggle: () => void, selector: string,
+                                  doc: Document = document, now: () => number = () => Date.now()): void {
+  let last: { at: number; x: number; y: number } | null = null;
+  doc.addEventListener("mousedown", (event) => {
+    const target = event.target as Element | null;
+    if (event.button !== 0 || !target || typeof target.matches !== "function" || !target.matches(selector)) return;
+    event.preventDefault();
+    const at = now();
+    if (last && at - last.at <= DOUBLE_PRESS_MS
+        && Math.abs(event.screenX - last.x) <= DOUBLE_PRESS_PX && Math.abs(event.screenY - last.y) <= DOUBLE_PRESS_PX) {
+      last = null;
+      toggle();
+      return;
+    }
+    last = { at, x: event.screenX, y: event.screenY };
+    void invoke("python_window", { action: "begin_drag", edge: "move" }).catch((error) => console.error(error));
   });
 }

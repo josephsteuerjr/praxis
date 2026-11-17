@@ -107,6 +107,7 @@ export function start(opts: WindowOptions): void {
   view.replaceChildren(viewInner);
   scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
+  const mainBox = document.querySelector<HTMLElement>("#main");
   const disposeMedia = mountWindowMedia(app, opts.localAgent !== false);
   const disposeTextMenu = mountTextMenu(app);
   const disposeSelects = mountPaperSelects(app);
@@ -450,11 +451,20 @@ export function start(opts: WindowOptions): void {
     }
     // The frameless pywebview window has no native resize border on Windows/Linux.
     if (bridge.shell === "python" && bridge.presentation !== "miniapp") {
-      import("./native-resize").then(({ installNativeResize, installHeaderToggle, NATIVE_RESIZE_PLATFORMS }) => {
+      import("./native-resize").then(({ installNativeResize, installHeaderToggle, installNativeDrag,
+                                        NATIVE_RESIZE_PLATFORMS, NATIVE_DRAG_PLATFORMS }) => {
         if (!NATIVE_RESIZE_PLATFORMS.includes(String(bridge.platform))) return;
-        installNativeResize((command, args) => bridge.invoke(command, args));
-        // The same selector as the shell's drag region (python_app: DRAG_REGION_SELECTOR).
-        installHeaderToggle(() => bridge.win("maximize"), "#chrome, .chrome-drag, .rail-sign");
+        const invoke = (command: string, args: Record<string, unknown>) => bridge.invoke(command, args);
+        // The header's drag area (python_app: HEADER_DRAG_SELECTOR).
+        const header = "#chrome, .chrome-drag, .rail-sign";
+        if (NATIVE_DRAG_PLATFORMS.includes(String(bridge.platform))) {
+          // Windows: header and edges go to the system's move/size loop (python_app.begin_native_drag).
+          installNativeResize(invoke, document, true);
+          installNativeDrag(invoke, () => bridge.win("maximize"), header);
+        } else {
+          installNativeResize(invoke);
+          installHeaderToggle(() => bridge.win("maximize"), header);
+        }
       });
     }
   } else if (inTauri) {
@@ -806,6 +816,9 @@ export function start(opts: WindowOptions): void {
     app.classList.add("no-anim");
     const mounting = viewInner.firstChild !== page;
     if (mounting) viewInner.replaceChildren(page);
+    // The section the window shows, for CSS (interface-refresh.css #head). A :has() over the
+    // feed asked the same question and re-styled #main on every DOM change (2.8.7).
+    if (mainBox && mainBox.dataset.view !== id) mainBox.dataset.view = id;
     // Focus on entry, before asynchronous history arrives. Polling/reconnect
     // must not take focus back from a selection, menu or another input.
     if (talking && mounting && !opts.quiet) {

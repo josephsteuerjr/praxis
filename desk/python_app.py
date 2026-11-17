@@ -272,6 +272,8 @@ class Application:
             if action == "resize_edge":
                 resize_edge(self, args)
                 return None
+            if action == "begin_drag":
+                return begin_native_drag(self, args)
             if action == "state":
                 return {"maximized": window_is_maximized(self)}
             if self.window is not None:
@@ -656,6 +658,50 @@ def resize_edge(app, args):
     return True
 
 
+# The header's drag area, shared with ui-kit/window/main.ts.
+HEADER_DRAG_SELECTOR = '#chrome, .chrome-drag, .rail-sign'
+# Matches nothing: pywebview's renderer drag is off where the system loop moves the window.
+NATIVE_DRAG_OFF = '[data-helene-renderer-drag]'
+# WM_NCLBUTTONDOWN hit-test codes: the system's own move loop (caption) and size loops (edges).
+NATIVE_DRAG_HIT = {"move": 2, "w": 10, "e": 11, "n": 12, "nw": 13, "ne": 14, "s": 15, "sw": 16, "se": 17}
+
+
+def begin_native_drag(app, args):
+    """Hand a header or edge drag on Windows to the system's own move/size loop.
+
+    pywebview moved the frameless window from the renderer: every mousemove went renderer ->
+    Python -> SetWindowPos, so the window trailed the cursor (Tim, 17.11: "окно не успевает
+    за движением курсора") and each step stalled WebView2's browser thread (50-77 ms measured
+    on the owner's 2.8.6 window). As in a titled window, a press on the caption or an edge now
+    starts Windows' modal move/size loop on the window's own thread. A maximized window stays
+    put, as in 2.8.3. Other platforms keep the renderer's drag (returns False).
+    """
+    kind = args.get("edge", "move")
+    if sys.platform != "win32" or not isinstance(kind, str) or kind not in NATIVE_DRAG_HIT:
+        return False
+    handle = getattr(app, "window_handle", 0)
+    if getattr(app, "window", None) is None or not handle or window_is_maximized(app):
+        return False
+    import ctypes
+    from ctypes import wintypes
+    from System import Action
+    user32 = ctypes.windll.user32
+    hit = NATIVE_DRAG_HIT[kind]
+
+    def start():
+        point = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(point))
+        # The press began in WebView2's child window; its input queue is attached to this
+        # thread's, so releasing capture here frees the mouse for the system loop.
+        user32.ReleaseCapture()
+        user32.PostMessageW(wintypes.HWND(handle), 0x00A1, wintypes.WPARAM(hit),
+                            wintypes.LPARAM((point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)))
+
+    # Posted, not sent: the bridge request returns while the loop runs on the window thread.
+    app.window.native.BeginInvoke(Action(start))
+    return True
+
+
 def close_without_tray(app):
     """Linux has no background tray view: closing its last view is Exit."""
     if (sys.platform.startswith('linux') and getattr(app,'host',None) is not None
@@ -940,9 +986,17 @@ def _main(argv=None):
             import webview
             app.start_in_tray = (args.launch_intent == 'automatic' and
                                  sys.platform == 'win32' and not app.migration_id)
-            webview.settings['DRAG_REGION_SELECTOR'] = '#chrome, .chrome-drag, .rail-sign'
+            # On Windows the renderer hands header drags to the system move loop
+            # (begin_native_drag); pywebview's own renderer drag must not also move the window.
+            webview.settings['DRAG_REGION_SELECTOR'] = (NATIVE_DRAG_OFF if sys.platform == 'win32'
+                                                        else HEADER_DRAG_SELECTOR)
             webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
-            app.window = webview.create_window("Hélène", app.origin, **window_geometry(webview.screens[0]),
+            geometry = window_geometry(webview.screens[0])
+            app.window = webview.create_window("Hélène", app.origin, **geometry,
+                                               # The system size loop (begin_native_drag) honours
+                                               # the form's minimum, as resize_edge clamps it.
+                                               min_size=(min(MIN_WINDOW_SIZE[0], geometry["width"]),
+                                                         min(MIN_WINDOW_SIZE[1], geometry["height"])),
                                                frameless=True, easy_drag=False, text_select=True,
                                                background_color="#1d1914", hidden=app.start_in_tray)
             if sys.platform=='darwin':

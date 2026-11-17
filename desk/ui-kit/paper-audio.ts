@@ -11,6 +11,14 @@ export function pausePaperAudio() { for (const player of activePlayers) player.p
 const clock = (n: number) => { n = Number.isFinite(n) ? Math.max(0, n) : 0; return `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`; };
 const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$|[a-f0-9]{32}\.)/i.test(media.name) ? uiText("ui.ui.kit.paper.audio.6e70042869") : media.name;
 
+/* 2.8.7: paint() runs on every poll (2.5 s) and every timeupdate for EVERY voice message in
+   the feed. Each identical write was still a DOM mutation (text node replaced, attribute
+   reset): a style/accessibility update per message per poll. Write only what changed. */
+const setText = (node: Element | null, text: string) => { if (node && node.textContent !== text) node.textContent = text; };
+const setHidden = (node: HTMLElement | null, hidden: boolean) => { if (node && node.hidden !== hidden) node.hidden = hidden; };
+const setAttr = (node: Element | null, name: string, value: string) => { if (node && node.getAttribute(name) !== value) node.setAttribute(name, value); };
+const setDisabled = (node: HTMLButtonElement | null, disabled: boolean) => { if (node && node.disabled !== disabled) node.disabled = disabled; };
+
 export function audioHTML(m: PaperMedia, data: string) {
   return uiText("ui.ui.kit.paper.audio.02851ba6b9", {p0: String(data), p1: String(esc(title(m)))});
 }
@@ -42,20 +50,20 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     for (const node of nodes()) {
       const status = statuses.get(key(node));
       const recognition=status?.status==='error'?uiText("ui.ui.kit.paper.audio.ec5aff00b9"):status?.status==='transcribing'?uiText("ui.ui.kit.paper.audio.87cc4f69bb"):status?.status==='unavailable'?uiText("ui.ui.kit.paper.audio.c026e68ee6"):'';
-      node.querySelector('[data-audio-status]')!.textContent=recognition;
+      setText(node.querySelector('[data-audio-status]'), recognition);
       if (status) {
         const label = node.querySelector<HTMLElement>('[data-voice-state]')!, retry = node.querySelector<HTMLButtonElement>('[data-voice-retry]')!;
-        label.hidden = false;
-        label.textContent = status.status === 'ready' ? uiText("ui.ui.kit.paper.audio.fb7a8ccf64")+status.transcript : status.status === 'error' ? uiText("ui.ui.kit.paper.audio.dbaa576b22")+status.error : status.status === 'transcribing' ? uiText("ui.ui.kit.paper.audio.87cc4f69bb") : status.status === 'unavailable' ? uiText("ui.ui.kit.paper.audio.95d1502bee") : uiText("ui.ui.kit.paper.audio.690dd9bee4");
-        retry.hidden = status.status !== 'error'; retry.disabled = retrying.has(key(node)) || !!status.retry_requested;
-        retry.textContent = status.retry_requested ? uiText("ui.ui.kit.paper.audio.e13054c023") : uiText("ui.ui.kit.paper.audio.17c3ca65c4");
+        setHidden(label, false);
+        setText(label, status.status === 'ready' ? uiText("ui.ui.kit.paper.audio.fb7a8ccf64")+status.transcript : status.status === 'error' ? uiText("ui.ui.kit.paper.audio.dbaa576b22")+status.error : status.status === 'transcribing' ? uiText("ui.ui.kit.paper.audio.87cc4f69bb") : status.status === 'unavailable' ? uiText("ui.ui.kit.paper.audio.95d1502bee") : uiText("ui.ui.kit.paper.audio.690dd9bee4"));
+        setHidden(retry, status.status !== 'error'); setDisabled(retry, retrying.has(key(node)) || !!status.retry_requested);
+        setText(retry, status.retry_requested ? uiText("ui.ui.kit.paper.audio.e13054c023") : uiText("ui.ui.kit.paper.audio.17c3ca65c4"));
       }
       const track = tracks.get(key(node)); if (!track) continue;
       const a = track.audio, toggle = node.querySelector<HTMLButtonElement>('[data-audio-toggle]')!;
-      toggle.textContent = a.paused ? '▶' : 'Ⅱ'; toggle.setAttribute('aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
-      node.querySelector('[data-audio-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
-      node.querySelector('[data-audio-status]')!.textContent = track.error || (track.loading ? uiText("ui.ui.kit.paper.audio.1679ed8669") : recognition);
-      const seek = node.querySelector<HTMLInputElement>('.paper-audio-seek')!; seek.value = String(Number.isFinite(a.duration) && a.duration ? a.currentTime / a.duration * 1000 : 0);
+      setText(toggle, a.paused ? '▶' : 'Ⅱ'); setAttr(toggle, 'aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
+      setText(node.querySelector('[data-audio-time]'), `${clock(a.currentTime)} / ${clock(a.duration)}`);
+      setText(node.querySelector('[data-audio-status]'), track.error || (track.loading ? uiText("ui.ui.kit.paper.audio.1679ed8669") : recognition));
+      const seek = node.querySelector<HTMLInputElement>('.paper-audio-seek')!, position = String(Number.isFinite(a.duration) && a.duration ? a.currentTime / a.duration * 1000 : 0); if (seek.value !== position) seek.value = position;
       const slot = node.querySelector<HTMLElement>('.paper-wave')!;
       if (track.waveform.parentElement !== slot) slot.replaceChildren(track.waveform);
     }
@@ -63,15 +71,17 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       if(key(node)!==client.key(active!.media))return false;
       const rect=node.getBoundingClientRect();return rect.bottom>0 && rect.top<innerHeight;
     });
-    bar.hidden = !active || active.audio.paused || !!visibleActive || !root.classList.contains('with-panel');
+    setHidden(bar, !active || active.audio.paused || !!visibleActive || !root.classList.contains('with-panel'));
+    // A floating (undocked) bar reserves room at the bottom of the page (paper-files.css).
+    document.body.classList.toggle('paper-audio-floating', !bar.hidden && !bar.dataset.docked);
     if (active) {
       const a = active.audio;
-      bar.querySelector('[data-audio-title]')!.textContent = title(active.media);
-      bar.querySelector('[data-audio-bar-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
-      const b = bar.querySelector<HTMLButtonElement>('[data-audio-bar-play]')!; b.textContent = a.paused ? '▶' : 'Ⅱ'; b.setAttribute('aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
+      setText(bar.querySelector('[data-audio-title]'), title(active.media));
+      setText(bar.querySelector('[data-audio-bar-time]'), `${clock(a.currentTime)} / ${clock(a.duration)}`);
+      const b = bar.querySelector<HTMLButtonElement>('[data-audio-bar-play]')!; setText(b, a.paused ? '▶' : 'Ⅱ'); setAttr(b, 'aria-label', a.paused ? uiText("ui.ui.kit.paper.audio.bdd37eb217") : uiText("ui.ui.kit.paper.audio.65530fd463"));
       const queue = nodes(), i = queue.findIndex(n => key(n) === client.key(active!.media));
-      bar.querySelector<HTMLButtonElement>('[data-audio-prev]')!.disabled = i <= 0;
-      bar.querySelector<HTMLButtonElement>('[data-audio-next]')!.disabled = i < 0 || i >= queue.length - 1;
+      setDisabled(bar.querySelector<HTMLButtonElement>('[data-audio-prev]'), i <= 0);
+      setDisabled(bar.querySelector<HTMLButtonElement>('[data-audio-next]'), i < 0 || i >= queue.length - 1);
     }
   }
   function clearWave(t: Track) {
@@ -229,5 +239,5 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
   const observer=new MutationObserver(records => { if(records.some(r => [...r.addedNodes,...r.removedNodes].some(containsAudio))) reconcile(); }); observer.observe(root,{childList:true,subtree:true});
   const pollTimer=setInterval(()=>void pollVoice(),2500); void pollVoice();
   reconcile();
-  return () => { disposed=true; clearInterval(pollTimer); ++generation;cancelAuto(); observer.disconnect();removeEventListener('frame-room',roomChanged);removeEventListener('helene:voice-preferences',preferences);removeEventListener('helene:voice-incoming',incoming);removeEventListener('helene:recording',hush);removeEventListener('helene:recording-ended',quietEnd);root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); };
+  return () => { disposed=true; clearInterval(pollTimer); ++generation;cancelAuto(); observer.disconnect();removeEventListener('frame-room',roomChanged);removeEventListener('helene:voice-preferences',preferences);removeEventListener('helene:voice-incoming',incoming);removeEventListener('helene:recording',hush);removeEventListener('helene:recording-ended',quietEnd);root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); document.body.classList.remove('paper-audio-floating'); };
 }

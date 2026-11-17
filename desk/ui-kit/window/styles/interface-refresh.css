@@ -13,7 +13,9 @@
 #view :is(.center,.wide,.settings,.learn) { width: 100%; max-width: var(--page-max); margin-inline: auto; }
 /* The chat has its own em-based reading measure and user zoom. */
 #view .center.talk { max-width: none; }
-#main:not(:has([data-page="talk"])) #head {
+/* 2.8.7: data-view on #main (main.ts show), not #main:has(): like body:has() in paper-files.css,
+   it re-styled a whole-window box on every DOM change inside the feed. */
+#main:not([data-view="talk"]) #head {
   padding-inline: max(var(--page-gutter), calc((100cqw - var(--page-max)) / 2));
 }
 .head-kicker { color: var(--ink-2); font: 400 12.5px/1.5 var(--sans); letter-spacing: 0; }

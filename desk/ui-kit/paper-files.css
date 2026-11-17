@@ -101,10 +101,14 @@
 .paper-audio-bar label { display:flex; align-items:center; gap:5px; }
 .paper-audio-bar input { width:70px; accent-color:var(--accent); }
 .paper-audio-bar:focus-within { outline:1px solid var(--accent); }
-body:has(.paper-audio-bar:not([hidden]):not([data-docked])) { padding-bottom:76px; }
+/* 2.8.7: a class set by paper-audio.ts, not body:has(). The :has() made <body> re-style on
+   every small DOM change (a hidden flip, a status text), and with it the full-window paper
+   body::before: the GPU repainted the whole window and the page waited ~0.5 s per frame in
+   Commit (WebView2 157, stand with a long feed: typing 410-480 ms -> 18-21 ms). */
+body.paper-audio-floating { padding-bottom:76px; }
 .paper-audio-bar[data-docked] { position:relative; inset:auto; transform:none; flex:none; align-self:center; width:min(720px,calc(100% - 32px)); max-width:calc(100% - 32px); margin:6px auto; }
 .paper-transcription { font:12px/1.5 var(--sans); margin-top:6px; max-height:6em; overflow:auto; overflow-wrap:anywhere; }
 .paper-artifact { gap:8px; align-items:center; padding:7px 10px; margin:7px 0; width:min(360px,100%); box-sizing:border-box; font-size:12px; }
 .paper-artifact .paper-file-icon { font-size:18px; width:18px; }
 .paper-artifact-actions { gap:12px; margin-top:2px; font-size:11px; }
-@media(max-width:600px) { .paper-audio-bar { width:calc(100vw - 20px); gap:6px; } .paper-audio-bar [data-audio-title] { order:-1; flex:1 0 100%; max-width:none; white-space:normal; overflow-wrap:anywhere; } .paper-audio-bar label { font-size:11px; } body:has(.paper-audio-bar:not([hidden]):not([data-docked])) { padding-bottom:140px; } }
+@media(max-width:600px) { .paper-audio-bar { width:calc(100vw - 20px); gap:6px; } .paper-audio-bar [data-audio-title] { order:-1; flex:1 0 100%; max-width:none; white-space:normal; overflow-wrap:anywhere; } .paper-audio-bar label { font-size:11px; } body.paper-audio-floating { padding-bottom:140px; } }
