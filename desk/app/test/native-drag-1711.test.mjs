@@ -54,5 +54,6 @@ assert.equal(asked.length,1,'a maximized window has no edges to drag');
 // The window wiring picks the system loop exactly on NATIVE_DRAG_PLATFORMS.
 const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'utf8');
 assert.match(main,/NATIVE_DRAG_PLATFORMS\.includes\(String\(bridge\.platform\)\)/);
-assert.match(main,/installNativeResize\(invoke, document, true\)/);
+assert.doesNotMatch(main,/installNativeResize\(invoke, document, true\)/);
+assert.match(main,/installNativeResize\(invoke\);\s*installNativeDrag/,'Windows resizing uses fixed-edge API while header keeps its native loop');
 console.log(JSON.stringify({ok:true,nativeDrag:true}));

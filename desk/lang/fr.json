@@ -4325,5 +4325,17 @@
   "supervisor.startup.unconfirmed": "Le moteur ne confirme plus la liaison ; le redémarrage est disponible",
   "supervisor.startup.elapsed": "{phase} · {seconds} s",
   "supervisor.restart.running": "Redémarrage…",
-  "forge.liveness.unreadable": "Le relevé d'état du processus est endommagé ou inaccessible ; son activité est inconnue."
+  "forge.liveness.unreadable": "Le relevé d'état du processus est endommagé ou inaccessible ; son activité est inconnue.",
+  "bridge.bundled.help": "Le proxy SSH et le HTTPS permanent sont intégrés à Hélène. Aucun Tray Bridge séparé n'est nécessaire ; il s'agit d'une connexion serveur, distincte de Computer Use. Configurez-la ici puis sélectionnez-la pour votre agent.",
+  "bridge.existing.help": "Si tinyproxy fonctionne déjà sur le serveur, choisissez le serveur existant : Hélène vérifie SSH et le proxy sans installer de paquets. Un proxy sortant n'exige ni domaine ni HTTPS permanent. Si un Tray Bridge externe utilise déjà le port local, choisissez-le dans les paramètres réseau ou indiquez ici un autre port libre.",
+  "bridge.ssh.key.help": "Choisissez votre clé SSH privée existante ou indiquez son chemin, par exemple ~/.ssh/id_ed25519. Une nouvelle clé n'est pas nécessaire si l'accès au serveur est déjà configuré.",
+  "bridge.ssh.verified": "SSH est connecté et l'empreinte du serveur est vérifiée.",
+  "bridge.relay.optin": "Utiliser aussi ce proxy pour le relais (son trajet est vérifié séparément)",
+  "bridge.routes.draft": "Le trajet est sélectionné pour cet agent. Enregistrez les paramètres puis effectuez le redémarrage proposé. La messagerie et le trajet du relais sont vérifiés séparément.",
+  "run.outcome.uncertain": "Le résultat de l'action doit être vérifié",
+  "run.outcome.evidence_needed": "Le résultat de l'action précédente est inconnu et elle n'est pas répétée automatiquement. Pour un envoi de média, vérifiez Telegram puis donnez une preuve à l'agent pour régulariser ce tour. Une mise à jour ne confirme pas la livraison.",
+  "bridge.error.local_port": "Le port local est occupé ou indisponible. Aucun Tray Bridge ou autre programme existant n'a été arrêté. Choisissez un port libre ou utilisez le proxy existant dans les paramètres réseau.",
+  "bridge.error.host_key": "L'empreinte du serveur SSH a changé. Aucun mot de passe ni clé n'a été envoyé. Vérifiez le serveur et son empreinte avant de vous reconnecter.",
+  "bridge.error.authentication": "L'authentification SSH n'est pas confirmée. Vérifiez l'utilisateur, la clé privée choisie et sa phrase secrète, ou le mot de passe du serveur.",
+  "bridge.error.unavailable": "Le serveur SSH est inaccessible ou n'a pas terminé la connexion. Vérifiez l'adresse, le port SSH et le réseau. Le proxy n'est pas encore vérifié."
 }

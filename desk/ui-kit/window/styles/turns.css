@@ -145,6 +145,7 @@
   position: relative;
   z-index: 1;
 }
+.turn[data-status="attention"] .turn-dot,
 .turn[data-status="failed"] .turn-dot {
   background: var(--err);
   border-color: var(--err);

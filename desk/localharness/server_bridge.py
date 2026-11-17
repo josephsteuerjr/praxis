@@ -16,6 +16,12 @@ from .server_bridge_runtime import Bridge,ports
 FORMAT='helene-server-bridge.v1'
 
 
+class BridgeCheckError(ValueError):
+    def __init__(self,message,code):
+        super().__init__(message)
+        self.code=code
+
+
 def component():
     marker=connections.root()/'bridge-component.json'
     return {'id':'server-bridge','ready':True,'installed':marker.is_file(),'restart_required':False}
@@ -79,7 +85,9 @@ def verify(bridge,value,agent,*,timeout=20):
     """Real outbound HTTP through the proxy, and exact public app identity."""
     end=time.monotonic()+timeout
     while bridge.state()['state'] in ('off','connecting') and time.monotonic()<end:time.sleep(.05)
-    if bridge.state()['state']!='connected':raise ValueError(bridge.state()['message'])
+    if bridge.state()['state']!='connected':
+        state=bridge.state()
+        raise BridgeCheckError(state['message'],state.get('error_code','ssh_unavailable'))
     checks=[];selected=bridge.ports
     if selected.get('local_proxy_port'):
         from deskd.network_route import Route

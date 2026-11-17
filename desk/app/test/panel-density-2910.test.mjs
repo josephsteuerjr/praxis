@@ -29,3 +29,11 @@ assert.match(row.html,/\$ bash -lc /,'the observed process is shown as its shell
 assert.match(row.html,/agent\.tool_shell\(cmd=/,'the Python hand is shown as handler(**args)');
 assert.doesNotMatch(row.html,/<actual>/,'observed command remains inert');
 console.log('Production panel: compact defaults, visible harness execution and inert full trace PASS');
+const uncertain=render({...detail,manifest:{status:'in_doubt'}}).find(row=>row.key==='uncertainty');
+assert.match(uncertain.html,/неизвестен/);assert.match(uncertain.html,/повтора нет/);
+assert.equal(render(detail).some(row=>row.key==='uncertainty'),false);
+const rowSource=source.slice(source.indexOf('function rowOf('),source.indexOf('\nfunction metaOf('));
+const rowOf=new Function('clean','noteWords','clip','fmtTime','turnAt','EV_KIND',rowSource+';return rowOf;')(
+  String,String,steps.clip,String,()=>'',{});
+assert.equal(rowOf({run_id:'old-media',out:'authored text'},{status:'in_doubt'},'').status,'attention');
+assert.equal(rowOf({run_id:'complete',out:'authored text'},{status:'done'},'').status,'done');

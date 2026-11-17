@@ -4325,5 +4325,17 @@
   "supervisor.startup.unconfirmed": "引擎已停止确认连接，可以重启",
   "supervisor.startup.elapsed": "{phase} · {seconds} 秒",
   "supervisor.restart.running": "正在重启…",
-  "forge.liveness.unreadable": "进程状态记录已损坏或无法读取；进程是否仍在运行未知。"
+  "forge.liveness.unreadable": "进程状态记录已损坏或无法读取；进程是否仍在运行未知。",
+  "bridge.bundled.help": "Hélène 已内置 SSH 代理和固定 HTTPS 连接，无需单独的 Tray Bridge。这是服务器连接功能，与 Computer Use 不同。在此配置连接，再为所需代理选择它。",
+  "bridge.existing.help": "如果服务器已运行 tinyproxy，请选择现有服务器：Hélène 仅检查 SSH 和代理，不安装软件包。仅使用出站代理时不需要域名或固定 HTTPS。如果外部 Tray Bridge 已占用本地端口，请在网络设置中使用它，或在此选择其他空闲端口。",
+  "bridge.ssh.key.help": "选择现有的 SSH 私钥或输入其路径，例如 ~/.ssh/id_ed25519。如果已配置服务器访问，无需创建新密钥。",
+  "bridge.ssh.verified": "SSH 已连接，服务器指纹已验证。",
+  "bridge.relay.optin": "同时为中继使用此代理（中继线路需单独检查）",
+  "bridge.routes.draft": "已为此代理选择线路。保存设置，然后按提示重启。消息收发和中继线路需单独检查。",
+  "run.outcome.uncertain": "操作结果需要核实",
+  "run.outcome.evidence_needed": "此前操作的结果未知，系统不会自动重复。若涉及媒体发送，请在 Telegram 中核实，并向代理提供凭据以核对此轮。更新程序不代表已确认送达。",
+  "bridge.error.local_port": "本地端口已被占用或不可用。现有 Tray Bridge 或其他程序未被停止。请选择空闲端口，或在网络设置中使用现有代理。",
+  "bridge.error.host_key": "SSH 服务器指纹已改变。密码和密钥均未发送。重新连接前请核实服务器及其指纹。",
+  "bridge.error.authentication": "SSH 身份验证未通过。请检查用户名、所选私钥及其口令，或服务器密码。",
+  "bridge.error.unavailable": "SSH 服务器不可用或未能完成连接。请检查地址、SSH 端口和网络。代理尚未验证。"
 }

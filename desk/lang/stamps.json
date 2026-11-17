@@ -21633,5 +21633,65 @@
     "en": "4fc85b87",
     "fr": "4fc85b87",
     "zh": "4fc85b87"
+  },
+  "bridge.bundled.help": {
+    "en": "a2080ec6",
+    "fr": "a2080ec6",
+    "zh": "a2080ec6"
+  },
+  "bridge.existing.help": {
+    "en": "00396c29",
+    "fr": "00396c29",
+    "zh": "00396c29"
+  },
+  "bridge.ssh.key.help": {
+    "en": "01639001",
+    "fr": "01639001",
+    "zh": "01639001"
+  },
+  "bridge.ssh.verified": {
+    "en": "9dcfb818",
+    "fr": "9dcfb818",
+    "zh": "9dcfb818"
+  },
+  "bridge.relay.optin": {
+    "en": "2d6ddf74",
+    "fr": "2d6ddf74",
+    "zh": "2d6ddf74"
+  },
+  "bridge.routes.draft": {
+    "en": "691d29cb",
+    "fr": "691d29cb",
+    "zh": "691d29cb"
+  },
+  "run.outcome.uncertain": {
+    "en": "b75fd18f",
+    "fr": "b75fd18f",
+    "zh": "b75fd18f"
+  },
+  "run.outcome.evidence_needed": {
+    "en": "a4b0fe2e",
+    "fr": "a4b0fe2e",
+    "zh": "a4b0fe2e"
+  },
+  "bridge.error.local_port": {
+    "en": "58186501",
+    "fr": "58186501",
+    "zh": "58186501"
+  },
+  "bridge.error.host_key": {
+    "en": "e026c856",
+    "fr": "e026c856",
+    "zh": "e026c856"
+  },
+  "bridge.error.authentication": {
+    "en": "b838d35a",
+    "fr": "b838d35a",
+    "zh": "b838d35a"
+  },
+  "bridge.error.unavailable": {
+    "en": "40cf07b9",
+    "fr": "40cf07b9",
+    "zh": "40cf07b9"
   }
 }

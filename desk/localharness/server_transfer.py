@@ -29,7 +29,10 @@ import owner_stop
 from server_destination import destination, accepted
 from deskd.connection_checks import check_telegram
 
-class TransferError(RuntimeError):pass
+class TransferError(RuntimeError):
+    def __init__(self,message,*,code='transfer_error'):
+        super().__init__(message)
+        self.code=code
 TARGET='/opt/helene'
 TOKEN_PATH=TARGET+'/data/.serverboot/desk-token'
 MARKER_PATH=TARGET+'/.window-transfer.json'
@@ -133,7 +136,7 @@ def parameters(raw):
 class Pin(paramiko.MissingHostKeyPolicy):
     def __init__(self,expected):self.expected=expected
     def missing_host_key(self,client,hostname,key):
-        if fingerprint(key)!=self.expected:raise TransferError('Ключ сервера изменился. Сначала проверь подключение заново')
+        if fingerprint(key)!=self.expected:raise TransferError('Ключ сервера изменился. Сначала проверь подключение заново',code='ssh_host_key_changed')
 
 def connect(raw,*,on_client=None):
     from localharness.server_connections import authentication
@@ -146,7 +149,7 @@ def connect(raw,*,on_client=None):
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:auth=authentication(raw)
     except ValueError as error:
-        client.close();raise TransferError(str(error)) from None
+        client.close();raise TransferError(str(error),code='ssh_credentials_invalid') from None
     try:
         if on_client:on_client(client)
         def transport_factory(sock,**options):
@@ -170,8 +173,12 @@ def connect(raw,*,on_client=None):
         return client
     except TransferError:
         client.close();raise
+    except paramiko.AuthenticationException:
+        client.close();raise TransferError('Войти на сервер не удалось. Проверь адрес, логин, пароль или SSH-ключ',code='ssh_authentication_failed') from None
+    except paramiko.BadHostKeyException:
+        client.close();raise TransferError('Ключ сервера изменился. Сначала проверь подключение заново',code='ssh_host_key_changed') from None
     except Exception:
-        client.close();raise TransferError('Войти на сервер не удалось. Проверь адрес, логин, пароль или SSH-ключ') from None
+        client.close();raise TransferError('Войти на сервер не удалось. Проверь адрес, логин, пароль или SSH-ключ',code='ssh_unavailable') from None
 
 def execute(client,command,timeout=30,check=True,input_data=None):
     stdin,out,_=client.exec_command(command,timeout=timeout)

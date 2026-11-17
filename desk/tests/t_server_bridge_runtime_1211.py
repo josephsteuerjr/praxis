@@ -55,7 +55,9 @@ class Forwarding(unittest.TestCase):
         class Server(paramiko.ServerInterface):
             def __init__(self,transport):self.transport=transport
             def get_allowed_auths(self,user):return 'password'
-            def check_auth_password(self,user,password):owner.auths.append(user);return paramiko.AUTH_SUCCESSFUL
+            def check_auth_password(self,user,password):
+                owner.auths.append(user)
+                return paramiko.AUTH_FAILED if getattr(owner,'reject_auth',False) else paramiko.AUTH_SUCCESSFUL
             def check_channel_direct_tcpip_request(self,chanid,origin,destination):
                 owner.destinations[chanid]=destination
                 return paramiko.OPEN_SUCCEEDED if destination==owner.echo.getsockname() else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
@@ -142,10 +144,18 @@ class Forwarding(unittest.TestCase):
         bridge=self.bridge(local_proxy_port=port,remote_proxy_port=self.echo.getsockname()[1])
         self.wait(bridge,'retry');self.assertEqual(self.auths,[])
         self.assertEqual(busy.getsockname()[1],port)
+        self.assertEqual(bridge.state()['error_code'],'local_port_unavailable')
     def test_changed_host_key_refuses_authentication(self):
         bridge=self.bridge({**self.connection,'fingerprint':'SHA256:different'},
                            local_proxy_port=free_port(),remote_proxy_port=self.echo.getsockname()[1])
         self.wait(bridge,'retry');self.assertEqual(self.auths,[])
+        self.assertEqual(bridge.state()['error_code'],'ssh_host_key_changed')
+    def test_authentication_failure_is_distinct_from_a_host_key_or_port_failure(self):
+        self.reject_auth=True
+        bridge=self.bridge(local_proxy_port=free_port(),remote_proxy_port=self.echo.getsockname()[1])
+        self.wait(bridge,'retry')
+        self.assertEqual(bridge.state()['error_code'],'ssh_authentication_failed')
+        self.assertNotIn(self.connection['password'],bridge.state()['message'])
     def test_reconnect_recovers_real_forward_after_transport_drop(self):
         port=free_port();bridge=self.bridge(local_proxy_port=port,remote_proxy_port=self.echo.getsockname()[1])
         self.wait(bridge,'connected');before=len(self.auths)

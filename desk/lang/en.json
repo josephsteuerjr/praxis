@@ -4325,5 +4325,17 @@
   "supervisor.startup.unconfirmed": "The engine stopped confirming contact; restart is available",
   "supervisor.startup.elapsed": "{phase} · {seconds} s",
   "supervisor.restart.running": "Restarting…",
-  "forge.liveness.unreadable": "The process status record is damaged or unavailable; liveness is unknown."
+  "forge.liveness.unreadable": "The process status record is damaged or unavailable; liveness is unknown.",
+  "bridge.bundled.help": "SSH proxy and permanent HTTPS are built into Hélène. A separate Tray Bridge is unnecessary; this connects a server and is separate from Computer Use. Set up the connection here and select it for your agent.",
+  "bridge.existing.help": "If tinyproxy already runs on the server, use the existing-server option: Hélène checks SSH and the proxy without installing packages. An outbound proxy needs no domain or permanent HTTPS. If an external Tray Bridge already occupies the local port, use it in network settings or choose a different free port here.",
+  "bridge.ssh.key.help": "Select your existing private SSH key or enter its path, for example ~/.ssh/id_ed25519. You do not need a new key when server access is already configured.",
+  "bridge.ssh.verified": "SSH is connected and the host fingerprint is verified.",
+  "bridge.relay.optin": "Also use this proxy for the relay (its route is checked separately)",
+  "bridge.routes.draft": "The route is selected for this agent. Save the settings, then perform the offered restart. Messaging and the relay route are checked separately.",
+  "run.outcome.uncertain": "The action outcome needs reconciliation",
+  "run.outcome.evidence_needed": "The earlier action has an unknown outcome and is not automatically repeated. For media delivery, check Telegram and give the agent evidence to reconcile this turn. Updating the application does not confirm delivery.",
+  "bridge.error.local_port": "The local port is occupied or unavailable. An existing Tray Bridge or other application was not stopped. Choose a free port or use the existing proxy in network settings.",
+  "bridge.error.host_key": "The SSH host fingerprint changed. No password or key was sent. Verify the server and its fingerprint before reconnecting.",
+  "bridge.error.authentication": "SSH authentication was not confirmed. Check the username, selected private key and its passphrase, or the server password.",
+  "bridge.error.unavailable": "The SSH server is unavailable or did not complete the connection. Check its address, SSH port and network. The proxy has not been verified yet."
 }

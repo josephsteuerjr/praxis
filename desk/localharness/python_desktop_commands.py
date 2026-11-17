@@ -206,7 +206,9 @@ def invoke(owner, command, args):
         return dict(result,id=remote.get('id'),path=str(agent.config),before_mtime_ns=seen)
     if command=='server_bridge':
         from . import server_bridge
-        return server_bridge.invoke(owner,args.get('action'),json.loads(args.get('request','{}')))
+        try:return server_bridge.invoke(owner,args.get('action'),json.loads(args.get('request','{}')))
+        except server_bridge.BridgeCheckError as error:
+            return {'ok':False,'checks':[],'error_code':error.code}
     if command=='server_connection':
         from . import server_connections
         action=args.get('action')

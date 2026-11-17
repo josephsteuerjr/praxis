@@ -33,19 +33,20 @@ export function sshAccessForm(data:Record<string,unknown>,changed:()=>void) {
   element.addEventListener('ssh-fields-updated',()=>{
     for(const [node,key] of [[host,'host'],[login,'login'],[port,'port']] as const)node.querySelector('input')!.value=String(data[key]||'');
   });
-  inner.append(port,field(uiText("ui.ui.kit.window.server.access.form.4f85ccf66f"),'',value=>{data.key_path=value;delete data.key_text;invalidate()}),
-    field(uiText("ui.ui.kit.window.server.access.form.94d2a5458b"),'',value=>{data.key_password=value;invalidate()},{type:'password'}),
-    button(uiText("ui.ui.kit.window.server.access.form.16e7e432b4"),'quiet',async()=>{
+  const keyPath=field(uiText("ui.ui.kit.window.server.access.form.4f85ccf66f"),'',value=>{data.key_path=value;delete data.key_text;invalidate()},
+    {placeholder:'~/.ssh/id_ed25519',hint:uiText('bridge.ssh.key.help')});
+  const chooseKey=button(uiText("ui.ui.kit.window.server.access.form.16e7e432b4"),'quiet',async()=>{
       try{const files=await pickPaperFiles(true,1,65536);if(files[0]){
         data.key_text=await files[0].text();delete data.password;delete data.key_path;
         password.querySelector('input')!.value='';invalidate();keyLabel.textContent=files[0].name;
       }}catch(error){out.textContent=humanError(error).text;}
-    }),keyLabel);
-  manual.append(grid,extra);
+    });
+  inner.append(port,field(uiText("ui.ui.kit.window.server.access.form.94d2a5458b"),'',value=>{data.key_password=value;invalidate()},{type:'password'}));
+  manual.append(grid,keyPath,chooseKey,keyLabel,extra);
   let rows:ServerProfile[]=[];let busy=false;
   const choose=(profile?:ServerProfile)=>{
     for(const name of ['password','key_text','key_path','key_password','fingerprint','confirmed_host'])delete data[name];
-    manual.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value='');keyLabel.textContent='';
+    manual.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value='');keyLabel.textContent='';keyPath.querySelector('input')!.value='';
     if(profile){data.server_profile=profile.id;Object.assign(data,{host:profile.host,port:profile.port,login:profile.login});}
     else delete data.server_profile;
     for(const [node,key] of [[host,'host'],[login,'login'],[port,'port']] as const)node.querySelector('input')!.value=String(data[key]||'');
