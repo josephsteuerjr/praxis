@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import Mock,patch
@@ -19,6 +20,22 @@ from localharness.package_notice import read, write
 
 
 class ShutdownObservation(unittest.TestCase):
+    def test_attached_observer_event_polls_skip_roster_but_other_requests_validate(self):
+        host = object.__new__(session.Host)
+        host.stop = threading.Event()
+        host.lock = threading.Lock()
+        host.root = Path('fixture')
+        host.observers = {'attached': {'agent': 'main'}}
+        host.events = [{'seq': 1}, {'seq': 2}]
+        with patch.object(session.agents, 'find', return_value=None) as find:
+            self.assertEqual(host.dispatch('events', {'agent': 'main', 'observer': 'attached', 'after': 1}),
+                             {'events': [{'seq': 2}]})
+            find.assert_not_called()
+            for action, identity in (('status', 'attached'), ('events', 'different')):
+                with self.assertRaisesRegex(ValueError, 'Selected agent is unavailable'):
+                    host.dispatch(action, {'agent': 'main', 'observer': identity})
+            self.assertEqual(find.call_count, 2)
+
     def test_lost_exit_reply_accepts_only_confirmed_absence_without_replaying(self):
         client=object.__new__(session.SessionClient);client.descriptor={'pid':42,'birth':1}
         client._request=Mock(side_effect=OSError('connection refused'));client.close=Mock()

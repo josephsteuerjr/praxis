@@ -36,6 +36,35 @@ class PythonApplicationTests(unittest.TestCase):
         # that environment and must restore it before the next consumer.
         self.enterContext(patch.dict(os.environ))
 
+    def test_appearance_event_is_retryable_without_an_idle_preference_read(self):
+        from unittest.mock import patch
+        from localharness import window_preferences
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = python_app.Application(root, root)
+            app.serve()
+            try:
+                def events(version=0):
+                    request = urllib.request.Request(app.origin + f'/__python__/events?appearance={version}',
+                                                     headers={'X-Helene-Window': app.token})
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        return json.load(response)
+
+                with patch.object(window_preferences, '_load', side_effect=AssertionError('idle preference read')):
+                    self.assertEqual(events(), [])
+                    self.assertEqual(events(), [])
+                window_preferences.change(root, {'frame.panel': '1'})
+                version = [{'name': 'window-preferences', 'data': {'version': 1}}]
+                self.assertEqual(events(), version)
+                self.assertEqual(events(), version)  # first response may never reach the renderer
+                self.assertEqual(events(1), [])
+                self.assertEqual(app.invoke('appearance_read', {})['values'], {'frame.panel': '1'})
+                (root / 'window-preferences.json').unlink()
+                self.assertEqual(events(1), [{'name': 'window-preferences', 'data': {'version': 2}}])
+            finally:
+                app.close()
+
     def test_normal_renderer_ready_is_published_for_the_actual_window(self):
         with tempfile.TemporaryDirectory() as temporary:
             app=python_app.Application(Path(temporary),Path(temporary))
