@@ -88,7 +88,8 @@ TOOL_DESK['description'] += (' ИМПЕРАТИВ: прямое поручени
 
 def on_server() -> bool:
     """Надзор — serverboot (он ставит метку детям) или мы в контейнере."""
-    return os.environ.get("HELENE_SUPERVISOR") == "serverboot" or Path("/.dockerenv").exists()
+    return os.environ.get("HELENE_SUPERVISOR") == "serverboot" or (
+        os.name != "nt" and Path("/.dockerenv").exists())
 
 
 def _control():

@@ -854,7 +854,7 @@ def beat(tree: Path, kind: str, started_utc: str, children: list[dict]) -> None:
         "started_utc": started_utc,
         "beat_utc": _utc(),
         "beat_epoch": time.time(),
-        "in_container": Path("/.dockerenv").exists(),
+        "in_container": os.name != "nt" and Path("/.dockerenv").exists(),
         "children": children,
     })
 

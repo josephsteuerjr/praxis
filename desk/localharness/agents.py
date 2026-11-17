@@ -219,6 +219,9 @@ def find(base_dir: Path, agent_id: str) -> Agent | None:
     wanted = (agent_id or "").strip().lower()
     if not wanted:
         return None
+    if wanted == BASE_ID:
+        # The base is always first and wins any duplicate port in roster().
+        return _one(Path(base_dir), BASE_ID, base=True, index=0)
     for got in roster(base_dir):
         if got.id == wanted:
             return got
