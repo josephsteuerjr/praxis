@@ -23,12 +23,23 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.8.8 Beta
+
+The built-in SSH server bridge installs without interrupting the session. Its
+setup connects an existing tinyproxy with your SSH key, checks the route and
+applies it to the selected agent; relay proxying is a separate choice. Forge
+keeps its roster visible around damaged process observations and remembers
+card disclosure through reloads. Confirmed Mini App buttons retain their ready
+state, uncertain historical actions remain visible for reconciliation, and
+Windows edge resizing uses the compatible fixed-edge path while header movement
+stays responsive. See the [2.8.8 release notes](desk/docs/RELEASE-2.8.8.md).
+
 ## Included in 2.8.7 Beta
 
 The window is smooth again while the agent works: scrolling, typing, animations
 and buttons no longer wait behind half-second repaints of the whole window. On
 Windows the window follows the cursor when it is moved or resized, like any
-other window. See the [release notes](desk/docs/RELEASE-2.8.7.md).
+other window. See the [release notes](desk/docs/RELEASE-2.8.8.md).
 
 ## Included in 2.8.6 Beta
 
@@ -53,7 +64,7 @@ The interface and agent context each support Russian, English, French and Chines
 with independent settings. Includes resident skills, optional living prose,
 Windows MCP, exact program arguments, code navigation and stronger process custody.
 The bundled relay can switch ChatGPT subscriptions on quota exhaustion.
-The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.7) includes these fixes.
+The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.8) includes these fixes.
 On cold macOS and Linux starts, the process guardian now allows up to 60 seconds
 for preparation while keeping launch refusal and cleanup on timeout. See the
 [changes and qualification limits](desk/docs/RELEASE-2.8.5.md).
