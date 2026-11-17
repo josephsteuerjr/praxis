@@ -120,3 +120,7 @@ class Convergence(unittest.TestCase):
             time.sleep(.02)
         self.assertTrue(receipt.get('ok'));self.assertIsNotNone(selected.poll())
         self.assertIsNone(sibling.poll());self.assertEqual(self.manager.manifest(self.run)['status'],'paused')
+
+
+if __name__ == '__main__':
+    unittest.main()

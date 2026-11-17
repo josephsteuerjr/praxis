@@ -144,3 +144,7 @@ class HistoryRecovery(unittest.TestCase):
         with patch.object(forge,'_launch_agent_unlocked',side_effect=AssertionError('unknown actions must not replay')):
             answer=self.control('resume')
         self.assertEqual(answer['status'],'refused')
+
+
+if __name__ == '__main__':
+    unittest.main()
