@@ -1,3 +1,10 @@
+# 2.8.7 Beta
+
+- Scrolling, typing, animations and buttons lagged while the agent was working: two window-wide `:has()` style rules made every small change in the page (a status line, a voice-player flag) restyle the whole window, including the full-window paper layer, so the page waited about half a second for each repaint. They are replaced by explicit flags. On a stand with a 600-message feed on the current WebView2, a typed letter appeared after 410–480 ms in 2.8.6 and after 18–21 ms in 2.8.7, and idle half-second stalls disappeared.
+- The voice player and the work-activity block no longer rewrite identical text and flags on every poll.
+- Windows: moving the window by its header and resizing it by an edge or corner use the system's own move and size loops, so the window follows the cursor even while the page is busy. A double click on the header still maximizes or restores; a maximized window is not dragged. macOS and Linux keep their previous behavior.
+- Latest Beta for Windows, macOS Apple silicon/Intel, Debian/Ubuntu, Fedora and Linux ARM64 server; includes all 2.8.6 changes.
+
 # 2.8.6 Beta
 
 - The external desktop process owner now serves supervision and restart requests before the engine finishes sandbox preparation. A slow sandbox initialization no longer silences supervision or leaves a restart request waiting inside the initializing engine.
