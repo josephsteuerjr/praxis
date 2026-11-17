@@ -224,6 +224,11 @@ class Application:
             return None
         if command == "component_install":
             name=str(args.get('name',''))
+            if name == 'server-bridge':
+                # This built-in module only enables a private marker. It has
+                # no replaceable binary and must not retire the live session.
+                from localharness.server_bridge import install
+                return install()
             if name == 'relay':
                 from localharness import standalone_relay
                 return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
