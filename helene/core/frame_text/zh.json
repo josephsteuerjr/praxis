@@ -3539,5 +3539,6 @@
   "native.runner.media.document_failed": "[Telegram 文件：{p0}，消息 {p1}：字节已收到，但无法创建工作副本（{p2}）。不要猜测其内容。]",
   "forge.history.prepared": "原 Linux 主机的见证记录和日志精确快照已保存，其中包括损坏的字节。进程归属尚未解除。所有者须自行重启该主机，再调用 recover；应用不会执行重启。",
   "forge.history.recovered": "已解除对经证实已终止的进程树的归属。旧结果、损坏的日志及未知结果均已保留。仍禁止不安全的继续执行和重复产生副作用。",
-  "forge.history.refused": "恢复尚未确认。请检查 diagnostic.code 和已保留的证据。对于损坏的历史记录，需要明确确认原 Linux 主机，执行 prepare_recovery，由所有者随后重启该主机，再执行 recover。不要删除损坏记录或重复结果未知的操作。"
+  "forge.history.refused": "恢复尚未确认。请检查 diagnostic.code 和已保留的证据。对于损坏的历史记录，需要明确确认原 Linux 主机，执行 prepare_recovery，由所有者随后重启该主机，再执行 recover。不要删除损坏记录或重复结果未知的操作。",
+  "forge.history.none": "所选分支中没有需要此类恢复的单元。历史记录未更改。"
 }

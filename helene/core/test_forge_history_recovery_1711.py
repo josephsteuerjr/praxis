@@ -134,6 +134,27 @@ class HistoryRecovery(unittest.TestCase):
                 self.journal.write_bytes(self.first+bad)
                 self.assertEqual(recovery.history_diagnostic(self.unit)['code'],'forge_history_corrupt')
 
+    def test_valid_json_without_event_or_launch_identity_cannot_hide_new_execution(self):
+        self.prepare();self.reboot();clean=self.journal.read_bytes()
+        now=dt.datetime.now(dt.timezone.utc).isoformat()
+        for bad in ({},{'kind':'agent_resumed','at':now},{'kind':'agent_spawned','agent_id':None,'at':now},
+                    {'kind':'agent_resumed','agent_id':self.uid,'at':'unknown'}):
+            with self.subTest(bad=bad):
+                self.journal.write_bytes(clean+(json.dumps(bad)+'\n').encode())
+                self.assertEqual(self.control('recover')['diagnostic']['code'],'forge_history_corrupt')
+                self.assertIsNone(self.proof())
+        self.journal.write_bytes(clean);self.assertEqual(self.control('recover')['status'],'settled')
+
+    def test_diagnostic_after_witness_targets_new_corruption_even_after_torn_no_newline_tail(self):
+        self.journal.write_bytes(self.raw.rstrip(b'\n'));self.prepare();self.reboot()
+        self.assertEqual(self.control('recover')['status'],'settled')
+        before=self.journal.read_bytes()
+        with self.journal.open('ab') as out:out.write(b'{}\n')
+        diagnostic=recovery.history_diagnostic(self.unit)
+        self.assertEqual(diagnostic['offset'],len(before))
+        self.assertEqual(diagnostic['line'],len(before.splitlines())+int(before.endswith((b'\n',b'\r'))))
+        self.assertIsNone(self.proof())
+
     def test_recover_without_witness_and_missing_participant_are_named_refusals(self):
         self.reboot();self.assertEqual(self.control('recover')['diagnostic']['code'],'forge_history_witness_required')
         answer=forge.control(self.tid,'recover',agent_id='agent-missing')

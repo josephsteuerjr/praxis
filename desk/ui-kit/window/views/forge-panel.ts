@@ -463,8 +463,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       (unit.current_disposition ? uiText("ui.ui.kit.window.views.forge.panel.69517383a8") + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? uiText("ui.ui.kit.window.views.forge.panel.06811cd0d8") : "") +
       (unit.custody === "unresolved_stop" ? uiText("ui.ui.kit.window.views.forge.panel.e49b1be6cb") : "") +
       (unit.custody === 'recovered_boundary' ? uiText('forge.recovery.recovered') : '') +
-      (unit.recovery?.diagnostic ? '\n' + uiText('forge.history.damaged', {
-        line: String(unit.recovery.diagnostic.line ?? '—'), offset: String(unit.recovery.diagnostic.offset ?? '—')}) +
+      (unit.recovery?.diagnostic ? '\n' + (['forge_history_corrupt','forge_history_unreadable'].includes(unit.recovery.diagnostic.code) ? uiText('forge.history.damaged', {
+        line: String(unit.recovery.diagnostic.line ?? '—'), offset: String(unit.recovery.diagnostic.offset ?? '—')}) : uiText('forge.history.refused')) +
         ' · ' + unit.recovery.diagnostic.code + (unit.recovery.diagnostic.journal_sha256 ? '\nSHA-256 '+unit.recovery.diagnostic.journal_sha256 : '') : '') +
       (unit.stale_dispositions ? uiText("ui.ui.kit.window.views.forge.panel.bba46ad410", {p0: String(unit.stale_dispositions)}) : "");
     view.brief.textContent = unit.subtask || uiText("ui.ui.kit.window.views.forge.panel.0d6bd2b100");

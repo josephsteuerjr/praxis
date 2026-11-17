@@ -38,11 +38,19 @@ class HistoryRefusal(ValueError):
 def _rows(raw: bytes, *, offset=0, line=1):
     """Strict evidence reader. An unknown record cannot be a negative census."""
     digest = hashlib.sha256(raw).hexdigest()
+    identities = {kind:identity for kind,identity in KINDS.values()}
+    identities.update(agent_dequeued='agent_id',agent_resumed='agent_id')
     for part in raw.splitlines(keepends=True):
         try:
             row = json.loads(part.decode('utf-8'))
             if not isinstance(row, dict):
                 raise ValueError('object required')
+            if not isinstance(row.get('kind'),str) or not row['kind']:
+                raise ValueError('event kind required')
+            timestamp(row.get('at'))
+            identity = identities.get(row['kind'])
+            if identity and (not isinstance(row.get(identity),str) or not row[identity]):
+                raise ValueError('execution identity required')
         except (ValueError, UnicodeError):
             raise HistoryRefusal('forge_history_corrupt', line=line, offset=offset,
                 record_size=len(part), record_sha256=hashlib.sha256(part).hexdigest(),
@@ -54,7 +62,16 @@ def _rows(raw: bytes, *, offset=0, line=1):
 
 def history_diagnostic(directory: Path) -> dict | None:
     try:
-        raw = _bytes(Path(directory).parents[1]/'events.jsonl')
+        directory = Path(directory)
+        raw = _bytes(directory.parents[1]/'events.jsonl')
+        if (directory/HISTORY_PROOF).exists():
+            try:
+                _read_history_recovery(directory)
+                return None
+            except HistoryRefusal:
+                raise
+            except (OSError,ValueError,TypeError,KeyError,StopIteration,AttributeError):
+                return {'code':'forge_history_proof_changed','journal_sha256':hashlib.sha256(raw).hexdigest()}
         list(_rows(raw))
     except HistoryRefusal as error:
         return {**error.diagnostic, 'journal_sha256': hashlib.sha256(raw).hexdigest()}
@@ -230,7 +247,8 @@ def _history_tail(directory: Path, snapshot: bytes, boundary: dict) -> None:
     kind, identity = KINDS[directory.parent.name]
     # Only the exact pre-reboot snapshot is covered by the witnessed boundary.
     # Every later byte must be readable; a hidden relaunch still blocks custody.
-    for _, row in _rows(journal[len(snapshot):], offset=len(snapshot), line=len(snapshot.splitlines())+1):
+    line = len(snapshot.splitlines()) + int(not snapshot or snapshot.endswith((b'\n',b'\r')))
+    for _, row in _rows(journal[len(snapshot):], offset=len(snapshot), line=line):
         if (row.get(identity) == directory.name
                 and row.get('kind') in {kind,'agent_dequeued','agent_resumed'}
                 and timestamp(row.get('at')) >= int(boundary['boot_time'])):
@@ -359,7 +377,8 @@ def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_g
                     recovery_sha256=hashlib.sha256(_bytes(directory/filename)).hexdigest())
             return {'status':'prepared' if action == 'prepare_recovery' and selected else 'settled',
                     'action':action,'task_id':task_id,'agent_id':agent_id,'units':[d.name for d in selected],
-                    'reason':frame_language.text('forge.history.prepared' if action == 'prepare_recovery' and selected else 'forge.history.recovered')}
+                    'reason':frame_language.text('forge.history.none' if not selected else
+                        'forge.history.prepared' if action == 'prepare_recovery' else 'forge.history.recovered')}
     except (OSError,ValueError,TypeError,KeyError,StopIteration,AttributeError) as error:
         return {'status':'refused','action':action,'task_id':task_id,
                 'diagnostic':getattr(error,'diagnostic',{'code':'forge_history_unavailable'}),

@@ -3539,5 +3539,6 @@
   "native.runner.media.document_failed": "[Telegram file: {p0}, message {p1}: the bytes arrived, but the working copy could not be created ({p2}). Do not guess its contents.]",
   "forge.history.prepared": "The original Linux host witness and exact journal snapshot, including damaged bytes, are saved. Process custody is not yet released. The owner must restart this host themselves, then call recover; the application does not reboot it.",
   "forge.history.recovered": "Custody of process trees proven extinct is released. Historical results, the damaged journal and unknown outcomes are retained. Unsafe continuation and side-effect replay remain prohibited.",
-  "forge.history.refused": "Recovery is unconfirmed. Inspect diagnostic.code and retained evidence. Damaged history requires explicit confirmation of the original Linux host, prepare_recovery and a later owner-performed reboot of that host before recover. Do not delete bad records or replay unknown actions."
+  "forge.history.refused": "Recovery is unconfirmed. Inspect diagnostic.code and retained evidence. Damaged history requires explicit confirmation of the original Linux host, prepare_recovery and a later owner-performed reboot of that host before recover. Do not delete bad records or replay unknown actions.",
+  "forge.history.none": "No units in the selected branch require this recovery. History is unchanged."
 }
