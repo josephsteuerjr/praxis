@@ -1,0 +1,23 @@
+name: Anonymous Hélène 2.8.8 public verification
+on:
+  push:
+    branches: [codex/helene288-public-verify-1711]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify every public asset anonymously
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 verify_public_ci.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-verification
+          path: PUBLIC-VERIFIED.json
