@@ -129,6 +129,20 @@ class InvalidTransition(RunError):
     pass
 
 
+def manifest_paths(root: Path, run_id: str) -> list[Path]:
+    """Find exact manifest entries across buckets, including broken duplicates."""
+    if not run_id or run_id in {'.', '..'} or not _SAFE_ID.fullmatch(run_id):
+        return []
+    # A full Path.glob pattern can enumerate every run in each bucket on 3.12.
+    # Imported IDs need not encode a date, so probe one exact child per bucket.
+    paths = []
+    for bucket in root.glob('*/'):
+        path = bucket / run_id / 'manifest.json'
+        if os.path.lexists(path):
+            paths.append(path)
+    return paths
+
+
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 

@@ -273,6 +273,8 @@ def suppresses_replay(chat_id, last_inbound_ts=None, *, base=None):
     The run's immutable start bounds the original input. A newer incoming
     message remains eligible; missing/ambiguous evidence never hides it.
     """
+    from run_manager import manifest_paths
+
     home = Path(base or base_path())
     try:
         if last_inbound_ts is None:
@@ -286,11 +288,13 @@ def suppresses_replay(chat_id, last_inbound_ts=None, *, base=None):
     for path in (home / 'memory/.control/run-cancel').glob('run-*.json'):
         if not requested(path.stem, home):
             continue
-        manifests = list((home / 'memory/runs').glob('*/' + path.stem + '/manifest.json'))
+        manifests = manifest_paths(home / 'memory/runs', path.stem)
         if len(manifests) != 1:
             continue
         try:
             context = json.loads(manifests[0].read_text(encoding='utf-8'))['context']
+            if not isinstance(context, dict) or not isinstance(context.get('created_at'), str):
+                continue
             peer = context.get('origin_chat_id') or context.get('delivery_chat_id')
             created = datetime.datetime.fromisoformat(context['created_at'].replace('Z', '+00:00'))
             if str(peer) == str(chat_id) and created.tzinfo is not None and stamp <= created.timestamp():
