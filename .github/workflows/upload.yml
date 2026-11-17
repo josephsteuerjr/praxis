@@ -1,0 +1,38 @@
+name: Upload exact Hélène 2.8.8 archives
+on:
+  push:
+    branches: [codex/helene288-upload-allos-1711]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos
+          path: native/44130427711/native-macos
+          run-id: 44130427711
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-intel
+          path: native/44130427711/native-macos-intel
+          run-id: 44130427711
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-arm
+          path: native/44130427711/server-arm
+          run-id: 44130427711
+          github-token: ${{ github.token }}
+      - name: Reconstruct, verify and upload to the draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 upload_allos.py
