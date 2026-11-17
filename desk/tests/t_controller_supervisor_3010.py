@@ -8,6 +8,49 @@ from localharness.package_notice import read,write
 
 
 class ControllerSupervisor(unittest.TestCase):
+    def test_idle_observations_leave_export_unchanged_and_refresh_still_flushes(self):
+        import threading
+        from queue import Queue
+
+        with tempfile.TemporaryDirectory(prefix='idle-status-') as tmp:
+            tree = Path(tmp)
+            config = tree / 'helene.json'
+            write(config, {'tree': str(tree)})
+            stop = threading.Event()
+            commands = Queue()
+            observed = []
+            exported = []
+            flushes = []
+            original = supervisor._desktop_status
+
+            def export(*args):
+                exported.append(args[3])
+                with patch.object(os, 'fsync', side_effect=lambda fd: flushes.append(fd)):
+                    original(*args)
+
+            def observe(value):
+                observed.append(value)
+                if len(observed) == 3:
+                    commands.put('requested-refresh')
+                if len(observed) == 6:
+                    stop.set()
+
+            channel = supervisor.Spec('channel', (), tree, {}, tree / 'child.log', 0,
+                                      unavailable='fixture has no child')
+            plans = {supervisor.BASE_ID: (tree, {supervisor.BASE_ID + ':channel': channel})}
+            with patch.object(owner_stop, 'stopped', return_value=False), \
+                 patch.object(supervisor, '_plans', return_value=plans), \
+                 patch.object(supervisor, '_desktop_status', side_effect=export):
+                self.assertEqual(supervisor.run(config, stop=stop, desktop_roster=True,
+                    status_nonce='a' * 32, commands=commands, status_observer=observe), 0)
+
+            self.assertEqual([row['seq'] for row in observed], list(range(1, 7)))
+            self.assertEqual([row['ack'] for row in observed],
+                             [None, None, None, 'requested-refresh', None, None])
+            self.assertEqual(exported, [None, 'requested-refresh', None])
+            self.assertEqual(len(flushes), 1)
+            self.assertIsNone(read(tree / '.python-desktop-status')['ack'])
+
     def exercise(self,bootstrap):
         with tempfile.TemporaryDirectory(prefix='controller-supervisor-') as tmp:
             root=Path(tmp);data=root/'data';data.mkdir()
