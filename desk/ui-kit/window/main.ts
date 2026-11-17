@@ -458,8 +458,10 @@ export function start(opts: WindowOptions): void {
         // The header's drag area (python_app: HEADER_DRAG_SELECTOR).
         const header = "#chrome, .chrome-drag, .rail-sign";
         if (NATIVE_DRAG_PLATFORMS.includes(String(bridge.platform))) {
-          // Windows: header and edges go to the system's move/size loop (python_app.begin_native_drag).
-          installNativeResize(invoke, document, true);
+          // Keep the responsive system caption drag. Frameless edge hit-test
+          // messages are ignored on reported Windows 10 installations; the
+          // coalesced resize API fixes the opposite edge on every platform.
+          installNativeResize(invoke);
           installNativeDrag(invoke, () => bridge.win("maximize"), header);
         } else {
           installNativeResize(invoke);

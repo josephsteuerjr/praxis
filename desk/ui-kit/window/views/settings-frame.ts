@@ -258,7 +258,7 @@ export interface Edition {
   collect(out: Config): string;
   /** Refresh route-specific controls only after a confirmed config write. */
   didSave?(config: Config): void;
-  useServerBridge?(bridge:ServerBridge):void;
+  useServerBridge?(bridge:ServerBridge,options?:{relay?:boolean}):void;
   /** Подпись под карточкой «Имена»: у изданий она разная. */
   namesHint: string;
   /**
@@ -392,11 +392,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
 
-  const chooseBridge=(bridge:ServerBridge)=>{
+  const chooseBridge=(bridge:ServerBridge,options:{relay?:boolean}={})=>{
     if(draft.mode==='remote')throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.18eb1ae156"));
-    useBridge(draft,bridge);built.useServerBridge?.(bridge);
+    useBridge(draft,bridge,options);built.useServerBridge?.(bridge,options);
     phoneSettings.dispatchEvent(new CustomEvent('bridge-selected',{detail:bridge}));
     phoneSettings.dispatchEvent(new Event('input',{bubbles:true}));
+    return uiText('bridge.routes.draft');
   };
   const phoneSettings=phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg,{onBridge:chooseBridge});
   center.append(inGroup(phoneSettings, GROUP.brain));

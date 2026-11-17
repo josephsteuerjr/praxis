@@ -447,6 +447,14 @@ class Host:
         if action=='retirement_start':
             from .portable_retirement import start
             return start(self.root,owner=self.owner)
+        if action == 'events':
+            with self.lock:
+                identity = args.get('observer')
+                observer = self.observers.get(identity) if isinstance(identity, str) else None
+                if observer is not None and args.get('agent') == observer['agent']:
+                    # The authenticated attached window only observes this
+                    # in-memory queue. It has no need to re-read the roster.
+                    return {'events': [row for row in self.events if row['seq'] > int(args.get('after') or 0)]}
         selected = args.get('agent') or self.owner._default()
         if agents.find(self.root, selected) is None:
             raise ValueError('Selected agent is unavailable')

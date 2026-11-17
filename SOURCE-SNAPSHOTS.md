@@ -1,14 +1,12 @@
 # Source and package bindings
 
-## Hélène 2.8.7 source base
+## Hélène 2.8.9 source base
 
-The immutable `v2.8.7` tag at
-`517669de20d73c7a2e3efb2e2c55ff339dc740ab` identifies the latest released
-Hélène source: the desktop host, interfaces and explicit `helene/core/` overlay
-on its shared `praxis/` base. Shipped per-platform inventories bind the exact
-qualified composition. The 17 November main sync includes that public history
-and then adds the current cloud snapshot below; main is development source,
-so it does not redefine the released 2.8.7 composition.
+The immutable `v2.8.9` tag at
+`3b46cc08e998bfdd8f34e3243dd5dfefa898e8fb` identifies the latest all-platform
+release. Shipped per-platform inventories bind its qualified composition.
+This main sync incorporates that already-public history and then the newer
+cloud source below. It does not redefine the shipped desktop composition.
 
 ## Historical desktop 2.5.0 composition
 
@@ -40,48 +38,23 @@ beyond that frozen desktop code.
 
 ## Current cloud Praxis mirror
 
-`praxis/` mirrors the selected public source of running cloud Praxis on
-17 November 2026: HEAD `67111dfb00d55e1e43bf73d1c6c02d979929d220`, with no
-selected deployed-uncommitted files. This updates the previous `fe7d2036`
-resident-skills snapshot with the subsequent epoch-tape and context fixes:
-superseded revisions and duplicate deletion records retire once represented;
-a pending life write holds its archive occurrence until it can be joined;
-her sends from other topics remain marked evidence rather than her current
-reply; follow-up and turn-trigger labels name their direction. A dismissed
-stale epoch-repair blocker retains its evidence without remaining active.
+`praxis/` mirrors the selected public code of running cloud Praxis at
+`c5785bb1762c79a92dceb62f63d244194a877f2f`. [CORE-SOURCE.json](CORE-SOURCE.json) binds
+799 files and their executable modes. The engine checks exact run
+manifests during turn preparation and preserves ambiguous records for review.
+Two canonical Linux runs on the deployed commit each reported 7,364 tests,
+19 skips and zero failures.
 
-`CORE-SOURCE.json` records the 796 selected live source files, their modes,
-source and public digests, exclusions and historical qualification. The last
-live change passed two identical full gates, each with 7,338 tests, 16 skips
-and no errors, plus its 506-test focused set. Those are the original deployment
-results, not fresh tests performed by this mirror sync. This sync checks source
-identity, executable modes, Python syntax and publication privacy.
+`remote/praxis-desk/` mirrors app source `4f74f5c604d95ae054f704a03c6b89a46b2d52cd`.
+The active-turn card resolves the author from the exact trigger record.
+Its backend gate ran 63 tests, and deployed readback verified author resolution.
+The source comparison covers 181 app files, 21 deployed backend files
+and 46 deployed frontend files. The public title test uses a synthetic handle.
 
-Two live files remain excluded: a stray runner copy and a one-off script that
-reads a third party's private inbox. Eight files originally introduced into
-`praxis/` by Hélène releases remain preserved. The existing two documentation
-sanitizations remove third-party identifiers from comments and docstrings while
-preserving the executable AST. Private memory, authored soul, workspace,
-credentials and private Git history are excluded.
-
-Praxis's server application is in
-[`remote/praxis-desk/`](remote/praxis-desk/), separate from Hélène's `desk/`.
-Its source remains `e52ce540fcc1a49b7d47c22bed2dc5c845572508`: all 19 installed
-backend files match after line-ending normalization, and the deployed MiniApp
-and PWA files still match the original build manifest. The relay source and
-running image are unchanged from `RELAY-SOURCE.json`; that record's disabled
-limits describe the historical 14 November capture. The three limits were
-subsequently enabled as runtime configuration, without a relay code change.
-No runtime is deployed or restarted by this source publication.
-
-The source keeps the existing Ouroboros attribution in the README and original
-commits. New cloud tests can expose gaps where Hélène overrides a shared module;
-porting decisions and full desktop qualification belong to the next release.
-Use immutable desktop tags and shipped inventories for released code.
-
-The older source bindings below are historical provenance. `HELENE-SOURCE.json`
-and `helene/PLATFORM-SOURCE.json` also retain historical inputs; each new archive
-has its own generated composition inventories.
+The cloud mirror retains its public templates and Hélène-origin files.
+Two existing comment and docstring sanitizations preserve the executable AST.
+The snapshot contains public source and excludes private runtime state and Git history.
+See [RELAY-SOURCE.json](RELAY-SOURCE.json) for relay provenance.
 
 ## Historical 2.2.9 bindings
 

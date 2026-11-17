@@ -1,3 +1,21 @@
+# 2.8.9 Beta
+
+- Refresh desktop preferences on change and deliver attached-window session events from memory.
+- Publish desktop status when it changes while preserving startup, Stop and command acknowledgements.
+- Accelerate cold memory timestamp validation and exact run manifest lookup.
+
+# 2.8.8 Beta
+
+- Fixed native installation of the built-in SSH server bridge without retiring the session.
+- Direct proxy setup, existing-server default, visible SSH key selection, proxy-only operation and separate relay opt-in; distinguish occupied ports, changed host keys, authentication and connection failures.
+- Preserve the Forge roster around damaged optional liveness records and remember explicit card disclosures through page reloads.
+- Preserve confirmed Mini App menu readiness when optional bot metadata lookup fails.
+- Mark historical in-doubt turns for evidence-based reconciliation without resending or inventing media delivery.
+- Restore compatible Windows edge/corner resizing while retaining responsive native header movement and unobstructed maximized edge/close targets.
+- Device Stop and resource-owner confirmation share the same durable cancellation semantics while retaining channel/gesture provenance.
+- Diagnose damaged Forge history by exact line, byte offset and hash; explicit Linux recovery preserves its snapshot and requires a witnessed later reboot of the confirmed original host before releasing custody.
+- Latest Beta for Windows, Mac Apple silicon/Intel, Debian/Ubuntu, Fedora and Linux ARM64 server.
+
 # 2.8.7 Beta
 
 - Scrolling, typing, animations and buttons lagged while the agent was working: two window-wide `:has()` style rules made every small change in the page (a status line, a voice-player flag) restyle the whole window, including the full-window paper layer, so the page waited about half a second for each repaint. They are replaced by explicit flags. On a stand with a 600-message feed on the current WebView2, a typed letter appeared after 410–480 ms in 2.8.6 and after 18–21 ms in 2.8.7, and idle half-second stalls disappeared.

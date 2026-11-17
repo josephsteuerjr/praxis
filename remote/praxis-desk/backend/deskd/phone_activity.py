@@ -1,10 +1,11 @@
 """Read-only phone monitoring: display metadata, never Forge payload authority."""
 from . import forge_reader
 
-TASK=('id','kind','goal','status','max_active_workers')
+TASK=('id','kind','goal','status','max_active_workers','recovery_units')
 UNIT=('id','parent_unit_id','depth','ancestry_unknown','role','model','subtask','status',
       'request_status','custody','current_disposition','stale_dispositions','started','created',
-      'finished','observation','liveness','process_liveness','request_ref','result_ref','payload_refs')
+      'finished','observation','liveness','process_liveness','request_ref','result_ref','payload_refs',
+      'history_diagnostic','recovery')
 EVENT=('seq','kind','at','tool','generation','iteration','call_id','input_ref','output_ref')
 
 def activity(tree,limit=20,cursor=''):

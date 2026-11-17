@@ -10,6 +10,8 @@ from deskd import forge_reader,phone_activity,forge_snapshot
 
 class PhoneContract(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        from unittest.mock import patch
+        self.enterContext(patch.dict(os.environ,{'HELENE_TREE':str(TREE)}))
         forge_snapshot.invalidate();self.addCleanup(forge_snapshot.invalidate)
         app.TOKEN='synthetic-owner';app._DEVICES_CACHE={'stamp':None,'rows':[]}
         app._save_devices([{'id':'fixture','hash':app._key_hash('synthetic-phone')}])

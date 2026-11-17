@@ -4827,7 +4827,12 @@ def _control_task(task_id: str, action: str, agent_id: str = "", expected_genera
     return value
 
 
-def control(task_id: str, action: str, agent_id: str = '', expected_generation: str = '') -> dict:
+def control(task_id: str, action: str, agent_id: str = '', expected_generation: str = '',
+            *, host_binding: str = '', reason: str = '') -> dict:
+    if action in {'prepare_recovery','recover'}:
+        import forge_recovery
+        return forge_recovery.recovery_control(sys.modules[__name__],task_id,action,agent_id,expected_generation,
+            host_binding=host_binding,reason=reason)
     return _control_linked(task_id,action,agent_id,expected_generation,set())
 
 

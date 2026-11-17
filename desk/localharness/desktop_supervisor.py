@@ -494,8 +494,9 @@ def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
     try:
         with temporary.open("x", encoding="utf-8") as stream:
             json.dump(data, stream, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
+            if ack is not None:
+                stream.flush()
+                os.fsync(stream.fileno())
         # Windows readers briefly hold a handle that can deny replacement of
         # the old pathname (WinError 5/32). Keep the writer's exact temp bytes
         # and retry only that atomic replace for a short bounded interval;
@@ -552,6 +553,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         receipt_seq = 0
         last_status = 0.0
         pending_ack = None
+        exported_status = None
         export_problem = None
         uncertain = False
         from localharness.desktop_control import Control
@@ -724,21 +726,24 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                 if desktop_roster and (pending_ack is not None or time.monotonic() - last_status >= 1.0):
                     receipt_seq += 1
                     observation = _desktop_observation(status_nonce, receipt_seq, pending_ack, installed, active)
-                    try:
-                        _desktop_status(tree, status_nonce, receipt_seq, pending_ack, installed, active)
-                    except OSError as exc:
-                        # An unavailable observation export must not retire healthy
-                        # owned children. Only this publication boundary is caught;
-                        # process/custody/configuration faults still unwind normally.
-                        problem = type(exc).__name__ + ': ' + str(exc)
-                        observation['status_export_error'] = problem
-                        if problem != export_problem:
-                            print('[python-supervisor] status export unavailable: ' + problem,
-                                  file=sys.stderr, flush=True)
-                        export_problem = problem
-                    else:
-                        pending_ack = None
-                        export_problem = None
+                    status_content = (pending_ack, observation['agents'])
+                    # The native owner verifies file mtime. The Python controller
+                    # receives a fresh in-process observation each tick and needs
+                    # a file export only when its content changes.
+                    if status_observer is None or status_content != exported_status or export_problem:
+                        try:
+                            _desktop_status(tree, status_nonce, receipt_seq, pending_ack, installed, active)
+                        except OSError as exc:
+                            problem = type(exc).__name__ + ': ' + str(exc)
+                            observation['status_export_error'] = problem
+                            if problem != export_problem:
+                                print('[python-supervisor] status export unavailable: ' + problem,
+                                      file=sys.stderr, flush=True)
+                            export_problem = problem
+                        else:
+                            exported_status = status_content
+                            pending_ack = None
+                            export_problem = None
                     if status_observer is not None:
                         status_observer(observation)
                     last_status = time.monotonic()

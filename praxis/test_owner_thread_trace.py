@@ -160,7 +160,14 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         self._orig = fu.LEDGER.path
         fu.LEDGER.path = Path(self.tmp.name) / "followups.json"
         self.addCleanup(lambda: setattr(fu.LEDGER, "path", self._orig))
-        self.now = time.time()
+        import datetime as dt
+        from unittest.mock import patch
+        import praxis_time
+
+        # The fixture's recent sends must all be on the same local day.
+        noon = praxis_time.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        self.enterContext(patch.object(praxis_time, '_source', return_value=noon.astimezone(dt.UTC)))
+        self.now = noon.timestamp()
         # ⚠ ВТОРОЙ ИСТОЧНИК, КОТОРЫЙ ЗДЕСЬ НЕ ИЗОЛИРОВАЛСЯ, И ЭТО СТОИЛО КРАСНОГО ГЕЙТА.
         #
         # `my_sends_today_digest()` читает ДВА источника: след нитей (он изолирован строкой

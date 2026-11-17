@@ -292,7 +292,13 @@ class PhoneAccess:
                             self.menu = MenuOwner(self.root, botapi.BotClient.from_config(config), int(owner), token)
                         try:
                             await self.menu.publish(self.url, str((config.get('agent') or {}).get('name') or 'Hélène'))
-                            me = await self.menu.call('getMe')
+                            # Menu readiness was already read back by publish.
+                            # A failed optional username lookup must not turn
+                            # that confirmed effect into a permanent retry.
+                            try:
+                                me = await self.menu.call('getMe')
+                            except Exception:
+                                me = {}
                             import re
                             username = str(me.get('username') or '')
                             bot_url = 'https://t.me/' + username + '?start=helene' if re.fullmatch(r'[A-Za-z0-9_]+', username) else ''

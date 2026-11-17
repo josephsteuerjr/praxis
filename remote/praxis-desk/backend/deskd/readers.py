@@ -539,7 +539,7 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
                 "chat_title": _title_for(chat_id, titles),
                 "run_label": _turn_label(chat_id, _run_words(name), titles) if with_titles and run_kind == "chat_turn" else "",
                 "forge_task_id": context.get("forge_task_id") or "",
-                "goal_head": _run_title(month / name, manifest) if with_titles else "",
+                "goal_head": _run_title(month / name, manifest, titles=titles) if with_titles else "",
                 "operator": operator,
                 "terminal_status": terminal.get("status") or "",
                 "model_profile": context.get("model_profile") or "",
@@ -995,7 +995,7 @@ def _plain_title(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _run_title(path: Path, manifest: dict) -> str:
+def _run_title(path: Path, manifest: dict, *, titles: dict[str, str] | None = None) -> str:
     context = manifest.get("context") or {}
     principal = str(context.get("principal_id") or "")
     kind = str(context.get("kind") or "")
@@ -1005,13 +1005,15 @@ def _run_title(path: Path, manifest: dict) -> str:
     if kind != "chat_turn" or principal == "praxis:self":
         return {"wake": "Пробуждение", "task_window": "Работа над задачей",
                 "chat_turn": "Собственное событие"}.get(kind, kind or "Событие агента")
-    origin = _run_origin(path, manifest)
+    origin = _run_origin(path, manifest, include_author=True)
     if origin["source"] != "snapshot":
         ids = context.get("origin_message_ids") or []
         return ("Повод: сообщение " + ", ".join("#" + str(v) for v in ids) + " недоступно"
                 if ids else "Повод: сообщение не записано")
-    words = _run_words(path.name)
-    author = _plain_title(re.sub(r"\s*\(@[^)]*\)\s*$", "", words.get("who", "")))
+    speaker = origin.get("author") or _run_words(path.name).get("who", "")
+    if not speaker and principal.isascii() and principal.isdecimal() and principal == str(context.get("origin_chat_id")):
+        speaker = _title_for(principal, chat_titles() if titles is None else titles)
+    author = _plain_title(re.sub(r"\s*\(@[^)]*\)\s*$", "", speaker))
     if not author:
         author = _plain_title(_room_titles().get(principal, "")) or ("Участник #" + principal if principal else "Автор")
     text = _plain_title(origin["text"])
@@ -1032,7 +1034,7 @@ def _origin_authority(filename: str, stamp: tuple) -> dict:
     return authority
 
 
-def _run_origin(path: Path, manifest: dict) -> dict:
+def _run_origin(path: Path, manifest: dict, *, include_author: bool = False) -> dict:
     """Only the first authority block supplies the trigger, never conversation head.
 
     v1/v2 snapshots share this JSON envelope. Decode JSON rather than searching
@@ -1054,7 +1056,23 @@ def _run_origin(path: Path, manifest: dict) -> dict:
         if expected != actual:
             return unknown
         text = authority.get("origin_text")
-        return {"text": text, "source": "snapshot"} if isinstance(text, str) and text.strip() else unknown
+        if not isinstance(text, str) or not text.strip():
+            return unknown
+        origin = {"text": text, "source": "snapshot"}
+        if include_author and authority.get("principal_id") == context.get("principal_id"):
+            # The immutable reply targets already contain the sender at run birth.
+            # Match the exact trigger, since another participant may speak next.
+            message_id = authority.get("origin_message_id")
+            target = str(message_id) if type(message_id) is int else (
+                expected[0] if len(expected) == 1 else "")
+            rows = authority.get("reply_targets")
+            if target in expected and isinstance(rows, list):
+                names = {row[1].strip() for row in rows if isinstance(row, list) and len(row) == 3
+                         and type(row[0]) is int and str(row[0]) == target
+                         and isinstance(row[1], str) and row[1].strip()}
+                if len(names) == 1:
+                    origin["author"] = names.pop()
+        return origin
     except (OSError, ValueError, TypeError):
         return unknown
 

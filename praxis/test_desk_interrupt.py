@@ -23,12 +23,17 @@ import selfdev  # noqa: E402
 
 class _Manager:
     def __init__(self, rows, conflict=()):
-        self.rows = rows
+        self.base = Path(tempfile.mkdtemp(prefix='praxis_interrupt_manager_'))
+        import datetime as dt
+        born=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(seconds=10)).isoformat()
+        self.rows = [dict(created_at=born,**r) for r in rows]
         self.conflict = set(conflict)
         self.cancelled: list[tuple[str, str, str]] = []
 
     def list_runs(self, *, statuses=None, kind="", limit=None):
         return [dict(r) for r in self.rows]
+
+    def append_event_once(self, *args, **kwargs):pass
 
     def request_cancel(self, run_id, *, actor, reason="", expected_revision=None):
         if run_id in self.conflict:
@@ -48,11 +53,14 @@ class DeskInterruptTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
         self.journal: list[str] = []
+        mock.patch('step_control.signal_cancel', return_value={'requested':0,'failures':[]}).start()
         mock.patch.object(runner.agent, "tool_journal",
                           lambda entry, salience=2: self.journal.append(entry) or "ok").start()
         self.addCleanup(mock.patch.stopall)
 
     def _request(self, **fields):
+        import datetime as dt
+        fields.setdefault('at',dt.datetime.now(dt.timezone.utc).isoformat())
         selfdev.INTERRUPT_REQ.parent.mkdir(parents=True, exist_ok=True)
         selfdev.INTERRUPT_REQ.write_text(json.dumps(fields, ensure_ascii=False), encoding="utf-8")
 
@@ -70,7 +78,7 @@ class DeskInterruptTests(unittest.TestCase):
         with mock.patch.object(runner.agent, "_runs", lambda: manager):
             asyncio.run(runner._desk_interrupt_once())
         self.assertEqual([c[0] for c in manager.cancelled], ["run-1", "run-2"])
-        self.assertEqual(manager.cancelled[0][1], "desk:phone")
+        self.assertEqual(manager.cancelled[0][1], "desk:owner")
         self.assertEqual(manager.cancelled[0][2], "стоп")
         self.assertFalse(selfdev.INTERRUPT_REQ.exists(), "просьба исполнена один раз")
         self.assertTrue(any("прервано" in line for line in self.journal),
@@ -80,11 +88,13 @@ class DeskInterruptTests(unittest.TestCase):
         manager = _Manager([{"run_id": "run-1"}, {"run_id": "run-2"}, {"run_id": "run-3"}],
                            conflict={"run-1"})
         with mock.patch.object(runner.agent, "_runs", lambda: manager):
-            result = runner._apply_desk_interrupt({"scope": "run-2", "by": "owner"})
+            import datetime as dt
+            at=dt.datetime.now(dt.timezone.utc).isoformat()
+            result = runner._apply_desk_interrupt({'scope':'run-2','by':'owner','at':at})
         self.assertEqual(result["cancelled"], ["run-2"])
         self.assertEqual(result["skipped"], [])
         with mock.patch.object(runner.agent, "_runs", lambda: manager):
-            result = runner._apply_desk_interrupt({"scope": "all"})
+            result = runner._apply_desk_interrupt({'scope':'all','at':at})
         self.assertEqual(result["cancelled"], ["run-2", "run-3"])
         self.assertEqual(result["skipped"], ["run-1: RuntimeError"])
 

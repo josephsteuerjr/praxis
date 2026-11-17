@@ -108,10 +108,12 @@ def _validate_result(result, identity):
 
 
 def _status(base, run_id):
-    if not run_id:return ''
-    paths = list((base / 'memory/runs').glob('*/' + run_id + '/manifest.json'))
+    from run_manager import manifest_paths
+    paths = manifest_paths(base / 'memory/runs', run_id)
     if len(paths) != 1:return ''
-    try:return str(json.loads(paths[0].read_text(encoding='utf-8')).get('status') or '')
+    try:
+        manifest = json.loads(paths[0].read_text(encoding='utf-8'))
+        return str(manifest.get('status') or '') if isinstance(manifest, dict) else ''
     except (OSError, ValueError):return ''
 
 

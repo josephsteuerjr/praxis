@@ -180,7 +180,10 @@ class Bridge:
                     message=('Локальный порт занят или недоступен. Выбери свободный порт; чужое подключение не изменено.'
                         if isinstance(error,OSError) and getattr(error,'errno',None) in (48,98,10048,10013)
                         else 'Мост не подключился. Проверь SSH-доступ, отпечаток и разрешённые пробросы.')
-                    self.record('retry',message,error_type=type(error).__name__,retry_at=time.time()+min(30,2**min(attempt,5)))
+                    self.record('retry',message,error_type=type(error).__name__,
+                        error_code=('local_port_unavailable' if isinstance(error,OSError) and getattr(error,'errno',None) in (48,98,10048,10013)
+                                    else getattr(error,'code','ssh_unavailable')),
+                        retry_at=time.time()+min(30,2**min(attempt,5)))
                 finally:self.disconnect()
                 if self.stop_event.is_set():break
                 self.retry_event.wait(min(30,2**min(attempt,5)));self.retry_event.clear();attempt+=1

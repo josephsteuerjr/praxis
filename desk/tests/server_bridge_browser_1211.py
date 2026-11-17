@@ -65,6 +65,10 @@ def run(evidence):
                         if action=='check':return request.fulfill(json={'ok':True,'checks':[{'message':'HTTPS и прокси проверены (fixture).'}]})
                         if action=='retry':return request.fulfill(json={'ok':True})
                         if action=='add-existing':
+                            if not raw['external']:
+                                assert raw['server_profile']=='a'*32 and raw['ports']=={'local_proxy_port':18889,'remote_proxy_port':8888}
+                                only_proxy={'id':'f'*32,'name':'Proxy only','external':'','ports':raw['ports']}
+                                bridges.append(only_proxy);return request.fulfill(json={'ok':True,'bridge':only_proxy,'message':'Added.'})
                             assert raw['server_profile']=='a'*32 and raw['external']=='https://existing.example.org'
                             existing={**bridge,'id':'e'*32,'name':'Готовый сервер','external':raw['external']}
                             bridges.append(existing);return request.fulfill(json={'ok':True,'bridge':existing,'message':'Добавлено.'})
@@ -75,8 +79,11 @@ def run(evidence):
                         if width<760:page.locator('#toggle-rail').click()
                         page.locator('[data-view="settings"]').click();page.get_by_role('tab',name='Программа',exact=True).click()
                         card=page.get_by_role('heading',name='Серверный мост',exact=True).locator('..')
-                        card.get_by_role('button',name='Установить серверный мост',exact=True).click()
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
+                        assert installed,'direct setup enables the already bundled component'
+                        assert card.get_by_role('button',name='Сервер уже настроен',exact=True).get_attribute('aria-pressed')=='true'
+                        assert card.get_by_placeholder('~/.ssh/id_ed25519',exact=True).is_visible()
+                        card.get_by_role('button',name='Настроить сервер автоматически',exact=True).click()
                         card.get_by_label('Адрес сервера',exact=True).fill('fixture.example.org')
                         password=card.get_by_label('Пароль или SSH-ключ',exact=False)
                         password.evaluate("node=>{const data=new DataTransfer();data.setData('text','-----BEGIN OPENSSH PRIVATE KEY-----\\nfixture-only\\n-----END OPENSSH PRIVATE KEY-----');node.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}")
@@ -144,6 +151,24 @@ def run(evidence):
                         card.get_by_role('button',name='Проверить и подготовить',exact=True).click()
                         card.get_by_role('button',name='Использовать для этого агента',exact=True).wait_for()
                         assert len([row for row in calls if row[1] in ('prepare','install')])==before
+                        card.get_by_role('button',name='Настроить подключение',exact=True).click()
+                        card.get_by_role('button',name='Сохранённое подключение сервера',exact=True).click()
+                        page.get_by_role('option',name='Мой сервер · root@fixture.example.org',exact=True).click()
+                        ports=card.locator('details').filter(has=page.get_by_label('Локальный порт прокси',exact=True))
+                        ports.locator('summary').click()
+                        card.get_by_label('Локальный порт прокси',exact=True).fill('18889')
+                        card.get_by_role('button',name='Проверить и подготовить',exact=True).click()
+                        relay=card.get_by_role('switch',name='Также использовать этот прокси для реле (его маршрут проверяется отдельно)',exact=True)
+                        assert relay.get_attribute('aria-checked')=='false'
+                        relay.click()
+                        card.get_by_role('button',name='Использовать для этого агента',exact=True).click()
+                        page.get_by_role('button',name='Сохранить',exact=True).click();page.wait_for_timeout(180)
+                        assert saves[-1]['network']['proxy']['port']=='18889'
+                        assert saves[-1]['relay']['proxy']['port']=='18889'
+                        assert saves[-1]['relay']['port']==config['relay']['port']
+                        assert len([row for row in calls if row[1] in ('prepare','install')])==before
+                        card.get_by_role('button',name='Использовать для этого агента',exact=True).scroll_into_view_if_needed()
+                        page.screenshot(path=str(evidence/f'proxy-only-{width}.png'))
                         placement=page.get_by_role('heading',name='Размещение агента',exact=True).locator('..')
                         placement.get_by_role('button',name='Открыть управление сервером',exact=True).click()
                         placement.get_by_role('button',name='Обновить сервер',exact=True).wait_for()
@@ -163,7 +188,7 @@ def run(evidence):
                         assert not page.evaluate('document.documentElement.scrollWidth>innerWidth')
                         assert not errors,errors
                         results.append({'width':width,'trust_before_auth':True,'plan_review_resume':True,'both_routes_saved':True,'manual_proxy_detaches':True,
-                            'reopen_saved_profile':True,'existing_server_no_install':True,'offline_manual':True,'persistent_management':True,'guide_saved':True,'errors':errors})
+                            'reopen_saved_profile':True,'existing_server_no_install':True,'proxy_only_and_explicit_relay':True,'offline_manual':True,'persistent_management':True,'guide_saved':True,'errors':errors})
                     except BaseException:
                         page.screenshot(path=str(evidence/f'failure-{width}.png'))
                         (evidence/f'failure-{width}.txt').write_text(page.locator('body').inner_text(),encoding='utf8');raise

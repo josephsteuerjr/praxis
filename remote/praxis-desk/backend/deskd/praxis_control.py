@@ -97,11 +97,7 @@ async def cancel_run(tree, run_id):
     # A terminal manifest alone does not prove that a previously cancelled
     # provider/process has exited. Always request the resource-owner receipt.
     path = tree / 'memory/.control/run-cancel' / (run_id + '.json')
-    request = read(path)
-    if request.get('run_id') != run_id or request.get('action') != 'cancel':
-        request = {'id': secrets.token_hex(12), 'run_id': run_id, 'action': 'cancel',
-                   'by': 'desk:owner', 'at': time.time(), 'reason': 'immediate reset from MiniApp'}
-        write(path, request)
+    request = await asyncio.to_thread(_cancel_request, path, run_id)
     receipt = path.with_suffix('.receipt')
     end = time.monotonic() + 2
     while time.monotonic() < end:
@@ -115,3 +111,22 @@ async def cancel_run(tree, run_id):
         await asyncio.sleep(.05)
     return {'ok': True, 'accepted': True, 'confirmed': False,
             'note': 'Сброс запрошен. Завершение шага пока не подтверждено.'}
+
+
+def _cancel_request(path, run_id):
+    # The core phone consumer uses this same cross-process publication lock.
+    # An existing exact request keeps its original identity/reason.
+    import fcntl
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.with_suffix('.lock').open('a+b') as lock:
+        fcntl.flock(lock.fileno(),fcntl.LOCK_EX)
+        try:
+            request=read(path)
+            if request.get('run_id')==run_id and request.get('action')=='cancel':
+                return request
+            request={'id':secrets.token_hex(12),'run_id':run_id,'action':'cancel',
+                     'by':'desk:owner','at':time.time(),'reason':'immediate reset from MiniApp'}
+            write(path,request)
+            return request
+        finally:
+            fcntl.flock(lock.fileno(),fcntl.LOCK_UN)

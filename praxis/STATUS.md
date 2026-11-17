@@ -1,3 +1,39 @@
+## CURRENT17 November2026 — Stop convergence and Forge history recovery live
+
+Runtime source 725a390f8efd90f947b48d2814903db70d26f050, app b69d03b34e724a4779e7d44bb38eb402527eae05, fast-forward from67111dfb/e52ce54.
+Two full canonical discover gates on the SAME clean source: each7362tests,19skips,
+zero failures/errors; observed IDs and skips equal. All24new cases executed. First
+full run with missing SOUL/skills test inputs remains RED in operator evidence.
+Private read-only test input copies were never applied to authored identity.
+
+Phone/core Stop writers converge on one immutable request identity and reason;
+selected resources receive signals before ledger arbitration. Strict unrelated
+conflicts, request birth fences and honest exit confirmation remain in place.
+Corrupt Forge history has byte/line/hash diagnostics. Explicit owner preparation
+preserves the raw journal and witnesses this Linux host; recovery requires a later
+kernel boot on the same host. It releases old process custody only; original
+unknown effects stay unknown. No automatic reboot, tool replay or fabricated result.
+The paired phone uses the bounded existing owner control queue and reads receipts.
+
+App backend60tests PASS; actual app/core cross-process publication10races PASS;
+new browser recovery checks PASS at320/390/820, zero JS errors; both frontends built.
+The old Windows390px tab-fit assertion also fails unchanged pristinee52 baseline;
+12 preceding browser groups pass, original failure retained. Physical phone and
+real Linux reboot acceptance are separate.
+
+One core/app rollout, exact source bytes verified. Ready in326.815s,
+corePID254532/appPID254614, no restart loop/traceback. Actual installed
+24core+10API cases PASS using synthetic temporary trees only. Five authenticated
+read endpoints200; unauthenticated control403. Self-authored/private memory,
+configuration, auth, existing paused/in_doubt outcomes and old frontend assets kept.
+Rollback tar and immutable release/rollback refs under
+/opt/deploy-operator/praxis-ouroboros-1711. No operator live-control posts or reboot.
+Relay remained unchanged by this rollout; the owner's subsequent Sol6.2 client
+version request is a separate operation with its own receipt. Public source sync
+and project cleanup follow this accepted runtime change.
+
+---
+
 ## CURRENT14 November2026 — titles, generation telemetry and code_query live verified
 
 S1/S2phone source44ff961: true origin-message titles, separate operator probes and numeric

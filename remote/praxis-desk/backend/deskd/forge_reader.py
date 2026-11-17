@@ -140,7 +140,11 @@ def _unit(folder: Path, task_id: str) -> dict:
     result, ref = _result(folder)
     progress = _read(folder, "progress.json")
     stop = _read(folder, "stop.json")
-    unresolved = stop.get("state") in {"pending", "unresolved"}
+    from . import forge_recovery
+    recovery=forge_recovery.read_recovery(folder)
+    unresolved = stop.get("state") in {"pending", "unresolved"} and not recovery
+    diagnostic=forge_recovery.history_diagnostic(folder) if (unresolved or (folder/forge_recovery.HISTORY_WITNESS).exists()
+        or (folder/forge_recovery.HISTORY_PROOF).exists() or (folder/forge_recovery.FILE).exists()) else None
     receipts, stale = [], 0
     for path in sorted(folder.glob("disposition-*.json")):
         row = _read(folder, path.name)
@@ -170,6 +174,7 @@ def _unit(folder: Path, task_id: str) -> dict:
         fresh=-5<=(dt.datetime.now(dt.timezone.utc)-observed).total_seconds()<15
     except (ValueError,TypeError):fresh=False
     effective = ('stop_pending' if unresolved else str(result.get('status') or 'unknown') if result else
+                 'lost' if recovery else
                  'paused' if request.get('status') == 'paused' else
                  'waiting' if progress.get('phase') == 'waiting' else
                  'queued' if request.get('status') == 'queued' else
@@ -182,7 +187,9 @@ def _unit(folder: Path, task_id: str) -> dict:
         "subtask": request.get("brief") or request.get("goal") or "",
         "status": effective,
         "request_status": str(request.get("status") or ""),
-        "custody": "unresolved_stop" if unresolved else "result" if result else "unknown",
+        "custody": "recovered" if recovery else "unresolved_stop" if unresolved else "result" if result else "unknown",
+        "recovery": {'proven':bool(recovery),'witness_present':(folder/forge_recovery.HISTORY_WITNESS).is_file()},
+        "history_diagnostic": diagnostic,
         "created": request.get("created"), "finished": result.get("finished"),
         "started": process.get('birth') if isinstance(process,dict) and process.get('adapter')=='psutil-v1' else None,
         "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,
@@ -219,13 +226,22 @@ def task_detail(tree: Path, task_id: str) -> dict:
         agents = [_unit(unit_dir(tree, task_id, p.name), task_id) for p in folders]
     except OSError as exc:
         raise ReadError(f"Forge participants unreadable: {exc}", 503) from exc
+    recovery_units=[]
+    for kind in ('processes','verifications'):
+        directory=_inside(folder,folder/kind)
+        for path in sorted(directory.iterdir()) if directory.exists() else []:
+            if not path.is_dir():continue
+            unit=_unit(_inside(folder,path),task_id)
+            if unit['custody']!='recovered' and unit['status'] in {'unknown','lost','stop_pending'}:
+                recovery_units.append({'id':unit['id'],'kind':kind,'status':unit['status'],
+                    'history_diagnostic':unit.get('history_diagnostic')})
     return {"id": task_id, "goal": task.get("goal") or "", "status": task.get("status") or "unknown",
             'kind':'review' if task.get('self_review') else 'source_update' if task.get('source_update') else 'work',
             "created": task.get('created') or '',
             "finished": max([str(task.get('finished') or '')] + [str(unit.get('finished') or '') for unit in agents]),
             "priority": task.get("priority"), "control": _read(folder, "control.json"),
             "max_active_workers": task.get("max_active_workers"),
-            "agents": _ancestry(agents), "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "agents": _ancestry(agents), "recovery_units": recovery_units, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "process_liveness": "not_probed"}
 
 
@@ -268,9 +284,9 @@ def activity(tree: Path, limit: int = 20, cursor: str = '') -> dict:
     active, recent = [], []
     for folder in folders:
         row = task_detail(tree, folder.name)
-        if not row['agents']:
+        if not row['agents'] and not row.get('recovery_units'):
             continue
-        if any(unit['status'] not in _TERMINAL for unit in row['agents']):
+        if row.get('recovery_units') or any(unit['custody']!='recovered' and unit['status'] not in _TERMINAL for unit in row['agents']):
             active.append(row)
         else:
             recent.append(row)

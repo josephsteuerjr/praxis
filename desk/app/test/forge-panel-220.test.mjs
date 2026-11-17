@@ -37,7 +37,7 @@ function stand(options={}) {
   const content='<script>inert output</script>\n'+'complete text 🐍\n'.repeat(900);
   const read=async(path,signal,body)=>{
     calls.push({path,signal,body});
-    if(body) {if(state.commandError)throw Error('lost reply');return {command_id:body.command_id,state:state.commandState};}
+    if(body) {if(state.commandError)throw Error('lost reply');return {command_id:body.command_id,state:state.commandState,result:state.commandResult,reason:state.commandReason};}
     if(path==='/api/forge/tasks?view=active'){if(state.delay)return await state.delay;if(state.error)throw Error(state.error);return {active:structuredClone(state.tasks),recent:structuredClone(state.recent),next_cursor:state.nextCursor};}
     const url=new URL(path,'http://fixture.invalid');
     if(url.pathname==='/api/phone/activity'){if(state.reviewError)throw Error(state.reviewError);return structuredClone(state.reviewPage || {recent_reviewers:[],recent_reviewers_cursor:null});}
@@ -380,3 +380,42 @@ console.log('Generic producer transport errors retain inert, Unicode-paged, even
   t.panel.stop();assert.equal(t.timers.size,0);
 }
 console.log('Legacy recovery needs explicit host confirmation and retains actual recovery state PASS');
+
+{
+  const t=stand({compact:true});const row=t.state.tasks[0].agents[0];
+  row.recovery={available:true,witness_recorded:true,diagnostic:{code:'forge_history_corrupt',line:7,offset:831,journal_sha256:sha}};
+  t.state.commandState='rejected';t.state.commandReason='Untranslated frame language';
+  t.state.commandResult={diagnostic:{code:'forge_history_reboot_required'}};
+  t.panel.start();await tick();const {unit}=await open(t);
+  assert.match(unit.textContent,/строка 7, байтовое смещение 831/);assert.match(unit.textContent,new RegExp(sha));
+  const details=unit.querySelector('.forge-recovery');
+  assert.doesNotMatch(details.textContent,/Windows/,'recovery applies to the actual original host');
+  await find(details,'Проверить после перезагрузки').click();await tick();
+  assert.match(unit.textContent,/ещё не подтверждена новая загрузка того же хоста/);
+  assert.doesNotMatch(unit.textContent,/Untranslated frame language/,'typed diagnostic uses independent UI captions');
+  t.panel.stop();t.root.remove();
+}
+console.log('Corrupt shared journal diagnostics and typed recovery refusals remain visible in UI language PASS');
+
+{
+  const values=new Map();
+  globalThis.localStorage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+  const first=stand({compact:true});first.panel.start();await tick();
+  const active=first.root.querySelector('.forge-active');active.open=true;await active.emit('toggle');
+  const {team,unit}=await open(first);await team.emit('toggle');
+  unit.open=true;await unit.emit('toggle');
+  first.panel.stop();first.root.remove();
+  const reloaded=stand({compact:true});reloaded.panel.start();await tick();
+  assert.equal(reloaded.root.querySelector('.forge-active').open,true);
+  assert.equal(reloaded.root.querySelector('.forge-task').open,true);
+  const retained=reloaded.root.querySelector('.forge-unit');assert.equal(retained.open,true);
+  retained.open=false;await retained.emit('toggle');await reloaded.panel.refresh();await tick();
+  assert.equal(retained.open,false,'polling does not reverse an explicit collapse');
+  reloaded.state.tasks[0].agents[0].liveness={state:'unknown',error:'unreadable_liveness_record'};
+  await reloaded.panel.refresh();await tick();assert.match(retained.textContent,/повреждена или недоступна/);
+  reloaded.panel.stop();reloaded.root.remove();
+  const again=stand({compact:true});again.panel.start();await tick();
+  assert.equal(again.root.querySelector('.forge-unit').open,false,'collapse survives recreation after reload');
+  again.panel.stop();again.root.remove();delete globalThis.localStorage;
+}
+console.log('Explicit Forge disclosures survive reload and corrupt observations stay visible PASS');

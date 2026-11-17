@@ -118,6 +118,8 @@ def consume(tree: Path, manager, statuses) -> dict | None:
             owner_stop.pause()
         by = str(request.get("by") or "owner")[:40]
         reason = str(request.get("reason") or "interrupted from the window")[:200]
+        source = {"id": result["id"], "by": by, "reason": reason}
+        result["source"] = source
         for row in manager.list_runs(statuses=tuple(statuses)):
             rid = str(row.get("run_id") or row.get("id") or "")
             if not rid or (scope != "all" and rid != scope):
@@ -133,9 +135,20 @@ def consume(tree: Path, manager, statuses) -> dict | None:
                 result["requested"].append(rid)
                 with _BOUNDARY_LOCK:
                     from deskd.run_control import known_run as exact_request
-                    exact_request(tree,rid,reason)
+                    published = exact_request(tree,rid,reason,source=source)
                     result.setdefault("processes", {})[rid] = process_scope.cancel(rid)
-                    receipt = manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
+                    actor, why = f"desk:{by}", reason
+                    if published is not None:
+                        _, canonical = published
+                        # Both consumers settle this same immutable request. The
+                        # authenticated source is audit provenance, not a second
+                        # pending cancellation with different ledger semantics.
+                        actor = 'desk:owner'
+                        why = str(canonical.get('reason') or 'immediate reset from MiniApp')
+                        result.setdefault('cancel_requests', {})[rid] = canonical['id']
+                        manager.append_event_once(rid, 'desk_cancel_observed', source['id'],
+                            cancel_request_id=canonical['id'], source=source)
+                    receipt = manager.request_cancel(rid, actor=actor, reason=why)
                 key = ("cancelled" if receipt.get("status") == "cancelled"
                        else "pending_tool_outcomes")
                 result[key].append(rid)

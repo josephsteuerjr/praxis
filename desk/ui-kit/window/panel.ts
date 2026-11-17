@@ -41,7 +41,7 @@ interface Turn {
   note?: string;
 }
 
-type Status = "live" | "done" | "failed" | "silent";
+type Status = "live" | "done" | "failed" | "silent" | "attention";
 
 interface TurnRow {
   id: string;
@@ -112,7 +112,8 @@ function rowOf(t: Turn, run: Run | undefined, liveId: string): TurnRow {
   const who = (t.who || "").trim();
   const live = t.run_id === liveId;
   const failed = run?.terminal_status === "failed" || run?.status === "failed" || t.delivery === "failed";
-  const status: Status = live ? "live" : failed ? "failed" : t.held === "unspoken" ? "silent" : "done";
+  const uncertain=run?.status==='in_doubt' || t.delivery==='unknown';
+  const status: Status = live ? "live" : uncertain ? "attention" : failed ? "failed" : t.held === "unspoken" ? "silent" : "done";
   const title = out || note || (t.held === "unspoken" ? uiText("ui.ui.kit.window.panel.13f655a697") : "") || `${EV_KIND[run?.kind || t.kind || ""] || uiText("ui.ui.kit.window.panel.8eb484df7b")} · ${fmtTime(turnAt(t, run))}`;
   const cause = inn ? `${who || uiText("ui.ui.kit.window.panel.bdde6ebee2")}: «${clip(inn, 140)}»` : who ? `${EV_KIND[run?.kind || t.kind || ""] || uiText("ui.ui.kit.window.panel.8eb484df7b")} · ${who}` : "";
   return { id: t.run_id, status, at: turnAt(t, run), title: clip(title, 220), cause, live };
@@ -155,6 +156,8 @@ interface StepRow { key: string; html: string; cls: string }
 function stepRows(d: RunDetail, withFrame = true): StepRow[] {
   const rows: StepRow[] = [];
   const runId = d.id || "";
+  if(d.manifest?.status==='in_doubt')rows.push({key:'uncertainty',cls:'st st-uncertainty is-attention',
+    html:esc(uiText('run.outcome.evidence_needed'))});
   const live = d.manifest?.status === "running";
   const origin = clean(runOriginText(d.origin));
   if (origin) {
@@ -326,7 +329,7 @@ function fillTurn(el: HTMLElement, r: TurnRow) {
   const cause = el.querySelector<HTMLElement>(".turn-cause")!;
   cause.textContent = r.cause;
   cause.hidden = !r.cause;
-  el.querySelector(".turn-dot")!.setAttribute("title", { live: uiText("ui.ui.kit.window.panel.3fc5a17431"), done: uiText("ui.ui.kit.window.panel.450efe162e"), failed: uiText("ui.ui.kit.window.panel.53bfff06e4"), silent: uiText("ui.ui.kit.window.panel.06253fce37") }[r.status]);
+  el.querySelector(".turn-dot")!.setAttribute("title", { live: uiText("ui.ui.kit.window.panel.3fc5a17431"), done: uiText("ui.ui.kit.window.panel.450efe162e"), failed: uiText("ui.ui.kit.window.panel.53bfff06e4"), silent: uiText("ui.ui.kit.window.panel.06253fce37"), attention:uiText('run.outcome.uncertain') }[r.status]);
 }
 
 function liveTurnCause(id: string, detail?: RunDetail): string {

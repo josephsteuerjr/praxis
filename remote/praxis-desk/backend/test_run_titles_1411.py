@@ -19,15 +19,17 @@ class RunTitles(unittest.TestCase):
         self.ctx = {'kind': 'chat_turn', 'principal_id': '42', 'origin_chat_id': '-10042',
                     'origin_message_ids': [123], 'goal': 'Praxis: WRONG WINDOW\nЕгор: wanted'}
 
-    def make(self, number=1, text='**Проверь** [код](https://example.test). Ещё фраза.', **ctx):
+    def make(self, number=1, text='**Проверь** [код](https://example.test). Ещё фраза.',
+             *, status='done', authority_fields=None, **ctx):
         run_id = f'run-20261114T120000000000Z-{number:08x}'
         path = self.root / 'memory/runs/2026-11' / run_id
         path.mkdir(parents=True, exist_ok=True)
         context = {**self.ctx, **ctx}
-        manifest = {'context': context, 'status': 'done'}
+        manifest = {'context': context, 'status': status}
         (path / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
         if text is not None:
             authority = {**context, 'schema': 'praxis.run.authority.v2', 'origin_text': text}
+            authority.update(authority_fields or {})
             (path / 'context.md').write_text('# Immutable run context\n## Authority and address\n```json\n' + json.dumps(authority) + '\n```\n', encoding='utf-8')
         return path, manifest
 
@@ -50,6 +52,34 @@ class RunTitles(unittest.TestCase):
         with patch.object(readers, '_run_words', return_value={}):
             path, manifest = self.make()
             self.assertEqual(readers._run_title(path, manifest), 'Участник #42: Проверь код.')
+
+    def test_live_group_run_uses_the_exact_trigger_author_before_turn_log(self):
+        with patch.object(readers, '_run_words', return_value={}), \
+             patch.object(readers, 'chat_titles', return_value={'-10042': 'Имя комнаты'}):
+            path, _ = self.make(status='running', authority_fields={
+                'origin_message_id': 123,
+                'reply_targets': [[122, 'Предыдущий', ''], [123, 'Тим (@qa)', ''],
+                                  [124, 'Следующий', '']],
+            })
+            row = readers.list_runs()[0]
+            self.assertEqual(row['status'], 'running')
+            self.assertEqual(row['chat_title'], 'Имя комнаты')
+            self.assertEqual(row['goal_head'], 'Тим: Проверь код.')
+            self.assertEqual(readers.run_detail(path.name)['origin']['source'], 'snapshot')
+
+    def test_live_direct_run_can_use_the_same_peer_name_as_the_header(self):
+        with patch.object(readers, '_run_words', return_value={}), \
+             patch.object(readers, 'chat_titles', return_value={'42': 'Тим (@qa)'}):
+            self.make(status='running', origin_chat_id='42')
+            row = readers.list_runs()[0]
+            self.assertEqual(row['chat_title'], 'Тим (@qa)')
+            self.assertEqual(row['goal_head'], 'Тим: Проверь код.')
+
+    def test_live_group_does_not_name_the_room_or_a_different_message_as_author(self):
+        with patch.object(readers, '_run_words', return_value={}), \
+             patch.object(readers, 'chat_titles', return_value={'-10042': 'Имя комнаты'}):
+            self.make(status='running', authority_fields={'reply_targets': [[124, 'Другой автор', '']]})
+            self.assertEqual(readers.list_runs()[0]['goal_head'], 'Участник #42: Проверь код.')
 
     def test_self_and_non_chat_events_never_get_conversation_title(self):
         for kind, principal, expected in [('wake', 'praxis:self', 'Пробуждение'),

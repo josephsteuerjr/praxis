@@ -67,5 +67,20 @@
     "src/main.rs": "710fd0eedf99d767cd43b778748e92cfe2bf5eaf9413c165d63dbcda7a013d76",
     "src/tray.rs": "c40edbeb89442e9c0b1dee0ef9bc037a0909d0f87b33ad3ddd65de782348496c",
     "ПАМЯТКА.md": "6f16a3f7e4380fe1586252a96d724fe15b1dbc7161b80d255b5270515bfa2252"
+  },
+  "runtime_configuration_2026_11_17": {
+    "presented_codex_client_version": "0.169.0",
+    "previous_presented_client_version": "0.165.0",
+    "source_and_binary_unchanged": true,
+    "owner_requested_container_recreation": true,
+    "verified_model": "gpt-6.2-sol",
+    "probe_http_status": 200,
+    "probe_result": "pong",
+    "generation_limits": {
+      "argument_bytes": 262144,
+      "whitespace_run": 4096,
+      "attempt_ms": 900000
+    },
+    "qualification": "Historical Rust130/clippy/release qualification unchanged; current image/binary/auth/account/proxy/caps retained. No Rust source rebuild or new standalone release."
   }
 }

@@ -173,6 +173,10 @@ def _utc_millis(value: Any) -> _dt.datetime | None:
     if not _UTC_MILLIS_RE.fullmatch(text):
         return None
     try:
+        if text.isascii():
+            if text[11:13] >= "24":
+                return None
+            return _dt.datetime.fromisoformat(text[:-1] + "+00:00")
         parsed = _dt.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ")
     except ValueError:
         return None
@@ -184,6 +188,14 @@ def _id_matches_timestamp(value: str, timestamp: str, pattern: re.Pattern[str]) 
     parsed = _utc_millis(timestamp)
     if not match or parsed is None:
         return False
+    # The parser has validated the calendar and the fixed UTC wire format.
+    # Reuse those digits instead of formatting the same date three times.
+    if parsed.year >= 1000 and timestamp.isascii():
+        return (
+            match.group("date") == timestamp[:4] + timestamp[5:7] + timestamp[8:10]
+            and match.group("clock") == timestamp[11:13] + timestamp[14:16] + timestamp[17:19]
+            and match.group("micros")[:3] == timestamp[20:23]
+        )
     return (
         match.group("date") == parsed.strftime("%Y%m%d")
         and match.group("clock") == parsed.strftime("%H%M%S")

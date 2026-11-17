@@ -69,6 +69,68 @@ def requested(run_id, base=None):
     return value if isinstance(value, dict) and value.get('run_id') == run_id and value.get('action') == 'cancel' else False
 
 
+@contextlib.contextmanager
+def request_lock(path):
+    """Same publication lock as the independent MiniApp controller."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix('.lock').open('a+b') as stream:
+        if os.name == 'nt':
+            import msvcrt
+            if stream.tell() == 0:
+                stream.write(b'0'); stream.flush()
+            stream.seek(0); msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                stream.seek(0); msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def publish_cancel(run_id, reason, *, base=None, source=None):
+    """One immutable exact-run request; channel provenance is separate audit."""
+    if not _ID.fullmatch(str(run_id)):
+        raise ValueError('invalid control run identity')
+    base = Path(base or base_path())
+    path = base / 'memory/.control/run-cancel' / (run_id + '.json')
+    with request_lock(path):
+        current = requested(run_id, base)
+        if current:
+            return path, current
+        value = {'id': secrets.token_hex(12), 'run_id': run_id, 'action': 'cancel',
+                 'by': 'desk:owner', 'at': time.time(),
+                 'reason': str(reason or 'immediate reset from MiniApp')}
+        if source is not None:
+            value['source'] = dict(source)
+        _write(path, value)
+        with path.open('rb') as stream:
+            os.fsync(stream.fileno())
+        if os.name != 'nt':
+            descriptor=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(descriptor)
+            finally:os.close(descriptor)
+        return path, value
+
+
+def signal_cancel(run_id, *, base=None):
+    """Fan out to selected owned handles before ledger arbitration; no exit claim."""
+    registry = start(base)
+    with registry.lock:
+        handles = list(registry.handles.get(run_id, ()))
+    failures = []
+    for handle in handles:
+        try:
+            registry._stop(handle)
+        except Exception as error:
+            failures.append(type(error).__name__)
+    return {'requested': len(handles), 'failures': failures}
+
+
 class Registry:
     def __init__(self, base):
         self.base = Path(base).resolve()
@@ -137,17 +199,19 @@ class Registry:
 
     def _stop(self, process):
         """Fan out independently; one backend cannot delay another signal."""
-        key = process.control_handle
-        job = self.stop_jobs.get(key)
-        if job is None or (job[0].done() and not job[0].result()[0] and time.monotonic()-job[1] > .2):
-            future = concurrent.futures.Future()
-            def execute():
-                try:future.set_result(process.stop_tree())
-                except Exception as error:future.set_result((False, 'stop unconfirmed: '+type(error).__name__))
-            self.stop_jobs[key] = (future, time.monotonic())
-            threading.Thread(target=execute, name='run-resource-stop', daemon=True).start()
-            job = self.stop_jobs[key]
-        return job[0]
+        with self.lock:
+            key = process.control_handle
+            job = self.stop_jobs.get(key)
+            if job is None or (job[0].done() and not job[0].result()[0] and time.monotonic()-job[1] > .2):
+                future = concurrent.futures.Future()
+                def execute():
+                    try:future.set_result(process.stop_tree())
+                    except Exception as error:future.set_result((False, 'stop unconfirmed: '+type(error).__name__))
+                self.stop_jobs[key] = (future, time.monotonic())
+                threading.Thread(target=execute, name='run-resource-stop', daemon=True).start()
+                job = self.stop_jobs[key]
+            return job[0]
+
 
     def once(self):
         directory = self.base / 'memory/.control/run-cancel'
@@ -273,6 +337,8 @@ def suppresses_replay(chat_id, last_inbound_ts=None, *, base=None):
     The run's immutable start bounds the original input. A newer incoming
     message remains eligible; missing/ambiguous evidence never hides it.
     """
+    from run_manager import manifest_paths
+
     home = Path(base or base_path())
     try:
         if last_inbound_ts is None:
@@ -286,11 +352,13 @@ def suppresses_replay(chat_id, last_inbound_ts=None, *, base=None):
     for path in (home / 'memory/.control/run-cancel').glob('run-*.json'):
         if not requested(path.stem, home):
             continue
-        manifests = list((home / 'memory/runs').glob('*/' + path.stem + '/manifest.json'))
+        manifests = manifest_paths(home / 'memory/runs', path.stem)
         if len(manifests) != 1:
             continue
         try:
             context = json.loads(manifests[0].read_text(encoding='utf-8'))['context']
+            if not isinstance(context, dict) or not isinstance(context.get('created_at'), str):
+                continue
             peer = context.get('origin_chat_id') or context.get('delivery_chat_id')
             created = datetime.datetime.fromisoformat(context['created_at'].replace('Z', '+00:00'))
             if str(peer) == str(chat_id) and created.tzinfo is not None and stamp <= created.timestamp():

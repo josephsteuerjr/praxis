@@ -8,18 +8,20 @@ export interface ForgeUnit {
   id: string; parent_unit_id?: string; depth?: number; ancestry_unknown?: boolean;
   role?: string; model?: string; subtask?: string; status?: string; request_status?: string;
   custody?: string; current_disposition?: string; stale_dispositions?: number;
+  recovery?: {proven?: boolean; witness_present?: boolean};
+  history_diagnostic?: {code?: string; line?: number; offset?: number; journal_sha256?: string; record_sha256?: string};
   started?: number; created?: string; finished?: string;
   observation?: { generation?: string; phase?: string; tool?: string; observed_at?: string; iteration?: number };
   result_ref?: ForgeRef; request_ref?: ForgeRef; payload_refs?: Record<string, ForgeRef>;
   liveness?: {state: string; observed_at?: string; basis?: string}; process_liveness?: string;
 }
-export interface ForgeTask { id: string; kind?: string; goal?: string; status?: string; agents: ForgeUnit[]; max_active_workers?: number; control?: {action?: string} }
+export interface ForgeTask { id: string; kind?: string; goal?: string; status?: string; agents: ForgeUnit[]; max_active_workers?: number; control?: {action?: string}; recovery_units?: {id:string; kind:string; status:string; history_diagnostic?:ForgeUnit['history_diagnostic']}[] }
 interface EventRow { seq: number; kind: string; at?: string; tool?: string; generation?: string; iteration?: number; call_id?: string; input_ref?: ForgeRef; output_ref?: ForgeRef; receipt?: ExecutionReceipt; outcome?: string; target?: string; error?: string }
 interface EventPage { events: EventRow[]; next_offset: number; next_after_seq: number; has_more: boolean; pending_tail?: boolean; generation: string }
 interface PayloadPage { sha256: string; text: string; offset: number; total_chars: number; next_offset: number | null }
 interface ActivityPage { active: ForgeTask[]; recent: ForgeTask[]; next_cursor: string | null }
-interface PanelOptions { compact?: boolean; readOnly?: boolean; scope?: () => string; onPlans?: () => void }
-interface Command { command_id: string; state: string; task_id?: string; agent_id?: string; action?: string; reason?: string; result?: unknown }
+interface PanelOptions { compact?: boolean; readOnly?: boolean; recovery?: boolean; scope?: () => string; onPlans?: () => void }
+interface Command { command_id: string; state: string; task_id?: string; agent_id?: string; action?: string; host_binding?: string; reason?: string; result?: unknown }
 type Read = <T>(path: string, signal: AbortSignal, body?: unknown) => Promise<T>;
 
 const STATUS: Record<string, string> = { stalled: "требует внимания", active: "в работе", running: "выполняется", queued: "в очереди", pending: "в очереди", done: "завершено", completed: "завершено", paused: "на паузе", waiting: "ожидает", stop_pending: "остановка не подтверждена", lost: "связь потеряна", cancelled: "отменено", stopped: "остановлено", failed: "ошибка", error: "ошибка", unknown: "состояние не подтверждено", abandoned: "оставлено", awaiting_acceptance: "ждёт приёмки" };
@@ -67,7 +69,7 @@ interface UnitView {
 interface ActionView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; time: HTMLElement; mark:HTMLElement; body:HTMLElement; data:ToolDetail; key:string;
   input?:ForgeRef; output?:ForgeRef; payloads:Map<string,{text:string;offset:number;total:number;more:boolean;busy:boolean;error?:string}> }
 
-interface TaskView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; goal: HTMLElement; controls: HTMLElement; commands: HTMLElement; units: HTMLElement; views: Map<string, UnitView>; task: ForgeTask }
+interface TaskView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; goal: HTMLElement; recovery: HTMLElement; controls: HTMLElement; commands: HTMLElement; units: HTMLElement; views: Map<string, UnitView>; task: ForgeTask }
 
 /** Exported controller is also the production-fragment test seam. */
 export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2500, options: PanelOptions = {}) {
@@ -114,14 +116,36 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (c.state === "processing") return "Forge принял просьбу; результат ещё не записан.";
     if (c.state === "unknown") return "Результат управления неизвестен. " + (c.reason || "Автоматического повтора нет.");
     if (c.state === "rejected") return "Просьба отклонена: " + (c.reason || "см. запись");
+    const result = c.result && typeof c.result === 'object' ? c.result as {status?:string; reason?:string; diagnostic?:{code?:string}} : undefined;
+    const hints:Record<string,string> = {
+      forge_history_stop_required:'Сначала запроси Stop и дождись его обработки.',
+      forge_history_witness_required:'Сначала подготовь восстановление на исходном хосте.',
+      forge_history_reboot_required:'После подготовки нужна самостоятельная перезагрузка исходного Linux-хоста.',
+      forge_history_host_confirmation_required:'Нужно явное подтверждение исходного хоста выполнения.',
+      forge_history_host_changed:'Хост выполнения изменился; это свидетельство к нему не подходит.',
+      forge_history_new_execution:'После подготовки появился новый запуск; прежнего свидетельства недостаточно.',
+      forge_history_generation_changed:'Участник уже обновился. Перечитай его состояние перед новой просьбой.'
+    };
+    if(result?.diagnostic?.code){
+      const code=result.diagnostic.code;
+      return 'Восстановление не подтверждено. '+(hints[code]||'Журнал или свидетельство изменились; требуется проверка сохранённых записей.')+
+        ' Исходные байты и неизвестные исходы сохранены. Код: '+code;
+    }
+    if(result?.reason)return result.reason;
     return "Получена расписка Forge: " + JSON.stringify(c.result ?? c.state);
   }
   async function control(task: ForgeTask, unit: ForgeUnit | undefined, action: string, target: HTMLElement) {
+    if(action==='prepare_recovery' && !confirm('Подтверждаешь, что это исходный Linux-хост выполнения? Сохраним точные байты журнала и свидетельство после Stop. Перезагрузку хоста нужно выполнить самостоятельно. Неизвестные исходы действий сохранятся.'))return;
+    if(action==='recover' && !confirm('Подтверждаешь восстановление на том же исходном Linux-хосте после его перезагрузки? Проверка должна подтвердить новую загрузку; неизвестные исходы действий сохранятся.'))return;
     const captured = epoch;
     const key = task.id + "/" + (unit?.id || "");
     if (pending.has(key)) return;
     const bytes = crypto.getRandomValues(new Uint8Array(16));
     const command: Command = { command_id: Array.from(bytes, value => value.toString(16).padStart(2, "0")).join(""), state: "queued", task_id: task.id, agent_id: unit?.id || "", action };
+    if(action==='prepare_recovery'||action==='recover'){
+      command.host_binding='verified-local-execution-host';
+      command.reason='MiniApp: владелец явно подтвердил исходный Linux-хост выполнения и сохранение исторических исходов';
+    }
     pending.set(key, { command, feedback: target });
     target.textContent = "Передаю просьбу…";
     try {
@@ -138,12 +162,19 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   }
   function controls(current: () => [ForgeTask, ForgeUnit | undefined], host: HTMLElement) {
     host.replaceChildren();
-    if(options.readOnly)return;
+    if(options.readOnly&&!options.recovery)return;
     const feedback = el("p", "muted"); feedback.setAttribute("role", "status");
     const [task, unit] = current();
     const terminal = ["done", "completed", "cancelled", "abandoned"].includes(task.status || "");
     const row = el("div", "forge-actions");
-    for (const [action, title] of [["pause", "Приостановить"], ["stop", unit ? "Остановить участника" : "Остановить группу"], ["resume", "Возобновить"]]) {
+    const affected=unit ? !!unit.history_diagnostic || !!unit.recovery?.witness_present || ['unknown','lost','stop_pending'].includes(unit.status||'') : !!task.recovery_units?.length || task.agents.some(u=>!!u.history_diagnostic||!!u.recovery?.witness_present||['unknown','lost','stop_pending'].includes(u.status||''));
+    const actions=options.readOnly ? [] : [["pause", "Приостановить"], ["stop", unit ? "Остановить участника" : "Остановить группу"], ["resume", "Возобновить"]];
+    if(options.recovery&&affected){
+      if(options.readOnly)actions.push(['stop',unit?'Запросить Stop участника':'Запросить Stop группы']);
+      actions.push(['prepare_recovery','Подготовить восстановление'],['recover','Восстановить после перезагрузки']);
+    }
+    if(!actions.length)return;
+    for (const [action, title] of actions) {
       const b = button(title, () => { const [task, unit] = current(); void control(task, unit, action, feedback); });
       // Core remains the authority for safe continuation/old generation fences.
       b.disabled = terminal && action === "resume";
@@ -353,9 +384,16 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       (unit.current_disposition ? " · приёмка: " + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? " · ждёт приёмки" : "") +
       (unit.custody === "unresolved_stop" ? " · остановка не подтверждена" : "") +
       (unit.stale_dispositions ? ` · несовпавших расписок: ${unit.stale_dispositions}` : "");
+    const diagnostic=unit.history_diagnostic;
+    if(diagnostic){
+      view.meta.textContent+='\nВосстановление требует проверки: '+(diagnostic.code||'неизвестная причина')+
+        (diagnostic.line!==undefined?' · строка '+diagnostic.line:'')+(diagnostic.offset!==undefined?' · байт '+diagnostic.offset:'')+
+        (diagnostic.journal_sha256?'\nSHA-256 журнала: '+diagnostic.journal_sha256:'')+'\nИсходные байты и неизвестные исходы действий сохранены.';
+    }
+    if(unit.recovery?.witness_present&&!unit.recovery.proven)view.meta.textContent+='\nСвидетельство сохранено. Восстановление требует подтверждённой новой загрузки того же хоста.';
     view.brief.textContent = (options.compact ? (task.goal || task.id) + '\n\n' : '') + (unit.subtask || "Подзадача не записана.");
     // Controls keep their in-flight feedback while the next observation arrives.
-    if (!options.compact && !view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
+    if ((!options.compact||options.recovery) && !view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
     const refsKey = JSON.stringify([unit.result_ref, unit.request_ref, unit.payload_refs]);
     if (refsKey !== view.refsKey) {
       view.refsKey = refsKey; view.refs.replaceChildren();
@@ -377,15 +415,21 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
         const assignment = document.createElement('details'); assignment.className = 'forge-assignment';
         assignment.append(el('summary', '', 'Полное задание команды'), goal); body.append(assignment);
       } else body.append(goal);
-      body.append(actions, commands, units); details.append(summary, body); host.append(details);
-      view = { details, title, state, goal, controls: actions, commands, units, views: new Map(), task }; tasks.set(task.id, view);
+      const recovery=el('p','muted forge-meta');recovery.style.whiteSpace='pre-wrap';recovery.style.overflowWrap='anywhere';
+      body.append(recovery, actions, commands, units); details.append(summary, body); host.append(details);
+      view = { details, title, state, goal, recovery, controls: actions, commands, units, views: new Map(), task }; tasks.set(task.id, view);
     }
     if (view.details.parentNode !== host) host.append(view.details);
     view.task = task;
     view.title.textContent = options.compact ? shortGoal(task.goal || task.id) : (task.goal || task.id).split("\n")[0];
-    view.state.textContent = ` · ${label(task.status)}${task.control?.action === "pause" ? " · допуск на паузе" : ""} · участников ${task.agents.length}`;
+    view.state.textContent = ` · ${label(task.status)}${task.control?.action === "pause" ? " · допуск на паузе" : ""}`+(task.agents.length?` · участников ${task.agents.length}`:'')+(task.recovery_units?.length?` · неподтверждённых исполнений ${task.recovery_units.length}`:'');
     view.goal.textContent = task.goal || task.id;
-    if (!options.compact && !view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
+    view.recovery.hidden=!task.recovery_units?.length;
+    view.recovery.textContent=(task.recovery_units||[]).map(row=>{
+      const d=row.history_diagnostic;
+      return `${row.kind} · ${row.id}: завершение исполнения не подтверждено`+(d?`\n${d.code||'История требует проверки'}${d.line!==undefined?' · строка '+d.line:''}${d.offset!==undefined?' · байт '+d.offset:''}${d.journal_sha256?'\nSHA-256 журнала: '+d.journal_sha256:''}`:'');
+    }).join('\n\n');
+    if ((!options.compact||options.recovery) && !view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
     const present = new Set(task.agents.map(a => a.id));
     for (const [id, unit] of view.views) if (!present.has(id)) { unit.details.remove(); view.views.delete(id); }
     for (const unit of task.agents) {
@@ -411,10 +455,11 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     const current=external(reviewers),finishedReviews=external(recentReviewers);renderActiveReviews({reviewers:current});renderRecentReviews({reviewers:finishedReviews});
     reviewNext.hidden=!reviewCursor;
     const participants=activeRows.reduce((n,task)=>n+task.agents.length,0)+current.length;
+    const unresolved=activeRows.reduce((n,task)=>n+(task.recovery_units?.length||0),0);
     const completed=recentRows.filter(task=>!activeRows.some(active=>active.id===task.id)).reduce((n,task)=>n+task.agents.length,0)+finishedReviews.length;
     recent.hidden=completed===0;recentSummary.textContent=`Завершённые субагенты · ${completed}${nextCursor||reviewCursor?'+':''}`;
     if(recent.hidden)recent.open=false;
-    message.textContent=[forgeError,recentError,reviewError].filter(Boolean).join(' ') || (!forgeLoaded?'Читаю записи Forge…':participants?`${participants} участников`:completed?'':'Субагентов пока нет.');
+    message.textContent=[forgeError,recentError,reviewError].filter(Boolean).join(' ') || (!forgeLoaded?'Читаю записи Forge…':participants?`${participants} участников`:unresolved?`Исполнений с неподтверждённым завершением: ${unresolved}`:completed?'':'Субагентов пока нет.');
     message.hidden=!message.textContent;
   }
   async function loadReviewRecent() {
@@ -456,7 +501,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       paintTasks();
       for (const task of [...activeRows, ...recentRows]) {
         const view = tasks.get(task.id)!;
-        if (!options.compact && view.details.open) {
+        if ((!options.compact||options.recovery) && view.details.open) {
           const commands = await request<{commands: Command[]}>(query("/api/forge/control", { task_id: task.id }));
           if (!valid(captured)) return;
           view.commands.textContent = commands.commands.map(c => `${c.agent_id || "Группа"}: ${commandText(c)}`).join("\n");

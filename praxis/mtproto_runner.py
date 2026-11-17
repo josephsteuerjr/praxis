@@ -9468,44 +9468,48 @@ def _arm_restart_exit() -> "threading.Timer":
 
 
 def _apply_desk_interrupt(request: dict) -> dict:
-    """Прервать живые прогоны по просьбе Пульта — кооперативно, через run_manager.
+    """One authenticated gesture, exact-run resources and one cancellation ledger.
 
-    `request_cancel` терминализует прогон, если у него нет незакрытых вызовов рук, иначе
-    записывает просьбу и ставит паузу; `_run_status_gate` в тул-цикле видит статус
-    ≠ running на ближайшей границе (перед рукой, после ответа модели) и поднимает
-    RunStopped — черновик ответа брошен, руки дальше не зовутся. Идущий вызов модели
-    дорабатывает до конца: рвать поток посреди генерации значило бы врать провайдеру
-    о расходе. scope — «all» или id одного прогона.
+    Stop signals are independent of canonical arbitration. Accepted cancellation
+    and resource-owner confirmation remain separate; unknown effects stay unknown.
     """
+    import hashlib
+    import step_control
     scope = str(request.get("scope") or "all").strip() or "all"
     by = str(request.get("by") or "desk").strip()[:40] or "desk"
     reason = str(request.get("reason") or "прервано с Пульта").strip()[:200]
+    asked = _iso_epoch(request.get('at'))
+    source = {'id': str(request.get('id') or hashlib.sha256(
+        json.dumps(request, ensure_ascii=False, sort_keys=True).encode()).hexdigest()),
+        'by': by, 'reason': reason}
     manager = agent._runs()
-    rows = manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES))
-    cancelled: list[str] = []
-    waiting: list[str] = []
-    skipped: list[str] = []
-    for row in rows:
+    cancelled, waiting, skipped = [], [], []
+    canonical, processes = {}, {}
+    for row in manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES)):
         rid = str(row.get("run_id") or row.get("id") or "")
         if not rid or (scope != "all" and rid != scope):
             continue
+        born = _iso_epoch(row.get('created_at'))
+        if asked == float('inf') or born == float('inf') or born + .001 > asked:
+            skipped.append(f'{rid}: request has no authority over this run birth')
+            continue
         try:
-            manifest = manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
-            # ⚠ 21.09.2026. Здесь любой вызов без исключения шёл в «отменено», и Пульт
-            # рапортовал бодрое число. Но `request_cancel` при незакрытом вызове руки
-            # НАМЕРЕННО не терминализует ход: он пишет просьбу и ставит `paused`,
-            # возвращая манифест. То есть в счёт попадали и ходы, которые просто встали
-            # на паузу с висящим намерением, — а владелец читал это как «остановлено».
-            # Считаем раздельно: остановлено сейчас и ждёт незакрытых вызовов.
-            status = str((manifest or {}).get("status") or "")
-            if status == "cancelled":
+            _, published = step_control.publish_cancel(rid, reason, base=manager.base, source=source)
+            canonical[rid] = published['id']
+            processes[rid] = step_control.signal_cancel(rid, base=manager.base)
+            manager.append_event_once(rid, 'desk_cancel_observed', source['id'],
+                cancel_request_id=published['id'], source=source)
+            manifest = manager.request_cancel(rid, actor='desk:owner',
+                reason=str(published.get('reason') or 'immediate reset from MiniApp'))
+            if str((manifest or {}).get('status') or '') == 'cancelled':
                 cancelled.append(rid)
             else:
-                waiting.append(f"{rid}: {status or 'unknown'}")
+                waiting.append(f"{rid}: {str((manifest or {}).get('status') or 'unknown')}")
         except Exception as exc:
             skipped.append(f"{rid}: {type(exc).__name__}")
-    return {"cancelled": cancelled, "waiting": waiting, "skipped": skipped,
-            "scope": scope, "by": by}
+    return {'cancelled':cancelled, 'waiting':waiting, 'skipped':skipped,
+            'scope':scope, 'by':by, 'source':source,
+            'cancel_requests':canonical, 'processes':processes}
 
 
 _INTERRUPT_MAX_AGE_SEC = 120.0

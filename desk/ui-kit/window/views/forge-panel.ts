@@ -2,18 +2,18 @@ import { t as uiText, locale } from "../../../lang/lang";
 // Owner Forge viewer. Persisted observations are not process-liveness probes.
 import { ApiError, channelURL, cfg } from "../api";
 import { ACTIONS, toolTraceHTML, toolSummary, type ToolDetail, type ExecutionReceipt } from "../../steps";
-import {workActivity,type WorkActivity,type Reviewer} from '../work-activity';
+import {workActivity,rememberDisclosure,type WorkActivity,type Reviewer} from '../work-activity';
 
 export interface ForgeRef { kind: "payload" | "result" | "request"; sha256: string; size_bytes?: number }
 export interface ForgeUnit {
   id: string; parent_unit_id?: string; depth?: number; ancestry_unknown?: boolean;
   role?: string; model?: string; subtask?: string; status?: string; request_status?: string;
   custody?: string; current_disposition?: string; stale_dispositions?: number;
-  recovery?: {available: boolean; witness_recorded: boolean};
+  recovery?: {available: boolean; witness_recorded: boolean; diagnostic?: {code:string; line?:number; offset?:number; journal_sha256?:string}};
   started?: number; created?: string; finished?: string;
   observation?: { generation?: string; phase?: string; tool?: string; observed_at?: string; iteration?: number };
   result_ref?: ForgeRef; request_ref?: ForgeRef; payload_refs?: Record<string, ForgeRef>;
-  liveness?: {state: string; observed_at?: string; basis?: string}; process_liveness?: string;
+  liveness?: {state: string; observed_at?: string; basis?: string; error?:string}; process_liveness?: string;
 }
 export interface ForgeTask { id: string; kind?: string; goal?: string; status?: string; agents: ForgeUnit[]; max_active_workers?: number; control?: {action?: string} }
 interface EventRow { seq: number; kind: string; at?: string; tool?: string; generation?: string; iteration?: number; call_id?: string; input_ref?: ForgeRef; output_ref?: ForgeRef; receipt?: ExecutionReceipt; outcome?: string; target?: string; model?: string; model_requested?: string; summary?: boolean; reason?: string; error?: string; attempt?: number; retry?: boolean; partial_not_dispatched?: boolean }
@@ -77,6 +77,9 @@ interface TaskView { details: HTMLDetailsElement; title: HTMLElement; state: HTM
 
 /** Exported controller is also the production-fragment test seam. */
 export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2500, options: PanelOptions = {}) {
+  // The browser origin already isolates installations. Keep tokens out of
+  // preference storage; task/unit identities are scoped by selected agent.
+  const disclosureScope=()=>JSON.stringify([cfg.base,cfg.agent,(cfg as {agent_id?:string}).agent_id,!!options.compact]);
   const message = el("p", "muted", uiText("ui.ui.kit.window.views.forge.panel.c0a3d42991")); message.setAttribute("role", "status");
   const teams = el("div", "forge-teams");
   const recentTeams = el("div", "forge-teams forge-recent-teams");
@@ -84,9 +87,11 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const renderActiveReviews=workActivity(activeReviews,{heading:false}),renderRecentReviews=workActivity(recentReviews,{heading:false});
   const active=document.createElement('details');active.className='forge-active';active.hidden=true;
   const activeSummary=el('summary');active.append(activeSummary,teams,activeReviews);
+  const restoreActive=rememberDisclosure(active,'forge-active',disclosureScope);
   const recent = document.createElement('details'); recent.className = 'forge-recent';
   const recentSummary=el('summary');recent.hidden=true;
   recent.append(recentSummary, recentTeams,recentReviews);
+  const restoreRecent=rememberDisclosure(recent,'forge-recent',disclosureScope);
   const next = button(uiText("ui.ui.kit.window.views.forge.panel.fa80efdd96"), () => void loadRecent()); next.hidden = true; recent.append(next);
   const reviewNext=button(uiText("ui.ui.kit.window.views.forge.panel.899d44eaf2"),()=>void loadReviewRecent());reviewNext.hidden=true;recent.append(reviewNext);
   const refreshButton = button(uiText("ui.ui.kit.window.views.forge.panel.603e460bf5"), () => void refresh());
@@ -108,8 +113,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     scope = getScope(); tasks.clear(); pending.clear(); teams.replaceChildren(); recentTeams.replaceChildren();
     activeRows = []; recentRows = []; nextCursor = null; next.hidden = true; recentBusy = false; busy = false;
     reviewers=[];recentReviewers=[];reviewCursor=null;reviewHead=undefined;reviewBusy=false;reviewNext.hidden=true;renderActiveReviews({});renderRecentReviews({});
-    forgeError='';recentError='';reviewError='';forgeLoaded=false;recent.hidden=true;recent.open=false;
-    active.hidden=true;active.open=false;
+    forgeError='';recentError='';reviewError='';forgeLoaded=false;recent.hidden=true;restoreRecent();
+    active.hidden=true;restoreActive();
     message.textContent = uiText("ui.ui.kit.window.views.forge.panel.8f4c66cd60");
     message.hidden=false;
   }
@@ -122,6 +127,13 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (c.state === "queued") return uiText("ui.ui.kit.window.views.forge.panel.758a276176");
     if (c.state === "processing") return uiText("ui.ui.kit.window.views.forge.panel.d693eebb8c");
     if (c.state === "unknown") return uiText("ui.ui.kit.window.views.forge.panel.6c024486c5") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.a2d76e8c24"));
+    const diagnostic = (c.result as {diagnostic?: {code:string}})?.diagnostic;
+    if (c.state === "rejected" && diagnostic?.code.startsWith('forge_history_')) {
+      const message = diagnostic.code === 'forge_history_reboot_required' ? uiText('forge.history.reboot_required')
+        : diagnostic.code === 'forge_history_stop_required' ? uiText('forge.history.stop_required')
+        : diagnostic.code === 'forge_history_witness_required' ? uiText('forge.history.witness_required') : uiText('forge.history.refused');
+      return message + ' · ' + diagnostic.code;
+    }
     if (c.state === "rejected") return uiText("ui.ui.kit.window.views.forge.panel.ee11bf92cc") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.321069cccf"));
     if (c.state === 'observed' && (c.result as {status?: string})?.status === 'prepared')
       return uiText('forge.recovery.prepared');
@@ -180,7 +192,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       if (!checkbox.checked) return;
       const [task, unit] = current();
       void control(task, unit, 'prepare_recovery', feedback, {
-        host_binding: 'verified-local-execution-host', reason: 'Owner confirmed original Windows execution host after unresolved Stop',
+        host_binding: 'verified-local-execution-host', reason: uiText('forge.recovery.reason'),
       });
     });
     prepare.disabled = true;
@@ -417,6 +429,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       body.append(logStatus,log,view.more,actions,refs,contentMeta,content,view.contentMore,observation);
     } else body.append(brief, actions, refs, logStatus, log, view.more, contentMeta, content, view.contentMore);
     details.append(summary, body);
+    rememberDisclosure(details,'forge-unit:'+task.id+'/'+unit.id,disclosureScope());
     details.addEventListener("toggle", () => { if (details.open && running && !view.eventsLoaded) void loadEvents(view); });
     return view;
   }
@@ -438,18 +451,21 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     view.modelSummary.textContent=[unit.role || uiText("ui.ui.kit.window.views.forge.panel.3728896b36"),unit.model || uiText("ui.ui.kit.window.views.forge.panel.b70c30266d")].join(' · ');
     const acceptance=(task.kind || 'work')==='work' && unit.status==='done' && unit.result_ref
       ? unit.current_disposition ? ACCEPTED[unit.current_disposition] : uiText("ui.ui.kit.window.views.forge.panel.5e479184d8") : '';
-    view.stateSummary.textContent = acceptance || label(unit.status);
+    view.stateSummary.textContent = unit.liveness?.error ? uiText('forge.liveness.unreadable') : acceptance || label(unit.status);
     view.stateSummary.title = view.stateSummary.textContent;
     view.elapsed.textContent=unitDuration(unit);view.elapsed.title=uiText("ui.ui.kit.window.views.forge.panel.fae2ac42fb");
     view.stateSummary.setAttribute('data-state', unit.status || 'unknown');
     const o = unit.observation || {};
     const live = unit.liveness;
-    const liveText = live?.state === 'alive' ? uiText("ui.ui.kit.window.views.forge.panel.c5e4f530d6") : live?.state === 'exited' ? uiText("ui.ui.kit.window.views.forge.panel.2e1b268314") : live?.state === 'not_started' ? uiText("ui.ui.kit.window.views.forge.panel.6f13437958") : uiText("ui.ui.kit.window.views.forge.panel.0e4b4d2118");
+    const liveText = live?.error ? uiText('forge.liveness.unreadable') : live?.state === 'alive' ? uiText("ui.ui.kit.window.views.forge.panel.c5e4f530d6") : live?.state === 'exited' ? uiText("ui.ui.kit.window.views.forge.panel.2e1b268314") : live?.state === 'not_started' ? uiText("ui.ui.kit.window.views.forge.panel.6f13437958") : uiText("ui.ui.kit.window.views.forge.panel.0e4b4d2118");
     view.meta.textContent = uiText("ui.ui.kit.window.views.forge.panel.f680f19502", {p0: String(unit.id), p1: String(unit.parent_unit_id || uiText("ui.ui.kit.window.views.forge.panel.9247d77f72")), p2: String(unit.ancestry_unknown ? uiText("ui.ui.kit.window.views.forge.panel.78eb590e45") : "")}) +
       uiText("ui.ui.kit.window.views.forge.panel.c7c8925c7a", {p0: String(o.phase ? (PHASE[o.phase] || o.phase) + (o.tool ? ": " + o.tool : "") : uiText("ui.ui.kit.window.views.forge.panel.f7607ec31a")), p1: String(label(unit.request_status)), p2: String(o.observed_at || uiText("ui.ui.kit.window.views.forge.panel.dc9337ff5b")), p3: String(liveText), p4: String(live?.observed_at ? ': ' + live.observed_at : '')}) +
       (unit.current_disposition ? uiText("ui.ui.kit.window.views.forge.panel.69517383a8") + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? uiText("ui.ui.kit.window.views.forge.panel.06811cd0d8") : "") +
       (unit.custody === "unresolved_stop" ? uiText("ui.ui.kit.window.views.forge.panel.e49b1be6cb") : "") +
       (unit.custody === 'recovered_boundary' ? uiText('forge.recovery.recovered') : '') +
+      (unit.recovery?.diagnostic ? '\n' + (['forge_history_corrupt','forge_history_unreadable'].includes(unit.recovery.diagnostic.code) ? uiText('forge.history.damaged', {
+        line: String(unit.recovery.diagnostic.line ?? '—'), offset: String(unit.recovery.diagnostic.offset ?? '—')}) : uiText('forge.history.refused')) +
+        ' · ' + unit.recovery.diagnostic.code + (unit.recovery.diagnostic.journal_sha256 ? '\nSHA-256 '+unit.recovery.diagnostic.journal_sha256 : '') : '') +
       (unit.stale_dispositions ? uiText("ui.ui.kit.window.views.forge.panel.bba46ad410", {p0: String(unit.stale_dispositions)}) : "");
     view.brief.textContent = unit.subtask || uiText("ui.ui.kit.window.views.forge.panel.0d6bd2b100");
     // Controls keep their in-flight feedback while the next observation arrives.
@@ -468,7 +484,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     let view = tasks.get(task.id);
     if (!view) {
       const details = document.createElement("details"); details.className = "fold forge-task";
-      details.open = false;
+      rememberDisclosure(details,'forge-task:'+task.id,disclosureScope());
       const summary = document.createElement("summary"), title = el("b"), state = el("span", "muted"), goal = el("p", "forge-brief");
       const body = el("div", "fold-body"), actions = el("div"), commands = el("div", "muted forge-command"), units = el("div");
       summary.append(title, state);

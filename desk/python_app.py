@@ -130,6 +130,10 @@ class Application:
         self.events: list[dict] = []
         self.stopping = threading.Event()
         self.lock = threading.Lock()
+        from localharness.inbox_wake import InboxWake
+        self.preference_wake = InboxWake(root)
+        self.preference_stamp = self._preference_signature()
+        self.preference_version = 0
         self.channel = (host.channel() if isinstance(host, Controller) else
                         self._channel(host.ready.result(timeout=60)["script"]) if host else {})
         if host:
@@ -224,6 +228,11 @@ class Application:
             return None
         if command == "component_install":
             name=str(args.get('name',''))
+            if name == 'server-bridge':
+                # This built-in module only enables a private marker. It has
+                # no replaceable binary and must not retire the live session.
+                from localharness.server_bridge import install
+                return install()
             if name == 'relay':
                 from localharness import standalone_relay
                 return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
@@ -338,6 +347,23 @@ class Application:
         from localharness.window_preferences import storage
         return storage(self.root)
 
+    def _preference_signature(self):
+        try:
+            stat = (self.root / 'window-preferences.json').stat()
+            return stat.st_ino, stat.st_mtime_ns, stat.st_size
+        except OSError:
+            return None
+
+    def _preferences_changed(self):
+        # Observe the installation directory before checking the signature so
+        # an atomic save between two window polls still wakes the next poll.
+        if self.preference_wake.native and not self.preference_wake.wait(0) and self.preference_wake.native:
+            return False
+        stamp = self._preference_signature()
+        changed = stamp != self.preference_stamp
+        self.preference_stamp = stamp
+        return changed
+
     def bridge(self):
         from localharness.window_preferences import bootstrap
         saved, seen = bootstrap(self.root)
@@ -392,10 +418,12 @@ window.addEventListener('helene:ui-ready',async()=>{
     fail(error);
    }
   });}};
- window.__HELENE__.syncAppearance=()=>{const at=revision;pending=pending.then(async()=>{
-   const result=await window.__HELENE__.invoke('appearance_read');if(at!==revision || result.seen===seen)return;
-   accept(result);
- }).catch(fail);};
+ window.__HELENE__.appearanceVersion=0;
+ window.__HELENE__.syncAppearance=(version=window.__HELENE__.appearanceVersion)=>{const at=revision;pending=pending.then(async()=>{
+   const result=await window.__HELENE__.invoke('appearance_read');if(at!==revision)return;
+   if(result.seen!==seen)accept(result);
+   window.__HELENE__.appearanceVersion=version;
+ }).catch(fail);return pending;};
  Storage.prototype.setItem=function(key,value){originalSet.call(this,key,value);if(this===store)persist(String(key),String(value));};
  Storage.prototype.removeItem=function(key){originalRemove.call(this,key);if(this===store)persist(String(key),null);};
  // Production WebView2 disables native browser accelerators. Reload only the
@@ -423,9 +451,9 @@ window.addEventListener('helene:ui-ready',async()=>{
  },true);
 })(%s);
 (async function events(){try {
- const r=await fetch('/__python__/events',{headers:{'X-Helene-Window':%s}});
+ const r=await fetch('/__python__/events?appearance='+window.__HELENE__.appearanceVersion,{headers:{'X-Helene-Window':%s}});
  if(r.ok) for(const e of await r.json()) {
-  if(e.name==='window-preferences') window.__HELENE__.syncAppearance();
+  if(e.name==='window-preferences') await window.__HELENE__.syncAppearance(e.data.version);
   else if(e.name==='replace-window') location.replace('/');
   else if(e.name==='retire-window') location.replace('/__python__/retired?id='+encodeURIComponent(e.data.id));
   else if(e.name==='exit') window.__HELENE__.win('exit');
@@ -477,9 +505,14 @@ window.addEventListener('helene:ui-ready',async()=>{
                 if path == "/__python__/events":
                     if not self.authorized():
                         return self.reply(403, {"error": "window token required"})
+                    from urllib.parse import parse_qs
+                    appearance = parse_qs(urlsplit(self.path).query).get('appearance', ['0'])[-1]
                     with app.lock:
                         items, app.events = app.events, []
-                    items.append({'name':'window-preferences','data':{}})
+                        if app._preferences_changed():
+                            app.preference_version += 1
+                        if appearance != str(app.preference_version):
+                            items.append({'name':'window-preferences','data':{'version':app.preference_version}})
                     return self.reply(200, items)
                 target = (app.ui / unquote(path).lstrip("/")).resolve()
                 if path == "/":
@@ -555,6 +588,7 @@ window.addEventListener('helene:ui-ready',async()=>{
         if getattr(self,'thread',None):finish(self.server.shutdown)
         finish(self.server.server_close)
         if getattr(self,'thread',None):finish(lambda:self.thread.join(5))
+        if getattr(self,'preference_wake',None):finish(self.preference_wake.close)
         finish(lambda:self.control_file.unlink(missing_ok=True))
         if failures:
             diagnostic='; '.join(str(exc) for exc in failures)

@@ -5427,8 +5427,9 @@ def tool_coding_swarm(task_id: str, action: str = "status", plan: str = "",
                        message=message, files=files or [], max_parallel=max_parallel,result_sha256=result_sha256)
 
 
-def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '') -> str:
-    return json.dumps(forge.control(task_id,action,agent_id,expected_generation),ensure_ascii=False)
+def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '',
+                        host_binding: str = '',reason: str = '') -> str:
+    return json.dumps(forge.control(task_id,action,agent_id,expected_generation,host_binding=host_binding,reason=reason),ensure_ascii=False)
 
 
 def tool_coding_review(task_id: str,action: str = 'status',**kwargs) -> str:

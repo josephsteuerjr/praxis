@@ -16,9 +16,11 @@ def extend(tools,obj):
     by_name['coding_swarm']['description']='Durable dependency graph, exact-result acceptance and rework. plan nodes include phase/success_criteria; dependencies require the exact accepted result revision. For action=checkpoint put a JSON object with next_action/unresolved_reviews in plan (message accepts the same object for compatibility). rework needs node_id, current result_sha256 and concrete correction message. Ownership is advisory.'
     properties('coding_inspect')['action']['enum']+=['coordination']
     tools.extend([
-        {'name':'coding_control','description':'Pause/Stop/Resume a task or selected agent subtree. Resume needs current generation and proven old-writer exit, creates a new identity and retains history. Unknown outcome is not stopped.',
-         'input_schema':obj({'task_id':{'type':'string'},'action':{'type':'string','enum':['pause','stop','resume']},
-            'agent_id':{'type':'string'},'expected_generation':{'type':'string'}},['task_id','action'])},
+        {'name':'coding_control','description':'Pause/Stop/Resume a task or selected agent subtree. Resume needs current generation and proven old-writer exit, creates a new identity and retains history. For damaged shared history, prepare_recovery preserves exact journal bytes and a pre-reboot witness; it requires host_binding=verified-local-execution-host and a concrete reason on the independently verified original Linux host, after Stop. After an actual later reboot of that same host, recover can release old process custody. Unknown action outcomes remain unknown; this does not reboot, resend or replay anything. Diagnostic codes include exact line, byte offset and hashes when available.',
+         'input_schema':obj({'task_id':{'type':'string'},'action':{'type':'string','enum':['pause','stop','resume','prepare_recovery','recover']},
+            'agent_id':{'type':'string'},'expected_generation':{'type':'string'},
+            'host_binding':{'type':'string','description':'Explicit verified-local-execution-host attestation; never infer from a missing PID.'},
+            'reason':{'type':'string','description':'Concrete execution-host verification and recovery reason.'}},['task_id','action'])},
         {'name':'coding_review','description':'Prepare/start/inspect independent frozen source review or a separate isolated A/L/B/M merger, retain findings, request review of fixes and record an explicit author decision. A=base,L=authored local,B=incoming,M=candidate. This never applies live code; critics remain advisory.',
          'input_schema':obj({'task_id':{'type':'string'},'action':{'type':'string','enum':['prepare','start','status','decide','prepare_merge','start_merge','rework_merge','verification_plan','bind_verification']},
             'review_id':{'type':'string'},'criteria':{'type':'string'},'previous_review_id':{'type':'string'},'merge_id':{'type':'string'},

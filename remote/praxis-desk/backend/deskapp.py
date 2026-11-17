@@ -176,7 +176,7 @@ _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/me
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
                  "/api/interrupt", "/api/praxis/control", "/api/agenda", "/api/board", "/api/forge",
-                 "/api/phone/activity", "/api/phone/forge/tasks", "/api/phone/forge/events",
+                 "/api/phone/activity", "/api/phone/forge/control", "/api/phone/forge/tasks", "/api/phone/forge/events",
                   "/api/phone/forge/payload"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/", "/api/xtts/", "/api/speech/")

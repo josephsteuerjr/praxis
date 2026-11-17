@@ -46,13 +46,12 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   root.append(options.agentsOnly?forge:agents);
   const renderWork=workActivity(work,{reviewers:false});
   const teams=forgePanel(forge,async<T>(path:string,signal:AbortSignal,body?:unknown)=>{
-    if(body!==undefined)throw Error('Управление Forge с этого экрана недоступно');
-    const value=await request<T>(path.replace('/api/forge/','/api/phone/forge/'),undefined,signal);
+    const value=await request<T>(path.replace('/api/forge/','/api/phone/forge/'),body,signal);
     // `open` меняется сразу по щелчку, а `toggle` приходит позже: ответ между ними не должен
     // заполнить уже закрытый список. Остановка панели делает его ответ недействительным.
     if(!options.agentsOnly&&!agents.open)teams.stop();
     return value;
-  },2500,{compact:true,readOnly:true,scope});
+  },2500,{compact:true,readOnly:true,recovery:true,scope});
   const rows=new Map<string,ReturnType<typeof makeRow>>();
   let active=false,busy=false,epoch=0,timer:ReturnType<typeof setTimeout>|undefined;
   let controller:AbortController|undefined,owner=scope(),liveRun='';

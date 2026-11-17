@@ -19,7 +19,7 @@ from typing import Callable
 import forge_reader as reader
 
 _COMMAND = re.compile(r"[0-9a-f]{32}\Z")
-_ACTIONS = {"stop", "pause", "resume"}
+_ACTIONS = {"stop", "pause", "resume", "prepare_recovery", "recover"}
 
 
 def _utc() -> str:
@@ -74,7 +74,7 @@ def receipt(tree: Path, command_id: str) -> dict:
             "agent_id": (request or processing).get("agent_id", ""), "action": (request or processing).get("action")}
 
 
-def enqueue(tree: Path, task_id: str, action: str, agent_id: str = "", expected_generation: str = "", command_id: str = "") -> dict:
+def enqueue(tree: Path, task_id: str, action: str, agent_id: str = "", expected_generation: str = "", command_id: str = "", *, host_binding: str = "", reason: str = "") -> dict:
     command_id = _command_id(command_id)
     if not isinstance(action, str) or action not in _ACTIONS:
         raise reader.ReadError("Unsupported Forge control action")
@@ -83,6 +83,12 @@ def enqueue(tree: Path, task_id: str, action: str, agent_id: str = "", expected_
     root = _root(tree)
     identity = {"schema": 1, "command_id": command_id, "task_id": task_id, "agent_id": agent_id,
                 "action": action, "expected_generation": expected_generation}
+    if action in {'prepare_recovery','recover'}:
+        if not isinstance(host_binding,str) or not isinstance(reason,str) or len(reason)>4000:
+            raise reader.ReadError('Invalid execution-host recovery confirmation')
+        if action == 'prepare_recovery' and (host_binding != 'verified-local-execution-host' or not reason.strip()):
+            raise reader.ReadError('Confirm the original Linux execution host and give a recovery reason')
+        identity.update(host_binding=host_binding,reason=reason)
     for subdir in ("commands", "processing", "receipts"):
         prior = _record(root, subdir, command_id)
         if prior:
@@ -103,7 +109,7 @@ def enqueue(tree: Path, task_id: str, action: str, agent_id: str = "", expected_
     try:
         _write(commands / (command_id + ".json"), value, exclusive=True)
     except FileExistsError:
-        return enqueue(tree, task_id, action, agent_id, expected_generation, command_id)
+        return enqueue(tree, task_id, action, agent_id, expected_generation, command_id, host_binding=host_binding, reason=reason)
     except OSError as exc:
         raise reader.ReadError(f"Forge command was not queued: {exc}", 503) from exc
     return {"ok": True, "command_id": command_id, "state": "queued", "task_id": task_id, "agent_id": agent_id, "action": action}
@@ -192,8 +198,9 @@ def consume_pending(tree: Path, callback: Callable[..., dict], limit: int = 30) 
                 folder = reader.unit_dir(tree, task_id, agent_id)
                 if str(reader._read(folder, "progress.json").get("generation") or "") != request.get("expected_generation", ""):
                     raise reader.ReadError("Participant generation changed before control", 409)
+            extra = {key:request.get(key,'') for key in ('host_binding','reason')} if request['action'] in {'prepare_recovery','recover'} else {}
             observed = callback(task_id, request["action"], agent_id=agent_id,
-                                expected_generation=request.get("expected_generation", ""))
+                                expected_generation=request.get("expected_generation", ""), **extra)
             if not isinstance(observed, dict):
                 raise TypeError("Forge control returned no receipt")
             status = observed.get("status")
