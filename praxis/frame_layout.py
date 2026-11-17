@@ -1138,7 +1138,11 @@ def _feed(ctx, snap: dict) -> tuple[Own, str]:
             return DOT.join(dialogue + [own("карта адресных ответов этому ходу не собрана")]), ""
         return own("пусто: карта адресных ответов этому ходу не собрана"), "empty"
     authors = {str(row[1]) for row in targets if len(row) > 1}
-    bits = dialogue + [own(_plural(len(targets), "сообщение", "сообщения", "сообщений")
+    # 15.11.2026: «1 сообщение от 1 человека» стояло рядом с блоком текущего сообщения из
+    # восьми реплик, и она прочла его как описание всего блока. Это повод ЭТОГО хода
+    # (адресные входы, на которые можно ответить), а не объём ленты, — так и подписано.
+    bits = dialogue + [own("повод этого хода: "
+                           + _plural(len(targets), "сообщение", "сообщения", "сообщений")
                            + " от " + _plural(len(authors), "человека", "человек", "человек"))]
     if ctx is not None and getattr(ctx, "addressed", False):
         bits.append(own("мне адресовано"))

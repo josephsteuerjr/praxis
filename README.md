@@ -23,6 +23,26 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Reading the source
+
+This branch includes the Hélène 2.8.7 source and the live cloud Praxis snapshot
+from 17 November 2026. The two products share a base but have separate runtime
+and interface layers:
+
+| Path | Source |
+| --- | --- |
+| [`desk/`](desk/) | Hélène desktop host, lifecycle, installer and interfaces |
+| [`helene/core/`](helene/core/) | Hélène engine adaptations over the shared base |
+| [`praxis/`](praxis/) | Live cloud Praxis engine, tools and schemas |
+| [`remote/praxis-desk/`](remote/praxis-desk/) | Praxis server backend, Telegram MiniApp and PWA |
+| [`relay/`](relay/) | Published Praxis relay source snapshot |
+
+Use the immutable [`v2.8.7` tag](https://github.com/josephsteuerjr/praxis/tree/v2.8.7)
+to inspect the shipped Hélène composition. Main also carries newer cloud engine
+changes; they require separate porting and qualification before a new desktop
+release. [Source bindings](SOURCE-SNAPSHOTS.md) record the snapshot dates and
+verification scope.
+
 ## Included in 2.8.7 Beta
 
 The window is smooth again while the agent works: scrolling, typing, animations

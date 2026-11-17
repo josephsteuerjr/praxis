@@ -115,7 +115,9 @@ PARAGRAPH = ("Он сказал, что архитектура памяти об
 # руки, непрерывность, живой коммит. Повод — живая конфабуляция 13.08 в AbstractDL:
 # спросили про архитектуру, в кадре не было ни одного факта о себе, зато было чужое
 # слово «DeepSeek» из ленты — им она и ответила. Число перемерено, а не обещано.
-PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 718, 1190, 1944, 968
+# 718 -> 736 и 1944 -> 1962, 15.11.2026: подпись «повод этого хода: » (+18) у счётчика ленты —
+# она прочла «1 сообщение от 1 человека» как описание всего блока текущего сообщения.
+PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 736, 1190, 1962, 968
 # Третье слагаемое живёт константой рядом с остальными, а не выводится в тесте: если гуттер
 # реплики однажды подорожает, это обязано краснить именно здесь.
 PRICE_REPLY = 2
@@ -769,14 +771,15 @@ class InAGroupThePeopleStayApart(ZoneBase):
         zone = zone_of(self.turn(ctx=ctx)["tail"])
         feed = next(ln for ln in zone.split("\n") if ln.startswith("  лента"))
         authors = {row[1] for row in ctx.reply_targets}
-        self.assertIn(f"{len(ctx.reply_targets)} сообщения от {len(authors)} человек", feed)
+        self.assertIn(f"повод этого хода: {len(ctx.reply_targets)} сообщения от {len(authors)} человек",
+                      feed)
         self.assertIn("рядом идут чужие ветки", feed)
 
     def test_a_single_voice_room_does_not_claim_foreign_threads(self):
         ctx = self.group(reply_targets=((553, "Пётр", "а что"),))
         zone = zone_of(self.turn(ctx=ctx)["tail"])
         feed = next(ln for ln in zone.split("\n") if ln.startswith("  лента"))
-        self.assertIn("1 сообщение от 1 человека", feed)
+        self.assertIn("повод этого хода: 1 сообщение от 1 человека", feed)
         self.assertNotIn("чужие ветки", feed)
 
 

@@ -279,12 +279,15 @@ class ShippedLivingProse(unittest.TestCase):
     LINK = re.compile(r"\]\(([^)#]+)\)")
 
     def test_fits_default_cap_with_room_for_her_own(self):
+        # The resident text is hers to edit (self-edit bfe9028a added a paragraph, 3173
+        # chars). No size pin on her own words below the cap: the renderer itself names
+        # what does not fit. Pinned: in frame, whole, under the default cap.
         text, rows = resident_skills.render(REPO / "soul" / "skills",
                                             limit=resident_skills.DEFAULT_MAX_CHARS)
         row = next(r for r in rows if r["slug"] == "living-prose")
         self.assertTrue(row["in_frame"])
         self.assertTrue(row["skill_file"])
-        self.assertLess(row["chars"], resident_skills.DEFAULT_MAX_CHARS // 2)
+        self.assertLess(row["chars"], resident_skills.DEFAULT_MAX_CHARS)
 
     def test_links_resolve_inside_the_skill(self):
         files = [REPO / "soul" / "skills" / "living-prose.md", *sorted(SHIPPED.glob("*.md"))]

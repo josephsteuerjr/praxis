@@ -123,11 +123,14 @@ def collect(ctx=None) -> tuple[str, ...]:
                 seen.add(line)
                 lines.append(line)
 
-    # 2) pending follow-up следы (мой след без ответа)
+    # 2) pending follow-up следы (мой след без ответа). Выжимка — МОИ слова адресату:
+    # 15.11.2026 «Имя (follow-up, без ответа): текст» читалось как реплика адресата
+    # (её собственная проверка кадра, AbstractDL #126467), поэтому направление и автор
+    # названы словами, как в остальных следах ledger («я сказала: …»).
     for item in _pending_followups(ids, peer):
         label = str(item.get("target_label") or item.get("target_user_id") or "?")
         excerpt = str(item.get("sent_excerpt") or "")[:80]
-        line = f"{label} (follow-up, без ответа): {excerpt}"
+        line = f"follow-up к {label}, ответа нет; я сказала: {excerpt}"
         if line not in seen:
             seen.add(line)
             lines.append(line)

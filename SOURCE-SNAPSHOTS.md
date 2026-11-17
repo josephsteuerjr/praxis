@@ -1,6 +1,16 @@
 # Source and package bindings
 
-## Desktop 2.5.0 composition
+## Hélène 2.8.7 source base
+
+The immutable `v2.8.7` tag at
+`517669de20d73c7a2e3efb2e2c55ff339dc740ab` identifies the latest released
+Hélène source: the desktop host, interfaces and explicit `helene/core/` overlay
+on its shared `praxis/` base. Shipped per-platform inventories bind the exact
+qualified composition. The 17 November main sync includes that public history
+and then adds the current cloud snapshot below; main is development source,
+so it does not redefine the released 2.8.7 composition.
+
+## Historical desktop 2.5.0 composition
 
 The 2.5.0 build selects current `praxis/` followed by the explicit
 `helene/core/` overlay, together with `desk/` and its built shared interfaces.
@@ -30,72 +40,48 @@ beyond that frozen desktop code.
 
 ## Current cloud Praxis mirror
 
-`praxis/` mirrors the selected public source of the running cloud Praxis on
-2026-11-14: HEAD `fe7d2036713ee8428b36d4ec3d4f7366b7d41514`, with no deployed-uncommitted
-product files. Since the previous core mirror (`12f38a8`, live `a3f18a7e`), this
-adds resident skills. A skill folder may hold `resident.md`; its text stands in
-the persona of every turn right after VOICE, while the skill file and the rest of
-the folder stay on demand. Order is deterministic, symbolic links are refused,
-and a total cap (`PRAXIS_RESIDENT_SKILLS_MAX`, 6,000 characters) names what did
-not fit instead of cutting it. The section belongs to the closed frame roster and
-the shadow constitution; the owner capability description names resident skills
-and their materials. The first resident skill, a support for lively Russian prose
-with an on-demand workshop, exercises and sources, lives in Praxis's private
-soul directory and is not mirrored. The source passed two identical 435-module gates, each with 7,323
-tests, 16 skips and no errors; the first fresh model inputs after deployment
-carried the resident section exactly once.
+`praxis/` mirrors the selected public source of running cloud Praxis on
+17 November 2026: HEAD `67111dfb00d55e1e43bf73d1c6c02d979929d220`, with no
+selected deployed-uncommitted files. This updates the previous `fe7d2036`
+resident-skills snapshot with the subsequent epoch-tape and context fixes:
+superseded revisions and duplicate deletion records retire once represented;
+a pending life write holds its archive occurrence until it can be joined;
+her sends from other topics remain marked evidence rather than her current
+reply; follow-up and turn-trigger labels name their direction. A dismissed
+stale epoch-repair blocker retains its evidence without remaining active.
 
-Earlier the same day (docs HEAD `a3f18a7e`, runtime `771695e8`, final
-test-isolated source `7a4dfea8`), the mirror after `24d09a6` added titles bound to
-the actual triggering messages, separate operator-probe history, numeric model
-generation progress, and the `code_query` hand shared with Forge. Semantic search
-runs through owned child processes; its Python AST evidence, hash-bound pages
-and structural cache make incomplete or uncertain results explicit. External
-roots use a process-memory cache; remote task roots are explicitly unsupported.
+`CORE-SOURCE.json` records the 796 selected live source files, their modes,
+source and public digests, exclusions and historical qualification. The last
+live change passed two identical full gates, each with 7,338 tests, 16 skips
+and no errors, plus its 506-test focused set. Those are the original deployment
+results, not fresh tests performed by this mirror sync. This sync checks source
+identity, executable modes, Python syntax and publication privacy.
 
-The relay reports numeric progress without exposing argument text. Its three
-generation limits remain zero (disabled), pending owner approval of thresholds.
-The original long silent attempt's whitespace explanation remains unproven.
-The final source passed two identical 434-module gates, each with 7,307 tests,
-16 skips and no errors; all 24 installed semantic-search tests passed. Relay
-130 tests and strict Clippy, app backend 44/browser 12, and six live HTTPS groups
-passed. No paid provider probes were made; physical phone acceptance is separate.
+Two live files remain excluded: a stray runner copy and a one-off script that
+reads a third party's private inbox. Eight files originally introduced into
+`praxis/` by Hélène releases remain preserved. The existing two documentation
+sanitizations remove third-party identifiers from comments and docstrings while
+preserving the executable AST. Private memory, authored soul, workspace,
+credentials and private Git history are excluded.
 
-The semantic-search interface draws on Ouroboros v7.10.0 (MIT)
-`tools/query_code.py` and `code_navigation.py`; implementation reuses Praxis
-Forge and owned search, with no source copied. The split between an always-present
-support and on-demand materials follows the Ouroboros "living prose" kit
-(2026-11-14); the resident-skill mechanism is new Praxis code.
-`CORE-SOURCE.json` records all selected source digests, mirror digests and
-executable modes, together with the canonical mirror digest.
+Praxis's server application is in
+[`remote/praxis-desk/`](remote/praxis-desk/), separate from Hélène's `desk/`.
+Its source remains `e52ce540fcc1a49b7d47c22bed2dc5c845572508`: all 19 installed
+backend files match after line-ending normalization, and the deployed MiniApp
+and PWA files still match the original build manifest. The relay source and
+running image are unchanged from `RELAY-SOURCE.json`; that record's disabled
+limits describe the historical 14 November capture. The three limits were
+subsequently enabled as runtime configuration, without a relay code change.
+No runtime is deployed or restarted by this source publication.
 
-Two live files stay out of the mirror: a stray copy of `mtproto_runner.py`
-committed alongside a skill and a one-off script that reads a private inbox
-path. Eight files that Hélène releases 1.7.0 and 2.0.0 had placed into
-`praxis/` were never part of live Praxis; they are retained so the next
-Hélène composition does not lose them silently. Private memory, soul,
-workspace, credentials and private Git history are excluded. Two public
-documentation sanitizations (third-party handles and a name in comments)
-preserve the executable code.
+The source keeps the existing Ouroboros attribution in the README and original
+commits. New cloud tests can expose gaps where Hélène overrides a shared module;
+porting decisions and full desktop qualification belong to the next release.
+Use immutable desktop tags and shipped inventories for released code.
 
-No gate was re-run for this mirror: it publishes code that is already live,
-and the live qualification receipts are named in `CORE-SOURCE.json`. The next
-Hélène composition takes this base. New Praxis tests (from 2026-11-13 and
-2026-11-14) enter it while their subject modules remain overridden by older
-`helene/core/` files, so they are expected to show that gap at the next desktop
-release gate until the engine changes are ported. Immutable desktop
-tags and shipped per-platform inventories retain the authority for each
-released composition.
-
-Praxis's own server application (the MiniApp/PWA and the `praxis-desk`
-backend) lives in [`remote/praxis-desk/`](remote/praxis-desk) as the exact
-deployed source; see its README.
-
-The records below describe historical 2.2.9 deliveries. Their immutable tags,
-digests and older voice references are provenance, not the current desktop source
-selection. `HELENE-SOURCE.json` and `helene/PLATFORM-SOURCE.json` are retained as
-historical inputs; current composition inventories are generated for each new
-archive.
+The older source bindings below are historical provenance. `HELENE-SOURCE.json`
+and `helene/PLATFORM-SOURCE.json` also retain historical inputs; each new archive
+has its own generated composition inventories.
 
 ## Historical 2.2.9 bindings
 

@@ -86,6 +86,237 @@ class EpochSources(unittest.TestCase):
         self.snapshot['boundary'] = 'new-coverage-boundary'
         self.assertNotIn('archive-only', self.text(self.prepare()))
 
+    def test_deleted_text_never_stands_as_her_turn_and_retires_with_its_tombstone(self):
+        # AbstractDL #125916, 13->14.11.2026: her deleted report outlived its folded
+        # tombstone and rendered as her latest delivered `reply` right before a new
+        # question; she then apologised for a reply nobody had seen. Once the deletion is
+        # represented (tombstone hot or folded) the original retires; a deletion with no
+        # life record at all stays as marked evidence, never as her turn.
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        self.add(7, 'deleted report', outgoing=True)
+        gc.observe_deletion(peer_id=ROOM, message_id=7, timestamp='2026-10-20T00:00:37Z',
+                            origin='live')
+        self.add(8, 'spam to delete')
+        gc.observe_deletion(peer_id=ROOM, message_id=8, timestamp='2026-10-20T00:00:40Z',
+                            origin='live')
+        self.add(9, 'standing reply', outgoing=True)
+        archive = [json.loads(line) for line in
+                   gc.archive_path(ROOM).read_text(encoding='utf-8').splitlines()]
+
+        def life(row, eid):
+            sid, direction, text = gc.epoch_life_signature(row)
+            return self.life(eid, sid, text, own=direction == 'out')
+
+        for row, eid in zip(archive[-5:], ('orig7', 'del7', 'orig8', 'del8', 'own9')):
+            life(row, eid)
+        current = ['del7', 'del8', 'own9']
+
+        def self_rows(selected):
+            return [r['role_line'] for r in selected['rows'] if r['self']]
+
+        def spoken(selected):
+            turns = [(r['self'], r['line'], r['role_line']) for r in selected['rows']]
+            history, now = runner._group_dialogue(turns, exact=True)
+            return [m for m in history if m.get('role') == 'assistant'], history, now
+
+        # Tombstones hot: the deletion is represented, the originals retire.
+        self.snapshot['hot'] = [r for r in self.snapshot['hot'] if r['id'] in current]
+        self.snapshot.update(current_event_ids=current, boundary='tombstones-hot')
+        fresh = self.prepare()
+        self.assertEqual(self_rows(fresh), ['standing reply'])
+        self.assertIn('message removed', self.text(fresh))
+        self.assertNotIn('deleted report', self.text(fresh))
+        self.assertNotIn('spam to delete', self.text(fresh))
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+
+        # An authored fold covers the tombstones: nothing returns.
+        self.snapshot['hot'] = [r for r in self.snapshot['hot'] if r['id'] == 'own9']
+        self.snapshot.update(covered_event_ids=['del7', 'del8'], boundary='tombstones-folded')
+        folded = self.prepare()
+        self.assertNotIn('message removed', self.text(folded))
+        self.assertNotIn('deleted report', self.text(folded))
+        self.assertEqual(self_rows(folded), ['standing reply'])
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+        raw = gc.archive_path(ROOM).read_text(encoding='utf-8')
+        self.assertIn('deleted report', raw)
+        self.assertIn('spam to delete', raw)
+
+        # No life record of the message or its deletion: marked evidence, not her turn.
+        self.add(10, 'unrecorded own words', outgoing=True)
+        gc.observe_deletion(peer_id=ROOM, message_id=10, timestamp='2026-10-20T00:01:00Z',
+                            origin='live')
+        self.snapshot['boundary'] = 'unrecorded-deletion'
+        bare = self.prepare()
+        marked = [r for r in bare['rows'] if r.get('deleted_later')]
+        self.assertEqual(len(marked), 1)
+        self.assertIn('unrecorded own words', marked[0]['line'])
+        self.assertFalse(marked[0]['self'])
+        self.assertEqual(marked[0]['role_line'], marked[0]['line'])
+        self.assertTrue(marked[0]['line'].endswith('\n' + gc.EPOCH_DELETED_LATER))
+        self.assertEqual(self_rows(bare), ['standing reply'])
+        assistant, history, now = spoken(bare)
+        self.assertNotIn('unrecorded own words', str(assistant))
+        self.assertIn('standing reply', str(assistant))
+        self.assertIn(gc.EPOCH_DELETED_LATER, str(history) + str(now))
+
+    def test_superseded_edit_original_retires_once_its_current_edit_is_represented(self):
+        # AbstractDL 15.11.2026: every edited message left its pre-edit original as an
+        # eternal residual (folds cover the current revision only); 1948 of them filled
+        # the epoch to its cap through maintenance recaps. While the edit was hot the
+        # original also trailed the current message as a raw duplicate.
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        self.add(5, 'original words')
+        self.add(5, 'edited words', edited_at='2026-10-20T00:00:30Z')
+        self.add(6, 'plain words')
+        archive = [json.loads(line) for line in
+                   gc.archive_path(ROOM).read_text(encoding='utf-8').splitlines()]
+        for row, eid in zip(archive[-3:], ('orig5', 'edit5', 'm6')):
+            sid, _direction, text = gc.epoch_life_signature(row)
+            self.life(eid, sid, text)
+
+        # Current revision of the lineage missing from the read: absence proves nothing.
+        self.snapshot.update(current_event_ids=['m6'], boundary='edit-unknown')
+        self.snapshot['hot'] = [r for r in self.snapshot['hot'] if r['id'] == 'm6']
+        self.assertIn('original words', self.text(self.prepare()))
+
+        # Edit hot: it is the one readable version; the original retires.
+        edit5 = next(e for e in self.snapshot['events'] if e['id'] == 'edit5')
+        self.snapshot['hot'].insert(0, dict(edit5, line=edit5['text'], chat=ROOM, unprovable=False))
+        self.snapshot.update(current_event_ids=['edit5', 'm6'], boundary='edit-hot')
+        hot = self.prepare()
+        self.assertNotIn('original words', self.text(hot))
+        self.assertIn('edited words', self.text(hot))
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+
+        # The fold covers the edit: nothing returns; the raw archive keeps the original.
+        self.snapshot['hot'] = [r for r in self.snapshot['hot'] if r['id'] == 'm6']
+        self.snapshot.update(covered_event_ids=['edit5'], boundary='edit-folded')
+        folded = self.prepare()
+        self.assertNotIn('original words', self.text(folded))
+        self.assertNotIn('edited words', self.text(folded))
+        self.assertIn('plain words', self.text(folded))
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+        self.assertIn('original words', gc.archive_path(ROOM).read_text(encoding='utf-8'))
+
+    def test_drifted_revision_label_joins_by_exact_revision_id_only(self):
+        # October 2026 life lines labelled edits without the payload digest and tombstones
+        # without the former sender, while the archive kept exact revision ids. After
+        # 8fce135a 22 such edits and two tombstones trailed her current message raw.
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        self.add(12, 'first words')
+        self.add(12, 'second words', edited_at='2026-10-20T00:00:30Z')
+        self.add(14, 'gone words')
+        gc.observe_deletion(peer_id=ROOM, message_id=14, timestamp='2026-10-20T00:00:50Z',
+                            origin='live')
+        self.add(15, 'stranger words', edited_at='2026-10-20T00:00:40Z')
+        archive = [json.loads(line) for line in
+                   gc.archive_path(ROOM).read_text(encoding='utf-8').splitlines()]
+        sig = {eid: gc.epoch_life_signature(row) for row, eid in
+               zip(archive[-5:], ('orig12', 'edit12', 'orig14', 'del14', 'edit15'))}
+        self.life('orig12', sig['orig12'][0], sig['orig12'][2])
+        self.life('edit12', sig['edit12'][0], 'Alice [edited #12 at 2026-10-20T00:00:30Z]: second words')
+        self.life('orig14', sig['orig14'][0], sig['orig14'][2])
+        self.life('del14', '14:delete', 'Telegram [deleted #14]: message removed')
+        other = sig['edit15'][0].rsplit(':', 1)[0] + ':' + '0' * 20
+        self.life('edit15', other, 'Alice [edited #15 at 2026-10-20T00:00:40Z]: stranger words')
+        self.snapshot['hot'] = []
+        self.snapshot.update(current_event_ids=['edit12', 'del14', 'edit15'],
+                             covered_event_ids=['edit12', 'del14', 'edit15'], boundary='drift')
+        selected = self.prepare()
+        for gone in ('first words', 'second words', 'gone words', 'message deleted'):
+            self.assertNotIn(gone, self.text(selected))
+        # A different payload digest is a different revision: never joined.
+        self.assertIn('stranger words', self.text(selected))
+        self.assertEqual([o['row']['message_id'] for o in fe.load(ROOM)['tape']['residuals']], [15])
+
+    def test_fresh_unjoined_archive_occurrence_waits_for_its_life_write(self):
+        # AbstractDL #126472, 15.11.2026: her moderation deletion reached the archive while
+        # its life write waited 11 s on a lock; the frozen tape rendered the raw deletion
+        # record next to the deleted text. A fresh unjoined occurrence now waits.
+        import datetime
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        gc.observe_message(peer_id=ROOM, topic_id=None, message_id=31, sender_id=2,
+                           sender_name='Alice', reply_to_message_id=None, timestamp=now,
+                           text='fresh words', origin='live')
+        gc.observe_deletion(peer_id=ROOM, message_id=32, timestamp=now, origin='live')
+        first = self.prepare()
+        self.assertNotIn('fresh words', self.text(first))
+        self.assertNotIn('[archive', self.text(first))
+        self.assertEqual([o['row']['message_id'] for o in fe.load(ROOM)['tape']['held']], [31, 32])
+        archive = [json.loads(line) for line in
+                   gc.archive_path(ROOM).read_text(encoding='utf-8').splitlines()]
+        for row, eid in zip(archive[-2:], ('m31', 'd32')):
+            sid, _direction, text = gc.epoch_life_signature(row)
+            self.life(eid, sid, text)
+        second = self.prepare()
+        self.assertEqual([r['line'] for r in second['rows']].count('Alice: fresh words'), 1)
+        self.assertIn('message removed', self.text(second))
+        self.assertNotIn('[archive', self.text(second))
+        self.assertEqual(fe.load(ROOM)['tape']['held'], [])
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+
+    def test_unjoined_occurrence_past_the_grace_still_recovers_a_failed_life_write(self):
+        import datetime
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        gc.observe_message(peer_id=ROOM, topic_id=None, message_id=41, sender_id=2,
+                           sender_name='Alice', reply_to_message_id=None, timestamp=now,
+                           text='never recorded', origin='live')
+        self.assertNotIn('never recorded', self.text(self.prepare()))
+        with mock.patch.dict(os.environ, {fe.ARCHIVE_GRACE_ENV: '0'}):
+            late = self.prepare()
+        self.assertIn('never recorded', self.text(late))
+        self.assertEqual(fe.load(ROOM)['tape']['held'], [])
+        self.assertEqual(len(fe.load(ROOM)['tape']['residuals']), 1)
+
+    def test_duplicate_life_revision_of_a_represented_lineage_is_not_a_raw_residual(self):
+        # Ouroboros topic 898, 15.11.2026: a tombstone with two identical life events (one
+        # current and folded, one not current) stayed a raw archive row forever.
+        self.prepare()  # bootstrap: everything below is the future archive tail
+        self.add(21, 'removed words')
+        gc.observe_deletion(peer_id=ROOM, message_id=21, timestamp='2026-10-20T00:00:30Z',
+                            origin='live')
+        archive = [json.loads(line) for line in
+                   gc.archive_path(ROOM).read_text(encoding='utf-8').splitlines()]
+        orig = gc.epoch_life_signature(archive[-2])
+        tomb = gc.epoch_life_signature(archive[-1])
+        self.life('orig21', orig[0], orig[2])
+        self.life('del21a', tomb[0], tomb[2])
+        self.life('del21b', tomb[0], tomb[2])
+        self.snapshot['hot'] = []
+        # Without any current revision in the read the duplicates prove nothing.
+        self.snapshot.update(current_event_ids=[], covered_event_ids=[], boundary='no-current')
+        self.assertIn('message deleted', self.text(self.prepare()))
+        self.snapshot.update(current_event_ids=['del21a'], covered_event_ids=['del21a'],
+                             boundary='duplicate-tombstone')
+        selected = self.prepare()
+        self.assertNotIn('removed words', self.text(selected))
+        self.assertNotIn('message deleted', self.text(selected))
+        self.assertEqual(fe.load(ROOM)['tape']['residuals'], [])
+
+    def test_her_send_from_another_topic_is_evidence_not_her_turn_in_this_topic(self):
+        # Ouroboros topic 898, 15.11.2026: a whole-room topic tape showed 16 of her replies
+        # from other topics as her turns here; after a rebuild one could stand last.
+        def select():
+            return fe.prepare_tape(ROOM, peer_id=ROOM, topic_id=10, whole_room=True)
+
+        select()  # bootstrap
+        self.add(30, 'my words elsewhere', outgoing=True, topic=20)
+        self.add(31, 'my words here', outgoing=True, topic=10)
+        self.add(32, 'their words elsewhere', topic=20)
+        rows = select()['rows']
+        elsewhere = next(r for r in rows if 'my words elsewhere' in r['line'])
+        here = next(r for r in rows if 'my words here' in r['line'])
+        self.assertFalse(elsewhere['self'])
+        self.assertTrue(elsewhere.get('other_topic'))
+        self.assertEqual(elsewhere['role_line'], elsewhere['line'])
+        self.assertIn('"topic_id":20', elsewhere['line'])
+        self.assertTrue(here['self'])
+        self.assertEqual(here['role_line'], 'my words here')
+        self.assertEqual([r['role_line'] for r in rows if r['self']], ['my words here'])
+        self.assertIn('their words elsewhere', '\n'.join(r['line'] for r in rows))
+
     def test_scope_expansion_recovers_failed_life_receipts_without_narrow_leak(self):
         def narrow():
             return fe.prepare_tape(ROOM, peer_id=ROOM, topic_id=10)

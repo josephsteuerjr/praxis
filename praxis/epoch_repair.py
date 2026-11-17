@@ -34,6 +34,10 @@ paragraphs or ### headings (never ##). Raw sources are retained independently.
 """
 _WAKE_KEYS = ("mid", "message_ts", "kind", "addressed", "query", "name",
               "sender_id", "is_owner", "known", "family")
+# Events that close a parked trigger. `dismissed` is the owner's explicit retirement of
+# a trigger that must not be replayed (e.g. a weeks-old blocked mention); the parked
+# evidence itself always stays in the journal.
+_CLOSED = frozenset({"replayed", "adopted", "covered_by_reply", "dismissed"})
 
 
 def enabled():
@@ -113,7 +117,7 @@ def pending(now=None):
         rows = _rows()
     requests = {r["id"]: r for r in rows if r.get("event") == "parked"}
     for r in rows:
-        if r.get("event") in {"replayed", "adopted", "covered_by_reply"}:
+        if r.get("event") in _CLOSED:
             requests.pop(r.get("id"), None)
         elif r.get("event") in {"blocked", "retry"}:
             for q in requests.values():
@@ -154,6 +158,22 @@ def defer_error(request, reason):
         _append(row)
 
 
+def dismissed(request_id, *, reason, actor="owner"):
+    """Owner retires one parked trigger without any voice pass or replay.
+
+    15.11.2026: a mention parked 28.10 stayed blocked (3x TornStreamError) for 18 days and
+    kept "блокеров=1" in her state; replaying it would answer a weeks-old message.
+    """
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValueError("a dismissal needs a stated reason")
+    with _guard():
+        requests = {r["id"]: r for r in _rows() if r.get("event") == "parked"}
+        row = requests[request_id]
+        _append({"event": "dismissed", "id": request_id, "chat": row["chat"],
+                 "actor": str(actor or "owner")[:100], "reason": reason[:500]})
+
+
 def adopted(ids, run_id):
     if not run_id:
         raise ValueError("a durable run must own deferred triggers")
@@ -172,7 +192,7 @@ def state_line():
         rows = _rows()
     live = {r["id"]: r for r in rows if r.get("event") == "parked"}
     for row in rows:
-        if row.get("event") in {"adopted", "replayed", "covered_by_reply"}:
+        if row.get("event") in _CLOSED:
             live.pop(row.get("id"), None)
     if not live:
         return ""

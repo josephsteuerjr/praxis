@@ -7,7 +7,6 @@
     "path": "/opt/praxisdesk",
     "container": "praxis-desk",
     "backend_files_byte_equal": [
-      "deskapp.py",
       "deskctl.py",
       "deskd/__init__.py",
       "deskd/agentcfg.py",
@@ -33,7 +32,10 @@
       "Dockerfile": "b5850d5c2c7d1728177053e3fc58ad7e6d42fd493e690f4284f1db4dc08693b6",
       "docker-compose.yml": "a9f37505cc0cb40079bbff308816de550d3cbddb3d3f71d7cc5491514a64031d"
     },
-    "front_applied": "2026-11-14: origin titles/operator disclosure (S1), numeric generation progress (S2), code_query lens/step targets/phone-only fullscreen"
+    "front_applied": "2026-11-14: origin titles/operator disclosure (S1), numeric generation progress (S2), code_query lens/step targets/phone-only fullscreen",
+    "backend_files_line_endings_equal": [
+      "deskapp.py"
+    ]
   },
   "privacy": {
     "secret_values_rescan_matches": 0,
@@ -233,5 +235,16 @@
     ],
     "physical_phone": false,
     "unexpected_tracebacks": 0
+  },
+  "verified_at": "2026-11-17T12:04:30.367686+00:00",
+  "verification_2026_11_17": {
+    "backend_files_equal_after_line_ending_normalization": 19,
+    "private_source_files_equal": 178,
+    "deployed_front_manifest_files_sha256_equal": 46,
+    "recipe_sha256_equal": true,
+    "source_changes": false,
+    "build_or_test_rerun": false,
+    "historical_validation_retained": true,
+    "runtime_restart": false
   }
 }

@@ -103,6 +103,10 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(len(out), 1, out)
         self.assertIn("follow-up", out[0])
         self.assertIn("выжимку статьи", out[0])
+        # 15.11.2026: the excerpt is her words to the addressee, never shown as theirs.
+        self.assertTrue(out[0].startswith("follow-up к Test Room"), out[0])
+        self.assertIn("я сказала: обещала выжимку статьи", out[0])
+        self.assertNotIn("Test Room (follow-up", out[0])
         self.assertNotIn("чужая нить", out[0])
 
     def test_cap(self):

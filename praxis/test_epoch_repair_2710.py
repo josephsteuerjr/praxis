@@ -125,6 +125,28 @@ class DurableQueue(unittest.TestCase):
         er.adopted([rid],"run-real")
         self.assertEqual(er.state_line(),"")
 
+    def test_owner_dismissal_retires_blocked_trigger_without_replay(self):
+        # 15.11.2026: a mention parked 28.10 stayed blocked for 18 days; replaying it would
+        # answer a weeks-old message, so the owner retires it and the evidence stays.
+        rid = self.park()
+        q, = er.pending()
+        er.note("blocked", request=q, reason="TornStreamError")
+        self.assertIn("блокеров=1", er.state_line())
+        with self.assertRaises(ValueError):
+            er.dismissed(rid, reason=" ")
+        with self.assertRaises(KeyError):
+            er.dismissed("unknown-request", reason="stale")
+        self.assertIn("блокеров=1", er.state_line())
+        er.dismissed(rid, reason="stale blocked mention, retired by owner")
+        self.assertEqual(er.state_line(), "")
+        self.assertEqual(er.pending(now=float("inf")), [])
+        text = (er.directory() / "events.jsonl").read_text()
+        self.assertIn("Exact original question", text)
+        last = json.loads(text.splitlines()[-1])
+        self.assertEqual((last["event"], last["actor"], last["id"]), ("dismissed", "owner", rid))
+        self.park(8)
+        self.assertEqual([r["wake"]["mid"] for r in er.pending()], [8])
+
 
 class MaintenanceFold(Base):
     def seed(self):

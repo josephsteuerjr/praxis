@@ -119,6 +119,31 @@ def _hot_row(row):
                        ("id", "source_id", "chat", "unprovable", "state_residual")}}
 
 
+ARCHIVE_GRACE_ENV = "PRAXIS_EPOCH_ARCHIVE_GRACE_SEC"
+DEFAULT_ARCHIVE_GRACE_SEC = 120.0
+
+
+def archive_grace_sec() -> float:
+    try:
+        return max(0.0, float(os.getenv(ARCHIVE_GRACE_ENV, str(DEFAULT_ARCHIVE_GRACE_SEC)) or 0))
+    except ValueError:
+        return DEFAULT_ARCHIVE_GRACE_SEC
+
+
+def _occurrence_age(row: dict, now: float) -> float | None:
+    """Seconds since the Telegram event an archive row records (deletion, edit or send)."""
+    import datetime
+    stamp = row.get("deleted_at") if row.get("kind") == "deletion" else (
+        row.get("edited_at") or row.get("timestamp"))
+    try:
+        at = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=datetime.timezone.utc)
+    return now - at.timestamp()
+
+
 def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
                  members=None, thread_word=None, summary_max_chars=7000):
     """Current canonical life baseline + append-only archive after bootstrap.
@@ -127,6 +152,16 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
     The cursor precedes the coherent life read, so neither ingestion write order
     loses a message between the two. Future orphan archive occurrences survive
     subsequent authored folds until exact source coverage can account for them.
+    A surviving occurrence of a message whose current revision is a deletion is
+    rendered as deleted evidence, never as her turn or as live speech.
+    An exact superseded revision (its own life event is no longer current) retires
+    once every current revision of its Telegram lineage is represented (hot or covered
+    by a fold); the raw archive keeps its bytes. Absence or a numeric id proves nothing.
+    A fresh unjoined live occurrence from others (younger than the grace) is held
+    unrendered: its life write may still be in flight; her own sends render at once. A
+    later selection joins it or, past the grace, renders it raw as before, so a failed
+    life write is still recovered. Her own send from another topic of a whole-room
+    selection is evidence, never her turn in this topic.
     """
     import group_context
     import memory_life
@@ -175,15 +210,37 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
                         seen_hot=[], residuals=[], gaps=[])
         covered = set(snapshot["covered_event_ids"])
         current_ids = set(snapshot.get("current_event_ids", [r["id"] for r in snapshot["hot"]]))
-        events = {}
+        events, revisions = {}, {}
         for event in snapshot["events"]:
             key = memory_provenance.telegram_message_key(event)
             if key and str(key[0]) == str(peer_id):
                 signature = (str(event.get("source_id") or ""),
                              str(event.get("direction") or ""), str(event.get("text", "")))
                 events.setdefault(signature, []).append(str(event.get("id")))
+                if ":edit:" in signature[0] or signature[0].endswith(":delete"):
+                    # An edit revision id carries edited_at plus a payload digest and a
+                    # deletion is terminal (one per message): exact revision identities even
+                    # where the life line label drifted (October 2026 format).
+                    revisions.setdefault(signature[:2], []).append(str(event.get("id")))
         hot = {str(r["id"]): r for r in snapshot["hot"] if not r.get("state_residual")}
         seen = set(tape["seen_hot"])
+        # Messages whose CURRENT Telegram revision is a deletion. Folds cover the current
+        # revision only, so once a tombstone is folded its original bytes stay an uncovered
+        # residual forever while the deletion row is retired. Such a row keeps its exact
+        # bytes as evidence but is rendered as deleted, never as standing speech.
+        deleted = set()
+        # Current life revisions per Telegram message (peer-wide lineage). An archive
+        # occurrence that joins exactly to a SUPERSEDED revision (an original later edited
+        # or deleted) is never covered by itself: folds cover the current revision only, so
+        # it used to stay a residual forever. AbstractDL 15.11.2026: 1948 such originals,
+        # packed into 32 maintenance recaps, were ~345K of a ~385K epoch at its 400K cap.
+        lineage = {}
+        for event in snapshot["events"]:
+            key = memory_provenance.telegram_message_key(event)
+            if key and str(key[0]) == str(peer_id) and str(event.get("id")) in current_ids:
+                lineage.setdefault(int(key[1]), []).append(str(event.get("id")))
+                if memory_provenance.telegram_revision_kind(event) == "delete":
+                    deleted.add(int(key[1]))
 
         def emit(row):
             identity = _hot_key(row)
@@ -193,7 +250,11 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
 
         def identities(occurrence):
             signature = group_context.epoch_life_signature(occurrence["row"])
-            return events.get(signature, []) if signature else []
+            if not signature:
+                return []
+            exact_revision = ":edit:" in signature[0] or signature[0].endswith(":delete")
+            return events.get(signature) or (revisions.get(signature[:2], [])
+                                             if exact_revision else [])
 
         if same:
             # A life write can finish AFTER its archive occurrence was already
@@ -213,7 +274,13 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
             for row in snapshot["hot"]:
                 emit(row)
         batch = initial if initial is not None else group_context.archive_occurrences(peer_id, cursor=tape["cursor"])
-        pending = ([] if same else old.get("residuals", [])) + batch["occurrences"]
+        held_before = list(old.get("held") or [])
+        tape["held"] = []
+        pending = ([] if same else old.get("residuals", [])) + held_before + batch["occurrences"]
+        now, grace = time.time(), archive_grace_sec()
+        deleted.update(int(o["row"].get("message_id") or 0) for o in pending
+                       if "row" in o and o["row"].get("kind") == "deletion"
+                       and o["row"].get("origin") == "live")
         for occurrence in pending:
             if "gap" in occurrence:
                 if initial is not None and occurrence["end"] <= bootstrap["offset"]:
@@ -246,9 +313,35 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
                     if eid in hot:
                         emit(hot[eid])
                 continue
-            if ids and all(eid in covered for eid in ids):
+            current = lineage.get(int(raw.get("message_id") or 0), [])
+            represented = bool(current) and all(eid in covered or eid in hot for eid in current)
+            if ids and all(eid in covered or (eid not in current_ids and represented) for eid in ids):
+                # Covered, or an exact superseded revision of a represented lineage. Per id:
+                # Ouroboros topic 898, 15.11.2026 — 26 tombstones had two identical life
+                # events (one current and folded, one not current) and stayed raw forever.
                 continue
-            tape["rows"].append(group_context.epoch_occurrence_row(occurrence))
+            own_send = raw["kind"] == "message" and raw.get("outgoing") is True
+            if not ids and initial is None and not own_send:
+                age = _occurrence_age(raw, now)
+                if age is not None and -grace < age < grace:
+                    # AbstractDL #126472, 15.11.2026: her moderation deletion reached the
+                    # archive while its life write waited 11 s on a lock; the frozen tape
+                    # rendered the raw deletion record beside the deleted text for the rest
+                    # of the epoch. Wait for the life write instead of rendering raw now.
+                    # Her own sends never wait: she must see what she already said even
+                    # before its life write lands, or a racing turn could say it again.
+                    tape["held"].append(occurrence)
+                    continue
+            # Ouroboros topic 898, 15.11.2026: a whole-room topic tape rendered 16 of her
+            # replies from other topics as her turns in this topic (the life read covers this
+            # place only, so they never join). Her words stay as evidence, not as her turn.
+            elsewhere = (topic_id is not None and raw.get("topic_id") is not None
+                         and raw.get("topic_id") != topic_id
+                         and not (members is not None and raw.get("topic_id") in members)
+                         and topic_id not in (raw.get("message_id"), raw.get("reply_to_message_id")))
+            tape["rows"].append(group_context.epoch_occurrence_row(
+                occurrence, deleted_later=int(raw.get("message_id") or 0) in deleted,
+                elsewhere=elsewhere))
             tape["residuals"].append(occurrence)
         for row in snapshot["hot"]:
             emit(row)
