@@ -28,6 +28,27 @@ def put(path: Path, value: dict) -> bytes:
 
 
 class WorkerTree(unittest.TestCase):
+    def test_corrupt_optional_liveness_keeps_other_workers_and_preserves_evidence(self):
+        from deskd import forge_reader
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);task=base/'memory/.forge/tasks/code-corrupt'
+            put(task/'task.json',{'status':'active'})
+            broken=task/'agents/agent-broken';healthy=task/'agents/agent-healthy'
+            put(broken/'request.json',{'id':broken.name,'task_id':task.name,'status':'running'})
+            put(healthy/'request.json',{'id':healthy.name,'task_id':task.name,'status':'running'})
+            put(healthy/'result.json',{'status':'done'})
+            for damaged in (bytes(346),b'{',b'[]'):
+                (broken/'liveness.json').write_bytes(damaged)
+                activity=forge_reader.activity(base)
+                units={unit['id']:unit for row in activity['active'] for unit in row['agents']}
+                self.assertEqual(units[broken.name]['status'],'unknown')
+                self.assertEqual(units[broken.name]['liveness']['error'],'unreadable_liveness_record')
+                self.assertEqual(units[healthy.name]['status'],'done')
+                self.assertEqual((broken/'liveness.json').read_bytes(),damaged)
+            (healthy/'result.json').write_bytes(b'{')
+            with self.assertRaises(forge_reader.ReadError):
+                forge_reader.activity(base)
+
     def test_duration_uses_exact_process_birth_and_running_requires_fresh_owner_observation(self):
         import datetime as dt
         from deskd import forge_reader

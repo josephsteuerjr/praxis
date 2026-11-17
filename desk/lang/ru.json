@@ -4324,5 +4324,6 @@
   "supervisor.startup.recovery": "Восстановление прерванных ходов",
   "supervisor.startup.unconfirmed": "Движок перестал подтверждать связь; доступен перезапуск",
   "supervisor.startup.elapsed": "{phase} · {seconds} с",
-  "supervisor.restart.running": "Перезапускается…"
+  "supervisor.restart.running": "Перезапускается…",
+  "forge.liveness.unreadable": "Запись состояния процесса повреждена или недоступна; живость неизвестна."
 }

@@ -198,7 +198,18 @@ def _unit(folder: Path, task_id: str) -> dict:
     observation = {k: progress[k] for k in ("generation", "phase", "iteration", "model", "tool", "call_id", "observed_at", "seq", "status") if k in progress}
     # This record is published by Forge's process owner. A phase/timestamp or
     # terminal result alone is not a fresh probe of the worker's OS identity.
-    live = _read(folder, 'liveness.json')
+    live_error = None
+    try:
+        live = _read(folder, 'liveness.json')
+    except ReadError as error:
+        if error.status != 503:
+            raise
+        # This optional observation is not canonical worker custody. Preserve
+        # the damaged bytes and show uncertainty for this unit, not a 503 for
+        # every healthy participant in the owner's roster.
+        live = {}
+        live_error = {'state': 'unknown', 'basis': 'invalid_owner_observation',
+                      'error': 'unreadable_liveness_record'}
     live = live if (live.get('schema') == 1 and live.get('unit_id') == folder.name
                     and live.get('task_id') == task_id
                     and live.get('supervisor_pid') == request.get('supervisor_pid')
@@ -206,6 +217,8 @@ def _unit(folder: Path, task_id: str) -> dict:
     liveness = {k: live[k] for k in ('state', 'observed_at', 'basis') if k in live}
     if liveness.get('state') not in {'alive', 'exited', 'unknown', 'not_started'}:
         liveness = {'state': 'unknown', 'basis': 'no_owner_observation'}
+    if live_error is not None:
+        liveness = live_error
     try:
         observed=dt.datetime.fromisoformat(str(liveness.get('observed_at')).replace('Z','+00:00'))
         fresh=-5<=(dt.datetime.now(dt.timezone.utc)-observed).total_seconds()<15

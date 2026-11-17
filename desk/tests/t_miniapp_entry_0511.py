@@ -180,6 +180,27 @@ class BotHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.url,'');self.assertEqual(self.button,{'type':'commands'})
         self.assertNotEqual(json.loads((runtime.root/'status.json').read_text(encoding='utf-8'))['state'],'ready')
 
+    async def test_verified_menu_stays_ready_when_optional_username_lookup_fails(self):
+        config={'phone':{'enabled':True,'mode':'stable','external':'https://stable.example/'},
+                'telegram':{'bot_token':'fixture:token','owner_id':123}}
+        runtime=phone_access.PhoneAccess(Path(self.temp.name),lambda:config,8094,owner_token=True)
+        runtime.menu=self.menu;observed=[];original=self.menu.call
+        async def call(method,**params):
+            if method=='getMe':raise OSError('fixture optional lookup unavailable')
+            return await original(method,**params)
+        async def disable(_):
+            observed.append(runtime.state());config['phone']['enabled']=False
+        runtime.delay=disable
+        with patch.object(self.menu,'call',side_effect=call), \
+             patch.object(phone_access,'probe_origin',new=AsyncMock(return_value=(True,''))), \
+             patch.object(phone_access.os,'getpgrp',side_effect=os.getpid,create=True):
+            import copy
+            await runtime.cycle(copy.deepcopy(config))
+        self.assertEqual(observed[0]['checks']['https']['state'],'ready')
+        self.assertEqual(observed[0]['checks']['menu']['state'],'ready')
+        self.assertNotIn('menu_error',observed[0])
+        self.assertEqual(len([row for row in self.calls if row[0]=='setChatMenuButton']),2)  # publish + explicit disable restore
+
 
 class RetiredInstall(unittest.IsolatedAsyncioTestCase):
     async def test_manifest_never_exports_existing_device_or_pair(self):

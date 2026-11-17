@@ -23,6 +23,17 @@ const states: Record<string,string> = {get queued() { return uiText("ui.ui.kit.w
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls='', text='') {
   const value=document.createElement(tag);value.className=cls;value.textContent=text;return value;
 }
+/** Presentation preference only; never store credentials or authored content. */
+export function rememberDisclosure(details:HTMLDetailsElement,identity:string,scope:string|(()=>string)='') {
+  const key=()=> 'frame.disclosure.v1:'+JSON.stringify([typeof scope==='function'?scope():scope,identity]);
+  const restore=()=>{try { details.open=localStorage.getItem(key())==='1'; } catch { /* unavailable storage */ }};
+  restore();
+  details.addEventListener('toggle',()=>{
+    if(details.hidden || !details.isConnected)return;
+    try { localStorage.setItem(key(),details.open?'1':'0'); } catch { /* keep the live choice */ }
+  });
+  return restore;
+}
 function duration(row: Reviewer) {
   if (!row.started_at) return '';
   // Only an observed live receipt permits a ticking clock. Stale records freeze.
@@ -89,7 +100,7 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean; he
       let view=rows.get(item.id);
       if (!view) {
         const row=node('details','work-reviewer'),head=node('summary'),name=node('span','work-name'),state=node('span','work-state'),body=node('div','work-detail');
-        head.append(name,state);row.append(head,body);roster.append(row);view={row,name,state,body};rows.set(item.id,view);
+        head.append(name,state);row.append(head,body);rememberDisclosure(row,'review:'+item.id);roster.append(row);view={row,name,state,body};rows.set(item.id,view);
       }
       view.name.textContent=item.name || uiText("ui.ui.kit.window.work.activity.14964b4f9f");view.name.title=item.id;
       view.state.textContent=[item.live ? states[item.execution || ''] || uiText("ui.ui.kit.window.work.activity.c01295237e") : states[item.execution || ''] || uiText("ui.ui.kit.window.work.activity.7752a89d84"),duration(item)].filter(Boolean).join(' · ');

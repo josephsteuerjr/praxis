@@ -4324,5 +4324,6 @@
   "supervisor.startup.recovery": "Récupération des tours interrompus",
   "supervisor.startup.unconfirmed": "Le moteur ne confirme plus la liaison ; le redémarrage est disponible",
   "supervisor.startup.elapsed": "{phase} · {seconds} s",
-  "supervisor.restart.running": "Redémarrage…"
+  "supervisor.restart.running": "Redémarrage…",
+  "forge.liveness.unreadable": "Le relevé d'état du processus est endommagé ou inaccessible ; son activité est inconnue."
 }

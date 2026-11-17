@@ -4324,5 +4324,6 @@
   "supervisor.startup.recovery": "Recovering interrupted turns",
   "supervisor.startup.unconfirmed": "The engine stopped confirming contact; restart is available",
   "supervisor.startup.elapsed": "{phase} · {seconds} s",
-  "supervisor.restart.running": "Restarting…"
+  "supervisor.restart.running": "Restarting…",
+  "forge.liveness.unreadable": "The process status record is damaged or unavailable; liveness is unknown."
 }

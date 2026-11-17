@@ -4324,5 +4324,6 @@
   "supervisor.startup.recovery": "正在恢复中断的轮次",
   "supervisor.startup.unconfirmed": "引擎已停止确认连接，可以重启",
   "supervisor.startup.elapsed": "{phase} · {seconds} 秒",
-  "supervisor.restart.running": "正在重启…"
+  "supervisor.restart.running": "正在重启…",
+  "forge.liveness.unreadable": "进程状态记录已损坏或无法读取；进程是否仍在运行未知。"
 }

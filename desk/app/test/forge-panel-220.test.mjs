@@ -380,3 +380,26 @@ console.log('Generic producer transport errors retain inert, Unicode-paged, even
   t.panel.stop();assert.equal(t.timers.size,0);
 }
 console.log('Legacy recovery needs explicit host confirmation and retains actual recovery state PASS');
+
+{
+  const values=new Map();
+  globalThis.localStorage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+  const first=stand({compact:true});first.panel.start();await tick();
+  const active=first.root.querySelector('.forge-active');active.open=true;await active.emit('toggle');
+  const {team,unit}=await open(first);await team.emit('toggle');
+  unit.open=true;await unit.emit('toggle');
+  first.panel.stop();first.root.remove();
+  const reloaded=stand({compact:true});reloaded.panel.start();await tick();
+  assert.equal(reloaded.root.querySelector('.forge-active').open,true);
+  assert.equal(reloaded.root.querySelector('.forge-task').open,true);
+  const retained=reloaded.root.querySelector('.forge-unit');assert.equal(retained.open,true);
+  retained.open=false;await retained.emit('toggle');await reloaded.panel.refresh();await tick();
+  assert.equal(retained.open,false,'polling does not reverse an explicit collapse');
+  reloaded.state.tasks[0].agents[0].liveness={state:'unknown',error:'unreadable_liveness_record'};
+  await reloaded.panel.refresh();await tick();assert.match(retained.textContent,/повреждена или недоступна/);
+  reloaded.panel.stop();reloaded.root.remove();
+  const again=stand({compact:true});again.panel.start();await tick();
+  assert.equal(again.root.querySelector('.forge-unit').open,false,'collapse survives recreation after reload');
+  again.panel.stop();again.root.remove();delete globalThis.localStorage;
+}
+console.log('Explicit Forge disclosures survive reload and corrupt observations stay visible PASS');
