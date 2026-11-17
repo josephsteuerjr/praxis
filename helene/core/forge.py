@@ -5082,6 +5082,10 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     if agent_id and not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", agent_id):
         return {"status": "refused", "reason": frame_language.text('forge.workers.56')}
     if action in {'prepare_recovery', 'recover'}:
+        if sys.platform.startswith('linux'):
+            import forge_recovery
+            return forge_recovery.recovery_control(sys.modules[__name__], task_id, action,
+                agent_id, expected_generation, host_binding=host_binding, reason=reason)
         import forge_windows_custody
         return forge_windows_custody.recovery_control(sys.modules[__name__], task_id, action,
             agent_id, expected_generation, host_binding=host_binding, reason=reason)

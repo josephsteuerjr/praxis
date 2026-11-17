@@ -6052,7 +6052,7 @@
     "purpose": "schema.tool.purpose.coding_learn"
   },
   "coding_control": {
-    "sha256": "03a031367459b927299dc793cd6db5b63df232560411cb07ad50bba51b5fc0e5",
+    "sha256": "314aa43c17c01be52480c12009e579004d7f72865577a31266d77c1a95350407",
     "descriptions": [
       {
         "path": [
@@ -6060,7 +6060,7 @@
         ],
         "key": "schema.tool.b3435ddd7d3c46ca",
         "present": true,
-        "source": "Control a task or selected agent subtree. Stop proves exact Windows Job extinction when a durable binding exists; historical results remain unchanged. Resume needs current generation and proven old-writer exit and creates a new identity. Legacy Windows unknown custody: prepare_recovery records a pre-reboot witness, only after independently confirming this is the original execution host (host_binding=verified-local-execution-host, reason required); it never reboots. After the owner restarts that computer, recover verifies a changed boot on the same host and releases only custody. Missing PID, unlocked journal and elapsed time are not proof. summary_in_flight remains unsafe to replay."
+        "source": "Control a task or selected agent subtree. Stop proves exact Windows Job extinction when a durable binding exists; historical results remain unchanged. Resume needs current generation and proven old-writer exit and creates a new identity. For unknown Windows custody or damaged Linux history, prepare_recovery records a pre-reboot witness only after independently confirming the original execution host (host_binding=verified-local-execution-host, reason required); it never reboots. After the owner restarts that host, recover verifies a later boot on the same host and releases only process custody. Damaged bytes remain intact. Missing PID, unlocked journal and elapsed time are not proof. summary_in_flight remains unsafe to replay."
       },
       {
         "path": [
@@ -6115,7 +6115,7 @@
         ],
         "key": "schema.tool.d50eb41e4b351052",
         "present": true,
-        "source": "For prepare_recovery only: explicit independent confirmation that the legacy work ran on this exact local Windows computer. Never infer this from absent PIDs or a copied task directory."
+        "source": "For prepare_recovery only: explicit independent confirmation that the old work ran on this exact original Windows or Linux host. Never infer this from absent PIDs or a copied task directory."
       },
       {
         "path": [

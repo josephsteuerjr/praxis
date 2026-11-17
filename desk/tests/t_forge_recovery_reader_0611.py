@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'desk'))
 from deskd import forge_reader as reader
 
-spec = importlib.util.spec_from_file_location('reader_fixture_recovery',ROOT/'praxis/forge_recovery.py')
+spec = importlib.util.spec_from_file_location('reader_fixture_recovery',ROOT/'helene/core/forge_recovery.py')
 recovery = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recovery)
 
@@ -63,6 +63,37 @@ class RecoveredReader(unittest.TestCase):
         return recovery.reconcile_unit(owner,self.task.name,'agents',self.unit.name,
             actor='fixture-owner',reason='verified execution host reboot',
             host_binding='verified-local-execution-host')
+
+    def history_control(self,action):
+        def read(path,default=None):
+            try:return json.loads(path.read_bytes())
+            except FileNotFoundError:return default
+        owner=SimpleNamespace(_unit_dir=lambda *args:self.unit,_mutation_lock=lambda *args:nullcontext(),
+            _pid_alive=lambda *args:False,_atomic_json=self.put,_event=mock.Mock(),
+            _read_json=read,get=lambda *args:read(self.task/'task.json'),
+            _units=lambda task,kind:[{'id':self.unit.name,'status':'unknown'}] if kind=='agents' else [],
+            _in_subtree=lambda *args:True)
+        return recovery.recovery_control(owner,self.task.name,action,self.unit.name,'',
+            host_binding='verified-local-execution-host',reason='owner confirmed execution host')
+
+    def test_damaged_history_is_diagnosed_without_hiding_team_or_starting_forge(self):
+        journal=self.task/'events.jsonl';journal.write_bytes(journal.read_bytes()+b'{broken\n')
+        before=self.snapshot();row=self.row()
+        self.assertEqual(row['recovery']['diagnostic']['code'],'forge_history_corrupt')
+        self.assertEqual(row['recovery']['diagnostic']['line'],2)
+        self.assertEqual(row['status'],'stop_pending');self.assertEqual(self.snapshot(),before)
+
+    def test_reader_accepts_prepared_history_proof_after_later_boot_and_keeps_stop(self):
+        journal=self.task/'events.jsonl';journal.write_bytes(journal.read_bytes()+b'{broken\n')
+        original=reader._validator().kernel_boundary()
+        later={**original,'boot_id':'later-boot','boot_time':original['boot_time']+300}
+        self.assertEqual(self.history_control('prepare_recovery')['status'],'prepared')
+        self.assertTrue(self.row()['recovery']['witness_recorded']);self.assertEqual(self.row()['status'],'stop_pending')
+        with mock.patch.object(recovery,'kernel_boundary',return_value=later),mock.patch.object(reader._validator(),'kernel_boundary',return_value=later):
+            self.assertEqual(self.history_control('recover')['status'],'settled')
+            before=self.snapshot();row=self.row()
+            self.assertTrue(row['custody_recovered']);self.assertEqual(row['status'],'lost')
+            self.assertEqual(row['stop']['state'],'unresolved');self.assertEqual(self.snapshot(),before)
 
     def row(self):
         return reader.task_detail(self.base,self.task.name)['agents'][0]

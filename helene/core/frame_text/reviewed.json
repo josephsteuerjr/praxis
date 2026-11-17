@@ -2520,7 +2520,7 @@
   "schema.tool.b06e5c2606e32d55": "089da7d175b1f417",
   "schema.tool.b1830b02071579f6": "b44ddfe1ab55c24f",
   "schema.tool.b2d429c8cfef0367": "a838c35817ca2f30",
-  "schema.tool.b3435ddd7d3c46ca": "3857b5624178a1f0",
+  "schema.tool.b3435ddd7d3c46ca": "02bdb504f3ebc366",
   "schema.tool.b3c0281d079e7e07": "8f9cc5d450498173",
   "schema.tool.b45eb58acadaed12": "34bc691786484e49",
   "schema.tool.b54802b0ae742531": "5289d31dc3240787",
@@ -2590,7 +2590,7 @@
   "schema.tool.d40ae21d428bb4b1": "48b749c986dbb1dd",
   "schema.tool.d44b3e9807b766b6": "ec301a03ee01d52a",
   "schema.tool.d5009a96303a443a": "dc2e7bf5439e704b",
-  "schema.tool.d50eb41e4b351052": "b81ca24dca1d16e0",
+  "schema.tool.d50eb41e4b351052": "952efb4b10069bcf",
   "schema.tool.d5535e8c3bd0590f": "1ca629db8e746433",
   "schema.tool.d55e9186e7a2be65": "3b7dcf81db88fa9d",
   "schema.tool.d57e8a1224929295": "1861405e5316e2b9",
@@ -3536,5 +3536,8 @@
   "tool.args.other": "b72e84132588254f",
   "native.runner.media.document_ready": "1fa31303878552ba",
   "native.runner.media.document_pending": "16f9b9a25612c436",
-  "native.runner.media.document_failed": "d4b9adaea1044242"
+  "native.runner.media.document_failed": "d4b9adaea1044242",
+  "forge.history.prepared": "74c4884d528b4d4d",
+  "forge.history.recovered": "04cceb2c1ba72e6a",
+  "forge.history.refused": "c132493f7c175983"
 }

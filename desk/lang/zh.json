@@ -2836,12 +2836,12 @@
   "ui.ui.kit.memory.line.a6aa9390b8": "记忆中：{p0}",
   "ui.ui.kit.memory.line.a53faedcbe": "智能体已暂停",
   "forge.recovery.title": "恢复写入所有权",
-  "forge.recovery.help": "如果 Stop 无法确认旧 Windows 任务已结束，请保存证明记录。然后自行重启运行该任务的原计算机，再在此验证恢复。",
-  "forge.recovery.confirm_host": "我确认此任务曾在运行此 Hélène 的原 Windows 计算机上执行。",
+  "forge.recovery.help": "如果 Stop 无法确认旧任务已结束，或日志已损坏，请在原执行主机上保存见证记录。然后自行重启该主机，并在此验证恢复。",
+  "forge.recovery.confirm_host": "我确认：此任务是在当前这台原执行主机上运行的，所选 Hélène 引擎也在此运行。",
   "forge.recovery.preserve": "工作副本、结果和历史均会保留。应用不会重启计算机。释放写入所有权不代表可以安全地重试中断的调用。",
   "forge.recovery.prepare": "保存证明记录",
   "forge.recovery.verify": "重启后验证",
-  "forge.recovery.prepared": "证明记录已保存。请重启原 Windows 计算机，然后选择“重启后验证”。",
+  "forge.recovery.prepared": "见证记录已保存。请自行重启原执行主机，然后选择“重启后验证”。",
   "forge.recovery.recovered": " · 进程树已结束；写入所有权已释放；历史结果已保留",
   "ui.ui.kit.window.server.speech.5c9ebd7b1c": "服务器语音",
   "ui.ui.kit.window.server.speech.9dc46063b3": "在服务器上选择声音和表达方式。试听不会向聊天发送内容。",
@@ -4337,5 +4337,11 @@
   "bridge.error.local_port": "本地端口已被占用或不可用。现有 Tray Bridge 或其他程序未被停止。请选择空闲端口，或在网络设置中使用现有代理。",
   "bridge.error.host_key": "SSH 服务器指纹已改变。密码和密钥均未发送。重新连接前请核实服务器及其指纹。",
   "bridge.error.authentication": "SSH 身份验证未通过。请检查用户名、所选私钥及其口令，或服务器密码。",
-  "bridge.error.unavailable": "SSH 服务器不可用或未能完成连接。请检查地址、SSH 端口和网络。代理尚未验证。"
+  "bridge.error.unavailable": "SSH 服务器不可用或未能完成连接。请检查地址、SSH 端口和网络。代理尚未验证。",
+  "forge.recovery.reason": "在 Stop 未获确认后，所有者已确认原执行主机。",
+  "forge.history.damaged": "恢复日志不可用或已损坏：第 {line} 行，字节偏移 {offset}。原始字节已保留；在验证前，进程归属仍为未知。",
+  "forge.history.refused": "恢复尚未确认。历史记录已保留；请检查诊断信息和原执行主机。",
+  "forge.history.reboot_required": "自保存见证记录以来，尚未验证同一主机发生了后续启动。历史记录已保留。",
+  "forge.history.stop_required": "请先停止所选分支。仍在运行或等待启动的进程会阻止恢复准备。",
+  "forge.history.witness_required": "请先在已确认的原执行主机上保存见证记录，之后还需要重启该主机。"
 }

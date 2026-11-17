@@ -26,7 +26,7 @@ def read(path):
     except (OSError,ValueError):return {}
 
 
-def request(tree, run_id, reason='immediate owner reset', *, known=False):
+def request(tree, run_id, reason='immediate owner reset', *, known=False, source=None):
     if not RUN_ID.fullmatch(str(run_id)):raise RunControlRefusal('invalid_id','Некорректный идентификатор хода.')
     tree=Path(tree)
     if not known:
@@ -37,14 +37,17 @@ def request(tree, run_id, reason='immediate owner reset', *, known=False):
     from localharness.phone_tunnel.platform_support import acquire_file_lock, release_file_lock
     path.parent.mkdir(parents=True,exist_ok=True)
     lock=acquire_file_lock(path.with_suffix('.lock'),timeout_sec=2)
-    try:return _publish(path,run_id,reason)
+    try:return _publish(path,run_id,reason,source=source)
     finally:release_file_lock(lock)
 
 
-def _publish(path, run_id, reason):
+def _publish(path, run_id, reason, *, source=None):
     current=read(path)
     if current.get('run_id')==run_id and current.get('action')=='cancel':return path,current
-    value=dict(id=secrets.token_hex(12),run_id=run_id,action='cancel',by='desk:owner',at=time.time(),reason=reason)
+    value=dict(id=secrets.token_hex(12),run_id=run_id,action='cancel',by='desk:owner',at=time.time(),
+               reason=str(reason or 'immediate reset from MiniApp'))
+    if source is not None:
+        value['source'] = dict(source)
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary=path.with_name(path.name+'.tmp-'+secrets.token_hex(6))
     temporary.write_text(json.dumps(value,ensure_ascii=False),encoding='utf-8')
@@ -52,11 +55,11 @@ def _publish(path, run_id, reason):
     return path,value
 
 
-def known_run(tree, run_id, reason):
+def known_run(tree, run_id, reason, *, source=None):
     # Legacy/custom harness identifiers keep their existing cancellation path;
     # only canonical runs participate in the new resource-owner protocol.
     if RUN_ID.fullmatch(str(run_id)):
-        return request(tree,run_id,reason,known=True)
+        return request(tree,run_id,reason,known=True,source=source)
 
 
 async def cancel(tree,run_id):

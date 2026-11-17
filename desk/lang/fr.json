@@ -2836,12 +2836,12 @@
   "ui.ui.kit.memory.line.a6aa9390b8": "En mémoire : {p0}",
   "ui.ui.kit.memory.line.a53faedcbe": "Agent en pause",
   "forge.recovery.title": "Rétablir la propriété d’écriture",
-  "forge.recovery.help": "Si Stop ne peut pas confirmer la fin d’une ancienne tâche Windows, enregistrez un témoin. Redémarrez ensuite vous-même l’ordinateur d’origine, puis vérifiez la récupération ici.",
-  "forge.recovery.confirm_host": "Je confirme que cette tâche s’exécutait sur l’ordinateur Windows d’origine où fonctionne cette Hélène.",
+  "forge.recovery.help": "Si Stop n’a pas confirmé la fin d’une ancienne tâche ou si le journal est endommagé, enregistrez un témoin sur l’hôte d’origine. Redémarrez ensuite cet hôte vous-même et vérifiez ici la récupération.",
+  "forge.recovery.confirm_host": "Je confirme que cette tâche s’est exécutée sur cet hôte d’origine, où fonctionne le moteur Hélène sélectionné.",
   "forge.recovery.preserve": "La copie de travail, les résultats et l’historique sont conservés. L’application ne redémarre pas l’ordinateur. Libérer l’écriture ne rend pas sûr le rejeu d’un appel interrompu.",
   "forge.recovery.prepare": "Enregistrer le témoin",
   "forge.recovery.verify": "Vérifier après redémarrage",
-  "forge.recovery.prepared": "Témoin enregistré. Redémarrez l’ordinateur Windows d’origine, puis choisissez « Vérifier après redémarrage ».",
+  "forge.recovery.prepared": "Témoin enregistré. Redémarrez vous-même l’hôte d’origine, puis choisissez Vérifier après le redémarrage.",
   "forge.recovery.recovered": " · arborescence des processus terminée ; écriture libérée ; résultat historique conservé",
   "ui.ui.kit.window.server.speech.5c9ebd7b1c": "Voix du serveur",
   "ui.ui.kit.window.server.speech.9dc46063b3": "La voix et l’interprétation sont choisies sur le serveur. Un aperçu n’envoie rien dans la conversation.",
@@ -4337,5 +4337,11 @@
   "bridge.error.local_port": "Le port local est occupé ou indisponible. Aucun Tray Bridge ou autre programme existant n'a été arrêté. Choisissez un port libre ou utilisez le proxy existant dans les paramètres réseau.",
   "bridge.error.host_key": "L'empreinte du serveur SSH a changé. Aucun mot de passe ni clé n'a été envoyé. Vérifiez le serveur et son empreinte avant de vous reconnecter.",
   "bridge.error.authentication": "L'authentification SSH n'est pas confirmée. Vérifiez l'utilisateur, la clé privée choisie et sa phrase secrète, ou le mot de passe du serveur.",
-  "bridge.error.unavailable": "Le serveur SSH est inaccessible ou n'a pas terminé la connexion. Vérifiez l'adresse, le port SSH et le réseau. Le proxy n'est pas encore vérifié."
+  "bridge.error.unavailable": "Le serveur SSH est inaccessible ou n'a pas terminé la connexion. Vérifiez l'adresse, le port SSH et le réseau. Le proxy n'est pas encore vérifié.",
+  "forge.recovery.reason": "Le propriétaire a confirmé l’hôte d’exécution d’origine après un Stop non confirmé.",
+  "forge.history.damaged": "Journal de récupération indisponible ou endommagé : ligne {line}, décalage en octets {offset}. Les octets d’origine sont conservés ; le contrôle des processus reste inconnu jusqu’à vérification.",
+  "forge.history.refused": "Récupération non confirmée. L’historique est conservé ; vérifiez le diagnostic et l’hôte d’origine.",
+  "forge.history.reboot_required": "Un nouveau démarrage du même hôte n’a pas encore été vérifié depuis l’enregistrement du témoin. L’historique est conservé.",
+  "forge.history.stop_required": "Arrêtez d’abord la branche sélectionnée. Des processus actifs ou en attente empêchent la préparation de la récupération.",
+  "forge.history.witness_required": "Enregistrez d’abord un témoin sur l’hôte d’origine confirmé. Un redémarrage ultérieur de cet hôte sera ensuite nécessaire."
 }

@@ -2836,12 +2836,12 @@
   "ui.ui.kit.memory.line.a6aa9390b8": "In memory: {p0}",
   "ui.ui.kit.memory.line.a53faedcbe": "Agent paused",
   "forge.recovery.title": "Recover write ownership",
-  "forge.recovery.help": "If Stop cannot confirm that an old Windows task has ended, save a witness record. Then restart its original computer yourself and verify recovery here.",
-  "forge.recovery.confirm_host": "I confirm that this task ran on the original Windows computer running this Hélène.",
+  "forge.recovery.help": "If Stop could not confirm that old work ended, or its journal is damaged, record a witness on the original host. Then restart that host yourself and verify recovery here.",
+  "forge.recovery.confirm_host": "I confirm that this task ran on this original host, where the selected Hélène engine is running.",
   "forge.recovery.preserve": "The working copy, results and history are preserved. The app does not restart the computer. Releasing ownership does not make an interrupted call safe to replay.",
   "forge.recovery.prepare": "Save witness record",
   "forge.recovery.verify": "Verify after restart",
-  "forge.recovery.prepared": "Witness record saved. Restart the original Windows computer, then select “Verify after restart”.",
+  "forge.recovery.prepared": "Witness saved. Restart the original host yourself, then select Verify after restart.",
   "forge.recovery.recovered": " · process tree ended; write ownership released; historical outcome retained",
   "ui.ui.kit.window.server.speech.5c9ebd7b1c": "Server voice",
   "ui.ui.kit.window.server.speech.9dc46063b3": "Voice and delivery are selected on the server. A preview sends nothing to the chat.",
@@ -4337,5 +4337,11 @@
   "bridge.error.local_port": "The local port is occupied or unavailable. An existing Tray Bridge or other application was not stopped. Choose a free port or use the existing proxy in network settings.",
   "bridge.error.host_key": "The SSH host fingerprint changed. No password or key was sent. Verify the server and its fingerprint before reconnecting.",
   "bridge.error.authentication": "SSH authentication was not confirmed. Check the username, selected private key and its passphrase, or the server password.",
-  "bridge.error.unavailable": "The SSH server is unavailable or did not complete the connection. Check its address, SSH port and network. The proxy has not been verified yet."
+  "bridge.error.unavailable": "The SSH server is unavailable or did not complete the connection. Check its address, SSH port and network. The proxy has not been verified yet.",
+  "forge.recovery.reason": "Owner confirmed the original execution host after an unconfirmed Stop.",
+  "forge.history.damaged": "Recovery journal unavailable or damaged: line {line}, byte offset {offset}. Original bytes are retained; custody stays unknown until verified.",
+  "forge.history.refused": "Recovery is unconfirmed. History is retained; check the diagnostic and original host.",
+  "forge.history.reboot_required": "A later boot of the same host has not been verified since the witness was saved. History is retained.",
+  "forge.history.stop_required": "Stop the selected branch first. Live or queued processes prevent recovery preparation.",
+  "forge.history.witness_required": "First save a witness on the confirmed original host. A later restart of that host is then required."
 }

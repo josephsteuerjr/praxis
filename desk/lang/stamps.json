@@ -14185,14 +14185,14 @@
     "zh": "1d45f6a2"
   },
   "forge.recovery.help": {
-    "en": "1520da1b",
-    "fr": "1520da1b",
-    "zh": "1520da1b"
+    "en": "2114bba9",
+    "fr": "2114bba9",
+    "zh": "2114bba9"
   },
   "forge.recovery.confirm_host": {
-    "en": "351752f2",
-    "fr": "351752f2",
-    "zh": "351752f2"
+    "en": "2848f3c9",
+    "fr": "2848f3c9",
+    "zh": "2848f3c9"
   },
   "forge.recovery.preserve": {
     "en": "24003731",
@@ -14210,9 +14210,9 @@
     "zh": "b44955e5"
   },
   "forge.recovery.prepared": {
-    "en": "c3c4812d",
-    "fr": "c3c4812d",
-    "zh": "c3c4812d"
+    "en": "580b431c",
+    "fr": "580b431c",
+    "zh": "580b431c"
   },
   "forge.recovery.recovered": {
     "en": "8d104399",
@@ -21693,5 +21693,35 @@
     "en": "40cf07b9",
     "fr": "40cf07b9",
     "zh": "40cf07b9"
+  },
+  "forge.recovery.reason": {
+    "en": "5baaf97a",
+    "fr": "5baaf97a",
+    "zh": "5baaf97a"
+  },
+  "forge.history.damaged": {
+    "en": "1860fdac",
+    "fr": "1860fdac",
+    "zh": "1860fdac"
+  },
+  "forge.history.refused": {
+    "en": "a6ac81b4",
+    "fr": "a6ac81b4",
+    "zh": "a6ac81b4"
+  },
+  "forge.history.reboot_required": {
+    "en": "f5c8ff1b",
+    "fr": "f5c8ff1b",
+    "zh": "f5c8ff1b"
+  },
+  "forge.history.stop_required": {
+    "en": "508a2e4a",
+    "fr": "508a2e4a",
+    "zh": "508a2e4a"
+  },
+  "forge.history.witness_required": {
+    "en": "0cb6db9e",
+    "fr": "0cb6db9e",
+    "zh": "0cb6db9e"
   }
 }

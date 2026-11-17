@@ -16,6 +16,7 @@ from functools import lru_cache
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\Z")
@@ -147,9 +148,7 @@ def _recovery_validator(path: Path, stamp: tuple):
     return validator
 
 
-def _recovered_status(folder: Path, result: dict) -> str | None:
-    if not (folder/'custody-recovery.json').is_file():
-        return None
+def _validator():
     # Use the shipped pure validator, independently of the profile's code path.
     # The two layouts are portable app/deskd and repository desk/deskd.
     root = Path(__file__).resolve().parents[2]
@@ -164,14 +163,19 @@ def _recovered_status(folder: Path, result: dict) -> str | None:
         path = _inside(root,path)
         stat = path.stat()
         validator = _recovery_validator(path, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
-        if validator is None:
-            return None
-        if validator.read_recovery(folder) is None:
-            return None
-        status = str(result.get('status') or 'lost')
-        return status if status in validator.TERMINAL else 'lost'
+        return validator
     except (ImportError, OSError, SyntaxError, AttributeError, ReadError):
         return None
+
+
+def _recovered_status(folder: Path, result: dict) -> str | None:
+    if not any((folder/name).is_file() for name in ('custody-recovery.json','custody-history-recovery.json')):
+        return None
+    validator = _validator()
+    if validator is None or validator.read_recovery(folder) is None:
+        return None
+    status = str(result.get('status') or 'lost')
+    return status if status in validator.TERMINAL else 'lost'
 
 
 def _unit(folder: Path, task_id: str) -> dict:
@@ -231,6 +235,16 @@ def _unit(folder: Path, task_id: str) -> dict:
     recovered = _recovered_status(folder,result)
     if recovered is not None:
         effective = recovered
+    recovery = {"available": ((os.name == 'nt' or sys.platform.startswith('linux'))
+                             and request.get('scope','self') in ({'self'} if os.name == 'nt' else {'self','host'})
+                             and not request.get('device_id') and (not request.get('remote') or request.get('scope') == 'host')
+                             and not (folder/'windows-job.json').exists() and recovered is None),
+                "witness_recorded": any((folder/name).is_file() for name in
+                    ('custody-reboot-witness.json','custody-history-witness.json'))}
+    if sys.platform.startswith('linux') and recovered is None and effective in {'unknown','lost','stop_pending'}:
+        validator = _validator()
+        if validator is not None and hasattr(validator,'history_diagnostic'):
+            recovery['diagnostic'] = validator.history_diagnostic(folder)
     process=request.get('process_identity') or {}
     return {
         "id": folder.name, "parent_unit_id": str(request.get("parent_unit_id") or ""),
@@ -241,10 +255,7 @@ def _unit(folder: Path, task_id: str) -> dict:
         "request_status": str(request.get("status") or ""),
         "custody": "recovered_boundary" if recovered is not None else "unresolved_stop" if unresolved else "result" if result else "unknown",
         "custody_recovered": recovered is not None,
-        "recovery": {"available": (os.name == 'nt' and request.get('scope', 'self') == 'self'
-                                      and not request.get('device_id') and not request.get('remote')
-                                      and not (folder/'windows-job.json').exists() and recovered is None),
-                     "witness_recorded": (folder/'custody-reboot-witness.json').is_file()},
+        "recovery": recovery,
         "created": request.get("created"), "finished": result.get("finished"),
         "started": process.get('birth') if isinstance(process,dict) and process.get('adapter')=='psutil-v1' else None,
         "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,

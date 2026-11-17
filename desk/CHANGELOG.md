@@ -6,6 +6,8 @@
 - Preserve confirmed Mini App menu readiness when optional bot metadata lookup fails.
 - Mark historical in-doubt turns for evidence-based reconciliation without resending or inventing media delivery.
 - Restore compatible Windows edge/corner resizing while retaining responsive native header movement and unobstructed maximized edge/close targets.
+- Device Stop and resource-owner confirmation share the same durable cancellation semantics while retaining channel/gesture provenance.
+- Diagnose damaged Forge history by exact line, byte offset and hash; explicit Linux recovery preserves its snapshot and requires a witnessed later reboot of the confirmed original host before releasing custody.
 - Latest Beta for Windows, Mac Apple silicon/Intel, Debian/Ubuntu, Fedora and Linux ARM64 server.
 
 # 2.8.7 Beta

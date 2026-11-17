@@ -34,6 +34,11 @@ state, uncertain historical actions remain visible for reconciliation, and
 Windows edge resizing uses the compatible fixed-edge path while header movement
 stays responsive. See the [2.8.8 release notes](desk/docs/RELEASE-2.8.8.md).
 
+Device Stop and its resource owner share one durable cancellation request while
+retaining the original channel in audit records. Damaged Forge history has exact
+diagnostics and an explicit witness/reboot recovery path on the original Linux
+host; corrupted bytes and unknown action outcomes are retained.
+
 ## Included in 2.8.7 Beta
 
 The window is smooth again while the agent works: scrolling, typing, animations

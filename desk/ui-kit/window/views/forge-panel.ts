@@ -9,7 +9,7 @@ export interface ForgeUnit {
   id: string; parent_unit_id?: string; depth?: number; ancestry_unknown?: boolean;
   role?: string; model?: string; subtask?: string; status?: string; request_status?: string;
   custody?: string; current_disposition?: string; stale_dispositions?: number;
-  recovery?: {available: boolean; witness_recorded: boolean};
+  recovery?: {available: boolean; witness_recorded: boolean; diagnostic?: {code:string; line?:number; offset?:number; journal_sha256?:string}};
   started?: number; created?: string; finished?: string;
   observation?: { generation?: string; phase?: string; tool?: string; observed_at?: string; iteration?: number };
   result_ref?: ForgeRef; request_ref?: ForgeRef; payload_refs?: Record<string, ForgeRef>;
@@ -127,6 +127,13 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (c.state === "queued") return uiText("ui.ui.kit.window.views.forge.panel.758a276176");
     if (c.state === "processing") return uiText("ui.ui.kit.window.views.forge.panel.d693eebb8c");
     if (c.state === "unknown") return uiText("ui.ui.kit.window.views.forge.panel.6c024486c5") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.a2d76e8c24"));
+    const diagnostic = (c.result as {diagnostic?: {code:string}})?.diagnostic;
+    if (c.state === "rejected" && diagnostic?.code.startsWith('forge_history_')) {
+      const message = diagnostic.code === 'forge_history_reboot_required' ? uiText('forge.history.reboot_required')
+        : diagnostic.code === 'forge_history_stop_required' ? uiText('forge.history.stop_required')
+        : diagnostic.code === 'forge_history_witness_required' ? uiText('forge.history.witness_required') : uiText('forge.history.refused');
+      return message + ' · ' + diagnostic.code;
+    }
     if (c.state === "rejected") return uiText("ui.ui.kit.window.views.forge.panel.ee11bf92cc") + (c.reason || uiText("ui.ui.kit.window.views.forge.panel.321069cccf"));
     if (c.state === 'observed' && (c.result as {status?: string})?.status === 'prepared')
       return uiText('forge.recovery.prepared');
@@ -185,7 +192,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       if (!checkbox.checked) return;
       const [task, unit] = current();
       void control(task, unit, 'prepare_recovery', feedback, {
-        host_binding: 'verified-local-execution-host', reason: 'Owner confirmed original Windows execution host after unresolved Stop',
+        host_binding: 'verified-local-execution-host', reason: uiText('forge.recovery.reason'),
       });
     });
     prepare.disabled = true;
@@ -456,6 +463,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       (unit.current_disposition ? uiText("ui.ui.kit.window.views.forge.panel.69517383a8") + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? uiText("ui.ui.kit.window.views.forge.panel.06811cd0d8") : "") +
       (unit.custody === "unresolved_stop" ? uiText("ui.ui.kit.window.views.forge.panel.e49b1be6cb") : "") +
       (unit.custody === 'recovered_boundary' ? uiText('forge.recovery.recovered') : '') +
+      (unit.recovery?.diagnostic ? '\n' + uiText('forge.history.damaged', {
+        line: String(unit.recovery.diagnostic.line ?? '—'), offset: String(unit.recovery.diagnostic.offset ?? '—')}) +
+        ' · ' + unit.recovery.diagnostic.code + (unit.recovery.diagnostic.journal_sha256 ? '\nSHA-256 '+unit.recovery.diagnostic.journal_sha256 : '') : '') +
       (unit.stale_dispositions ? uiText("ui.ui.kit.window.views.forge.panel.bba46ad410", {p0: String(unit.stale_dispositions)}) : "");
     view.brief.textContent = unit.subtask || uiText("ui.ui.kit.window.views.forge.panel.0d6bd2b100");
     // Controls keep their in-flight feedback while the next observation arrives.

@@ -1356,12 +1356,12 @@
   "schema.tool.4b40742b2795de8f": "用于 record：用自己的话记录经验。",
   "schema.tool.48d4aad7691a551b": "用于 record：防止问题再次出现的检查。",
   "schema.tool.purpose.coding_learn": "有证据支持的任务工程经验",
-  "schema.tool.b3435ddd7d3c46ca": "控制任务或所选代理子树。有持久绑定时，Stop 证明精确 Windows Job 已完全结束；不改写历史结果。Resume 需要当前 generation 以及旧写入者已退出的证明，并创建新标识。对于旧式 Windows 未知托管：仅在独立确认原始执行主机后，prepare_recovery 才记录重启前见证（host_binding=verified-local-execution-host，必须提供 reason）；它不会自行重启计算机。所有者重启后，recover 验证同一主机上的 boot 已变化，仅释放托管。PID 不存在、日志未加锁或时间已过去都不是证明。summary_in_flight 仍不能安全重放。",
+  "schema.tool.b3435ddd7d3c46ca": "控制任务或所选代理子树。存在持久绑定时，Stop 会证明对应 Windows Job 已终止；历史结果保持不变。Resume 需要当前代次及旧写入进程已退出的证明，并创建新标识。对于 Windows 进程归属未知或 Linux 历史记录损坏的情况，只有在独立确认原执行主机后，prepare_recovery 才会保存重启前的见证记录（host_binding=verified-local-execution-host，必须提供 reason）；它不会执行重启。所有者重启该主机后，recover 会验证同一主机发生了后续启动，并仅解除进程归属。损坏的字节保持完整。PID 缺失、日志未锁定及时间流逝均不构成证明。summary_in_flight 仍不适合安全重放。",
   "schema.tool.66667cfd4cfb5b50": "持久 Forge 任务标识。",
   "schema.tool.376bedb569957ff8": "请求的类型化操作。",
   "schema.tool.2859d71edab67d2c": "所选参与者标识；为空则选择整个任务。",
   "schema.tool.7090e60fbff2fb5a": "参与者最新 progress 中的 generation；拒绝过期控制。",
-  "schema.tool.d50eb41e4b351052": "仅用于 prepare_recovery：明确独立确认旧任务确实在此本地 Windows 计算机上执行。绝不能从 PID 不存在或复制的任务目录推断。",
+  "schema.tool.d50eb41e4b351052": "仅用于 prepare_recovery：明确且独立地确认旧任务是在当前这台原 Windows 或 Linux 执行主机上运行的。绝不能根据 PID 缺失或复制的任务目录作此推断。",
   "schema.tool.1be81526fcc1c47a": "恢复旧托管的具体原因；prepare_recovery 必填。",
   "schema.tool.purpose.coding_control": "pause/stop/resume，或仅凭证明恢复托管",
   "runs.active.empty": "未发现存活的持久运行。",
@@ -3536,5 +3536,8 @@
   "tool.args.other": "[参数未被接受] 调用 `{name}` 未执行：{error}。外部没有任何改变。请核对该工具的 schema 后重新调用。",
   "native.runner.media.document_ready": "[Telegram 文件：{p0}，来自 {p1}，消息 {p2}；{p3} 字节，SHA-256 {p4}。工作副本：{p5}。副本约保留一天；如需长期使用，请移到你自己的文件夹。]",
   "native.runner.media.document_pending": "[Telegram 文件：{p0}，消息 {p1}——尚未收到字节：{p2} 不要在磁盘上搜索它：下载完成后路径会出现在这里。]",
-  "native.runner.media.document_failed": "[Telegram 文件：{p0}，消息 {p1}：字节已收到，但无法创建工作副本（{p2}）。不要猜测其内容。]"
+  "native.runner.media.document_failed": "[Telegram 文件：{p0}，消息 {p1}：字节已收到，但无法创建工作副本（{p2}）。不要猜测其内容。]",
+  "forge.history.prepared": "原 Linux 主机的见证记录和日志精确快照已保存，其中包括损坏的字节。进程归属尚未解除。所有者须自行重启该主机，再调用 recover；应用不会执行重启。",
+  "forge.history.recovered": "已解除对经证实已终止的进程树的归属。旧结果、损坏的日志及未知结果均已保留。仍禁止不安全的继续执行和重复产生副作用。",
+  "forge.history.refused": "恢复尚未确认。请检查 diagnostic.code 和已保留的证据。对于损坏的历史记录，需要明确确认原 Linux 主机，执行 prepare_recovery，由所有者随后重启该主机，再执行 recover。不要删除损坏记录或重复结果未知的操作。"
 }

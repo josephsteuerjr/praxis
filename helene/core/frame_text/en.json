@@ -1356,12 +1356,12 @@
   "schema.tool.4b40742b2795de8f": "record: the lesson, in your own words",
   "schema.tool.48d4aad7691a551b": "record: the check that keeps it from coming back",
   "schema.tool.purpose.coding_learn": "evidence-backed task engineering lessons",
-  "schema.tool.b3435ddd7d3c46ca": "Control a task or selected agent subtree. Stop proves exact Windows Job extinction when a durable binding exists; historical results remain unchanged. Resume needs current generation and proven old-writer exit and creates a new identity. Legacy Windows unknown custody: prepare_recovery records a pre-reboot witness, only after independently confirming this is the original execution host (host_binding=verified-local-execution-host, reason required); it never reboots. After the owner restarts that computer, recover verifies a changed boot on the same host and releases only custody. Missing PID, unlocked journal and elapsed time are not proof. summary_in_flight remains unsafe to replay.",
+  "schema.tool.b3435ddd7d3c46ca": "Control a task or selected agent subtree. Stop proves exact Windows Job extinction when a durable binding exists; historical results remain unchanged. Resume needs current generation and proven old-writer exit and creates a new identity. For unknown Windows custody or damaged Linux history, prepare_recovery records a pre-reboot witness only after independently confirming the original execution host (host_binding=verified-local-execution-host, reason required); it never reboots. After the owner restarts that host, recover verifies a later boot on the same host and releases only process custody. Damaged bytes remain intact. Missing PID, unlocked journal and elapsed time are not proof. summary_in_flight remains unsafe to replay.",
   "schema.tool.66667cfd4cfb5b50": "Durable Forge task identity.",
   "schema.tool.376bedb569957ff8": "Requested typed operation.",
   "schema.tool.2859d71edab67d2c": "Selected participant identity; empty selects the task.",
   "schema.tool.7090e60fbff2fb5a": "Generation observed in the latest participant progress; stale control is refused.",
-  "schema.tool.d50eb41e4b351052": "For prepare_recovery only: explicit independent confirmation that the legacy work ran on this exact local Windows computer. Never infer this from absent PIDs or a copied task directory.",
+  "schema.tool.d50eb41e4b351052": "For prepare_recovery only: explicit independent confirmation that the old work ran on this exact original Windows or Linux host. Never infer this from absent PIDs or a copied task directory.",
   "schema.tool.1be81526fcc1c47a": "Concrete reason for legacy custody recovery; required for prepare_recovery.",
   "schema.tool.purpose.coding_control": "pause/stop/resume or recover only proven custody",
   "runs.active.empty": "No live durable runs found.",
@@ -3536,5 +3536,8 @@
   "tool.args.other": "[arguments not accepted] The call `{name}` was NOT executed: {error}. Nothing changed outside. Check the tool's schema and repeat the call.",
   "native.runner.media.document_ready": "[Telegram file: {p0} from {p1}, message {p2}; {p3} bytes, SHA-256 {p4}. Working copy: {p5}. The copy lasts about a day; move it into your own folder for longer work.]",
   "native.runner.media.document_pending": "[Telegram file: {p0}, message {p1} — no bytes yet: {p2} Do not search the disk for it: the path appears here once the download completes.]",
-  "native.runner.media.document_failed": "[Telegram file: {p0}, message {p1}: the bytes arrived, but the working copy could not be created ({p2}). Do not guess its contents.]"
+  "native.runner.media.document_failed": "[Telegram file: {p0}, message {p1}: the bytes arrived, but the working copy could not be created ({p2}). Do not guess its contents.]",
+  "forge.history.prepared": "The original Linux host witness and exact journal snapshot, including damaged bytes, are saved. Process custody is not yet released. The owner must restart this host themselves, then call recover; the application does not reboot it.",
+  "forge.history.recovered": "Custody of process trees proven extinct is released. Historical results, the damaged journal and unknown outcomes are retained. Unsafe continuation and side-effect replay remain prohibited.",
+  "forge.history.refused": "Recovery is unconfirmed. Inspect diagnostic.code and retained evidence. Damaged history requires explicit confirmation of the original Linux host, prepare_recovery and a later owner-performed reboot of that host before recover. Do not delete bad records or replay unknown actions."
 }
