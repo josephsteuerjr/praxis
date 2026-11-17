@@ -1,3 +1,9 @@
+# 2.8.9 Beta
+
+- Refresh desktop preferences on change and deliver attached-window session events from memory.
+- Publish desktop status when it changes while preserving startup, Stop and command acknowledgements.
+- Accelerate cold memory timestamp validation and exact run manifest lookup.
+
 # 2.8.8 Beta
 
 - Fixed native installation of the built-in SSH server bridge without retiring the session.
