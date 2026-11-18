@@ -23,7 +23,7 @@ def run(evidence):
                     config=copy.deepcopy(ProgramFixture.config);config['port']=18765
                     context=browser.new_context(viewport={'width':width,'height':960},reduced_motion='reduce')
                     page=context.new_page();page.set_default_timeout(10000)
-                    errors=[];calls=[];saves=[];profiles=[];bridges=[];operations=[]
+                    errors=[];calls=[];saves=[];profiles=[];bridges=[];operations=[];relay_checks=[]
                     page.on('pageerror',lambda error:errors.append(str(error)))
                     bridge={'id':'b'*32,'name':'Мой сервер','external':'https://helene.example.org','phase':'configured',
                             'ports':{'local_proxy_port':8888,'remote_proxy_port':8888,'local_app_port':18765,'remote_app_port':18766}}
@@ -37,6 +37,9 @@ def run(evidence):
                         if command=='config_load':return request.fulfill(json={'config':config,'mtime_ns':str(len(saves)+1),'tree':'C:/Fixture/data','path':'C:/Fixture/helene.json','exe_dir':'C:/Fixture'})
                         if command=='config_save':
                             config=json.loads(args['config']);saves.append(copy.deepcopy(config));return request.fulfill(json={'ok':True,'mtime_ns':str(len(saves)+1)})
+                        if command=='relay_network_check':
+                            relay_checks.append(config['relay']['proxy'].copy())
+                            return request.fulfill(json={'ok':True,'http_status':401,'generation_sent':False})
                         if command=='component_install':installed=True;return request.fulfill(json={'ok':True,'state':'completed','restart_required':False})
                         if command=='components_status':return request.fulfill(json=[{'id':'server-bridge','ready':True,'installed':installed,'restart_required':False}])
                         if command not in ('server_connection','server_bridge'):return request.continue_()
@@ -78,7 +81,28 @@ def run(evidence):
                         page.goto(origin+'/tg/',wait_until='networkidle');page.wait_for_selector('#app:not([hidden])')
                         if width<760:page.locator('#toggle-rail').click()
                         page.locator('[data-view="settings"]').click();page.get_by_role('tab',name='Программа',exact=True).click()
-                        card=page.get_by_role('heading',name='Серверный мост',exact=True).locator('..')
+                        assert page.get_by_role('heading',name='Размещение агента',exact=True).is_visible()
+                        assert not page.get_by_text('Серверный мост через SSH',exact=True).is_visible()
+                        page.get_by_role('tab',name='Мозг и связь',exact=True).click()
+                        network=page.get_by_role('heading',name='Сеть и прокси',exact=True).locator('..')
+                        network.get_by_role('button',name='Подставить Tray Bridge для Telegram',exact=True).click()
+                        telegram=network.get_by_role('heading',name='Сеть Telegram и Mini App',exact=True).locator('..')
+                        assert telegram.get_by_label('Порт',exact=True).input_value()=='8888'
+                        assert telegram.get_by_label('Сервер',exact=True).input_value()=='127.0.0.1'
+                        page.get_by_role('button',name='Сохранить',exact=True).click()
+                        network.get_by_role('button',name='Подставить Tray Bridge для реле',exact=True).click()
+                        check=network.get_by_role('button',name='Проверить сохранённое подключение',exact=True)
+                        assert check.is_disabled() and not relay_checks
+                        assert saves[-1]['relay']['proxy']['mode']=='system'
+                        assert saves[-1]['network']['proxy']['port']=='8888'
+                        page.get_by_role('button',name='Сохранить',exact=True).click()
+                        check.click()
+                        network.get_by_text('ChatGPT доступен по сохранённому маршруту. Запрос модели не отправлялся.',exact=True).wait_for()
+                        assert relay_checks==[{'mode':'proxy','protocol':'http','host':'127.0.0.1','port':'8888','username':'','password':''}]
+                        network.get_by_role('heading',name='Сеть и прокси').scroll_into_view_if_needed()
+                        page.screenshot(path=str(evidence/f'network-{width}.png'))
+                        card=network.get_by_text('Серверный мост через SSH',exact=True).locator('..')
+                        card.locator(':scope > summary').click()
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
                         assert installed,'direct setup enables the already bundled component'
                         assert card.get_by_role('button',name='Сервер уже настроен',exact=True).get_attribute('aria-pressed')=='true'
@@ -134,12 +158,12 @@ def run(evidence):
                         page.get_by_role('option',name='Мой сервер · https://helene.example.org',exact=True).click()
                         page.get_by_role('button',name='Сохранить',exact=True).click();page.wait_for_timeout(180)
                         assert saves[-1]['network']['bridge_profile']==bridge['id']
-                        page.get_by_role('tab',name='Программа',exact=True).click()
-                        card=page.get_by_role('heading',name='Серверный мост',exact=True).locator('..')
+                        card=page.get_by_text('Серверный мост через SSH',exact=True).locator('..')
+                        card.locator(':scope > summary').click()
                         card.locator('summary').filter(has_text='Как устроить').click()
                         with page.expect_download() as downloaded:card.get_by_role('button',name='Скачать полную инструкцию',exact=True).click()
                         manual=downloaded.value;assert manual.suggested_filename=='Helene-server-bridge.md'
-                        assert 'Уже настроенный сервер' in Path(manual.path()).read_text(encoding='utf8')
+                        assert 'Мозг и связь → Сеть и прокси → Серверный мост через SSH' in Path(manual.path()).read_text(encoding='utf8')
                         before=len([row for row in calls if row[1] in ('prepare','install')])
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
                         card.get_by_role('button',name='Сервер уже настроен',exact=True).click()
@@ -148,7 +172,7 @@ def run(evidence):
                         assert card.get_by_label('Адрес сервера',exact=True).is_disabled()
                         card.get_by_role('switch',name='Постоянный HTTPS для Mini App',exact=True).click()
                         card.get_by_label('Готовый HTTPS-адрес',exact=True).fill('https://existing.example.org')
-                        card.get_by_role('button',name='Проверить и подготовить',exact=True).click()
+                        card.get_by_role('button',name='Сохранить и проверить мост',exact=True).click()
                         card.get_by_role('button',name='Использовать для этого агента',exact=True).wait_for()
                         assert len([row for row in calls if row[1] in ('prepare','install')])==before
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
@@ -157,7 +181,7 @@ def run(evidence):
                         ports=card.locator('details').filter(has=page.get_by_label('Локальный порт прокси',exact=True))
                         ports.locator('summary').click()
                         card.get_by_label('Локальный порт прокси',exact=True).fill('18889')
-                        card.get_by_role('button',name='Проверить и подготовить',exact=True).click()
+                        card.get_by_role('button',name='Сохранить и проверить мост',exact=True).click()
                         relay=card.get_by_role('switch',name='Также использовать этот прокси для реле (его маршрут проверяется отдельно)',exact=True)
                         assert relay.get_attribute('aria-checked')=='false'
                         relay.click()
@@ -169,6 +193,7 @@ def run(evidence):
                         assert len([row for row in calls if row[1] in ('prepare','install')])==before
                         card.get_by_role('button',name='Использовать для этого агента',exact=True).scroll_into_view_if_needed()
                         page.screenshot(path=str(evidence/f'proxy-only-{width}.png'))
+                        page.get_by_role('tab',name='Программа',exact=True).click()
                         placement=page.get_by_role('heading',name='Размещение агента',exact=True).locator('..')
                         placement.get_by_role('button',name='Открыть управление сервером',exact=True).click()
                         placement.get_by_role('button',name='Обновить сервер',exact=True).wait_for()
@@ -187,7 +212,7 @@ def run(evidence):
                         row.scroll_into_view_if_needed();page.screenshot(path=str(evidence/f'guide-{width}.png'))
                         assert not page.evaluate('document.documentElement.scrollWidth>innerWidth')
                         assert not errors,errors
-                        results.append({'width':width,'trust_before_auth':True,'plan_review_resume':True,'both_routes_saved':True,'manual_proxy_detaches':True,
+                        results.append({'width':width,'tray_routes_separate':True,'check_after_save':True,'trust_before_auth':True,'plan_review_resume':True,'both_routes_saved':True,'manual_proxy_detaches':True,
                             'reopen_saved_profile':True,'existing_server_no_install':True,'proxy_only_and_explicit_relay':True,'offline_manual':True,'persistent_management':True,'guide_saved':True,'errors':errors})
                     except BaseException:
                         page.screenshot(path=str(evidence/f'failure-{width}.png'))

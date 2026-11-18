@@ -9,7 +9,8 @@ export function relayProxy(saved: unknown, options: { application?: boolean } = 
   const value: ProxySettings = { ...prior, mode: String(prior.mode || "system"), protocol: String(prior.protocol || "http"),
     host: String(prior.host || ""), port: String(prior.port || ""), username: String(prior.username || ""), password: String(prior.password || "") };
   const element = el("section", ""); element.style.marginTop = "24px";
-  if (!options.application) element.append(el("h4", "", uiText("ui.app.src.relay.proxy.2f5eaed169")));
+  element.append(el("h4", "", options.application ? uiText("ui.app.src.settings.agent.e2d6eafc73")
+    : uiText("ui.app.src.relay.proxy.2f5eaed169")));
   const select = (label: string, selected: string, choices: [string, string][], changed: (v: string) => void) => {
     const wrapper = el("label", "field"); const input = el("select", "field-input");
     if (!choices.some(([key]) => key === selected)) choices = [...choices, [selected, uiText("ui.app.src.relay.proxy.f432767d68", {p0: String(selected)})]];
@@ -26,19 +27,39 @@ export function relayProxy(saved: unknown, options: { application?: boolean } = 
     field(uiText("ui.app.src.relay.proxy.b12a661d08"), value.username, v => value.username = v),
     field(uiText("ui.app.src.relay.proxy.cb1a2074b3"), value.password, v => value.password = v, { type: "password" }));
   const result = el("p", "receipt"); result.setAttribute("aria-live", "polite");
+  const snapshot = () => JSON.stringify(value);
+  let savedSnapshot = snapshot();
+  let checking = false;
+  const updateCheck = () => { check.disabled = checking || snapshot() !== savedSnapshot; };
   const check = button(uiText("ui.app.src.relay.proxy.ff324286b5"), "quiet", async () => {
-    check.disabled = true; result.textContent = uiText("ui.app.src.relay.proxy.fe7b960445");
+    const checked = savedSnapshot;
+    checking = true; updateCheck(); result.textContent = uiText("ui.app.src.relay.proxy.fe7b960445");
     try {
-      const response = await shell<{ ok: boolean; http_status?: number; generation_sent?: boolean; error?: string }>("relay_network_check");
+      const response = await shell<{ ok: boolean; http_status?: number; error_code?: string }>("relay_network_check");
+      if (checked !== savedSnapshot || checked !== snapshot()) return;
       result.textContent = response.ok ? uiText("ui.app.src.relay.proxy.1e1f9bb15c")
-        : response.http_status ? uiText("ui.app.src.relay.proxy.8d3f165c4c", {p0: String(response.http_status)}) : response.error || uiText("ui.app.src.relay.proxy.5f2af98a51");
-    } catch (error) { result.textContent = humanError(error).text; }
-    finally { check.disabled = false; }
+        : response.http_status ? uiText("ui.app.src.relay.proxy.8d3f165c4c", {p0: String(response.http_status)})
+        : response.error_code === 'unsupported' ? uiText('connections.check_unsupported')
+        : response.error_code === 'timeout' ? uiText('connections.check_timeout')
+        : response.error_code === 'redirected' ? uiText('connections.check_redirected')
+        : response.error_code === 'transport' ? uiText('connections.check_transport')
+        : uiText("ui.app.src.relay.proxy.5f2af98a51");
+    } catch (error) {
+      if (checked === savedSnapshot && checked === snapshot()) result.textContent = humanError(error).text;
+    } finally { checking = false; updateCheck(); }
   });
   element.append(detail, el("p", "field-hint", options.application
     ? uiText("ui.app.src.relay.proxy.ef07983c23")
     : uiText("ui.app.src.relay.proxy.3af67a39de")));
-  if (!options.application) element.append(check, result);
+  if (!options.application) {
+    const routeEdited = () => {
+      result.textContent = snapshot() !== savedSnapshot ? uiText('connections.save_before_check') : '';
+      updateCheck();
+    };
+    element.addEventListener('input', routeEdited);
+    element.addEventListener('change', routeEdited);
+    element.append(check, result);
+  }
   show();
   return { element, collect: () => ({ ...value }), set: (next:Partial<ProxySettings>) => {
     Object.assign(value,next);
@@ -47,6 +68,9 @@ export function relayProxy(saved: unknown, options: { application?: boolean } = 
     const inputs=detail.querySelectorAll<HTMLInputElement>('input');
     [value.host,value.port,value.username,value.password].forEach((item,index)=>{inputs[index].value=item;inputs[index].dispatchEvent(new Event('input',{bubbles:true}))});
     show();
+  }, didSave: () => {
+    if (savedSnapshot === snapshot()) return;
+    savedSnapshot = snapshot(); result.textContent = ''; updateCheck();
   }, error: () => {
     if (!["system", "direct", "proxy"].includes(value.mode)) return uiText("ui.app.src.relay.proxy.39ab6758e8");
     if (value.mode !== "proxy") return "";

@@ -19,7 +19,7 @@ function bridgeError(code?:string) {
 }
 
 /** Same setup and daily controls live in the guide and persistent settings. */
-export function serverBridgeCard(onUse:(bridge:ServerBridge,options:{relay:boolean})=>void|string|Promise<void|string>):HTMLElement {
+export function serverBridgePanel(onUse:(bridge:ServerBridge,options:{relay:boolean})=>void|string|Promise<void|string>):HTMLElement {
   const body=el('div'),list=el('div'),setup=el('div'),operations=el('div'),note=el('p','receipt');
   let installed=false,busy=false;let timer:ReturnType<typeof setTimeout>|undefined;
   const command=<T>(action:string,request:unknown={})=>shell<T>('server_bridge',{action,request:JSON.stringify(request)});
@@ -106,8 +106,16 @@ export function serverBridgeCard(onUse:(bridge:ServerBridge,options:{relay:boole
     const externalField=field(uiText("ui.ui.kit.window.server.settings.bfd93aa6d9"),'',value=>external=value,{placeholder:'https://helene.example.org'});
     httpFields.append(domainField,externalField);
     const choice=el('div','actions');
-    const auto=button(uiText("ui.ui.kit.window.server.settings.451f03b1c9"),'quiet',()=>{existing=false;auto.setAttribute('aria-pressed','true');manual.setAttribute('aria-pressed','false');domainField.hidden=false;externalField.hidden=true;});
-    const manual=button(uiText("ui.ui.kit.window.server.settings.11153a731d"),'quiet',()=>{existing=true;auto.setAttribute('aria-pressed','false');manual.setAttribute('aria-pressed','true');domainField.hidden=true;externalField.hidden=false;});
+    const mode = (useExisting:boolean) => {
+      existing=useExisting;
+      auto.setAttribute('aria-pressed',String(!existing));
+      manual.setAttribute('aria-pressed',String(existing));
+      domainField.hidden=existing;
+      externalField.hidden=!existing;
+      submit.textContent=existing?uiText('connections.bridge_check'):uiText("ui.ui.kit.window.server.settings.e30f061a56");
+    };
+    const auto=button(uiText("ui.ui.kit.window.server.settings.451f03b1c9"),'quiet',()=>mode(false));
+    const manual=button(uiText("ui.ui.kit.window.server.settings.11153a731d"),'quiet',()=>mode(true));
     auto.setAttribute('aria-pressed','false');manual.setAttribute('aria-pressed','true');choice.append(manual,auto);
     const proxyFields=el('div','form-grid two');proxyFields.append(
       field(uiText("ui.ui.kit.window.server.settings.8d45fc2b21"),'8888',value=>localPort=Number(value),{type:'number'}),
@@ -117,7 +125,7 @@ export function serverBridgeCard(onUse:(bridge:ServerBridge,options:{relay:boole
       field(uiText("ui.ui.kit.window.server.settings.2163464958"),'',value=>publicAddress=value,{hint:uiText("ui.ui.kit.window.server.settings.88bce69b8e")}));
     extras.append(proxyFields,reverseFields);
     const advanced=el('details','fold');advanced.append(el('summary','',uiText("ui.ui.kit.window.server.settings.e0e021a041")),extras);
-    const submit=button(uiText("ui.ui.kit.window.server.settings.e30f061a56"),'primary',async()=>{
+    const submit=button(uiText('connections.bridge_check'),'primary',async()=>{
       if(!data.server_profile){out.textContent=uiText("ui.ui.kit.window.server.settings.2867e704ca");return;}
       submit.disabled=true;out.textContent=existing?uiText("ui.ui.kit.window.server.settings.de19649eda"):uiText("ui.ui.kit.window.server.settings.4291a149c0");
       try{
@@ -137,5 +145,9 @@ export function serverBridgeCard(onUse:(bridge:ServerBridge,options:{relay:boole
       toggle(uiText("ui.ui.kit.window.server.settings.5dc62ddfff"),false,value=>{https=value;httpFields.hidden=!value;reverseFields.hidden=!value}),httpFields,advanced,submit,out);
   }
   body.append(el('p','field-hint',uiText('bridge.bundled.help')),
-    actions,info,setup,operations,list,note);void refresh();return card(uiText("ui.ui.kit.window.server.settings.719d7aa17f"),body);
+    actions,info,setup,operations,list,note);void refresh();return body;
+}
+
+export function serverBridgeCard(onUse:Parameters<typeof serverBridgePanel>[0]):HTMLElement {
+  return card(uiText("ui.ui.kit.window.server.settings.719d7aa17f"),serverBridgePanel(onUse));
 }

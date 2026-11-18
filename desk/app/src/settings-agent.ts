@@ -481,7 +481,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   if (provider === 'chatgpt') void loadCodexModels();
   cards.push(inGroup(card(uiText("ui.app.src.settings.agent.f3bdf7cce3"), model), GROUP.brain));
   const subscriptionBody = el("div");
-  subscriptionBody.append(subscriptions.element, relayConnection.element, relayExecutableField);
+  subscriptionBody.append(subscriptions.element, relayExecutableField);
   cards.push(inGroup(card(uiText("ui.app.src.settings.agent.4738e3ba9f"), subscriptionBody), GROUP.brain));
 
   // --- Telegram: бот или свой аккаунт агента
@@ -627,7 +627,18 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
-  cards.push(inGroup(card(uiText("ui.app.src.settings.agent.e2d6eafc73"), applicationConnection.element), GROUP.brain));
+  const networkSettings = el('div');
+  const tray = {mode:'proxy',protocol:'http',host:'127.0.0.1',port:'8888',username:'',password:''};
+  const useTrayForTelegram = button(uiText('connections.tray_telegram'),'quiet',()=>{
+    applicationConnection.set(tray);
+    delete draft.network?.bridge_profile;
+  });
+  const useTrayForRelay = button(uiText('connections.tray_relay'),'quiet',()=>relayConnection.set(tray));
+  const trayActions = el('div','actions');
+  trayActions.append(useTrayForTelegram,useTrayForRelay);
+  networkSettings.append(el('p','field-hint',uiText('connections.tray_hint')),trayActions,
+    applicationConnection.element,relayConnection.element);
+  cards.push(inGroup(card(uiText('connections.title'),networkSettings),GROUP.brain));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
   //
@@ -760,6 +771,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
 
   return {
     cards,
+    networkSettings,
     useServerBridge(bridge,options={}) {
       if(bridge.ports.local_proxy_port){
         applicationConnection.set({mode:'proxy',protocol:'http',host:'127.0.0.1',port:String(bridge.ports.local_proxy_port),username:'',password:''});
@@ -794,6 +806,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     // фраза состояния сказать про него не может.
     note: () => noKeyNote + mode.note(),
     didSave(saved: Config) {
+      relayConnection.didSave();
       savedModelProvider = providerOf(saved);
       savedModelName = String(saved.model?.model || '').trim();
       effortChanged = false;

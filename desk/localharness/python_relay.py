@@ -88,6 +88,8 @@ def control(agent,op,*,timeout_sec=20,**arguments):
             raw = exc.read(4097)
             try: note = str(json.loads(raw).get('error', '')) if len(raw) <= 4096 else ''
             except (ValueError, AttributeError): note = ''
+            if op == 'network_check' and note == 'Unknown command: network_check':
+                return {'ok': False, 'error_code': 'unsupported', 'generation_sent': False}
             if 'already in progress' in note:
                 raise ValueError('Вход уже выполняется. Заверши или отмени текущую попытку.') from None
             if op in ('login_device', 'cancel_login_id') and ('Unknown' in note or 'unknown' in note):

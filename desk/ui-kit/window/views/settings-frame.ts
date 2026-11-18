@@ -23,7 +23,7 @@ import { t as uiText, UiError, locale } from "../../../lang/lang";
 // не там.
 import { api, cfg, electron, inTauri, post, shell } from "../api";
 import { componentsCard } from "../components-card";
-import { serverBridgeCard } from '../server-settings';
+import { serverBridgePanel } from '../server-settings';
 import { useBridge, type ServerBridge } from '../server-bridge-config';
 import { updateError } from "../../update-error";
 import { requestAgentUpdate } from '../update-admission';
@@ -258,6 +258,7 @@ export interface Edition {
   collect(out: Config): string;
   /** Refresh route-specific controls only after a confirmed config write. */
   didSave?(config: Config): void;
+  networkSettings?: HTMLElement;
   useServerBridge?(bridge:ServerBridge,options?:{relay?:boolean}):void;
   /** Подпись под карточкой «Имена»: у изданий она разная. */
   namesHint: string;
@@ -400,6 +401,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     return uiText('bridge.routes.draft');
   };
   const phoneSettings=phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg,{onBridge:chooseBridge});
+  if (built.networkSettings && electron?.shell === 'python' && draft.mode !== 'remote') {
+    const bridge = el('details','fold');
+    bridge.append(el('summary','',uiText('connections.ssh_bridge')));
+    const openBridge = () => {
+      if (!bridge.open) return;
+      bridge.append(serverBridgePanel(chooseBridge));
+      bridge.removeEventListener('toggle',openBridge);
+    };
+    bridge.addEventListener('toggle',openBridge);
+    built.networkSettings.append(bridge);
+  }
   center.append(inGroup(phoneSettings, GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
@@ -409,7 +421,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   }
 
   if (electron?.shell === "python") {
-    center.append(inGroup(componentsCard(), GROUP.app),inGroup(serverBridgeCard(chooseBridge),GROUP.app));
+    center.append(inGroup(componentsCard(), GROUP.app));
     const serverBody=el('div');
     const openServer=button(uiText("ui.ui.kit.window.views.settings.frame.01c36d809c"),'quiet',async()=>{
       openServer.disabled=true;

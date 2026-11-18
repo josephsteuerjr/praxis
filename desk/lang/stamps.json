@@ -16000,9 +16000,9 @@
     "zh": "fe7b9604"
   },
   "ui.app.src.relay.proxy.1e1f9bb15c": {
-    "en": "1e1f9bb1",
-    "fr": "1e1f9bb1",
-    "zh": "1e1f9bb1"
+    "en": "2a248ced",
+    "fr": "2a248ced",
+    "zh": "2a248ced"
   },
   "ui.app.src.relay.proxy.8d3f165c4c": {
     "en": "8d3f165c",
@@ -16015,14 +16015,14 @@
     "zh": "5f2af98a"
   },
   "ui.app.src.relay.proxy.ef07983c23": {
-    "en": "ef07983c",
-    "fr": "ef07983c",
-    "zh": "ef07983c"
+    "en": "98767acb",
+    "fr": "98767acb",
+    "zh": "98767acb"
   },
   "ui.app.src.relay.proxy.3af67a39de": {
-    "en": "3af67a39",
-    "fr": "3af67a39",
-    "zh": "3af67a39"
+    "en": "dec60f13",
+    "fr": "dec60f13",
+    "zh": "dec60f13"
   },
   "ui.app.src.relay.proxy.39ab6758e8": {
     "en": "39ab6758",
@@ -19115,9 +19115,9 @@
     "zh": "6f22f524"
   },
   "ui.ui.kit.window.server.bridge.manual.2d9c769830": {
-    "en": "2d9c7698",
-    "fr": "2d9c7698",
-    "zh": "2d9c7698"
+    "en": "c2314184",
+    "fr": "c2314184",
+    "zh": "c2314184"
   },
   "native.first.b38b23d5de": {
     "en": "b38b23d5",
@@ -21635,14 +21635,14 @@
     "zh": "4fc85b87"
   },
   "bridge.bundled.help": {
-    "en": "a2080ec6",
-    "fr": "a2080ec6",
-    "zh": "a2080ec6"
+    "en": "8a31e916",
+    "fr": "8a31e916",
+    "zh": "8a31e916"
   },
   "bridge.existing.help": {
-    "en": "00396c29",
-    "fr": "00396c29",
-    "zh": "00396c29"
+    "en": "23d9ac42",
+    "fr": "23d9ac42",
+    "zh": "23d9ac42"
   },
   "bridge.ssh.key.help": {
     "en": "01639001",
@@ -21723,5 +21723,60 @@
     "en": "0cb6db9e",
     "fr": "0cb6db9e",
     "zh": "0cb6db9e"
+  },
+  "connections.title": {
+    "en": "d02c70cc",
+    "fr": "d02c70cc",
+    "zh": "d02c70cc"
+  },
+  "connections.ssh_bridge": {
+    "en": "1f34fd68",
+    "fr": "1f34fd68",
+    "zh": "1f34fd68"
+  },
+  "connections.tray_telegram": {
+    "en": "685a9e83",
+    "fr": "685a9e83",
+    "zh": "685a9e83"
+  },
+  "connections.tray_relay": {
+    "en": "1ecc260b",
+    "fr": "1ecc260b",
+    "zh": "1ecc260b"
+  },
+  "connections.tray_hint": {
+    "en": "ed1da678",
+    "fr": "ed1da678",
+    "zh": "ed1da678"
+  },
+  "connections.bridge_check": {
+    "en": "67a788d0",
+    "fr": "67a788d0",
+    "zh": "67a788d0"
+  },
+  "connections.save_before_check": {
+    "en": "4b313ea1",
+    "fr": "4b313ea1",
+    "zh": "4b313ea1"
+  },
+  "connections.check_unsupported": {
+    "en": "88973ad8",
+    "fr": "88973ad8",
+    "zh": "88973ad8"
+  },
+  "connections.check_timeout": {
+    "en": "3e26480f",
+    "fr": "3e26480f",
+    "zh": "3e26480f"
+  },
+  "connections.check_redirected": {
+    "en": "e9c43da0",
+    "fr": "e9c43da0",
+    "zh": "e9c43da0"
+  },
+  "connections.check_transport": {
+    "en": "2a9cb450",
+    "fr": "2a9cb450",
+    "zh": "2a9cb450"
   }
 }
