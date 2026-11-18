@@ -1,3 +1,8 @@
+# 2.8.10 Beta
+
+- Group Telegram, Mini App, relay and SSH bridge settings under Network and proxy.
+- Check the subscription relay’s saved route to ChatGPT without a model request.
+
 # 2.8.9 Beta
 
 - Refresh desktop preferences on change and deliver attached-window session events from memory.
