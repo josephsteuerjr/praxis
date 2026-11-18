@@ -1,0 +1,478 @@
+{
+  "v2.8.9": {
+    "id": 449209039,
+    "assets": {
+      "FRONTENDS-2.8.9.json": {
+        "id": 760669233,
+        "size": 25421,
+        "digest": "sha256:2c02116c922dbf88613e167824ae1c4b43b30368a8819c60dfd5e273b380c102",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-fedora-x86_64.zip": {
+        "id": 760676342,
+        "size": 858424239,
+        "digest": "sha256:25af849a4db5794ebc7b3fee656848f0861819857eb0693e6ca8d861732cb48c",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-fedora-x86_64.zip.sha256": {
+        "id": 760669364,
+        "size": 98,
+        "digest": "sha256:118b2c58c3dfc3226b99242749e97b0ea5bf60bbecfdea4742a657b28615cdbf",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-linux-x86_64.zip": {
+        "id": 760673746,
+        "size": 858424226,
+        "digest": "sha256:bd03915cb7798ad5ec2a5594c51820fa88b9ba441284f91971e05b9d3f332779",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-linux-x86_64.zip.sha256": {
+        "id": 760669505,
+        "size": 97,
+        "digest": "sha256:9b8dd19e0443d09790c6e47425ff0b688dc2dfd4491d916c81c62ecb9b394f0a",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-macos-arm64.zip": {
+        "id": 760678434,
+        "size": 276935896,
+        "digest": "sha256:8c37a1e2405fa2db67b626d93a236f618cc99dfe48b939c6e3c2cbf629fb0f89",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-macos-arm64.zip.sha256": {
+        "id": 760669624,
+        "size": 96,
+        "digest": "sha256:ce4079e052dff2a48413d28b49a665d4d09c7d39d5e6daec88af4adddb698ac2",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-macos-x86_64.zip": {
+        "id": 760681024,
+        "size": 272256960,
+        "digest": "sha256:c7381a844af5a5c30fcdf754a07203510eba9369898d57b4af9e1bdc154ff5bd",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-macos-x86_64.zip.sha256": {
+        "id": 760669741,
+        "size": 97,
+        "digest": "sha256:ec8eb7c8aa37042560098ee8e60c4df0234ac547e8af5154aa3ce586c73ba16f",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-server-linux-arm64.zip": {
+        "id": 760680748,
+        "size": 18814607,
+        "digest": "sha256:889ed582331c4b0e45ac77c1d0dd6789585d8c51e29e08d48234c31609395f1d",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-server-linux-arm64.zip.sha256": {
+        "id": 760669865,
+        "size": 103,
+        "digest": "sha256:ad4a6ef61a44bb3801b6d7750a05f0d1a3f779d6673fc8e2d771e92a9b5d3576",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-source.zip": {
+        "id": 760669966,
+        "size": 23474304,
+        "digest": "sha256:ecf9bec88eee6a579d24a40175d86d7250c265d855ba480bdd0e4f1d3b707cb8",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9-source.zip.sha256": {
+        "id": 760670159,
+        "size": 91,
+        "digest": "sha256:30ac7ca4b037c56693f92522ff6ff9c0ba2092cea98dce9d48f987eb5ca5a767",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9.zip": {
+        "id": 760679789,
+        "size": 531616470,
+        "digest": "sha256:3b3dcc2df16e50a5c82267f8fd7b5e544510af52b5134dd08993cde271b2a9dd",
+        "state": "uploaded"
+      },
+      "Helene-2.8.9.zip.sha256": {
+        "id": 760670282,
+        "size": 84,
+        "digest": "sha256:f492262ca80893457979f0c732b0aaebada3e797c491580e736d248376471ef7",
+        "state": "uploaded"
+      },
+      "RELEASE-EVIDENCE.json": {
+        "id": 760670368,
+        "size": 13344,
+        "digest": "sha256:660444db0c2ec9c825ad6bbbc613dc196302e8734d156cdfc856bf515d367b19",
+        "state": "uploaded"
+      },
+      "RELEASE-NOTES.md": {
+        "id": 760670461,
+        "size": 4721,
+        "digest": "sha256:4112205189ad46c58f48e8173d9ae680605b076960b96a9e616a9d2afd9a05c8",
+        "state": "uploaded"
+      },
+      "SHA256SUMS": {
+        "id": 760670566,
+        "size": 2000,
+        "digest": "sha256:d4f203b3014cd942db140d80d9962676f5c154f41ac9b837e5f417d384c410ed",
+        "state": "uploaded"
+      },
+      "SOURCE-2.8.9.json": {
+        "id": 760670780,
+        "size": 699973,
+        "digest": "sha256:765407fc9e214f669dae90f46e64e47ab224c20cd68b24c96cda2f85656f6abc",
+        "state": "uploaded"
+      },
+      "START-HERE-2.8.9.txt": {
+        "id": 760670885,
+        "size": 214,
+        "digest": "sha256:eaff924d29a26f40d190046fc00f5f9954225a99a2819a04a9e8b4061b16acec",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.9.zip": {
+        "id": 760670991,
+        "size": 11418671,
+        "digest": "sha256:cf931e515b94c4ba9873a3a83df4eba961c6f69a82ac26b9b6ce2d38c8a09c69",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.9.zip.sha256": {
+        "id": 760671128,
+        "size": 89,
+        "digest": "sha256:916a90b42e44988420e86212c30a0c5e55ce73396a4d0a14eb36e684bdf615e6",
+        "state": "uploaded"
+      }
+    }
+  },
+  "v2.8.8": {
+    "id": 448968993,
+    "assets": {
+      "FRONTENDS-2.8.8.json": {
+        "id": 759975294,
+        "size": 25421,
+        "digest": "sha256:656f2c30b0738e485c9769484635656c7d635196d08dbfefb1ca01ae0dcf5e5c",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-fedora-x86_64.zip": {
+        "id": 759986517,
+        "size": 858408073,
+        "digest": "sha256:32e9df2d6f42d8ab5161bf1b7b1d11b520fd97caec3cb027380b650f8ac2c060",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-fedora-x86_64.zip.sha256": {
+        "id": 759975419,
+        "size": 98,
+        "digest": "sha256:da9e42829f72e3bfee95e581f3a50afe7144bcb2fe1d0146e52a8717cb9d8893",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-linux-x86_64.zip": {
+        "id": 759983666,
+        "size": 858408063,
+        "digest": "sha256:136200e4c157f51b3f784277aa29877a956f08c20fb2ee77f91e468016e19349",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-linux-x86_64.zip.sha256": {
+        "id": 759975514,
+        "size": 97,
+        "digest": "sha256:e526f0f03d63e43555543cc620ee86af2f12650c59b3aa0649da9e3a8a84d6eb",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-macos-arm64.zip": {
+        "id": 759989852,
+        "size": 276919743,
+        "digest": "sha256:dc55f6eefd66e47d5bb11f3561789e0a57785a22e73ee2ec157f7e37b2eae9e8",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-macos-arm64.zip.sha256": {
+        "id": 759975635,
+        "size": 96,
+        "digest": "sha256:32cb051f829e0b4861c55c130b39e5935b366781512342dfd54a1f8f23ec43a1",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-macos-x86_64.zip": {
+        "id": 759990643,
+        "size": 272240782,
+        "digest": "sha256:50346d547ce6b5251a01561a65760e03c1be47668440d4c91d672349254c4763",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-macos-x86_64.zip.sha256": {
+        "id": 759975757,
+        "size": 97,
+        "digest": "sha256:c6c1a45b2c3ebc242c80b9656896e0d606e5410f1cc183b6747bb46942ece03a",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-server-linux-arm64.zip": {
+        "id": 759989592,
+        "size": 18811051,
+        "digest": "sha256:3235f0bf6bfefe353c0d6224014ffeab86530e439f0ea764a2ed9afa522c9bc0",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-server-linux-arm64.zip.sha256": {
+        "id": 759975882,
+        "size": 103,
+        "digest": "sha256:cd2d98feaae857077f559667776bd4356f0ac42825c3198352ed91d984c15b85",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-source.zip": {
+        "id": 759975991,
+        "size": 23468637,
+        "digest": "sha256:96d98898f6ee8ecde80131120d25537634cb032d0de27c58ea4384166201efa6",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8-source.zip.sha256": {
+        "id": 759976166,
+        "size": 91,
+        "digest": "sha256:aaef0548446c745810e1998beff5e9873f0b778d704a60bfe9da49652c5e1115",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8.zip": {
+        "id": 759988430,
+        "size": 531599927,
+        "digest": "sha256:7d7b8f267e207b41f1810180d5ce920cd427b92b3f637a31e6977ca9d2a2d815",
+        "state": "uploaded"
+      },
+      "Helene-2.8.8.zip.sha256": {
+        "id": 759976245,
+        "size": 84,
+        "digest": "sha256:9ca3b60fa567291d402d1f8e863853a179f1d87688f25861ad3d578f425251b6",
+        "state": "uploaded"
+      },
+      "RELEASE-EVIDENCE.json": {
+        "id": 759976326,
+        "size": 15191,
+        "digest": "sha256:b4fedef2c8b9d28ce3fe48adcd2a5dc8cd8ab79f8bfc9c22fcaeaed7726552cb",
+        "state": "uploaded"
+      },
+      "RELEASE-NOTES.md": {
+        "id": 759976423,
+        "size": 8555,
+        "digest": "sha256:9dc42ebce014049703938098f2b1a85b39fe6284c370dcd00ed61c5cfb481501",
+        "state": "uploaded"
+      },
+      "SHA256SUMS": {
+        "id": 759976514,
+        "size": 2000,
+        "digest": "sha256:222062bb97c42d2dc106b449dca8f7e145c3970015c15e4b226bceefd9d1d2a6",
+        "state": "uploaded"
+      },
+      "SOURCE-2.8.8.json": {
+        "id": 759976594,
+        "size": 699415,
+        "digest": "sha256:1452b8c07ae7b6951382027abc4802fa1a2768837fcaa5597f60b3c046f2f2c4",
+        "state": "uploaded"
+      },
+      "START-HERE-2.8.8.txt": {
+        "id": 759976682,
+        "size": 214,
+        "digest": "sha256:6101b361486fdee74fc8df50d149c6132ffe21a87282b8f62bf00bfbbd6cc3df",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.8.zip": {
+        "id": 759976789,
+        "size": 11421355,
+        "digest": "sha256:6386ff94e057496f2a6ae2afc4aec1b77d3af91a894bc38e98d5ae06cc6e8f62",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.8.zip.sha256": {
+        "id": 759976910,
+        "size": 89,
+        "digest": "sha256:36778d72c42f7dc742b62f70719bff4c8803a7ef88627c93fd4163819622627b",
+        "state": "uploaded"
+      }
+    }
+  },
+  "v2.8.7": {
+    "id": 448512586,
+    "assets": {
+      "FRONTENDS-2.8.7.json": {
+        "id": 758715190,
+        "size": 25421,
+        "digest": "sha256:a40424849f0f991b9512f93dfef0a09a778159ce8b7ffa2083752b01bf484f4a",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-fedora-x86_64.zip": {
+        "id": 758725926,
+        "size": 858289479,
+        "digest": "sha256:fbaf156d072fafb0e94b7f77bdcf4aae1d6cb0a7c909e83983b24c1d2174f78e",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-fedora-x86_64.zip.sha256": {
+        "id": 758715274,
+        "size": 98,
+        "digest": "sha256:ac5d3f86f9a87b31f6a9fb0f9bf3ea01e59eb1d907bc1460834d961cb9514348",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-linux-x86_64.zip": {
+        "id": 758723227,
+        "size": 858289471,
+        "digest": "sha256:1ce7d6438a8bc0b18fed77cbb5937f6bf9eb7aa5bb2cee7d236629f9d543fb83",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-linux-x86_64.zip.sha256": {
+        "id": 758715348,
+        "size": 97,
+        "digest": "sha256:1f3699410e2d292d88622274fc6bc0d71b26fcc49c5f69b99b36b3557731addc",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-macos-arm64.zip": {
+        "id": 758727055,
+        "size": 276801227,
+        "digest": "sha256:7b6288fef1229ef3cd0e7358da56f0d083ea7064399e672c8d2e66f1ddc72c36",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-macos-arm64.zip.sha256": {
+        "id": 758715442,
+        "size": 96,
+        "digest": "sha256:9ce74c300c57a1c97224669461101fd309bd92c9032d3efe763c67c42ac108ef",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-macos-x86_64.zip": {
+        "id": 758727661,
+        "size": 272122277,
+        "digest": "sha256:07d2b0135b7faf0c7ba9c96a18a851e2851587c2ecf6ce2fa1b0eea2225f4acd",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-macos-x86_64.zip.sha256": {
+        "id": 758715536,
+        "size": 97,
+        "digest": "sha256:0b54d4347468ec25eb802efd168a1c446e90926c25ee7f629cec78e91daad3f1",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-server-bridge-fix.zip": {
+        "id": 759287374,
+        "size": 29001,
+        "digest": "sha256:1fe4b9f8957c2445eca846a0e97d52eab1e5ba73bb5b3f76efc55c4274e9df8d",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-server-bridge-fix.zip.sha256": {
+        "id": 759287370,
+        "size": 102,
+        "digest": "sha256:39cfd4879b294f3d77175d0827f9b2c13a01079f9e7fedffdc2358f753f9a567",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-server-linux-arm64.zip": {
+        "id": 758729248,
+        "size": 18781730,
+        "digest": "sha256:9385b45e1ab9d3b4ba78141da1d7d8d8eb96c4b8f0103b3aed81428f581f6e12",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-server-linux-arm64.zip.sha256": {
+        "id": 758715594,
+        "size": 103,
+        "digest": "sha256:fb8a661b37a18aaa2aa0258f7684500bdc194ea61dfba7a36064e156097476ee",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-source.zip": {
+        "id": 758715701,
+        "size": 23443540,
+        "digest": "sha256:7a4ce4219632ed30a0179b9d275245b447e94659b23b6c379d8eefd8e45ee0ca",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7-source.zip.sha256": {
+        "id": 758716865,
+        "size": 91,
+        "digest": "sha256:5ff4a9ef186192f78f43aefab6da4c8b2ef38c0bbdc2338317a674afab945dd3",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7.zip": {
+        "id": 758728440,
+        "size": 531479318,
+        "digest": "sha256:3a0a37b5db4cfeba3a3d631c9a836e028fa25f7d0ecbd7eb7db9d348aed9d7e7",
+        "state": "uploaded"
+      },
+      "Helene-2.8.7.zip.sha256": {
+        "id": 758716995,
+        "size": 84,
+        "digest": "sha256:48391873c92e5399e5c40b3e973c1fdf276650c53b83cb2086f71a18972802c1",
+        "state": "uploaded"
+      },
+      "RELEASE-EVIDENCE.json": {
+        "id": 758717125,
+        "size": 12094,
+        "digest": "sha256:f0410374f877ae51fe6f290b2ef0b77b108ec775e50d117b80d4477f63d6a65f",
+        "state": "uploaded"
+      },
+      "RELEASE-NOTES.md": {
+        "id": 758717229,
+        "size": 5764,
+        "digest": "sha256:15a08a711f06d612e2d20e7a51567e99c65a65239fd0ce573daf297cf25ead59",
+        "state": "uploaded"
+      },
+      "SHA256SUMS": {
+        "id": 758717318,
+        "size": 2000,
+        "digest": "sha256:0cc609da9b504abd2632e3ad2236a6d6dcfad0ee1486b90dcbcb40950890832c",
+        "state": "uploaded"
+      },
+      "SOURCE-2.8.7.json": {
+        "id": 758717420,
+        "size": 698464,
+        "digest": "sha256:6b420d7a9b57ba1a52b8ae4c68025b68bec46dfc19b0d0fcc1c773e4fa5c7891",
+        "state": "uploaded"
+      },
+      "START-HERE-2.8.7.txt": {
+        "id": 758717553,
+        "size": 214,
+        "digest": "sha256:5898223a9cbcfb65750913bbc3b0bed5240b4b92d66f1ea7079def8de4d7f136",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.7.zip": {
+        "id": 758717631,
+        "size": 11420411,
+        "digest": "sha256:5752690fa7f2d69b5d56e00836549989637f40f99f4a3f0af92d4b7093235b97",
+        "state": "uploaded"
+      },
+      "UI-EVIDENCE-2.8.7.zip.sha256": {
+        "id": 758718310,
+        "size": 89,
+        "digest": "sha256:68c18552708c092154d590c714a628fdc25496199e34beb8d77a7faa9ebe7485",
+        "state": "uploaded"
+      }
+    }
+  },
+  "v2.3.0-rc.18": {
+    "id": 447752358,
+    "assets": {
+      "Helene-components-whisper.zip": {
+        "id": 756871535,
+        "size": 111474754,
+        "digest": "sha256:ef435231303937fa4f49fbf865915fbc1a8d9625022a2fbab36d3b6924580c93",
+        "state": "uploaded"
+      },
+      "Helene-components-whisper.zip.sha256": {
+        "id": 756871861,
+        "size": 97,
+        "digest": "sha256:d730a490667fca4c43987a7c69f29ea066f3d23bf650354402d9cc5ee9e4bffe",
+        "state": "uploaded"
+      },
+      "Helene-components-xtts-model.zip": {
+        "id": 756871534,
+        "size": 1740279196,
+        "digest": "sha256:4d1165ceb9d10fe503324bc777b0bcdbe56b73970cc29ce319c0c966b393b8ce",
+        "state": "uploaded"
+      },
+      "Helene-components-xtts-model.zip.sha256": {
+        "id": 756871694,
+        "size": 100,
+        "digest": "sha256:a7b9f0a6a3da9a13c45b630323544d01b9cf02b2ddd4e62fdfeb9bc78acf3ad2",
+        "state": "uploaded"
+      },
+      "Helene-components-xtts-runtime.zip": {
+        "id": 756871537,
+        "size": 445699527,
+        "digest": "sha256:7eb174f3f7e825e9ed316be8b38da664f7bb154100d3ff25b65c95bb79b88b06",
+        "state": "uploaded"
+      },
+      "Helene-components-xtts-runtime.zip.sha256": {
+        "id": 756871642,
+        "size": 102,
+        "digest": "sha256:5335d4c2831699132e942d511ebe5e117d0f5b404c4b2c4702ef2a8737507c20",
+        "state": "uploaded"
+      },
+      "SHA256SUMS": {
+        "id": 756871539,
+        "size": 299,
+        "digest": "sha256:26b0ec71c153c7f8c8192e34614ad988c83512bcee97de8d784d299a18193e0d",
+        "state": "uploaded"
+      },
+      "voice-components.json": {
+        "id": 756871536,
+        "size": 1300,
+        "digest": "sha256:4d9ffd94fcaa0d7c7c798abfb8cfbce9dd25305dc6246940b99fb1df9171a706",
+        "state": "uploaded"
+      }
+    }
+  }
+}
