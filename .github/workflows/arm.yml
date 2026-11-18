@@ -1,0 +1,55 @@
+name: Hélène 2.8.10 native ARM server
+on:
+  push:
+    branches: [codex/helene2810-server-arm-1811]
+permissions:
+  contents: read
+jobs:
+  server-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: josephsteuerjr/praxis-relay
+          ref: 9dcbd61ff9006a4bef300510b061444498fabd95
+          path: relay-source
+          persist-credentials: false
+      - name: Verify the exact Hélène source
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          path = Path('source.zip')
+          proof = json.loads(Path('source.json').read_bytes())
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == proof['sha256']
+          with zipfile.ZipFile(path) as archive:
+              assert len(archive.infolist()) == proof['files'] and not archive.testzip()
+              for member in archive.infolist():
+                  assert member.filename.startswith('Helene-2.8.10-source/')
+                  destination = Path(archive.extract(member))
+                  os.chmod(destination, (member.external_attr >> 16) & 0o777)
+          PY
+      - name: Build and qualify the native server installation
+        run: >-
+          python3 Helene-2.8.10-source/desk/installer/qualify_server_arm64.py
+          --source Helene-2.8.10-source --relay-source relay-source --output server-result
+          > server-build.log 2>&1
+      - name: Collect package and native evidence
+        if: always()
+        run: |
+          mkdir -p server-result/evidence
+          cp server-build.log server-result/evidence/
+          tail -60 server-build.log
+          tar --exclude='evidence/native-relay-device/tree' --exclude='evidence/real-application-install/installed' --exclude='evidence/real-application-install/uploaded' --exclude='evidence/real-application-install/program.tar.gz' -czf server-evidence.tar.gz -C server-result evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-arm
+          path: |
+            server-evidence.tar.gz
+            server-result/*.zip
+            server-result/*.sha256
