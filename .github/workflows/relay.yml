@@ -1,0 +1,78 @@
+name: Hélène 2.8.10 embedded relay
+on:
+  push:
+    branches: [codex/helene2810-relay-native-1811-linux-x86_64]
+permissions:
+  contents: read
+jobs:
+  headless:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 55
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.3'
+      RELAY_CODEX_VERSION: '0.166.0'
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify and extract the frozen relay source
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, zipfile
+          from pathlib import Path
+          raw = Path('relay-source.zip').read_bytes()
+          assert hashlib.sha256(raw).hexdigest() == json.loads(Path('source.json').read_bytes())['sha256']
+          with zipfile.ZipFile('relay-source.zip') as archive:
+              assert not archive.testzip()
+              archive.extractall('relay')
+          PY
+      - name: Build and test on the supported glibc baseline
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD/relay:/source" -v "$PWD/out:/out" -w /source \
+            -e CARGO_BUILD_JOBS -e RELAY_CODEX_VERSION rust:1.94.1-bookworm bash -ec '
+              command -v python3 || (apt-get update -qq && apt-get install -y -qq python3)
+              cargo test --locked -- --test-threads=1 2>&1 | tee /out/rust-tests.log
+              test "${PIPESTATUS[0]}" = 0
+              cargo build --locked --release --bin praxis-relay-headless
+              python3 tests/accept_headless.py target/release/praxis-relay-headless
+              python3 tests/accept_unix.py target/release/praxis-relay-headless
+              cp target/release/praxis-relay-headless /out/
+              chmod a+r /out/*
+            '
+      - name: Build and test the native macOS architecture
+        if: runner.os == 'macOS'
+        working-directory: relay
+        run: |
+          mkdir -p ../out
+          rustup default 1.94.1
+          cargo test --locked -- --test-threads=1 2>&1 | tee ../out/rust-tests.log
+          cargo build --locked --release --bin praxis-relay-headless
+          python3 tests/accept_headless.py target/release/praxis-relay-headless
+          python3 tests/accept_unix.py target/release/praxis-relay-headless
+          cp target/release/praxis-relay-headless ../out/
+      - name: Bind native output to the source and runner
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, platform
+          from pathlib import Path
+          binary = Path('out/praxis-relay-headless')
+          evidence = json.loads(Path('source.json').read_bytes())
+          evidence.update(platform='${{ matrix.platform }}', arch=platform.machine(), system=platform.system(),
+                          binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                          tests_sha256=hashlib.sha256(Path('out/rust-tests.log').read_bytes()).hexdigest())
+          Path('out/BUILD.json').write_text(json.dumps(evidence, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
