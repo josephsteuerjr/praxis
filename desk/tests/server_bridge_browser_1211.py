@@ -23,7 +23,7 @@ def run(evidence):
                     config=copy.deepcopy(ProgramFixture.config);config['port']=18765
                     context=browser.new_context(viewport={'width':width,'height':960},reduced_motion='reduce')
                     page=context.new_page();page.set_default_timeout(10000)
-                    errors=[];calls=[];saves=[];profiles=[];bridges=[];operations=[];relay_checks=[]
+                    errors=[];calls=[];saves=[];profiles=[];bridges=[];operations=[];relay_checks=[];probes=[]
                     page.on('pageerror',lambda error:errors.append(str(error)))
                     bridge={'id':'b'*32,'name':'Мой сервер','external':'https://helene.example.org','phase':'configured',
                             'ports':{'local_proxy_port':8888,'remote_proxy_port':8888,'local_app_port':18765,'remote_app_port':18766}}
@@ -40,12 +40,18 @@ def run(evidence):
                         if command=='relay_network_check':
                             relay_checks.append(config['relay']['proxy'].copy())
                             return request.fulfill(json={'ok':True,'http_status':401,'generation_sent':False})
+                        if command=='local_proxy_probe':
+                            probes.append(args);return request.fulfill(json={'ok':True,'state':'proxy','status':200,'port':args['port']})
                         if command=='component_install':installed=True;return request.fulfill(json={'ok':True,'state':'completed','restart_required':False})
                         if command=='components_status':return request.fulfill(json=[{'id':'server-bridge','ready':True,'installed':installed,'restart_required':False}])
                         if command not in ('server_connection','server_bridge'):return request.continue_()
                         action=args['action'];raw=json.loads(args.get('request') or '{}');calls.append((command,action,raw))
                         if command=='server_connection':
                             if action=='list':return request.fulfill(json=profiles)
+                            if action=='remove':
+                                assert not [row for row in bridges if row.get('server_profile')==raw['id']]
+                                profiles[:]=[row for row in profiles if row['id']!=raw['id']]
+                                return request.fulfill(json={'ok':True,'message':'Подключение удалено с этого компьютера. На сервере ничего не менялось.'})
                             if not raw.get('confirmed_host'):return request.fulfill(json={'ok':False,'trust_needed':True,'fingerprint':'SHA256:fixture-pin','message':'Сверь отпечаток сервера.'})
                             assert raw['fingerprint']=='SHA256:fixture-pin'
                             assert raw['password']=='-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-only\n-----END OPENSSH PRIVATE KEY-----'
@@ -67,14 +73,23 @@ def run(evidence):
                             return request.fulfill(json=operations[0])
                         if action=='check':return request.fulfill(json={'ok':True,'checks':[{'message':'HTTPS и прокси проверены (fixture).'}]})
                         if action=='retry':return request.fulfill(json={'ok':True})
+                        if action=='remove':
+                            bridges[:]=[row for row in bridges if row['id']!=raw['id']]
+                            return request.fulfill(json={'ok':True,'message':'Мост удалён с этого компьютера. На сервере ничего не менялось.'})
                         if action=='add-existing':
+                            assert raw['verify'] is True,'the bridge is proven before it is saved'
+                            if raw['ports'].get('local_proxy_port')=='8888':
+                                return request.fulfill(json={'ok':False,'checks':[],'error_code':'local_port_unavailable',
+                                    'message':'Локальный порт 8888 уже занят: там, вероятно, Tray Bridge или другой туннель. Оставь поле пустым, и Hélène выберет свободный порт сама.'})
                             if not raw['external']:
-                                assert raw['server_profile']=='a'*32 and raw['ports']=={'local_proxy_port':18889,'remote_proxy_port':8888}
-                                only_proxy={'id':'f'*32,'name':'Proxy only','external':'','ports':raw['ports']}
-                                bridges.append(only_proxy);return request.fulfill(json={'ok':True,'bridge':only_proxy,'message':'Added.'})
+                                assert raw['server_profile']=='a'*32 and raw['ports']=={'local_proxy_port':'18889','remote_proxy_port':8888}
+                                only_proxy={'id':'f'*32,'name':'Proxy only','external':'','server_profile':raw['server_profile'],'ports':{'local_proxy_port':18889,'remote_proxy_port':8888}}
+                                bridges.append(only_proxy);return request.fulfill(json={'ok':True,'bridge':only_proxy,'checks':[{'message':'HTTPS-запрос в Telegram прошёл через этот прокси.'}],'message':'Мост проверен и сохранён.'})
                             assert raw['server_profile']=='a'*32 and raw['external']=='https://existing.example.org'
-                            existing={**bridge,'id':'e'*32,'name':'Готовый сервер','external':raw['external']}
-                            bridges.append(existing);return request.fulfill(json={'ok':True,'bridge':existing,'message':'Добавлено.'})
+                            assert raw['ports']['local_proxy_port']=='','an empty local port lets the backend choose a free one'
+                            existing={**bridge,'id':'e'*32,'name':'Готовый сервер','external':raw['external'],'server_profile':raw['server_profile'],
+                                      'ports':{**bridge['ports'],'local_proxy_port':18888}}
+                            bridges.append(existing);return request.fulfill(json={'ok':True,'bridge':existing,'checks':[{'message':'HTTPS и прокси проверены (fixture).'}],'message':'Мост проверен и сохранён.'})
                         raise AssertionError((command,action))
                     page.route('**/*',route)
                     try:
@@ -86,11 +101,16 @@ def run(evidence):
                         page.get_by_role('tab',name='Мозг и связь',exact=True).click()
                         network=page.get_by_role('heading',name='Сеть и прокси',exact=True).locator('..')
                         network.get_by_role('button',name='Подставить Tray Bridge для Telegram',exact=True).click()
+                        network.get_by_text('Telegram и Mini App пойдут через 127.0.0.1:8888 после сохранения: нажми «Сохранить». Tray Bridge отвечает и пропускает HTTPS.',exact=True).wait_for()
+                        assert probes==[{'port':8888}]
                         telegram=network.get_by_role('heading',name='Сеть Telegram и Mini App',exact=True).locator('..')
                         assert telegram.get_by_label('Порт',exact=True).input_value()=='8888'
                         assert telegram.get_by_label('Сервер',exact=True).input_value()=='127.0.0.1'
                         page.get_by_role('button',name='Сохранить',exact=True).click()
                         network.get_by_role('button',name='Подставить Tray Bridge для реле',exact=True).click()
+                        network.get_by_text('Реле пойдёт через 127.0.0.1:8888 после сохранения: нажми «Сохранить». Tray Bridge отвечает и пропускает HTTPS.',exact=True).wait_for()
+                        network.get_by_role('button',name='Подставить Tray Bridge для Telegram',exact=True).click()
+                        network.get_by_text('Для Telegram и Mini App уже указан 127.0.0.1:8888. Tray Bridge отвечает и пропускает HTTPS.',exact=True).wait_for()
                         check=network.get_by_role('button',name='Проверить сохранённое подключение',exact=True)
                         assert check.is_disabled() and not relay_checks
                         assert saves[-1]['relay']['proxy']['mode']=='system'
@@ -105,25 +125,29 @@ def run(evidence):
                         card.locator(':scope > summary').click()
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
                         assert installed,'direct setup enables the already bundled component'
-                        assert card.get_by_role('button',name='Сервер уже настроен',exact=True).get_attribute('aria-pressed')=='true'
+                        assert card.get_by_role('radio',name='Сервер уже настроен',exact=False).get_attribute('aria-checked')=='true'
+                        assert card.get_by_role('radio',name='Настроить сервер автоматически',exact=False).get_attribute('aria-checked')=='false'
                         assert card.get_by_placeholder('~/.ssh/id_ed25519',exact=True).is_visible()
-                        card.get_by_role('button',name='Настроить сервер автоматически',exact=True).click()
+                        assert not card.get_by_role('button',name='Проверить и сохранить подключение',exact=True).count(),'one primary action'
+                        card.get_by_role('radio',name='Настроить сервер автоматически',exact=False).click()
+                        assert card.get_by_role('radio',name='Настроить сервер автоматически',exact=False).get_attribute('aria-checked')=='true'
+                        assert card.get_by_role('radio',name='Сервер уже настроен',exact=False).get_attribute('aria-checked')=='false'
                         card.get_by_label('Адрес сервера',exact=True).fill('fixture.example.org')
                         password=card.get_by_label('Пароль или SSH-ключ',exact=False)
                         password.evaluate("node=>{const data=new DataTransfer();data.setData('text','-----BEGIN OPENSSH PRIVATE KEY-----\\nfixture-only\\n-----END OPENSSH PRIVATE KEY-----');node.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}")
                         assert password.input_value()==''
-                        card.get_by_role('button',name='Проверить и сохранить подключение',exact=True).click()
-                        page.get_by_text('SHA256:fixture-pin',exact=True).wait_for()
-                        assert len([row for row in calls if row[:2]==('server_connection','save')])==1
-                        assert not profiles and not operations
-                        card.scroll_into_view_if_needed();page.screenshot(path=str(evidence/f'trust-{width}.png'))
-                        page.get_by_role('button',name='Отпечаток совпадает — продолжить',exact=True).click()
-                        page.get_by_text('Подключение сохранено.',exact=True).wait_for()
                         card.get_by_role('switch',name='Постоянный HTTPS для Mini App',exact=True).click()
                         card.get_by_label('Домен для HTTPS',exact=True).fill('helene.example.org')
                         card.get_by_label('Название подключения',exact=True).fill('Мой сервер')
                         card.get_by_role('button',name='Проверить и подготовить',exact=True).click()
+                        page.get_by_text('SHA256:fixture-pin',exact=True).wait_for()
+                        card.get_by_text('Сверь отпечаток сервера выше и подтверди его: проверка продолжится сама.',exact=True).wait_for()
+                        assert len([row for row in calls if row[:2]==('server_connection','save')])==1
+                        assert not profiles and not operations
+                        card.scroll_into_view_if_needed();page.screenshot(path=str(evidence/f'trust-{width}.png'))
+                        page.get_by_role('button',name='Отпечаток совпадает — продолжить',exact=True).click()
                         apply=card.get_by_role('button',name='Применить эти изменения',exact=True);apply.wait_for()
+                        assert profiles,'the confirmed fingerprint saved the connection and continued to the plan'
                         assert apply_count==0
                         apply.scroll_into_view_if_needed();page.screenshot(path=str(evidence/f'plan-{width}.png'))
                         apply.click();card.get_by_role('button',name='Продолжить этот план',exact=True).click()
@@ -166,22 +190,30 @@ def run(evidence):
                         assert 'Мозг и связь → Сеть и прокси → Серверный мост через SSH' in Path(manual.path()).read_text(encoding='utf8')
                         before=len([row for row in calls if row[1] in ('prepare','install')])
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
-                        card.get_by_role('button',name='Сервер уже настроен',exact=True).click()
+                        card.get_by_role('radio',name='Сервер уже настроен',exact=False).click()
                         card.get_by_role('button',name='Сохранённое подключение сервера',exact=True).click()
                         page.get_by_role('option',name='Мой сервер · root@fixture.example.org',exact=True).click()
                         assert card.get_by_label('Адрес сервера',exact=True).is_disabled()
                         card.get_by_role('switch',name='Постоянный HTTPS для Mini App',exact=True).click()
                         card.get_by_label('Готовый HTTPS-адрес',exact=True).fill('https://existing.example.org')
-                        card.get_by_role('button',name='Сохранить и проверить мост',exact=True).click()
+                        card.get_by_role('button',name='Подключить и проверить',exact=True).click()
                         card.get_by_role('button',name='Использовать для этого агента',exact=True).wait_for()
+                        card.get_by_text('HTTPS и прокси проверены (fixture).',exact=False).first.wait_for()
                         assert len([row for row in calls if row[1] in ('prepare','install')])==before
                         card.get_by_role('button',name='Настроить подключение',exact=True).click()
                         card.get_by_role('button',name='Сохранённое подключение сервера',exact=True).click()
                         page.get_by_role('option',name='Мой сервер · root@fixture.example.org',exact=True).click()
-                        ports=card.locator('details').filter(has=page.get_by_label('Локальный порт прокси',exact=True))
+                        ports=card.locator('details').filter(has=page.get_by_label('Локальный порт прокси',exact=False))
                         ports.locator('summary').click()
-                        card.get_by_label('Локальный порт прокси',exact=True).fill('18889')
-                        card.get_by_role('button',name='Сохранить и проверить мост',exact=True).click()
+                        local=card.get_by_label('Локальный порт прокси',exact=False)
+                        assert local.input_value()=='' and local.get_attribute('placeholder')=='авто'
+                        before_bridges=len(bridges)
+                        local.fill('8888')
+                        card.get_by_role('button',name='Подключить и проверить',exact=True).click()
+                        card.get_by_text('Локальный порт 8888 уже занят',exact=False).wait_for()
+                        assert len(bridges)==before_bridges,'a refused port leaves no bridge record'
+                        local.fill('18889')
+                        card.get_by_role('button',name='Подключить и проверить',exact=True).click()
                         relay=card.get_by_role('switch',name='Также использовать этот прокси для реле (его маршрут проверяется отдельно)',exact=True)
                         assert relay.get_attribute('aria-checked')=='false'
                         relay.click()
@@ -193,6 +225,13 @@ def run(evidence):
                         assert len([row for row in calls if row[1] in ('prepare','install')])==before
                         card.get_by_role('button',name='Использовать для этого агента',exact=True).scroll_into_view_if_needed()
                         page.screenshot(path=str(evidence/f'proxy-only-{width}.png'))
+                        listed=card.get_by_role('heading',name='Готовый сервер',exact=True).locator('..')
+                        listed.get_by_text('Локальный прокси: 127.0.0.1:18888',exact=True).wait_for()
+                        listed.get_by_role('button',name='Удалить мост',exact=True).click()
+                        listed.get_by_role('button',name='Точно удалить? Нажми ещё раз',exact=True).click()
+                        card.get_by_text('Мост удалён с этого компьютера. На сервере ничего не менялось.',exact=True).wait_for()
+                        assert not [row for row in bridges if row['id']=='e'*32]
+                        assert card.get_by_role('heading',name='Готовый сервер',exact=True).count()==0
                         page.get_by_role('tab',name='Программа',exact=True).click()
                         placement=page.get_by_role('heading',name='Размещение агента',exact=True).locator('..')
                         placement.get_by_role('button',name='Открыть управление сервером',exact=True).click()

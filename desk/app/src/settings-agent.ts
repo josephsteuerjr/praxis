@@ -629,14 +629,33 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
   const networkSettings = el('div');
   const tray = {mode:'proxy',protocol:'http',host:'127.0.0.1',port:'8888',username:'',password:''};
-  const useTrayForTelegram = button(uiText('connections.tray_telegram'),'quiet',()=>{
-    applicationConnection.set(tray);
-    delete draft.network?.bridge_profile;
-  });
-  const useTrayForRelay = button(uiText('connections.tray_relay'),'quiet',()=>relayConnection.set(tray));
+  // 2.8.11 (owner, 20.11): the buttons used to fill fields silently, and with
+  // 127.0.0.1:8888 already in place nothing visibly happened. Say what changed,
+  // that saving applies it, and whether anything actually answers on that port.
+  const trayNote = el('p','receipt'); trayNote.setAttribute('aria-live','polite');
+  const useTray = async (telegram: boolean) => {
+    const connection = telegram ? applicationConnection : relayConnection;
+    const before = JSON.stringify(connection.collect());
+    connection.set(tray);
+    if (telegram) delete draft.network?.bridge_profile;
+    const same = before === JSON.stringify(connection.collect());
+    const filled = uiText(telegram ? (same ? 'connections.tray_already_telegram' : 'connections.tray_filled_telegram')
+      : (same ? 'connections.tray_already_relay' : 'connections.tray_filled_relay'));
+    trayNote.textContent = filled + ' ' + uiText('connections.tray_probing');
+    try {
+      const probe = await shell<{ ok: boolean; state: string }>('local_proxy_probe', { port: Number(tray.port) });
+      trayNote.textContent = filled + ' ' + uiText(probe.ok ? 'connections.tray_alive'
+        : probe.state === 'absent' ? 'connections.tray_absent' : 'connections.tray_not_proxy');
+    } catch {
+      // A shell without the probe still reports the filled route.
+      trayNote.textContent = filled;
+    }
+  };
+  const useTrayForTelegram = button(uiText('connections.tray_telegram'),'quiet',()=>void useTray(true));
+  const useTrayForRelay = button(uiText('connections.tray_relay'),'quiet',()=>void useTray(false));
   const trayActions = el('div','actions');
   trayActions.append(useTrayForTelegram,useTrayForRelay);
-  networkSettings.append(el('p','field-hint',uiText('connections.tray_hint')),trayActions,
+  networkSettings.append(el('p','field-hint',uiText('connections.tray_hint')),trayActions,trayNote,
     applicationConnection.element,relayConnection.element);
   cards.push(inGroup(card(uiText('connections.title'),networkSettings),GROUP.brain));
 

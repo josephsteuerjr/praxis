@@ -2119,6 +2119,21 @@ select.field-input {
   opacity: 0.55;
 }
 
+/* 2.8.11: server bridge setup — switches one per line, follow-up actions spaced. */
+.bridge-toggles {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.bridge-use {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .switch-knob {
   position: relative;
   width: 40px;

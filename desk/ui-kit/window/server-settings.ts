@@ -1,6 +1,6 @@
-import { t as uiText, UiError } from "../../lang/lang";
+import { t as uiText } from "../../lang/lang";
 import { shell } from './api';
-import { button, card, el, field, toggle } from '../dom';
+import { button, card, choice, el, field, toggle } from '../dom';
 import { humanError } from './lib';
 import { sshAccessForm } from './server-access-form';
 import type { ServerBridge } from './server-bridge-config';
@@ -8,6 +8,8 @@ import { serverBridgeManual } from './server-bridge-manual';
 
 type Operation={id:string;name:string;phase:string;message:string;active?:boolean;plan?:{sha256:string;changes:Array<{message:string}>}};
 type State={bridges:ServerBridge[];states:Record<string,{state:string;message:string;error_code?:string}>;component:{installed:boolean}};
+type Checked={ok:boolean;checks?:Array<{message:string}>;error_code?:string;message?:string;bridge?:ServerBridge};
+type Use=(bridge:ServerBridge,options:{relay:boolean})=>void|string|Promise<void|string>;
 function bridgeError(code?:string) {
   switch(code){
     case 'local_port_unavailable':return uiText('bridge.error.local_port');
@@ -17,9 +19,24 @@ function bridgeError(code?:string) {
     default:return '';
   }
 }
+/** A failed check speaks in the backend's exact words when it has them. */
+function failure(result:Checked) {
+  return result.message||bridgeError(result.error_code)||uiText("ui.ui.kit.window.server.settings.b7a276c178");
+}
+function line(node:HTMLElement) {const box=el('div');box.append(node);return box;}
+/** Two clicks instead of a modal dialog, which the WebView may not show. */
+function confirmButton(text:string,confirm:string,action:()=>Promise<void>) {
+  let armed:ReturnType<typeof setTimeout>|undefined;
+  const node=button(text,'quiet',async()=>{
+    if(!armed){node.textContent=confirm;armed=setTimeout(()=>{armed=undefined;node.textContent=text;},5000);return;}
+    clearTimeout(armed);armed=undefined;node.textContent=text;node.disabled=true;
+    try{await action();}finally{node.disabled=false;}
+  });
+  return node;
+}
 
 /** Same setup and daily controls live in the guide and persistent settings. */
-export function serverBridgePanel(onUse:(bridge:ServerBridge,options:{relay:boolean})=>void|string|Promise<void|string>):HTMLElement {
+export function serverBridgePanel(onUse:Use):HTMLElement {
   const body=el('div'),list=el('div'),setup=el('div'),operations=el('div'),note=el('p','receipt');
   let installed=false,busy=false;let timer:ReturnType<typeof setTimeout>|undefined;
   const command=<T>(action:string,request:unknown={})=>shell<T>('server_bridge',{action,request:JSON.stringify(request)});
@@ -48,22 +65,39 @@ export function serverBridgePanel(onUse:(bridge:ServerBridge,options:{relay:bool
   });
   const reload=button(uiText("ui.ui.kit.window.server.settings.35c394ca54"),'quiet',()=>void refresh());
   const actions=el('div','actions');actions.append(install,add,reload);
+  /** After a passed check: the explicit choice for the selected agent. */
+  function offerUse(bridge:ServerBridge,out:HTMLElement) {
+    out.parentElement?.querySelector('.bridge-use')?.remove();
+    let relay=false;
+    const choices=el('div','bridge-use');
+    if(bridge.ports.local_proxy_port)choices.append(line(toggle(uiText('bridge.relay.optin'),false,value=>relay=value)));
+    const use=button(uiText("ui.ui.kit.window.server.settings.2243b059b6"),'primary',async()=>{
+      use.disabled=true;
+      try{const message=await onUse(bridge,{relay});out.textContent=message||uiText("ui.ui.kit.window.server.settings.2a012899e4");}
+      catch(error){out.textContent=humanError(error).text;}
+      finally{use.disabled=false;}
+    });choices.append(use);out.after(choices);
+  }
+  function repairOffer(bridge:ServerBridge,out:HTMLElement) {
+    const repair=button(uiText('bridge.port.repair'),'quiet',async()=>{
+      repair.disabled=true;
+      try{const result=await command<{message:string}>('repair-port',{id:bridge.id});await refresh();note.textContent=result.message;}
+      catch(error){out.textContent=humanError(error).text;repair.disabled=false;}
+    });
+    const box=el('div','bridge-use');box.append(repair);out.after(box);
+  }
   async function inspectBridge(bridge:ServerBridge,out:HTMLElement) {
-    if(busy)return;busy=true;out.parentElement?.querySelector('.bridge-use')?.remove();
+    if(busy)return;busy=true;out.parentElement?.querySelectorAll('.bridge-use').forEach(node=>node.remove());
     out.textContent=uiText("ui.ui.kit.window.server.settings.41c62997d0");
     try{
-      const result=await command<{ok:boolean;checks:Array<{message:string}>;error_code?:string}>('check',{id:bridge.id});
-      out.textContent=[uiText('bridge.ssh.verified'),...result.checks.map(check=>check.message)].join(' ');
-      if(!result.ok)throw new UiError(bridgeError(result.error_code)||uiText("ui.ui.kit.window.server.settings.b7a276c178"));
-      let relay=false;
-      const choices=el('div','bridge-use');
-      if(bridge.ports.local_proxy_port)choices.append(toggle(uiText('bridge.relay.optin'),false,value=>relay=value));
-      const use=button(uiText("ui.ui.kit.window.server.settings.2243b059b6"),'primary',async()=>{
-        use.disabled=true;
-        try{const message=await onUse(bridge,{relay});out.textContent=message||uiText("ui.ui.kit.window.server.settings.2a012899e4");}
-        catch(error){out.textContent=humanError(error).text;}
-        finally{use.disabled=false;}
-      });choices.append(use);out.after(choices);
+      const result=await command<Checked>('check',{id:bridge.id});
+      if(!result.ok){
+        out.textContent=failure(result);
+        if(result.error_code==='local_port_unavailable'&&bridge.ports.local_proxy_port)repairOffer(bridge,out);
+        return;
+      }
+      out.textContent=[uiText('bridge.ssh.verified'),...(result.checks||[]).map(check=>check.message)].join(' ');
+      offerUse(bridge,out);
     }catch(error){out.textContent=humanError(error).text;}
     finally{busy=false;}
   }
@@ -76,11 +110,17 @@ export function serverBridgePanel(onUse:(bridge:ServerBridge,options:{relay:bool
       for(const bridge of state.bridges){
         const row=el('section','');row.append(el('h4','',bridge.name));
         if(bridge.external)row.append(el('p','field-hint',bridge.external));
+        if(bridge.ports?.local_proxy_port)row.append(el('p','field-hint',uiText('bridge.local_proxy',{p0:`127.0.0.1:${bridge.ports.local_proxy_port}`})));
         const current=state.states[bridge.id];row.append(el('p','receipt',bridgeError(current?.error_code)||current?.message||uiText("ui.ui.kit.window.server.settings.21328a3a2d")));
         const out=el('p','receipt');const buttons=el('div','actions');
         buttons.append(button(uiText("ui.ui.kit.window.server.settings.93275ac8c5"),'quiet',()=>void inspectBridge(bridge,out)),
-          button(uiText("ui.ui.kit.window.server.settings.557ca639e9"),'quiet',async()=>{try{await command('retry',{id:bridge.id});await refresh()}catch(error){out.textContent=humanError(error).text}}));
+          button(uiText("ui.ui.kit.window.server.settings.557ca639e9"),'quiet',async()=>{try{await command('retry',{id:bridge.id});await refresh()}catch(error){out.textContent=humanError(error).text}}),
+          confirmButton(uiText('bridge.remove'),uiText('bridge.remove_confirm'),async()=>{
+            try{const result=await command<{message:string}>('remove',{id:bridge.id});await refresh();note.textContent=result.message;}
+            catch(error){out.textContent=humanError(error).text;}
+          }));
         row.append(buttons,out);list.append(row);
+        if(current?.error_code==='local_port_unavailable'&&bridge.ports.local_proxy_port)repairOffer(bridge,out);
       }
       const pending=await command<Operation[]>('operations');operations.replaceChildren();
       for(const operation of pending){
@@ -99,50 +139,66 @@ export function serverBridgePanel(onUse:(bridge:ServerBridge,options:{relay:bool
   }
   function drawSetup(){
     const data:Record<string,unknown>={login:'root',port:22};let existing=true,proxy=true,https=false;
-    const form=sshAccessForm(data,()=>{}),out=el('p','receipt'),extras=el('div','form-grid two');
-    let name='',domain='',external='',publicAddress='',localPort=8888,remoteProxy=8888,remoteApp=18766;
+    const out=el('p','receipt'),extras=el('div','form-grid two');
+    // One primary action: saving the SSH connection is part of it. A confirmed
+    // fingerprint continues the same action instead of asking for a second click.
+    const form=sshAccessForm(data,()=>{},{saveButton:false,onSaved:()=>void run()});
+    let name='',domain='',external='',publicAddress='',localPort='',remoteProxy=8888,remoteApp=18766;
     const httpFields=el('div');httpFields.hidden=true;
     const domainField=field(uiText("ui.ui.kit.window.server.settings.728a52663d"),'',value=>domain=value,{placeholder:'helene.example.org'});domainField.hidden=true;
     const externalField=field(uiText("ui.ui.kit.window.server.settings.bfd93aa6d9"),'',value=>external=value,{placeholder:'https://helene.example.org'});
     httpFields.append(domainField,externalField);
-    const choice=el('div','actions');
-    const mode = (useExisting:boolean) => {
-      existing=useExisting;
-      auto.setAttribute('aria-pressed',String(!existing));
-      manual.setAttribute('aria-pressed',String(existing));
+    const mode=choice<'existing'|'auto'>([
+      {value:'existing',title:uiText("ui.ui.kit.window.server.settings.11153a731d"),text:uiText('bridge.mode.existing')},
+      {value:'auto',title:uiText("ui.ui.kit.window.server.settings.451f03b1c9"),text:uiText('bridge.mode.auto')},
+    ],'existing',value=>{
+      existing=value==='existing';
       domainField.hidden=existing;
       externalField.hidden=!existing;
       submit.textContent=existing?uiText('connections.bridge_check'):uiText("ui.ui.kit.window.server.settings.e30f061a56");
-    };
-    const auto=button(uiText("ui.ui.kit.window.server.settings.451f03b1c9"),'quiet',()=>mode(false));
-    const manual=button(uiText("ui.ui.kit.window.server.settings.11153a731d"),'quiet',()=>mode(true));
-    auto.setAttribute('aria-pressed','false');manual.setAttribute('aria-pressed','true');choice.append(manual,auto);
+      out.textContent='';
+    });
     const proxyFields=el('div','form-grid two');proxyFields.append(
-      field(uiText("ui.ui.kit.window.server.settings.8d45fc2b21"),'8888',value=>localPort=Number(value),{type:'number'}),
+      field(uiText("ui.ui.kit.window.server.settings.8d45fc2b21"),'',value=>localPort=value.trim(),{type:'number',placeholder:uiText('bridge.port.auto'),hint:uiText('bridge.port.auto_hint')}),
       field(uiText("ui.ui.kit.window.server.settings.7bddbad76a"),'8888',value=>remoteProxy=Number(value),{type:'number'}));
     const reverseFields=el('div');reverseFields.hidden=true;reverseFields.append(
       field(uiText("ui.ui.kit.window.server.settings.107e8585a7"),'18766',value=>remoteApp=Number(value),{type:'number'}),
       field(uiText("ui.ui.kit.window.server.settings.2163464958"),'',value=>publicAddress=value,{hint:uiText("ui.ui.kit.window.server.settings.88bce69b8e")}));
     extras.append(proxyFields,reverseFields);
     const advanced=el('details','fold');advanced.append(el('summary','',uiText("ui.ui.kit.window.server.settings.e0e021a041")),extras);
-    const submit=button(uiText('connections.bridge_check'),'primary',async()=>{
-      if(!data.server_profile){out.textContent=uiText("ui.ui.kit.window.server.settings.2867e704ca");return;}
-      submit.disabled=true;out.textContent=existing?uiText("ui.ui.kit.window.server.settings.de19649eda"):uiText("ui.ui.kit.window.server.settings.4291a149c0");
+    let running=false;
+    async function run(){
+      if(running)return;running=true;submit.disabled=true;
+      setup.querySelectorAll('.bridge-use').forEach(node=>node.remove());
+      out.textContent=uiText("ui.ui.kit.window.server.access.form.40f9ee7915");
       try{
+        if(!await form.save()){out.textContent=uiText('bridge.ssh.pending');return;}
+        out.textContent=existing?uiText("ui.ui.kit.window.server.settings.de19649eda"):uiText("ui.ui.kit.window.server.settings.4291a149c0");
         if(existing){
-          const ports:Record<string,number>={};if(proxy)Object.assign(ports,{local_proxy_port:localPort,remote_proxy_port:remoteProxy});if(https)ports.remote_app_port=remoteApp;
-          const result=await command<{ok:boolean;bridge:ServerBridge;message:string}>('add-existing',{server_profile:data.server_profile,name,external:https?external:'',ports});
-          await refresh();await inspectBridge(result.bridge,out);
+          const ports:Record<string,number|string>={};
+          if(proxy)Object.assign(ports,{local_proxy_port:localPort,remote_proxy_port:remoteProxy});
+          if(https)ports.remote_app_port=remoteApp;
+          const result=await command<Checked>('add-existing',{server_profile:data.server_profile,name,external:https?external:'',ports,verify:true});
+          if(!result.ok||!result.bridge){out.textContent=failure(result);return;}
+          await refresh();
+          out.textContent=[uiText('bridge.ssh.verified'),...(result.checks||[]).map(check=>check.message)].join(' ');
+          offerUse(result.bridge,out);
         }else{
-          await command('prepare',{server_profile:data.server_profile,name,proxy,https,domain,public_address:publicAddress,local_proxy_port:localPort,remote_proxy_port:remoteProxy,remote_app_port:remoteApp});
+          const result=await command<Checked>('prepare',{server_profile:data.server_profile,name,proxy,https,domain,public_address:publicAddress,
+            ...(localPort?{local_proxy_port:localPort}:{}),remote_proxy_port:remoteProxy,remote_app_port:remoteApp});
+          if(result&&result.ok===false){out.textContent=failure(result);return;}
           out.textContent=uiText("ui.ui.kit.window.server.settings.83aff31a65");await refresh();
         }
       }catch(error){out.textContent=humanError(error).text;}
-      finally{submit.disabled=false;}
-    });
-    setup.replaceChildren(el('h4','',uiText("ui.ui.kit.window.server.settings.2283137e59")),el('p','field-hint',uiText('bridge.existing.help')),choice,field(uiText("ui.ui.kit.window.server.settings.8c96c91a7c"),'',value=>name=value),
-      form,toggle(uiText("ui.ui.kit.window.server.settings.a644a513f1"),true,value=>{proxy=value;proxyFields.hidden=!value}),
-      toggle(uiText("ui.ui.kit.window.server.settings.5dc62ddfff"),false,value=>{https=value;httpFields.hidden=!value;reverseFields.hidden=!value}),httpFields,advanced,submit,out);
+      finally{running=false;submit.disabled=false;}
+    }
+    const submit=button(uiText('connections.bridge_check'),'primary',()=>void run());
+    const toggles=el('div','bridge-toggles');
+    toggles.append(line(toggle(uiText("ui.ui.kit.window.server.settings.a644a513f1"),true,value=>{proxy=value;proxyFields.hidden=!value})),
+      line(toggle(uiText("ui.ui.kit.window.server.settings.5dc62ddfff"),false,value=>{https=value;httpFields.hidden=!value;reverseFields.hidden=!value})));
+    setup.replaceChildren(el('h4','',uiText("ui.ui.kit.window.server.settings.2283137e59")),el('p','field-hint',uiText('bridge.existing.help')),mode.el,
+      field(uiText("ui.ui.kit.window.server.settings.8c96c91a7c"),'',value=>name=value),
+      form,toggles,httpFields,advanced,submit,out);
   }
   body.append(el('p','field-hint',uiText('bridge.bundled.help')),
     actions,info,setup,operations,list,note);void refresh();return body;

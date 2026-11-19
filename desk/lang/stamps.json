@@ -13480,9 +13480,9 @@
     "zh": "371c182d"
   },
   "ui.ui.kit.window.server.access.form.b64c720e30": {
-    "en": "b64c720e",
-    "fr": "b64c720e",
-    "zh": "b64c720e"
+    "en": "8e229df8",
+    "fr": "8e229df8",
+    "zh": "8e229df8"
   },
   "ui.ui.kit.window.server.access.form.4289b17137": {
     "en": "4289b171",
@@ -21640,9 +21640,9 @@
     "zh": "8a31e916"
   },
   "bridge.existing.help": {
-    "en": "23d9ac42",
-    "fr": "23d9ac42",
-    "zh": "23d9ac42"
+    "en": "8e06939e",
+    "fr": "8e06939e",
+    "zh": "8e06939e"
   },
   "bridge.ssh.key.help": {
     "en": "01639001",
@@ -21675,9 +21675,9 @@
     "zh": "a4b0fe2e"
   },
   "bridge.error.local_port": {
-    "en": "58186501",
-    "fr": "58186501",
-    "zh": "58186501"
+    "en": "6ca759b2",
+    "fr": "6ca759b2",
+    "zh": "6ca759b2"
   },
   "bridge.error.host_key": {
     "en": "e026c856",
@@ -21750,9 +21750,9 @@
     "zh": "ed1da678"
   },
   "connections.bridge_check": {
-    "en": "67a788d0",
-    "fr": "67a788d0",
-    "zh": "67a788d0"
+    "en": "2dbd28cc",
+    "fr": "2dbd28cc",
+    "zh": "2dbd28cc"
   },
   "connections.save_before_check": {
     "en": "4b313ea1",
@@ -21778,5 +21778,105 @@
     "en": "2a9cb450",
     "fr": "2a9cb450",
     "zh": "2a9cb450"
+  },
+  "ssh.key.opening": {
+    "en": "e0c5965e",
+    "fr": "e0c5965e",
+    "zh": "e0c5965e"
+  },
+  "ssh.profile.remove": {
+    "en": "038edde9",
+    "fr": "038edde9",
+    "zh": "038edde9"
+  },
+  "ssh.profile.remove_confirm": {
+    "en": "b303ffe6",
+    "fr": "b303ffe6",
+    "zh": "b303ffe6"
+  },
+  "bridge.mode.existing": {
+    "en": "39e9810b",
+    "fr": "39e9810b",
+    "zh": "39e9810b"
+  },
+  "bridge.mode.auto": {
+    "en": "4b6d1b44",
+    "fr": "4b6d1b44",
+    "zh": "4b6d1b44"
+  },
+  "bridge.port.auto": {
+    "en": "4af423e9",
+    "fr": "4af423e9",
+    "zh": "4af423e9"
+  },
+  "bridge.port.auto_hint": {
+    "en": "1bff1491",
+    "fr": "1bff1491",
+    "zh": "1bff1491"
+  },
+  "bridge.port.repair": {
+    "en": "5d3df0c1",
+    "fr": "5d3df0c1",
+    "zh": "5d3df0c1"
+  },
+  "bridge.local_proxy": {
+    "en": "e2049747",
+    "fr": "e2049747",
+    "zh": "e2049747"
+  },
+  "bridge.remove": {
+    "en": "e1e4d46f",
+    "fr": "e1e4d46f",
+    "zh": "e1e4d46f"
+  },
+  "bridge.remove_confirm": {
+    "en": "b303ffe6",
+    "fr": "b303ffe6",
+    "zh": "b303ffe6"
+  },
+  "bridge.ssh.pending": {
+    "en": "06daf869",
+    "fr": "06daf869",
+    "zh": "06daf869"
+  },
+  "connections.tray_filled_telegram": {
+    "en": "8c0fbe4b",
+    "fr": "8c0fbe4b",
+    "zh": "8c0fbe4b"
+  },
+  "connections.tray_filled_relay": {
+    "en": "a7c11a1f",
+    "fr": "a7c11a1f",
+    "zh": "a7c11a1f"
+  },
+  "connections.tray_already_telegram": {
+    "en": "80584e0c",
+    "fr": "80584e0c",
+    "zh": "80584e0c"
+  },
+  "connections.tray_already_relay": {
+    "en": "f5aa9eca",
+    "fr": "f5aa9eca",
+    "zh": "f5aa9eca"
+  },
+  "connections.tray_probing": {
+    "en": "db47e177",
+    "fr": "db47e177",
+    "zh": "db47e177"
+  },
+  "connections.tray_alive": {
+    "en": "502205e9",
+    "fr": "502205e9",
+    "zh": "502205e9"
+  },
+  "connections.tray_absent": {
+    "en": "2b5259d9",
+    "fr": "2b5259d9",
+    "zh": "2b5259d9"
+  },
+  "connections.tray_not_proxy": {
+    "en": "d32ea64d",
+    "fr": "d32ea64d",
+    "zh": "d32ea64d"
   }
 }

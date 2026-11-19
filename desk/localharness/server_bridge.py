@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import json
 import secrets
+import shutil
+import socket
 import threading
 import time
 import urllib.error
@@ -54,25 +56,130 @@ def listing():
     return result
 
 
+AUTO_PORTS=range(18888,19000)
+
+
+def port_free(port):
+    """Bind exactly as the bridge will; a live foreign listener refuses."""
+    probe=socket.socket()
+    try:
+        if hasattr(socket,'SO_EXCLUSIVEADDRUSE'):probe.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
+        else:probe.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        probe.bind(('127.0.0.1',port));return True
+    except OSError:return False
+    finally:probe.close()
+
+
+def free_local_port(preferred=None,*,exclude=()):
+    """Explicit port must be free; otherwise take one no saved bridge promised.
+
+    8888 is where Tray Bridge and manual tunnels usually live, so the automatic
+    range starts elsewhere and never displaces them.
+    """
+    taken={row.get('ports',{}).get('local_proxy_port') for row in listing()}|set(exclude)
+    if preferred not in (None,'',0,'0'):
+        port=ports({'local_proxy_port':preferred,'remote_proxy_port':1})['local_proxy_port']
+        if port in taken or not port_free(port):
+            raise BridgeCheckError(f'Локальный порт {port} уже занят: там, вероятно, Tray Bridge или другой туннель. '
+                                   'Оставь поле пустым, и Hélène выберет свободный порт сама.','local_port_unavailable')
+        return port
+    for port in AUTO_PORTS:
+        if port not in taken and port_free(port):return port
+    raise BridgeCheckError('Свободный локальный порт 18888–18999 не найден.','local_port_unavailable')
+
+
+def probe_local_proxy(port):
+    """Does something on 127.0.0.1:port actually pass HTTPS (Tray Bridge, a tunnel)?
+
+    Only a CONNECT request line goes out; no TLS, credentials or payload.
+    """
+    port=ports({'local_proxy_port':port,'remote_proxy_port':1})['local_proxy_port']
+    try:
+        with socket.create_connection(('127.0.0.1',port),timeout=3) as peer:
+            peer.settimeout(15)
+            peer.sendall(b'CONNECT api.telegram.org:443 HTTP/1.1\r\nHost: api.telegram.org:443\r\n\r\n')
+            head=peer.recv(256)
+    except ConnectionRefusedError:return {'ok':False,'state':'absent','port':port}
+    except OSError:return {'ok':False,'state':'silent','port':port}
+    parts=head.split(b'\r\n',1)[0].split()
+    status=int(parts[1]) if len(parts)>1 and parts[0].startswith(b'HTTP/') and parts[1].isdigit() else None
+    return {'ok':status==200,'state':'proxy' if status==200 else 'other','status':status,'port':port}
+
+
 def save_existing(raw,agent):
-    """Register an already configured server. No packages or remote files touched."""
+    """Register an already configured server. No packages or remote files touched.
+
+    With verify, a temporary bridge proves proxy/HTTPS first and nothing is
+    written on failure, so a wrong port or route does not leave a dead record.
+    """
     profile=raw.get('server_profile');checked=connections.inspect({'server_profile':profile})
     if not checked.get('ok'):return checked
-    configuration=dict(raw.get('ports') or {})
+    selected=dict(raw.get('ports') or {})
     external=str(raw.get('external') or '').strip()
     if external:
         from .phone_access import stable_origin
         external=stable_origin({'phone':{'mode':'stable','external':external}}).rstrip('/')
-        configuration['local_app_port']=agent.port
-    elif configuration.get('remote_app_port'):
+        selected['local_app_port']=agent.port
+    elif selected.get('remote_app_port'):
         raise ValueError('Для входа с телефона укажи постоянный HTTPS-адрес сервера.')
-    configuration=ports(configuration)
+    if selected.get('remote_proxy_port') or 'local_proxy_port' in selected:
+        selected['local_proxy_port']=free_local_port(selected.get('local_proxy_port'))
+    selected=ports(selected)
     identity=secrets.token_hex(16)
     value={'format':FORMAT,'id':identity,'name':str(raw.get('name') or connections.read(profile)['name'])[:100],
-           'server_profile':profile,'external':external,'ports':configuration,'phase':'configured'}
+           'server_profile':profile,'external':external,'ports':selected,'phase':'configured'}
+    checks=[]
+    if raw.get('verify'):
+        bridge=Bridge(connections.resolve({'server_profile':profile}),configuration(value,agent))
+        bridge.start()
+        try:checks=verify(bridge,value,agent)['checks']
+        finally:bridge.stop()
     write_private(path(identity),(json.dumps(value,ensure_ascii=False)+'\n').encode())
+    return {'ok':True,'bridge':{k:v for k,v in value.items() if k!='format'},'checks':checks,
+            'message':'Мост проверен и сохранён.' if checks else 'Подключение добавлено. Проверь прокси и HTTPS перед выбором в настройках.'}
+
+
+def selected_by(identity,owner):
+    """Agents whose saved settings route through this bridge."""
+    from . import agents
+    names=[]
+    for agent in agents.roster(owner.root):
+        cfg=agents.read_config(agent.config)
+        if identity in {(cfg.get(name) or {}).get('bridge_profile') for name in ('phone','network')}:
+            names.append(str(getattr(agent,'name','') or getattr(agent,'id','') or agent.config))
+    return names
+
+
+def _in_use(identity,owner):
+    used=selected_by(identity,owner)
+    if used:raise ValueError('Этот мост выбран у агента «'+used[0]+'». Сначала выбери другой маршрут в «Сеть и прокси» и сохрани настройки.')
+
+
+def _stop(manager,identity):
+    with manager.lock:
+        current=manager.bridges.pop(identity,None);manager.errors.pop(identity,None)
+        if current:current[0].stop()
+
+
+def remove(owner,manager,identity):
+    """Forget a bridge on this computer. Server services and files stay."""
+    read(identity);_in_use(identity,owner);_stop(manager,identity)
+    path(identity).unlink()
+    shutil.rmtree(path(identity).parent/identity,ignore_errors=True)
+    return {'ok':True,'message':'Мост удалён с этого компьютера. На сервере ничего не менялось.'}
+
+
+def repair_port(owner,manager,identity):
+    """Move an unused bridge off a local port that another program now holds."""
+    value=read(identity);_in_use(identity,owner)
+    old=value['ports'].get('local_proxy_port')
+    if not old:raise ValueError('У этого моста нет локального прокси.')
+    _stop(manager,identity)
+    value['ports']={**value['ports'],'local_proxy_port':free_local_port(exclude={old})}
+    write_private(path(identity),(json.dumps(value,ensure_ascii=False)+'\n').encode())
+    port=value['ports']['local_proxy_port']
     return {'ok':True,'bridge':{k:v for k,v in value.items() if k!='format'},
-            'message':'Подключение добавлено. Проверь прокси и HTTPS перед выбором в настройках.'}
+            'message':f'Мост перенесён на свободный локальный порт {port}. Проверь соединение.'}
 
 
 def configuration(value,agent):
@@ -92,11 +199,16 @@ def verify(bridge,value,agent,*,timeout=20):
     if selected.get('local_proxy_port'):
         from deskd.network_route import Route
         route=Route({'network':{'proxy':{'mode':'proxy','protocol':'http','host':'127.0.0.1','port':selected['local_proxy_port']}}})
-        try:
-            with route.open('https://api.telegram.org/',timeout=12) as response:code=response.status
-        except urllib.error.HTTPError as response:
-            code=response.code;response.close()
-        except Exception:raise ValueError('SSH работает, но запрос через прокси не прошёл. Проверь tinyproxy и доступ сервера в интернет.') from None
+        for attempt in (1,2):
+            # Telegram answers 302 here; any HTTP answer proves the CONNECT path.
+            try:
+                with route.open('https://api.telegram.org/',timeout=12) as response:code=response.status
+                break
+            except urllib.error.HTTPError as response:
+                code=response.code;response.close();break
+            except Exception:
+                if attempt==2:raise ValueError('SSH работает, но запрос через прокси не прошёл. Проверь tinyproxy и доступ сервера в интернет.') from None
+                time.sleep(1)
         if not 200<=code<400:raise ValueError('Прокси не подтвердил выход в Telegram (HTTP '+str(code)+').')
         checks.append({'id':'proxy','ok':True,'message':'HTTPS-запрос в Telegram прошёл через этот прокси.'})
     if value.get('external'):
@@ -193,6 +305,8 @@ def invoke(owner,action,raw):
         manager=owner.server_bridges
     if action=='list':return {'bridges':listing(),'states':manager.state(),'component':component()}
     if action=='add-existing':return save_existing(raw,agent)
+    if action=='remove':return remove(owner,manager,raw.get('id'))
+    if action=='repair-port':return repair_port(owner,manager,raw.get('id'))
     if action=='retry':
         with manager.lock:
             current=manager.bridges.get(raw.get('id'))

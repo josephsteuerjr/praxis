@@ -208,7 +208,10 @@ def invoke(owner, command, args):
         from . import server_bridge
         try:return server_bridge.invoke(owner,args.get('action'),json.loads(args.get('request','{}')))
         except server_bridge.BridgeCheckError as error:
-            return {'ok':False,'checks':[],'error_code':error.code}
+            return {'ok':False,'checks':[],'error_code':error.code,'message':str(error)}
+    if command=='local_proxy_probe':
+        from . import server_bridge
+        return server_bridge.probe_local_proxy(args.get('port'))
     if command=='server_connection':
         from . import server_connections
         action=args.get('action')
@@ -216,6 +219,7 @@ def invoke(owner, command, args):
         if action=='list':return server_connections.profiles()
         if action=='inspect':return server_connections.inspect(payload)
         if action=='save':return server_connections.save(payload)
+        if action=='remove':return server_connections.remove(payload.get('id'))
         raise ValueError('Unknown server connection action')
     if command=='server_transfer':
         from . import server_transfer, remote_locator
