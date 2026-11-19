@@ -1,3 +1,9 @@
+# 2.8.11 Beta
+
+- Set up the SSH bridge with one action; take a free local port instead of Tray Bridge's 8888.
+- Check a bridge before saving it; remove bridges and saved connections, or move a bridge to a free port.
+- Tray Bridge buttons report what they filled and whether 127.0.0.1:8888 really passes HTTPS.
+
 # 2.8.10 Beta
 
 - Group Telegram, Mini App, relay and SSH bridge settings under Network and proxy.

@@ -23,6 +23,12 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.8.11 Beta
+
+The SSH bridge sets up with one button: it saves the connection, takes a free local
+port instead of the one Tray Bridge already uses, checks the proxy and only then saves.
+See the [2.8.11 release notes](desk/docs/RELEASE-2.8.11.md).
+
 ## Included in 2.8.10 Beta
 
 Network settings put Telegram, Mini App, the subscription relay and the SSH bridge
@@ -81,7 +87,7 @@ The interface and agent context each support Russian, English, French and Chines
 with independent settings. Includes resident skills, optional living prose,
 Windows MCP, exact program arguments, code navigation and stronger process custody.
 The bundled relay can switch ChatGPT subscriptions on quota exhaustion.
-The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.10) includes the current packages.
+The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.11) includes the current packages.
 On cold macOS and Linux starts, the process guardian now allows up to 60 seconds
 for preparation while keeping launch refusal and cleanup on timeout. See the
 [changes and qualification limits](desk/docs/RELEASE-2.8.5.md).
