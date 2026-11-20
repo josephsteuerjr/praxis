@@ -320,6 +320,22 @@ def _history_plan(forge, directory: Path, action: str, boundary: dict, host_bind
     return HISTORY_PROOF,value,None
 
 
+def _settlement(forge, task_id: str, action: str) -> dict:
+    """The real forge module closes the finished queue; the shipped reader drives
+    this validator with a minimal owner surface and keeps the former answer."""
+    close = getattr(forge, '_recovery_settlement', None)
+    if close is None:
+        return {'unresolved_units': [], 'task_closed': False, 'task_status': ''}
+    return close(task_id, action)
+
+
+
+def _reason(forge, base: str, settlement: dict, *, selected: bool, show_outstanding: bool) -> str:
+    assemble = getattr(forge, '_recovery_reason', None)
+    if assemble is None:
+        return base
+    return assemble(base, settlement, selected=selected, show_outstanding=show_outstanding)
+
 def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_generation: str,
                      *, host_binding: str, reason: str) -> dict:
     """Witness an opaque history now; require an actual later reboot of this host.
@@ -375,10 +391,14 @@ def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_g
                 forge._event(task_id,'custody_history_prepared' if filename == HISTORY_WITNESS else 'custody_recovered',
                     unit_id=directory.name,unit_kind=directory.parent.name,
                     recovery_sha256=hashlib.sha256(_bytes(directory/filename)).hexdigest())
+            settlement = _settlement(forge, task_id, action)
+            base = frame_language.text('forge.history.none' if not selected else
+                'forge.history.prepared' if action == 'prepare_recovery' else 'forge.history.recovered')
             return {'status':'prepared' if action == 'prepare_recovery' and selected else 'settled',
                     'action':action,'task_id':task_id,'agent_id':agent_id,'units':[d.name for d in selected],
-                    'reason':frame_language.text('forge.history.none' if not selected else
-                        'forge.history.prepared' if action == 'prepare_recovery' else 'forge.history.recovered')}
+                    **settlement,
+                    'reason':_reason(forge,base,settlement,selected=bool(selected),
+                                 show_outstanding=action=='recover')}
     except (OSError,ValueError,TypeError,KeyError,StopIteration,AttributeError) as error:
         return {'status':'refused','action':action,'task_id':task_id,
                 'diagnostic':getattr(error,'diagnostic',{'code':'forge_history_unavailable'}),

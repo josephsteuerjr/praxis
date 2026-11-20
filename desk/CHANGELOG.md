@@ -1,3 +1,9 @@
+# 2.8.13 Beta
+
+- Forge custody recovery closes the finished queue: once no unresolved units remain, recover marks the old task stopped; no result is ever invented.
+- Recovery answers are written in the agent's own language and always name the next step: restart this computer, which units are still unresolved, or that a new stage is a new task on the same worktree.
+- A task left active by an earlier version closes with one recover call, and a group Stop of a recovered queue explains the next stage.
+
 # 2.8.12 Beta
 
 - Network and proxy: ① proxy sources (Hélène bridges) and ② routes chosen separately for Telegram and the ChatGPT relay.

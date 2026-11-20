@@ -25,8 +25,8 @@ a paired phone and web interface while the host is online. Powered by Praxis.
 
 ## Reading the source
 
-This branch includes the Hélène 2.8.12 source and the live cloud Praxis snapshot
-from 20 November 2026. The two products share a base but have separate runtime
+This branch includes the Hélène 2.8.13 source and the live cloud Praxis snapshot
+from 21 November 2026. The two products share a base but have separate runtime
 and interface layers:
 
 | Path | Source |
@@ -46,6 +46,12 @@ verification scope.
 The cloud snapshot also includes the qualified phone Stop and Forge history
 recovery repair: one cancellation identity, preserved corrupt bytes and explicit
 same-host reboot evidence. The cloud engine now runs a separate Telegram client for the owner's account, with its own named tools and wake rules; the server MiniApp/PWA controls it and shows its tool receipts.
+## Included in 2.8.13 Beta
+
+Custody recovery now finishes the job: a successful recover closes the old task
+instead of leaving it active, and every recovery answer states the exact next
+step in the agent's language.
+See the [2.8.13 release notes](desk/docs/RELEASE-2.8.13.md).
 
 ## Included in 2.8.12 Beta
 

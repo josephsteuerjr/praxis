@@ -5072,6 +5072,52 @@ def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tupl
     return message, visited
 
 
+_RECOVERY_UNRESOLVED_STATES = _LIVE_UNIT_STATES | {"unknown", "lost", "queued", "stop_pending"}
+
+
+def _recovery_outstanding(task_id: str) -> list[str]:
+    """Whole-task units whose custody or outcome is still unresolved."""
+    return [str(row["id"]) for kind in ("agents", "processes", "verifications")
+            for row in _units(task_id, kind)
+            if not row.get("custody_recovered")
+            and row.get("status") in _RECOVERY_UNRESOLVED_STATES]
+
+
+def _recovery_settlement(task_id: str, action: str) -> dict:
+    """Close a recovered task queue once nothing unresolved remains.
+
+    Recovery frees custody; it never writes a result. Without this step the
+    queue keeps showing an ownerless active task forever after a successful
+    recover, which reads as an unfinished cleanup. Only the status changes.
+    """
+    outstanding = _recovery_outstanding(task_id)
+    task = get(task_id) or {}
+    closed = False
+    if (action == "recover" and not outstanding
+            and task.get("status") in LIVE_TASK_STATUSES):
+        task.update(status="stopped", finished=_now())
+        _save_task(task)
+        _event(task_id, "task_closed_after_recovery",
+               summary="every unit custody-recovered; queue closed, results retained")
+        closed = True
+    return {"unresolved_units": outstanding, "task_closed": closed,
+            "task_status": str(task.get("status") or "")}
+
+
+def _recovery_reason(base: str, settlement: dict, *, selected: bool,
+                     show_outstanding: bool) -> str:
+    """Append the localized honest next step to a recovery control answer."""
+    if settlement["task_closed"]:
+        return base + " " + frame_language.text('forge.recovery.task_closed')
+    if show_outstanding and settlement["unresolved_units"]:
+        return (base + " " + frame_language.text('forge.recovery.remaining',
+                v0=", ".join(settlement["unresolved_units"]))
+                + " " + frame_language.text('forge.recovery.next_close'))
+    if not selected and settlement["task_status"] in LIVE_TASK_STATUSES:
+        return base + " " + frame_language.text('forge.recovery.close_hint')
+    return base
+
+
 @frame_language.pinned
 def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "",
             host_binding: str = "", reason: str = "") -> dict:
@@ -5143,6 +5189,13 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
                (_LIVE_UNIT_STATES | {"unknown", "lost", "queued"})]
     value = {"status": "unknown" if unknown else "settled", "action": action,
              "task_id": task_id, "agent_id": agent_id, "unknown_units": unknown, "receipts": receipts}
+    if (action == "stop" and not agent_id and not unknown
+            and any(row.get("custody_recovered") for kind in ("agents", "processes", "verifications")
+                    for row in _units(task_id, kind))):
+        # Closing a task whose queue was cleared by custody recovery: say what
+        # honest continuation looks like, so a settled Stop is not read as a
+        # license to replay the retained unsafe checkpoint.
+        value["note"] = frame_language.text('forge.recovery.stopped_recovered')
     _event(task_id, "group_control", summary=f"{action}: {value['status']}")
     return value
 

@@ -1,12 +1,18 @@
 # Source and package bindings
 
-## Hélène 2.8.12 source base
+## Hélène 2.8.13 source base
 
-The immutable `v2.8.12` tag at
-`3fc735cbea094292776f33823b6f7bc7ea316b9c` identifies the latest all-platform
+The immutable `v2.8.13` tag at
+`a636c85d331040b9f39c4b518863d1d449e893d1` identifies the latest all-platform
 release. Shipped per-platform inventories bind its qualified composition.
 This main sync incorporates that already-public history and then the newer
 cloud source below. It does not redefine the shipped desktop composition.
+
+## Hélène 2.8.12 source base
+
+The immutable `v2.8.12` tag at
+`3fc735cbea094292776f33823b6f7bc7ea316b9c` identifies an all-platform
+release. Shipped per-platform inventories bind its qualified composition.
 
 ## Historical desktop 2.5.0 composition
 

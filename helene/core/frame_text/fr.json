@@ -3540,5 +3540,13 @@
   "forge.history.prepared": "Le témoin de l’hôte Linux d’origine et une copie exacte du journal, y compris les octets endommagés, sont enregistrés. Le contrôle des processus n’est pas encore libéré. Le propriétaire doit redémarrer lui-même cet hôte, puis appeler recover ; l’application ne le redémarre pas.",
   "forge.history.recovered": "Le contrôle des arbres de processus dont la fin est prouvée est libéré. Les anciens résultats, le journal endommagé et les issues inconnues sont conservés. Les reprises non sûres et la répétition d’effets restent interdites.",
   "forge.history.refused": "Récupération non confirmée. Examinez diagnostic.code et les preuves conservées. Un historique endommagé exige la confirmation explicite de l’hôte Linux d’origine, prepare_recovery, puis un redémarrage ultérieur de cet hôte par son propriétaire avant recover. Ne supprimez pas les lignes endommagées et ne répétez pas les actions à l’issue inconnue.",
-  "forge.history.none": "Aucune unité de la branche sélectionnée ne nécessite cette récupération. L’historique reste inchangé."
+  "forge.history.none": "Aucune unité de la branche sélectionnée ne nécessite cette récupération. L’historique reste inchangé.",
+  "forge.recovery.prepared": "Un témoin de l'hôte Windows d'origine est conservé. La garde des processus n'est pas encore levée. Le propriétaire doit redémarrer lui-même cet ordinateur, puis appeler recover ; l'application n'effectue jamais le redémarrage.",
+  "forge.recovery.recovered": "La garde des arbres de processus confirmés éteints est levée. Les anciens résultats et les issues inconnues sont conservés. La continuation non sécurisée et la répétition d'effets de bord restent interdites.",
+  "forge.recovery.none": "Aucune unité de la branche sélectionnée ne nécessite cette récupération. L’historique est inchangé.",
+  "forge.recovery.task_closed": "La tâche est fermée comme arrêtée : aucune unité non résolue ne reste. L'ancien point de reprise ne doit pas être continué ; une nouvelle étape est une nouvelle tâche sur le même worktree.",
+  "forge.recovery.remaining": "Unités encore non résolues : {v0}.",
+  "forge.recovery.next_close": "Fermez-les par un Stop groupé de la tâche, ou par leur propre prepare_recovery → redémarrage → recover.",
+  "forge.recovery.close_hint": "Il ne reste que la tâche elle-même à fermer : rappelez recover sans préciser d’agent, ou faites un Stop groupé.",
+  "forge.recovery.stopped_recovered": "La tâche est fermée par le Stop groupé. L'ancien point de reprise ne doit pas être continué ; une nouvelle étape est une nouvelle tâche sur le même worktree."
 }
