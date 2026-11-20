@@ -1,3 +1,9 @@
+# 2.8.12 Beta
+
+- Network and proxy: ① proxy sources (Hélène bridges) and ② routes chosen separately for Telegram and the ChatGPT relay.
+- Remove «Use for this agent» and «Refresh servers»; show the old Telegram gateway switch only where it is still on.
+- Keep a bridge running when only the relay uses it; the relay restarts by itself when its route changes.
+
 # 2.8.11 Beta
 
 - Set up the SSH bridge with one action; take a free local port instead of Tray Bridge's 8888.
