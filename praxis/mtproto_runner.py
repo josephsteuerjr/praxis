@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 import praxis_time
 import agent
+import owner_telegram_rpc
 import bufstore
 import context_envelope
 import formation
@@ -6477,7 +6478,7 @@ async def _task_window(goal: str, *, mailbox_index: str | None = None,
 
 
 async def _wake_pass(goal: str, *, on_open=None, on_run=None, source_id=None,
-                     scheduled_target_id=None) -> bool | None:
+                     scheduled_target_id=None, run_id: str = "") -> bool | None:
     """kind=wake: её будильник поднимает ОБЫЧНЫЙ ход — Telethon НЕ закрываем.
 
     Отличие от ``_task_window`` ровно одно и оно всё: здесь нет disconnect. Поэтому пока
@@ -6508,7 +6509,8 @@ async def _wake_pass(goal: str, *, on_open=None, on_run=None, source_id=None,
         try:
             await asyncio.to_thread(agent.wake_turn, goal, on_run=on_run,
                                     source_id=source_id,
-                                    scheduled_target_id=scheduled_target_id)
+                                    scheduled_target_id=scheduled_target_id,
+                                    **({"run_id": run_id} if run_id else {}))
             return True
         except Exception:
             log.exception("пробуждение упало")
@@ -11118,9 +11120,42 @@ async def _epoch_repair_once() -> None:
     _EPOCH_REPAIR_TASK = asyncio.create_task(work())
 
 
+async def _owner_telegram_wake_once() -> None:
+    if _SHUTDOWN.is_set() or _ONE_MIND.locked() or not agent.llm.configured():
+        return
+    result = await asyncio.to_thread(owner_telegram_rpc.request, "next_event", timeout=2)
+    event = result.get("event")
+    if not isinstance(event, dict) or event.get("account") != OWNER_ID:
+        return
+    identity = str(event.get("id") or "")
+    if not re.fullmatch(r"[a-f0-9]{64}", identity):
+        return
+    run_id = "run-owner-telegram-" + identity
+
+    def acknowledge(run: str) -> None:
+        owner_telegram_rpc.request("ack_event", {"id": identity, "run": run}, timeout=2)
+
+    from run_manager import RunNotFound
+    try:
+        await asyncio.to_thread(agent._runs().manifest, run_id)
+    except RunNotFound:
+        pass
+    else:
+        await asyncio.to_thread(acknowledge, run_id)
+        return
+    chat = str(int(event["chat"]))
+    message = int(event["message"])
+    topic = f' / тема {int(event["topic"])}' if event.get("topic") else ""
+    signals = ", ".join(event.get("signals") or [])
+    goal = (f"Telegram Егора, входящее по твоему правилу ({signals}). "
+            f"Чат {chat}{topic}, сообщение {message}, отправитель {event.get('sender')}. "
+            f"Прочитай его через yegor_read(chat={chat!r}, message={message}) и реши, как поступить.")
+    await _wake_pass(goal, on_run=acknowledge, run_id=run_id)
+
+
 def _clock_jobs() -> dict:
     """Таблица забот часов: имя -> (период в секундах, корутина). Период <= 0 — выключена."""
-    return {
+    jobs = {
         "control": (max(CLOCK_TICK, 5.0), _control_once),
         "epoch_repair": (5.0 if epoch_repair.enabled() else 0.0, _epoch_repair_once),
         "buffers": (CLOCK_TICK, _flush_buffers),
@@ -11154,6 +11189,9 @@ def _clock_jobs() -> dict:
         # решает её леджер желаний. Рычаг опущен по умолчанию (PRAXIS_WORK_ENGINE).
         "work_engine": (300.0, _work_engine_once),
     }
+    if os.getenv("PRAXIS_OWNER_TELEGRAM_SOCKET"):
+        jobs["owner_telegram"] = (5.0, _owner_telegram_wake_once)
+    return jobs
 
 
 def _clock_initial_deadlines(now: float, jobs: dict) -> dict[str, float]:
@@ -11189,7 +11227,7 @@ def _clock_initial_deadlines(now: float, jobs: dict) -> dict[str, float]:
 # ход отвечал человеку второй раз. Тик ящика дёшев (замер 13.09: `pending()` 0,9 с,
 # `accepted()` 0,9 с при 2 701 записи), модель не зовёт и держит свой межпроцессный замок —
 # ему нечего ждать в общей очереди. Таблица `_clock_jobs()` не меняется: разрез делает `_clock`.
-_CLOCK_SIDE_CARES = frozenset({"direct_outbox", "voice_jobs"})
+_CLOCK_SIDE_CARES = frozenset({"direct_outbox", "voice_jobs", "owner_telegram"})
 
 
 def _split_clock_jobs(jobs: dict) -> tuple[dict, dict]:

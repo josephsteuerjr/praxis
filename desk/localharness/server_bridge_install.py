@@ -96,7 +96,8 @@ def prepare(raw,agent):
     private=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode()
     public_key=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
     spec=plan['inventory']['specification'];configuration={}
-    if spec['proxy']:configuration.update(local_proxy_port=raw.get('local_proxy_port',8888),remote_proxy_port=spec['remote_proxy_port'])
+    if spec['proxy']:configuration.update(local_proxy_port=server_bridge.free_local_port(raw.get('local_proxy_port')),
+                                          remote_proxy_port=spec['remote_proxy_port'])
     if spec['https']:configuration.update(local_app_port=agent.port,remote_app_port=spec['remote_app_port'])
     configuration=server_bridge.ports(configuration)
     row={'id':operation,'name':str(raw.get('name') or connections.read(profile)['name'])[:100],

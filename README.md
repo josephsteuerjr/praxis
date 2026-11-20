@@ -25,8 +25,8 @@ a paired phone and web interface while the host is online. Powered by Praxis.
 
 ## Reading the source
 
-This branch includes the Hélène 2.8.9 source and the live cloud Praxis snapshot
-from 18 November 2026. The two products share a base but have separate runtime
+This branch includes the Hélène 2.8.12 source and the live cloud Praxis snapshot
+from 20 November 2026. The two products share a base but have separate runtime
 and interface layers:
 
 | Path | Source |
@@ -37,7 +37,7 @@ and interface layers:
 | [`remote/praxis-desk/`](remote/praxis-desk/) | Praxis server backend, Telegram MiniApp and PWA |
 | [`RELAY-SOURCE.json`](RELAY-SOURCE.json) | Published relay source and exact runtime binary binding |
 
-Use the immutable [`v2.8.9` tag](https://github.com/josephsteuerjr/praxis/tree/v2.8.9)
+Use the immutable [`v2.8.12` tag](https://github.com/josephsteuerjr/praxis/tree/v2.8.12)
 to inspect the shipped Hélène composition. Main also carries newer cloud engine
 changes; they require separate porting and qualification before a new desktop
 release. [Source bindings](SOURCE-SNAPSHOTS.md) record the snapshot dates and
@@ -45,7 +45,25 @@ verification scope.
 
 The cloud snapshot also includes the qualified phone Stop and Forge history
 recovery repair: one cancellation identity, preserved corrupt bytes and explicit
-same-host reboot evidence. The server MiniApp/PWA now shows the author during an active turn. The engine checks exact run manifests during turn preparation.
+same-host reboot evidence. The cloud engine now runs a separate Telegram client for the owner's account, with its own named tools and wake rules; the server MiniApp/PWA controls it and shows its tool receipts.
+
+## Included in 2.8.12 Beta
+
+Network and proxy now has two steps: where the proxy comes from (Hélène bridges) and who
+goes through it, chosen separately for Telegram and the ChatGPT relay.
+See the [2.8.12 release notes](desk/docs/RELEASE-2.8.12.md).
+
+## Included in 2.8.11 Beta
+
+The SSH bridge sets up with one button: it saves the connection, takes a free local
+port instead of the one Tray Bridge already uses, checks the proxy and only then saves.
+See the [2.8.11 release notes](desk/docs/RELEASE-2.8.11.md).
+
+## Included in 2.8.10 Beta
+
+Network settings put Telegram, Mini App, the subscription relay and the SSH bridge
+in one place. The relay can verify its saved route to ChatGPT without generation.
+See the [2.8.10 release notes](desk/docs/RELEASE-2.8.10.md).
 
 ## Included in 2.8.9
 

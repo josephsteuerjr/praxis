@@ -1,9 +1,9 @@
 # Source and package bindings
 
-## Hélène 2.8.9 source base
+## Hélène 2.8.12 source base
 
-The immutable `v2.8.9` tag at
-`3b46cc08e998bfdd8f34e3243dd5dfefa898e8fb` identifies the latest all-platform
+The immutable `v2.8.12` tag at
+`3fc735cbea094292776f33823b6f7bc7ea316b9c` identifies the latest all-platform
 release. Shipped per-platform inventories bind its qualified composition.
 This main sync incorporates that already-public history and then the newer
 cloud source below. It does not redefine the shipped desktop composition.
@@ -39,17 +39,16 @@ beyond that frozen desktop code.
 ## Current cloud Praxis mirror
 
 `praxis/` mirrors the selected public code of running cloud Praxis at
-`c5785bb1762c79a92dceb62f63d244194a877f2f`. [CORE-SOURCE.json](CORE-SOURCE.json) binds
-799 files and their executable modes. The engine checks exact run
-manifests during turn preparation and preserves ambiguous records for review.
-Two canonical Linux runs on the deployed commit each reported 7,364 tests,
+`140e5719a8a87d3d145eec91e2cbb69a8bad1fc7`. [CORE-SOURCE.json](CORE-SOURCE.json) binds
+804 files and their executable modes. The engine adds an independent
+Telegram client for the owner's account with named tools and wake rules.
+The final core passed two full Linux gates before deployment, each with 7,372 tests,
 19 skips and zero failures.
 
-`remote/praxis-desk/` mirrors app source `4f74f5c604d95ae054f704a03c6b89a46b2d52cd`.
-The active-turn card resolves the author from the exact trigger record.
-Its backend gate ran 63 tests, and deployed readback verified author resolution.
-The source comparison covers 181 app files, 21 deployed backend files
-and 46 deployed frontend files. The public title test uses a synthetic handle.
+`remote/praxis-desk/` mirrors app source `4f2ddd50df869c0c6b668b00736f49909b68dd66`.
+The MiniApp/PWA controls the owner's Telegram service and shows its tool receipts.
+All 21 deployed backend files equal this source after line-ending normalization,
+and the deployed frontend was built from the same commit.
 
 The cloud mirror retains its public templates and Hélène-origin files.
 Two existing comment and docstring sanitizations preserve the executable AST.

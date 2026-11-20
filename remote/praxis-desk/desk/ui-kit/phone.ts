@@ -478,7 +478,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
   screen.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-open-agent-settings]");
+      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-open-agent-settings],[data-owner-telegram]");
     if (!spot) return;
     if(spot.hasAttribute('data-open-agent-settings')){openSettings();return;}
     const note = screen.querySelector<HTMLElement>("#sys-note");
@@ -488,6 +488,25 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       note.className = bad ? "err" : "muted";
       note.textContent = text;
     };
+    if (spot instanceof HTMLButtonElement && spot.hasAttribute("data-owner-telegram")) {
+      const enabled = spot.dataset.ownerTelegram === "on";
+      const row = spot.closest<HTMLElement>("[data-owner-telegram-row]");
+      if (!row) return;
+      spot.disabled = true;
+      row.setAttribute("aria-busy", "true");
+      row.querySelector("[data-service-state]")!.textContent = enabled ? "Запускается" : "Останавливается";
+      try {
+        const result = await post<OwnerTelegramState>("/api/services/owner-telegram", { enabled });
+        if (!row.isConnected) return;
+        const state = !result.ok && !result.state ? { ...result, state: "error" } : result;
+        paintOwnerTelegram(row, state, true);
+      } catch {
+        if (row.isConnected) paintOwnerTelegram(row, { available: true, enabled: !enabled, state: "unavailable" }, true);
+      } finally {
+        row.removeAttribute("aria-busy");
+      }
+      return;
+    }
     if (spot.hasAttribute("data-interrupt")) {
       say("прошу остановить ход…");
       try {
@@ -882,21 +901,65 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       custody?: "result" | "unknown" | "unresolved_stop"; ancestry_unknown?: boolean }>;
   }
 
+  interface OwnerTelegramState { available: boolean; enabled?: boolean; state?: string; ok?: boolean }
+  function ownerTelegramBody(value: OwnerTelegramState): string {
+    const labels: Record<string, string> = { ready: "Работает", starting: "Запускается", off: "Выключен",
+      error: "Ошибка сервиса", login_required: "Требуется вход", account_mismatch: "Другой аккаунт",
+      offline: "Связь потеряна", unavailable: "Состояние недоступно" };
+    const state = value.state || "unavailable";
+    return `<div class="task-head"><b>Telegram Егора</b> <span class="muted" data-service-state aria-live="polite">${esc(labels[state] || labels.unavailable)}</span></div>` +
+      `<div class="actions"><button type="button" class="chip" data-owner-telegram="${value.enabled ? "off" : "on"}" aria-pressed="${!!value.enabled}"${value.enabled === undefined ? " disabled" : ""}>${value.enabled ? "Выключить" : "Включить"}</button></div>`;
+  }
+
+  function paintOwnerTelegram(row: HTMLElement, state: OwnerTelegramState, force = false): void {
+    const key = JSON.stringify([state.available, state.enabled, state.state]);
+    if (!force && row.dataset.serviceView === key) return;
+    row.dataset.serviceView = key;
+    row.innerHTML = ownerTelegramBody(state);
+  }
+
+  let ownerTelegramRefreshRow: HTMLElement | null = null;
+  let ownerTelegramRefreshAt = -Infinity;
+  async function refreshOwnerTelegram(): Promise<void> {
+    if (tab !== "system" || document.hidden) return;
+    const row = screen.querySelector<HTMLElement>("[data-owner-telegram-row]");
+    if (!row || row.hidden || row.hasAttribute("aria-busy") || ownerTelegramRefreshRow === row) return;
+    if (performance.now() - ownerTelegramRefreshAt < 4000) return;
+    const button = row.querySelector("button");
+    ownerTelegramRefreshRow = row;
+    ownerTelegramRefreshAt = performance.now();
+    try {
+      const state = await api<OwnerTelegramState>("/api/services/owner-telegram");
+      if (row.isConnected && !row.hasAttribute("aria-busy") && row.querySelector("button") === button)
+        paintOwnerTelegram(row, state);
+    } catch {
+      // The normal state tick retries when the page is online again.
+    } finally {
+      if (ownerTelegramRefreshRow === row) ownerTelegramRefreshRow = null;
+    }
+  }
+
   async function renderSystem(guard: () => boolean = () => tab === "system") {
     if(!guard())return;
     const revision=++systemEpoch;
     disposePraxisControl?.();disposePraxisControl=undefined;
-    screen.innerHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div><section class="task-row" id="praxis-control"></section><div id="system-details"><div class="empty">читаю…</div></div>`;
+    screen.innerHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div><section class="task-row" id="praxis-control"></section><section class="task-row" data-owner-telegram-row hidden></section><div id="system-details"><div class="empty">читаю…</div></div>`;
     const target=screen.querySelector<HTMLElement>('#praxis-control')!;
     const details=screen.querySelector<HTMLElement>('#system-details')!;
     disposePraxisControl=mountPraxisControl(target,async<T>(path:string,body?:unknown)=>
       body===undefined?api<T>(path):post<T>(path,body));
-    const [boxes, brain, models] = await Promise.all([
+    const [boxes, brain, models, ownerTelegram] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
       scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
+      scoped<OwnerTelegramState>("/api/services/owner-telegram", "owner-telegram"),
     ]);
     if (!guard()||revision!==systemEpoch||!details.isConnected) return;
+    const ownerRow = screen.querySelector<HTMLElement>("[data-owner-telegram-row]")!;
+    if (ownerTelegram?.available) {
+      paintOwnerTelegram(ownerRow, ownerTelegram);
+      ownerRow.hidden = false;
+    }
     if (!boxes || !boxes.available) {
       details.innerHTML = `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
         (closed.has("containers")
@@ -904,7 +967,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
           : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
       return;
     }
-    const rows = boxes.containers
+    const containers = boxes.containers.filter(c => c.name !== "praxis-owner-telegram");
+    const rows = containers
       .map(
         (c) => `<div class="task-row" data-box="${esc(c.name)}">
           <div class="task-head"><b>${esc(c.name)}</b> <span class="${c.up ? "muted" : "err"}">${esc(c.status)}</span></div>
@@ -965,7 +1029,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       <div class="actions"><button type="button" class="chip" data-brain-apply="images">Применить</button></div>
     </div>` : "";
     details.innerHTML =
-      `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
+      `<div class="screen-title">Контейнеры <span class="n">${containers.length}</span></div>${rows}` +
       `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
       `<div class="screen-title">Мозг</div>${brainRows}${imageRows}` +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
@@ -1220,6 +1284,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       accessLost();
       return;
     }
+    if (st === "ok") void refreshOwnerTelegram();
     stateDelay = st === "ok" ? STATE_MIN : Math.min(STATE_MAX, Math.round(stateDelay * 1.6));
     scheduleState();
   }

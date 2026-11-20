@@ -876,6 +876,25 @@ def _result_json(path: Path, ref: dict):
         return None
 
 
+def _owner_telegram_lens(data) -> dict | None:
+    if not isinstance(data, dict) or not isinstance(data.get("status"), str):
+        return None
+    lens = {"kind": "owner_telegram", "status": data["status"][:40]}
+    receipt = data.get("receipt") or {}
+    if isinstance(receipt, dict):
+        if isinstance(receipt.get("status"), str):
+            lens["status"] = receipt["status"][:40]
+        for key in ("message_id", "chat", "topic"):
+            if type(receipt.get(key)) is int:
+                lens[key] = str(receipt[key])
+        if isinstance(receipt.get("receipt_id"), str):
+            lens["receipt_id"] = receipt["receipt_id"][:80]
+    for key in ("dialogs", "messages"):
+        if isinstance(data.get(key), list):
+            lens["count"] = len(data[key])
+    return lens
+
+
 _CQ_FAILED = {"owned_search_failed", "query_failed", "root_unavailable"}
 _CQ_ROW = ("path", "kind", "evidence", "method", "ambiguous", "matches_target", "name",
            "qualname", "caller", "receiver", "signature", "snippet", "files", "lines")
@@ -1103,6 +1122,7 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     iterations: list[dict] = []
     current: dict | None = None
     tools_by_call: dict[str, dict] = {}
+    owner_telegram_children: dict[str, str] = {}
     events_path = path / "events.jsonl"
     # Хвостом, а не через весь файл: правило записано в шапке этого же модуля,
     # а здесь оно нарушалось. Окно перечитывает идущий прогон каждые ~1.5 с;
@@ -1118,6 +1138,10 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     status_flow: list[dict] = []
     for row in rows:
         kind = row.get("kind")
+        if kind == "hand_requested" and str(row.get("tool") or "").startswith("yegor_"):
+            child_id, parent_id = row.get("call_id"), row.get("parent_call_id")
+            if isinstance(child_id, str) and isinstance(parent_id, str) and child_id != parent_id:
+                owner_telegram_children[child_id] = parent_id
         if kind == "model_started":
             current = {"at": row.get("at"), "seq": row.get("seq"),
                        "call_id": row.get("call_id"), "tools": [], "text": "",
@@ -1245,6 +1269,10 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                     if card.get("outcome") in (None, "unknown"):
                         card["outcome"] = _lens_outcome(lens)
                         card["outcome_source"] = "result"
+            elif str(card.get("tool") or "").startswith("yegor_"):
+                lens = _owner_telegram_lens(_result_json(path, row.get("result") or {}))
+                if lens:
+                    card["lens"] = lens
         elif kind in ("tool_failed", "tool_completed", "tool_reconciled"):
             card = tools_by_call.get(str(row.get("call_id") or ""))
             if card is None:
@@ -1264,6 +1292,15 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
         elif kind == "status_changed":
             status_flow.append({"at": row.get("at"), "from": row.get("from_status"),
                                 "to": row.get("to_status")})
+    nested_ids = set()
+    for child_id, parent_id in owner_telegram_children.items():
+        child, parent = tools_by_call.get(child_id), tools_by_call.get(parent_id)
+        if child is not None and parent is not None:
+            parent.setdefault("child_tools", []).append(child)
+            nested_ids.add(child_id)
+    if nested_ids:
+        for iteration in iterations:
+            iteration["tools"] = [card for card in iteration.get("tools", []) if card.get("call_id") not in nested_ids]
     recap = ""
     try:
         recap = (path / "RECAP.md").read_text(encoding="utf-8", errors="replace")[:120_000]

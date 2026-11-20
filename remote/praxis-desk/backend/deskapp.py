@@ -175,6 +175,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
+                 "/api/services/owner-telegram",
                  "/api/interrupt", "/api/praxis/control", "/api/agenda", "/api/board", "/api/forge",
                  "/api/phone/activity", "/api/phone/forge/control", "/api/phone/forge/tasks", "/api/phone/forge/events",
                   "/api/phone/forge/payload"}
@@ -1123,6 +1124,17 @@ async def _r_container_restart(c: Call):
     return await asyncio.to_thread(control.container_restart, str(body.get("name") or ""))
 
 
+async def _r_owner_telegram(c: Call):
+    return await asyncio.to_thread(control.owner_telegram)
+
+
+async def _r_owner_telegram_set(c: Call):
+    body = c.body
+    if not isinstance(body, dict) or set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+        raise web.HTTPBadRequest(text="enabled должен быть булевым значением")
+    return await asyncio.to_thread(control.owner_telegram, body["enabled"])
+
+
 async def _r_container_log(c: Call):
     return await asyncio.to_thread(control.container_log, c.match["name"],
                                    _int_arg(c.query, "lines", 200, 1, 400),
@@ -1229,6 +1241,8 @@ ROUTES: tuple[Route, ...] = (
     # протокол выше уже некому исполнить.
     Route("GET", "/api/containers", _r_containers),
     Route("POST", "/api/containers/restart", _r_container_restart),
+    Route("GET", "/api/services/owner-telegram", _r_owner_telegram, private=True),
+    Route("POST", "/api/services/owner-telegram", _r_owner_telegram_set, private=True),
     Route("GET", "/api/container-log/{name}", _r_container_log),
     Route("GET", "/api/brain", _r_brain),
     Route("GET", "/api/brain-models", _r_brain_models),

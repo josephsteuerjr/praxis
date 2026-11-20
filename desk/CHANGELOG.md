@@ -1,3 +1,20 @@
+# 2.8.12 Beta
+
+- Network and proxy: ① proxy sources (Hélène bridges) and ② routes chosen separately for Telegram and the ChatGPT relay.
+- Remove «Use for this agent» and «Refresh servers»; show the old Telegram gateway switch only where it is still on.
+- Keep a bridge running when only the relay uses it; the relay restarts by itself when its route changes.
+
+# 2.8.11 Beta
+
+- Set up the SSH bridge with one action; take a free local port instead of Tray Bridge's 8888.
+- Check a bridge before saving it; remove bridges and saved connections, or move a bridge to a free port.
+- Tray Bridge buttons report what they filled and whether 127.0.0.1:8888 really passes HTTPS.
+
+# 2.8.10 Beta
+
+- Group Telegram, Mini App, relay and SSH bridge settings under Network and proxy.
+- Check the subscription relay’s saved route to ChatGPT without a model request.
+
 # 2.8.9 Beta
 
 - Refresh desktop preferences on change and deliver attached-window session events from memory.

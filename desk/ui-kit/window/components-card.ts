@@ -36,6 +36,7 @@ export function componentsCard(): HTMLElement {
     try {
       const components = await shell<Component[]>('components_status');
       for (const item of components) {
+        if (item.id === 'server-bridge') continue;
         let entry = entries.get(item.id);
         if (!entry) {
           const row = el('div', 'component-install');
@@ -54,7 +55,7 @@ export function componentsCard(): HTMLElement {
           row.append(label, detail, bar, install, error); rows.append(row);
           entry = { row, label, detail, bar, install, error }; entries.set(item.id, entry);
         }
-        const names: Record<string, string> = {relay:'praxis-relay · MIT', xtts:uiText("ui.ui.kit.window.components.card.e594cd8ea7"), whisper:uiText("ui.ui.kit.window.components.card.f56e4834f2"),'server-bridge':uiText("ui.ui.kit.window.components.card.719d7aa17f"),'windows-mcp':'Windows MCP · MIT'};
+        const names: Record<string, string> = {relay:'praxis-relay · MIT', xtts:uiText("ui.ui.kit.window.components.card.e594cd8ea7"), whisper:uiText("ui.ui.kit.window.components.card.f56e4834f2"),'windows-mcp':'Windows MCP · MIT'};
         const active = starting.has(item.id) || item.progress?.active === true;
         const caption = componentProgress(item.progress || {});
         entry.label.textContent = `${names[item.id] || item.id} · ${active ? uiText("ui.ui.kit.window.components.card.5eabb2b659") : item.installed ? uiText("ui.ui.kit.window.components.card.4d9b985d9a") : item.ready ? uiText("ui.ui.kit.window.components.card.8e58beddaf") : uiText("ui.ui.kit.window.components.card.5023a2c800")}`;

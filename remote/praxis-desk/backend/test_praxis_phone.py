@@ -25,6 +25,27 @@ class PhoneContract(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):await self.client.close()
     async def test_no_key_cannot_read_phone_records(self):
         r=await self.client.get('/api/phone/forge/tasks');self.assertEqual(r.status,403)
+
+    async def test_paired_phone_controls_only_the_owner_telegram_service(self):
+        from unittest.mock import patch
+        path = '/api/services/owner-telegram'
+        with patch.object(app.control, 'owner_telegram', return_value={
+            'ok': True, 'available': True, 'enabled': True, 'state': 'starting',
+        }) as control:
+            denied = await self.client.post(path, json={'enabled': True})
+            self.assertEqual(denied.status, 403)
+            invalid = await self.client.post(path, headers=self.headers,
+                                             json={'enabled': True, 'name': 'praxis'})
+            self.assertEqual(invalid.status, 400)
+            control.assert_not_called()
+            read = await self.client.get(path, headers=self.headers)
+            self.assertEqual(read.status, 200)
+            self.assertEqual(read.headers['Cache-Control'], 'private, no-store')
+            control.assert_called_once_with()
+            changed = await self.client.post(path, headers=self.headers, json={'enabled': True})
+            self.assertEqual(changed.status, 200)
+            self.assertEqual((await changed.json())['state'], 'starting')
+            self.assertEqual(control.call_args.args, (True,))
     async def test_runs_default_to_work_and_operator_inventory_is_explicit(self):
         from unittest.mock import patch
         with patch.object(app.readers,'list_runs',return_value=[]) as read:

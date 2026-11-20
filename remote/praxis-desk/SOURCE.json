@@ -1,8 +1,8 @@
 {
   "format": "praxis-desk-source.v1",
-  "captured_at": "2026-11-17T22:34:01.938456+00:00",
-  "source_repository": "private isolated checkout of the November 2026 phone work (not published history)",
-  "source_commit": "4f74f5c604d95ae054f704a03c6b89a46b2d52cd",
+  "captured_at": "2026-11-20T09:46:49.279879+00:00",
+  "source_repository": "local mirror branch of the November 2026 owner-Telegram work (not published history)",
+  "source_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66",
   "deployed": {
     "path": "/opt/praxisdesk",
     "container": "praxis-desk",
@@ -68,12 +68,13 @@
   },
   "files": {
     ".gitignore": "53ae52e4c5d14baa0094c548600a087832a2ef2ef4426a64c14245ed2055bdbc",
+    "README.md": "50431e306785255e1e515940c08a4efb841f0cf01eb4ca13fe6f29f10683c106",
     "VALIDATION.md": "b766eb92fed41f89b80dc18b2e73a5685c2ea83933a2691f04f6d05bf0ed9288",
-    "backend/deskapp.py": "9187658cfd4d46eeea021b1b4bec3e84a76c86d8cea747d6255c927b3018071e",
-    "backend/deskctl.py": "8d91d8ba47fec3217b80f50ff6449da3f9a4437c5c9112b8dab1da1ce2d4a7a7",
+    "backend/deskapp.py": "c8d3605ea9aedcf3af456006f506c02ededcfac33c7481f3b3fcd7824687d339",
+    "backend/deskctl.py": "028310fb9088abab5636a29f883b4dbc4eaacbd31c9872088b5d6961bd2c0adb",
     "backend/deskd/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "backend/deskd/agentcfg.py": "6e735f3f470c69e8514483d7f5611e24aaf5a77184bf5f5a99a07587c7894708",
-    "backend/deskd/control.py": "84d8a628453d037df10b36042434ef4090b50fbf949b13a60249e3a0f0652214",
+    "backend/deskd/control.py": "e1bdb80b4649b91ccf8e1d7320feefac98279227afcc82666f08b3de4bfaf1cf",
     "backend/deskd/forge_control.py": "5bcfc6bf969e1bcc0d1f0147670f72152ee8095cf6735a593e4e2b72deda5c62",
     "backend/deskd/forge_reader.py": "38d2696c59de23f07ff019bcfb82ebea6489e4bdc5737921dabbcfd33d3ca40b",
     "backend/deskd/forge_recovery.py": "f4550e7b4adbcd69e545411bf41ecd0b0ca4a9562c77549d94f80f2622c2b638",
@@ -83,7 +84,7 @@
     "backend/deskd/phone_activity.py": "ac6a2c6deeb251dc2863e1f063d8de6769e64c9cca83786bb63cc1bfd0c2b1ca",
     "backend/deskd/praxis_control.py": "2393c83ca41a97fb2231359bf7c15d530c11958bb6296c18648b1589d176cf68",
     "backend/deskd/praxis_phone.py": "1d02c07c0b569a19e8d9f1cca31b457366fe9baeb066c2b5d0f037969c0d28c5",
-    "backend/deskd/readers.py": "2b161985eb228398367dca1dafea13ba9656c1b3d793ee69021fa4a058d9ede5",
+    "backend/deskd/readers.py": "bed04a5db7bf9d8a8569d02095321b324e5668e12f486ae2958fbf07112a8f67",
     "backend/deskd/rooms.py": "32cca28be685209882b3d7587bcd68180a24a521b5a92d5e9694a26b0d489160",
     "backend/deskd/spend.py": "7c73adcfbe7eedae8f9f7c014ba0167ff90b1baf0ad64508599a2574750193e3",
     "backend/deskd/usage.py": "865f99546800671181bf92552cb1a0a0ed76a08143037f524cd8a2cf678d98ff",
@@ -93,8 +94,9 @@
     "backend/test_forge_recovery_api_1711.py": "e2c8347b1be0ea5b96d18bd0c9e31bd23ed02f61fa4f2fe81252ae1765807e66",
     "backend/test_forge_snapshot.py": "0fc04770eab9fad8fa154af96fb34b458169511dfd85e92bb78abb83ffa65295",
     "backend/test_model_progress.py": "6e9ea8c5615769fb4431931426d55471b50ee904170b179a2d59cee3b1b00c04",
+    "backend/test_owner_telegram_panel.py": "8262e4ff61d21d74e37ecce65bb95c9903305e490d49dace2efcf8df2a9e70de",
     "backend/test_praxis_controls.py": "bb4dc6d8edd1fbabebf1239ca8abb531129a4d7258cbd05c69891058faa0ec55",
-    "backend/test_praxis_phone.py": "bb1be3084938ab55cc51cd9d7b5d931b94ae91740aa126df296a0cb6ed0a1964",
+    "backend/test_praxis_phone.py": "acfef3191f0164f0bc1dad9c830c1796f9360108a61cc12fa1ac0849a71ee964",
     "backend/test_praxis_stop_1311.py": "833ad3db0b7f7383ea51a71172517cffb2685a2b821020400c3d9cea45b67f72",
     "backend/test_run_titles_1411.py": "63015b406c08032df7fe1405a0cea4b96b7336e47f6564efceba00c528f20740",
     "backend/test_steps_outcome.py": "c8e85bc2ff65533c7be46e0a32c10749b193978d44e319b4a37aefa95a9fba1f",
@@ -166,7 +168,7 @@
     "desk/ui-kit/phone-actions.ts": "cb35c84aecbed61e8ca1489a31f0ac46baf88170674c05ff97f2ee26009f92c2",
     "desk/ui-kit/phone-settings.ts": "a1d7f2a8a36a692265f011ebff618cbf57a0480c2d1b26a3dceaa3b5aa35b60b",
     "desk/ui-kit/phone.css": "6a20a80dceaf2a6410a38951d62d332987f52308bc8dffb876a74a1368eb0b80",
-    "desk/ui-kit/phone.ts": "df95623baeb352d12e72d89e1b4ec3c42846fdf73d246f811abfb1ee15b187e0",
+    "desk/ui-kit/phone.ts": "a5e11a4d2da4d0a4679511c506c361d5c6ca701e21e02553a6387bd6c81ed0e4",
     "desk/ui-kit/platform.ts": "c1dc5626349831f38aa6bdf7a6751d10da4c4cf58176f25ac32627a1c5021534",
     "desk/ui-kit/praxis-control.ts": "ce70810724f445de79290dbb2287de1c16cc53caef769453f6372c3d6d3f171b",
     "desk/ui-kit/praxis-service.ts": "d0c34df1b8ec0443d1b2b9bff54e70ffdf5c00588198ae4d642fbd7a214946e3",
@@ -174,10 +176,10 @@
     "desk/ui-kit/praxis-voice.ts": "ef14a979cdb906397fade9d2300e6b84fec85420ef8bb3039675e69276074cff",
     "desk/ui-kit/providers.ts": "677460aa282998ca8d18c9375935b0fdbec008cbe23ea59aa0b586c3da89d16f",
     "desk/ui-kit/reply-preview.ts": "69d036f8819853460443faed97a5e38d03d62be72fa9319e3d5bc70acf27b318",
-    "desk/ui-kit/steps.ts": "29566e61d41b3cae0392e53fb9ed73a113c5b536a8b85c586d07465cc160200b",
+    "desk/ui-kit/steps.ts": "db997762b5e5e684614935b2dc3a5c8325d46bc0aa4f45a880cc53c52aeb9fe7",
     "desk/ui-kit/text.ts": "16dd46db91bdab7b3c14928d6c035c7c20e7bdf21ca4b24e5fc229d3a5ff68bc",
     "desk/ui-kit/tokens.css": "e666a36375e2c715da0f0943a8b34e6b64793e69c5510cd6a36db473e99d0be3",
-    "desk/ui-kit/tool-lens.ts": "2c185b61755a07cb69f700814f3f25b11cb0e4bc04bf37bebd3cdb66b080361c",
+    "desk/ui-kit/tool-lens.ts": "50d4126b94526ee46941f4da6b57fe6da9036b35159e45499ed3bdbf0a823f41",
     "desk/ui-kit/tray-position.ts": "3062efa015db5ab093dc82c57994c6e393cde4d4ba3d4bae70669a4c1861b13a",
     "desk/ui-kit/tray-state.ts": "55f99a62b3e7fe0c4a0b3fd9bae49e508dbb96e85d5df5522d0e51e60d78877e",
     "desk/ui-kit/update-error.ts": "011481ba4c12efb09e938e9939c89fcc1d5591c88f3f20092103253de038f638",
@@ -245,29 +247,29 @@
     "desk/ui-kit/window/voice-preferences.ts": "c44e21ec498ff611934fb3e6659e6241b2c27ec58d55b6a21b79d879b21b5fd3",
     "desk/ui-kit/window/voice-session.ts": "5861964258289ad8ac886675ac5031d27e6d405481609575eecb31b5ba9f6baa",
     "desk/ui-kit/window/work-activity.ts": "74e619f70ee20cb0e678071a491d06dffc323f7ec13e71281324602a7d15da8a",
+    "recipe/Dockerfile": "b5850d5c2c7d1728177053e3fc58ad7e6d42fd493e690f4284f1db4dc08693b6",
+    "recipe/docker-compose.yml": "131e5c1888af6bb1087472bb5ba9e4e7d26037f2e515439fad28f202b7808d55",
     "steps_argv.test.mjs": "cc59fbd5238801d6670dbd2af8ae12161e6bb9cde318cb2c576b991826090e1f",
     "test-entry.ts": "3878e356592140fc60cc2460a94f41ee42a609538a1d7ce1d239c3ceeca24f7d",
     "test-fixtures/code_query_lens.json": "e9a11b3e92df6847803b2ad69d08dea9d7700c3f650d1a4b681c09e02b50eaf6"
   },
   "validation": {
-    "backend_tests": 63,
-    "deployed_author_title_verified": true,
+    "backend_files_equal_live": 21,
+    "deployed_frontend_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66",
     "runtime_restart_by_sync": false
   },
-  "verified_at": "2026-11-17T22:34:01.938456+00:00",
+  "verified_at": "2026-11-20T09:46:49.279879+00:00",
   "private_history_published": false,
-  "previous_source_commit": "e52ce540fcc1a49b7d47c22bed2dc5c845572508",
-  "verification_2026_11_18": {
-    "private_source_files_equal": 180,
-    "backend_files_equal_after_line_ending_normalization": 21,
-    "deployed_front_manifest_files_sha256_equal": 46,
-    "private_source_files_checked": 181
-  },
+  "previous_source_commit": "4f74f5c604d95ae054f704a03c6b89a46b2d52cd",
   "mirror_differences": {
     "backend/test_run_titles_1411.py": {
       "source_sha256": "63015b406c08032df7fe1405a0cea4b96b7336e47f6564efceba00c528f20740",
       "mirror_sha256": "397706e06e368487268e54749847dde0416fa36860fe1d86e38be827c9db0f5d",
       "reason": "Synthetic handle in the public regression fixture"
     }
+  },
+  "verification_2026_11_20": {
+    "backend_files_equal_after_line_ending_normalization": 21,
+    "deployed_frontend_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66"
   }
 }

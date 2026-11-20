@@ -382,6 +382,12 @@ def container_restart(name: str) -> dict:
     return deskctl_call(f"/restart/{name}", method="POST")
 
 
+def owner_telegram(enabled: bool | None = None) -> dict:
+    if enabled is None:
+        return deskctl_call("/services/owner-telegram")
+    return deskctl_call("/services/owner-telegram", method="POST", body={"enabled": enabled}, timeout=30)
+
+
 def praxis_control(body=None) -> dict:
     if body is None:
         return deskctl_call('/praxis/control')

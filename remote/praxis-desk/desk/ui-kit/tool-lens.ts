@@ -34,6 +34,10 @@ export function codeQueryTarget(a: Args): string {
 export function toolTarget(tool: string, args: unknown): string {
   if (!args || typeof args !== "object" || Array.isArray(args)) return "";
   const a = args as Args, action = str(a, "action");
+  if (tool.startsWith("yegor_")) {
+    return join("Telegram Егора", action, str(a, "chat") || str(a, "request"),
+      str(a, "query"), num(a, "message") ? `#${num(a, "message")}` : "");
+  }
   switch (tool) {
     case "code_query": return codeQueryTarget(a);
     case "python": return firstLine(str(a, "code"));
@@ -85,7 +89,17 @@ export interface CodeQueryLens {
     tests?: number | null; docs?: number };
   impact?: { changed?: string[]; impacted?: number; tests?: number; tests_sample?: string[]; parse_errors?: number; truncated?: boolean };
 }
-export type ToolLens = CodeQueryLens;
+export interface OwnerTelegramLens {
+  kind: "owner_telegram";
+  status: string;
+  chat?: string;
+  topic?: string;
+  message_id?: string;
+  receipt_id?: string;
+  count?: number;
+}
+
+export type ToolLens = CodeQueryLens | OwnerTelegramLens;
 
 const CQ_ERRORS: Record<string, string> = {
   invalid_op: "неизвестная операция", limit_must_be_1_to_200: "limit вне 1–200", string_arguments_required: "аргументы должны быть строками",
@@ -214,5 +228,14 @@ export function codeQueryHTML(l: CodeQueryLens, args: unknown): string {
 }
 
 export function lensHTML(lens: ToolLens | undefined, args: unknown): string {
+  if (lens?.kind === "owner_telegram") {
+    const labels: Record<string, string> = { ok: "Выполнено", in_doubt: "Исход требует сверки", refused: "Отказано",
+      denied: "Отказано", unavailable: "Сервис недоступен", login_required: "Требуется вход",
+      not_found: "Не найдено", conflict: "Конфликт версии", retry_later: "Telegram просит подождать" };
+    const fact = join(labels[lens.status] || lens.status, lens.chat ? `чат ${lens.chat}` : "",
+      lens.topic ? `тема ${lens.topic}` : "", lens.message_id ? `сообщение #${lens.message_id}` : "",
+      lens.receipt_id ? `квитанция ${lens.receipt_id}` : "", lens.count !== undefined ? `найдено ${lens.count}` : "");
+    return `<div class="tool-trace-unrecorded">${esc(fact)}</div>`;
+  }
   return lens?.kind === "code_query" ? codeQueryHTML(lens, args) : "";
 }

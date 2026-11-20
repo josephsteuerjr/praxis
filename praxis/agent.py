@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import praxis_time
 import outgoing_spelling
+import owner_telegram_rpc
+import owner_telegram_tools
 import contextlib
 import copy
 import difflib
@@ -4409,6 +4411,24 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
             " | list | search | describe | call")
 
 
+def _owner_telegram_tool(method: str, **arguments) -> str:
+    """Call the second account without entering the main Telegram runner."""
+    if isinstance(arguments.get("params"), dict) and _valid_critical_param_marker(arguments["params"]):
+        return "Нужен новый точный вызов. Чувствительные параметры сохранены как непрозрачная метка."
+    execution = current_tool_execution() or {}
+    result = owner_telegram_rpc.run_tool_script(method, arguments, {
+        key: execution[key] for key in ("run_id", "call_id") if key in execution
+    })
+    status = result.get("status")
+    if status == "in_doubt":
+        tool_report.note(outcome="in_doubt")
+    elif status in {"refused", "denied", "login_required", "account_mismatch", "unavailable", "offline", "starting"}:
+        tool_report.note(outcome="refused")
+    elif status in {"error", "retryable_error", "retry_later"}:
+        tool_report.note(outcome="failed")
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
 def tool_add_alias(name: str, canonical: str) -> str:
     """PASS 8.6: связать имя-алиас с существующим досье («Егор» ↔ yegor-kosyrev)."""
     slug = graph.resolve(canonical)
@@ -6911,6 +6931,7 @@ TOOL_IMPL = {
     'update_profile': tool_update_profile,
     'react': tool_react,
     'telegram_account': tool_telegram_account,
+    **{name: functools.partial(_owner_telegram_tool, name) for name in owner_telegram_tools.NAMES},
     'fs_read': tool_fs_read,
     'edit': tool_edit,
     'fs_search': tool_fs_search,
@@ -12306,6 +12327,8 @@ _READ_ONLY_TOOLS = frozenset(['code_outline',
 
 def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
+    if name in owner_telegram_tools.NAMES:
+        return owner_telegram_rpc.mutates(name, call_input)
     action = call_input.get("action")
     if name == "proposal":
         return not (action in {"list", "diff"} or
@@ -12496,7 +12519,7 @@ def _durable_tool_input(name: str, call_input: dict) -> dict:
     the constructor plus an opaque process-keyed commitment, not plaintext arguments.
     """
     value = copy.deepcopy(dict(call_input or {}))
-    if name != "telegram_account" or not _critical_telegram_tool_input(value):
+    if name not in {"telegram_account", "yegor_mtproto"} or not _critical_telegram_tool_input(value):
         return value
     if (_critical_param_marker_version(value.get("params")) == "v2"
             and value.get("params_json") in (None, "")
@@ -12571,7 +12594,7 @@ def _critical_secret_values_from_blocks(blocks: list | tuple) -> tuple[str, ...]
     groups: list[tuple[str, ...]] = []
     for block in blocks or ():
         if (isinstance(block, dict) and block.get("type") == "tool_use"
-                and block.get("name") == "telegram_account"
+                and block.get("name") in {"telegram_account", "yegor_mtproto"}
                 and isinstance(block.get("input"), dict)):
             groups.append(_critical_secret_values(block["input"]))
     return _merged_secret_values(*groups)
@@ -12614,7 +12637,7 @@ def _scrub_critical_value(value: object, secret_values: tuple[str, ...]):
 
 def _durable_tool_output(name: str, call_input: dict, output: object) -> str:
     text = str(output)
-    if name != "telegram_account":
+    if name not in {"telegram_account", "yegor_mtproto"}:
         return text
     return _scrub_critical_text(text, _critical_secret_values(call_input))
 
@@ -13016,7 +13039,7 @@ def _run_context_markdown(*, ctx: "ChannelContext", kind: str, goal: str,
 
 def _create_durable_run(*, ctx: "ChannelContext", kind: str, goal: str,
                         conversation: str, history: list[dict] | None = None,
-                        extra: str = "") -> run_context.RunContext:
+                        extra: str = "", run_id: str = "") -> run_context.RunContext:
     principal = (PRAXIS_SELF_PRINCIPAL if ctx.praxis_self
                  else _stable_numeric_principal(ctx.principal_id) or "unknown")
     try:
@@ -13029,6 +13052,7 @@ def _create_durable_run(*, ctx: "ChannelContext", kind: str, goal: str,
             origin_message_ids=_run_origin_message_ids(ctx),
             delivery_chat_id=ctx.chat_id,
             model_profile="voice",
+            run_id=run_id,
         )
         persisted = _runs().create(
             created,
@@ -17335,7 +17359,7 @@ def _tool_request_projection(block: dict, tools: list, name: str, call_input: di
     """The offered schema and original call, using the existing durable redaction boundary."""
     raw_name = str(block.get('name') or '')
     safe_args = _durable_tool_input(name, call_input)
-    if name == 'telegram_account' and _critical_telegram_tool_input(call_input):
+    if name in {'telegram_account', 'yegor_mtproto'} and _critical_telegram_tool_input(call_input):
         # A generic call wrapper contains serialized critical arguments too.
         original = ({'name': name, 'args_json': json.dumps(safe_args, ensure_ascii=False)}
                     if raw_name == 'call' else safe_args)
@@ -17601,7 +17625,7 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     if not tool_pointers_enabled():
         return full
     natives = [t for t in full
-               if str(t.get("name") or "") in NATIVE_HAND_NAMES
+               if str(t.get("name") or "") in NATIVE_HAND_NAMES | owner_telegram_tools.NAMES
                or (t.get("type") and not t.get("input_schema"))]   # провайдерский web_search
     closer = [t for t in natives if t.get("name") == "end_turn"]
     body = [t for t in natives if t.get("name") != "end_turn"]
@@ -17625,6 +17649,8 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # это правило ДАВНО устарело» — пара удалена, набор один и тот же в любом ходе. Защита живёт на исходящей границе (оценщик,
     # маскировка кредов), а не на раздаче рук.
     tools = list(BASE_TOOLS) + list(SHARED_CONTEXT_TOOLS) + list(OWNER_TOOLS)
+    if os.getenv("PRAXIS_OWNER_TELEGRAM_SOCKET"):
+        tools += owner_telegram_tools.TOOLS
     # ⚑ РУКА ОТВЕТА ПРЕДЛАГАЕТСЯ ТАМ, ГДЕ ЕСТЬ КОМУ ОТВЕЧАТЬ, — И ЭТО ДВА РАЗНЫХ УСЛОВИЯ.
     #
     # Рычаг: при опущенном реплика уходит возвратом хода, и рука, которая «отправляет
@@ -17741,7 +17767,7 @@ def _append_captured_messages(messages: list[dict], additions: list[dict]) -> No
     try:
         critical = any(
             isinstance(block, dict) and block.get("type") == "tool_use"
-            and block.get("name") == "telegram_account"
+            and block.get("name") in {"telegram_account", "yegor_mtproto"}
             and _critical_telegram_tool_input(block.get("input") or {})
             for row in additions if isinstance(row.get("content"), list)
             for block in row["content"]
@@ -17970,7 +17996,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             try:
                 out = _call_tool_with_ceiling(b["name"], impl, call_input)
             except Exception as exc:
-                if (b["name"] == "telegram_account"
+                if (b["name"] in {"telegram_account", "yegor_mtproto"}
                         and _critical_telegram_tool_input(call_input)):
                     log.warning("account-critical telegram tool failed; details redacted")
                 else:
@@ -20109,7 +20135,7 @@ def _wake_frame(status: str) -> str:
 
 
 def wake_turn(goal: str = "", *, on_run=None, source_id=None,
-              scheduled_target_id=None) -> str:
+              scheduled_target_id=None, run_id: str = "") -> str:
     """kind=wake: её собственный будильник — живой ход с ОТКРЫТЫМ Telegram. -> '' обычно.
 
     Слепок с ``forge_event_turn``: под _ONE_MIND раннера, Telethon не закрываем.
@@ -20165,7 +20191,7 @@ def wake_turn(goal: str = "", *, on_run=None, source_id=None,
         # расписку в прожитых ходах, а не съесть пробуждение без следа.
         durable = _create_durable_run(
             ctx=ctx, kind="wake", goal=goal or "self-scheduled wake",
-            conversation=seed, extra=frame,
+            conversation=seed, extra=frame, **({"run_id": run_id} if run_id else {}),
         )
         if durable is not None and source_id:
             try:

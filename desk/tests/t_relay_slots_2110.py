@@ -1,5 +1,6 @@
 """Slot management through the Python desktop command, using isolated credentials."""
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import sys
@@ -7,6 +8,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
+from urllib.error import HTTPError
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import python_relay
@@ -47,6 +49,19 @@ class SlotTests(unittest.TestCase):
                 result=python_relay.invoke(owner,'relay_network_check',{})
                 self.assertFalse(result['generation_sent'])
                 self.assertEqual(request.call_args.args[1:],('network_check',))
+
+    def test_old_relay_reports_unsupported_route_check_separately_from_subscription(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            owner=self.owner(Path(tmp));agent=owner.current()
+            descriptor=agent.tree/'relay/local_auth/control.json'
+            descriptor.parent.mkdir(parents=True)
+            descriptor.write_text(json.dumps({'port':5012,'token':'fixture'}))
+            rejected=HTTPError('http://127.0.0.1:5012/_relay/control',409,'Conflict',None,
+                               BytesIO(b'{"error":"Unknown command: network_check"}'))
+            with patch.object(python_relay.urllib.request,'build_opener') as opener:
+                opener.return_value.open.side_effect=rejected
+                self.assertEqual(python_relay.invoke(owner,'relay_network_check',{}),
+                                 {'ok':False,'error_code':'unsupported','generation_sent':False})
 
     def test_invalid_proxy_save_leaves_working_settings_unchanged(self):
         from localharness import config_cli

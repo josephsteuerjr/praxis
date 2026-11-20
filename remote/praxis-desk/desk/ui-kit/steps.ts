@@ -47,7 +47,7 @@ export interface RunDetail {
     usage?: { in?: number; cache_read?: number; out?: number };
     tools?: Array<{
       call_id?: string; seq?: number; at?: string; finished_at?: string; status?: string; error?: string;
-      outcome?: string; target?: string; nested?: unknown[]; nested_cut?: boolean;
+      outcome?: string; target?: string; nested?: unknown[]; nested_cut?: boolean; child_tools?: ToolDetail[];
       tool?: string; args?: unknown;
       definition?: { description?: string; input_schema?: unknown };
       model_request?: { tool?: string; args?: unknown };
@@ -207,8 +207,8 @@ function selectTraceTab(button:HTMLElement):void {
   const tab=button.dataset.traceTab!,key=trace.dataset.traceKey!;
   selectedTraceTabs.delete(key);selectedTraceTabs.set(key,tab);
   if(selectedTraceTabs.size>1000)selectedTraceTabs.delete(selectedTraceTabs.keys().next().value!);
-  for(const b of trace.querySelectorAll<HTMLElement>('[data-trace-tab]')) {const on=b===button;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;}
-  for(const p of trace.querySelectorAll<HTMLElement>('[data-trace-panel]'))p.hidden=p.dataset.tracePanel!==tab;
+  for(const b of trace.querySelectorAll<HTMLElement>(':scope > .tool-tabs > [data-trace-tab]')) {const on=b===button;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;}
+  for(const p of trace.querySelectorAll<HTMLElement>(':scope > [data-trace-panel]'))p.hidden=p.dataset.tracePanel!==tab;
   trace.dispatchEvent(new CustomEvent('trace-tab-selected',{bubbles:true,detail:tab}));
 }
 
@@ -293,6 +293,9 @@ export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string
   else if(executions.length && !executions.some(r=>r.argv||r.command||r.requested_argv))panels.execution+=missing('Внутренних процессов, файлов и соединений журнал за этим вызовом не записал.');
   if(t.nested_cut)panels.execution+=missing('Список вложенных действий сокращён.');
   if(executions.length)panels.execution+=details(key+':receipt',[['Квитанции исполнения',pretty(executions)]],'Квитанции · JSON');
+  if (t.child_tools?.length) panels.execution += t.child_tools.map((child, i) =>
+    `<div><code class="tool-name">${esc(child.tool || "")}</code> ${esc(toolTarget(child.tool || "", child.args))}` +
+    toolTraceHTML(child, `${key}:child:${i}`, runId) + `</div>`).join("");
   const result=t.result?.truncated ? [t.result.head,'… пропущена часть результата …',t.result.tail].filter(Boolean).join('\n') : String(t.result?.head ?? t.result?.tail ?? '');
   panels.response=t.result ? traceBlock(key+':result','Ответ инструмента',resultText(result),'response',{truncated:t.result.truncated,ref:t.result.result_id,run:runId,size:t.result.size,raw:true}) : missing('Ответ инструмента ещё не записан.');
   if(t.model_observation!=null)panels.response+=!t.result?.truncated&&t.model_observation===result ? missing('Модель получила этот же ответ; отдельной приписки нет.') : traceBlock(key+':model-response','Ответ для модели с припиской харнесса',t.model_observation,'model-response');

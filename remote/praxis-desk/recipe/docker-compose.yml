@@ -76,7 +76,7 @@ services:
       DESKCTL_PORT: 8096
       # Кого этой службе позволено трогать. Всё, чего здесь нет, ей недоступно:
       # на общем сервере рядом живут чужие проекты.
-      DESKCTL_CONTAINERS: ${PRAXIS_DESKCTL_CONTAINERS:-praxis,relay,praxis-desk}
+      DESKCTL_CONTAINERS: ${PRAXIS_DESKCTL_CONTAINERS:-praxis,relay,praxis-desk},praxis-owner-telegram
       # ⚠ Ключ (`DESKCTL_TOKEN`) приходит ИЗ `desk.env`, а не интерполяцией:
       # compose подставляет `${…}` из `.env` рядом с СОБОЙ, то есть из каталога
       # рецепта, а он приезжает выкладкой пакета и переписывается ею. Секрет,

@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import socket
+import time
 from pathlib import Path
 
 import paramiko
@@ -19,11 +20,18 @@ AUTH_FIELDS=('password','key_text','key_path','key_password')
 KEY_HEADER=re.compile(r'^-----BEGIN (?:OPENSSH|RSA|EC|ENCRYPTED|DSA)? ?PRIVATE KEY-----')
 
 
+def key_path(value):
+    """A path as people copy it: Explorer's \u00abCopy as path\u00bb adds quotes."""
+    path=str(value or '').strip()
+    if len(path)>=2 and path[0]==path[-1] and path[0] in '"\'':path=path[1:-1].strip()
+    return path
+
+
 def authentication(raw):
     """Accept an existing key file, key text, or a key pasted in password."""
     password=str(raw.get('password') or '')
     text=str(raw.get('key_text') or '').strip().lstrip('\ufeff')
-    path=str(raw.get('key_path') or '').strip()
+    path=key_path(raw.get('key_path'))
     if KEY_HEADER.match(password.strip().lstrip('\ufeff')):
         if text or path:raise ValueError('Укажи один SSH-ключ: файлом либо текстом.')
         text=password.strip().lstrip('\ufeff');password=''
@@ -95,6 +103,30 @@ def profiles():
     return rows
 
 
+def users(identity):
+    """Saved bridges and unfinished server setups that still need this profile."""
+    names=[]
+    for folder,label in (('bridges','name'),('bridge-operations','name')):
+        directory=root()/folder
+        if not directory.exists():continue
+        for item in sorted(directory.glob('*.json')):
+            try:value=json.loads(item.read_text(encoding='utf-8'))
+            except (OSError,ValueError):continue
+            if folder=='bridge-operations' and value.get('phase')=='installed':continue
+            if isinstance(value,dict) and value.get('server_profile')==identity:names.append(str(value.get(label) or item.stem))
+    return names
+
+
+def remove(identity):
+    """Forget one saved SSH connection on this computer. Server is not touched."""
+    path=_path(identity)
+    if not path.exists():raise ValueError('Подключение к серверу не найдено.')
+    used=users(identity)
+    if used:raise ValueError('Это подключение использует мост «'+used[0]+'». Сначала удали мост.')
+    path.unlink()
+    return {'ok':True,'message':'Подключение удалено с этого компьютера. На сервере ничего не менялось.'}
+
+
 def resolve(raw):
     """Reuse secrets without trusting editable public fields to retarget them."""
     identity=raw.get('server_profile')
@@ -109,10 +141,8 @@ def resolve(raw):
             ('host','port','login','fingerprint',*AUTH_FIELDS)},'confirmed_host':True}
 
 
-def inspect(raw,*,on_client=None):
-    """Host key first, authentication second; no commands or remote writes."""
+def _host_key(host,port,on_client):
     from . import server_transfer as st
-    raw=resolve(raw);host,port,_=st.parameters(raw)
     transport=None;peer=None
     try:
         peer=socket.create_connection((host,port),timeout=10)
@@ -125,11 +155,23 @@ def inspect(raw,*,on_client=None):
         try:transport=paramiko.Transport(peer)
         except BaseException:peer.close();raise
         transport.start_client(timeout=15)
-        key=transport.get_remote_server_key();seen=st.fingerprint(key)
-    except Exception:raise ValueError('Сервер не отвечает по SSH. Проверь адрес и порт.') from None
+        key=transport.get_remote_server_key()
+        return key,st.fingerprint(key)
     finally:
         if transport:transport.close()
         if peer:peer.close()
+
+
+def inspect(raw,*,on_client=None):
+    """Host key first, authentication second; no commands or remote writes."""
+    from . import server_transfer as st
+    raw=resolve(raw);host,port,_=st.parameters(raw)
+    # One quiet repeat: unstable routes often lose only the first handshake.
+    for attempt in (1,2):
+        try:key,seen=_host_key(host,port,on_client);break
+        except Exception:
+            if attempt==2:raise ValueError('Сервер не отвечает по SSH. Проверь адрес, порт и сеть.') from None
+            time.sleep(1)
     known=paramiko.HostKeys()
     with contextlib.suppress(OSError):known.load(str(Path.home()/'.ssh/known_hosts'))
     name=host if port==22 else f'[{host}]:{port}'
@@ -140,7 +182,14 @@ def inspect(raw,*,on_client=None):
     if not trusted and (raw.get('confirmed_host') is not True or pinned!=seen):
         return {'ok':False,'trust_needed':True,'fingerprint':seen,
                 'message':'Сверь отпечаток с панелью сервера. Пароль и ключ ещё не отправлены.'}
-    with contextlib.closing(st.connect({**raw,'fingerprint':seen},on_client=on_client)):pass
+    for attempt in (1,2):
+        try:
+            with contextlib.closing(st.connect({**raw,'fingerprint':seen},on_client=on_client)):pass
+            break
+        except st.TransferError as error:
+            # Only a transport failure is repeated; wrong credentials are not retried.
+            if attempt==2 or getattr(error,'code','')!='ssh_unavailable':raise
+            time.sleep(1)
     return {'ok':True,'fingerprint':seen,'message':'Подключение по SSH проверено.'}
 
 

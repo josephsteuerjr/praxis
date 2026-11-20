@@ -277,6 +277,51 @@ async def restart(name: str) -> dict:
     return {"ok": True, "name": name, "note": f"перезапущен ({_utc()})"}
 
 
+OWNER_TELEGRAM = "praxis-owner-telegram"
+_owner_telegram_lock = asyncio.Lock()
+
+
+async def owner_telegram_state() -> dict:
+    if not allowed(OWNER_TELEGRAM):
+        return {"available": False}
+    code, blob = await _docker(f"/containers/{OWNER_TELEGRAM}/json")
+    if code == 404:
+        return {"available": False}
+    if code != 200:
+        return {"available": True, "state": "unavailable"}
+    try:
+        state = json.loads(blob)["State"]
+        running = bool(state["Running"])
+        health = state.get("Health") or {}
+        status = str(state.get("Status") or "")
+    except (KeyError, TypeError, ValueError):
+        return {"available": True, "state": "unavailable"}
+    if state.get("Restarting"):
+        return {"available": True, "enabled": True, "state": "starting"}
+    if not running:
+        label = "error" if status == "dead" or state.get("ExitCode") not in (0, None, 137, 143) else "off"
+    elif health.get("Status") == "healthy":
+        label = "ready"
+    else:
+        logs = health.get("Log") or []
+        reason = str(logs[-1].get("Output") or "").strip() if logs else ""
+        if reason in {"login_required", "account_mismatch", "offline"}:
+            label = reason
+        else:
+            label = "error" if health.get("Status") == "unhealthy" else "starting"
+    return {"available": True, "enabled": running, "state": label}
+
+
+async def owner_telegram_set(enabled: bool) -> dict:
+    if not allowed(OWNER_TELEGRAM):
+        return {"available": False, "ok": False}
+    async with _owner_telegram_lock:
+        verb = "start" if enabled else "stop?t=15"
+        code, _ = await _docker(f"/containers/{OWNER_TELEGRAM}/{verb}", method="POST", timeout=25)
+        result = await owner_telegram_state()
+        return {**result, "ok": code in (204, 304) and result.get("enabled") == enabled}
+
+
 # --- мозг ---------------------------------------------------------------------
 
 
@@ -465,6 +510,22 @@ async def h_restart(request: web.Request):
 
 
 @guard
+async def h_owner_telegram_state(request: web.Request):
+    return web.json_response(await owner_telegram_state())
+
+
+@guard
+async def h_owner_telegram_set(request: web.Request):
+    try:
+        payload = await request.json()
+    except (ValueError, TypeError):
+        payload = None
+    if not isinstance(payload, dict) or set(payload) != {"enabled"} or type(payload["enabled"]) is not bool:
+        return web.json_response({"ok": False}, status=400)
+    return web.json_response(await owner_telegram_set(payload["enabled"]))
+
+
+@guard
 async def h_brain(request: web.Request):
     return web.json_response(await asyncio.to_thread(brain_state))
 
@@ -528,6 +589,8 @@ def app() -> web.Application:
         web.get('/allowances', h_allowances),
         web.get('/services/xtts', h_xtts_state),
         web.post('/services/xtts', h_xtts_action),
+        web.get('/services/owner-telegram', h_owner_telegram_state),
+        web.post('/services/owner-telegram', h_owner_telegram_set),
         web.get("/logs/{name}", h_logs),
         web.post("/restart/{name}", h_restart),
         web.get("/brain", h_brain),

@@ -9780,9 +9780,9 @@
     "zh": "8f6923e3"
   },
   "ui.ui.kit.window.server.settings.7e4de143ff": {
-    "en": "7e4de143",
-    "fr": "7e4de143",
-    "zh": "7e4de143"
+    "en": "cd47ff50",
+    "fr": "cd47ff50",
+    "zh": "cd47ff50"
   },
   "ui.ui.kit.window.server.settings.d6105bb1f1": {
     "en": "d6105bb1",
@@ -9795,9 +9795,9 @@
     "zh": "f52c607e"
   },
   "ui.ui.kit.window.server.settings.7079f609f4": {
-    "en": "7079f609",
-    "fr": "7079f609",
-    "zh": "7079f609"
+    "en": "c61a7eb5",
+    "fr": "c61a7eb5",
+    "zh": "c61a7eb5"
   },
   "ui.ui.kit.window.server.settings.e0bb6718d5": {
     "en": "e0bb6718",
@@ -9960,9 +9960,9 @@
     "zh": "8c96c91a"
   },
   "ui.ui.kit.window.server.settings.a644a513f1": {
-    "en": "a644a513",
-    "fr": "a644a513",
-    "zh": "a644a513"
+    "en": "19d2c59a",
+    "fr": "19d2c59a",
+    "zh": "19d2c59a"
   },
   "ui.ui.kit.window.server.settings.5dc62ddfff": {
     "en": "5dc62ddf",
@@ -13480,9 +13480,9 @@
     "zh": "371c182d"
   },
   "ui.ui.kit.window.server.access.form.b64c720e30": {
-    "en": "b64c720e",
-    "fr": "b64c720e",
-    "zh": "b64c720e"
+    "en": "8e229df8",
+    "fr": "8e229df8",
+    "zh": "8e229df8"
   },
   "ui.ui.kit.window.server.access.form.4289b17137": {
     "en": "4289b171",
@@ -16000,9 +16000,9 @@
     "zh": "fe7b9604"
   },
   "ui.app.src.relay.proxy.1e1f9bb15c": {
-    "en": "1e1f9bb1",
-    "fr": "1e1f9bb1",
-    "zh": "1e1f9bb1"
+    "en": "2a248ced",
+    "fr": "2a248ced",
+    "zh": "2a248ced"
   },
   "ui.app.src.relay.proxy.8d3f165c4c": {
     "en": "8d3f165c",
@@ -16015,14 +16015,14 @@
     "zh": "5f2af98a"
   },
   "ui.app.src.relay.proxy.ef07983c23": {
-    "en": "ef07983c",
-    "fr": "ef07983c",
-    "zh": "ef07983c"
+    "en": "98767acb",
+    "fr": "98767acb",
+    "zh": "98767acb"
   },
   "ui.app.src.relay.proxy.3af67a39de": {
-    "en": "3af67a39",
-    "fr": "3af67a39",
-    "zh": "3af67a39"
+    "en": "dec60f13",
+    "fr": "dec60f13",
+    "zh": "dec60f13"
   },
   "ui.app.src.relay.proxy.39ab6758e8": {
     "en": "39ab6758",
@@ -19115,9 +19115,9 @@
     "zh": "6f22f524"
   },
   "ui.ui.kit.window.server.bridge.manual.2d9c769830": {
-    "en": "2d9c7698",
-    "fr": "2d9c7698",
-    "zh": "2d9c7698"
+    "en": "35d7e965",
+    "fr": "35d7e965",
+    "zh": "35d7e965"
   },
   "native.first.b38b23d5de": {
     "en": "b38b23d5",
@@ -21635,14 +21635,14 @@
     "zh": "4fc85b87"
   },
   "bridge.bundled.help": {
-    "en": "a2080ec6",
-    "fr": "a2080ec6",
-    "zh": "a2080ec6"
+    "en": "9c475be9",
+    "fr": "9c475be9",
+    "zh": "9c475be9"
   },
   "bridge.existing.help": {
-    "en": "00396c29",
-    "fr": "00396c29",
-    "zh": "00396c29"
+    "en": "8e06939e",
+    "fr": "8e06939e",
+    "zh": "8e06939e"
   },
   "bridge.ssh.key.help": {
     "en": "01639001",
@@ -21675,9 +21675,9 @@
     "zh": "a4b0fe2e"
   },
   "bridge.error.local_port": {
-    "en": "58186501",
-    "fr": "58186501",
-    "zh": "58186501"
+    "en": "6ca759b2",
+    "fr": "6ca759b2",
+    "zh": "6ca759b2"
   },
   "bridge.error.host_key": {
     "en": "e026c856",
@@ -21723,5 +21723,305 @@
     "en": "0cb6db9e",
     "fr": "0cb6db9e",
     "zh": "0cb6db9e"
+  },
+  "connections.title": {
+    "en": "d02c70cc",
+    "fr": "d02c70cc",
+    "zh": "d02c70cc"
+  },
+  "connections.ssh_bridge": {
+    "en": "1f34fd68",
+    "fr": "1f34fd68",
+    "zh": "1f34fd68"
+  },
+  "connections.tray_telegram": {
+    "en": "685a9e83",
+    "fr": "685a9e83",
+    "zh": "685a9e83"
+  },
+  "connections.tray_relay": {
+    "en": "1ecc260b",
+    "fr": "1ecc260b",
+    "zh": "1ecc260b"
+  },
+  "connections.tray_hint": {
+    "en": "ed1da678",
+    "fr": "ed1da678",
+    "zh": "ed1da678"
+  },
+  "connections.bridge_check": {
+    "en": "2dbd28cc",
+    "fr": "2dbd28cc",
+    "zh": "2dbd28cc"
+  },
+  "connections.save_before_check": {
+    "en": "4b313ea1",
+    "fr": "4b313ea1",
+    "zh": "4b313ea1"
+  },
+  "connections.check_unsupported": {
+    "en": "88973ad8",
+    "fr": "88973ad8",
+    "zh": "88973ad8"
+  },
+  "connections.check_timeout": {
+    "en": "3e26480f",
+    "fr": "3e26480f",
+    "zh": "3e26480f"
+  },
+  "connections.check_redirected": {
+    "en": "e9c43da0",
+    "fr": "e9c43da0",
+    "zh": "e9c43da0"
+  },
+  "connections.check_transport": {
+    "en": "2a9cb450",
+    "fr": "2a9cb450",
+    "zh": "2a9cb450"
+  },
+  "ssh.key.opening": {
+    "en": "e0c5965e",
+    "fr": "e0c5965e",
+    "zh": "e0c5965e"
+  },
+  "ssh.profile.remove": {
+    "en": "038edde9",
+    "fr": "038edde9",
+    "zh": "038edde9"
+  },
+  "ssh.profile.remove_confirm": {
+    "en": "b303ffe6",
+    "fr": "b303ffe6",
+    "zh": "b303ffe6"
+  },
+  "bridge.mode.existing": {
+    "en": "39e9810b",
+    "fr": "39e9810b",
+    "zh": "39e9810b"
+  },
+  "bridge.mode.auto": {
+    "en": "4b6d1b44",
+    "fr": "4b6d1b44",
+    "zh": "4b6d1b44"
+  },
+  "bridge.port.auto": {
+    "en": "4af423e9",
+    "fr": "4af423e9",
+    "zh": "4af423e9"
+  },
+  "bridge.port.auto_hint": {
+    "en": "1bff1491",
+    "fr": "1bff1491",
+    "zh": "1bff1491"
+  },
+  "bridge.port.repair": {
+    "en": "5d3df0c1",
+    "fr": "5d3df0c1",
+    "zh": "5d3df0c1"
+  },
+  "bridge.local_proxy": {
+    "en": "637b64e5",
+    "fr": "637b64e5",
+    "zh": "637b64e5"
+  },
+  "bridge.remove": {
+    "en": "e1e4d46f",
+    "fr": "e1e4d46f",
+    "zh": "e1e4d46f"
+  },
+  "bridge.remove_confirm": {
+    "en": "b303ffe6",
+    "fr": "b303ffe6",
+    "zh": "b303ffe6"
+  },
+  "bridge.ssh.pending": {
+    "en": "06daf869",
+    "fr": "06daf869",
+    "zh": "06daf869"
+  },
+  "connections.tray_filled_telegram": {
+    "en": "8c0fbe4b",
+    "fr": "8c0fbe4b",
+    "zh": "8c0fbe4b"
+  },
+  "connections.tray_filled_relay": {
+    "en": "a7c11a1f",
+    "fr": "a7c11a1f",
+    "zh": "a7c11a1f"
+  },
+  "connections.tray_already_telegram": {
+    "en": "80584e0c",
+    "fr": "80584e0c",
+    "zh": "80584e0c"
+  },
+  "connections.tray_already_relay": {
+    "en": "f5aa9eca",
+    "fr": "f5aa9eca",
+    "zh": "f5aa9eca"
+  },
+  "connections.tray_probing": {
+    "en": "db47e177",
+    "fr": "db47e177",
+    "zh": "db47e177"
+  },
+  "connections.tray_alive": {
+    "en": "502205e9",
+    "fr": "502205e9",
+    "zh": "502205e9"
+  },
+  "connections.tray_absent": {
+    "en": "2b5259d9",
+    "fr": "2b5259d9",
+    "zh": "2b5259d9"
+  },
+  "connections.tray_not_proxy": {
+    "en": "d32ea64d",
+    "fr": "d32ea64d",
+    "zh": "d32ea64d"
+  },
+  "network.intro": {
+    "en": "059dc785",
+    "fr": "059dc785",
+    "zh": "059dc785"
+  },
+  "network.sources.title": {
+    "en": "0d98724e",
+    "fr": "0d98724e",
+    "zh": "0d98724e"
+  },
+  "network.sources.external": {
+    "en": "ebd22814",
+    "fr": "ebd22814",
+    "zh": "ebd22814"
+  },
+  "network.routes.title": {
+    "en": "a8fb1e1b",
+    "fr": "a8fb1e1b",
+    "zh": "a8fb1e1b"
+  },
+  "network.usage.telegram": {
+    "en": "ad026228",
+    "fr": "ad026228",
+    "zh": "ad026228"
+  },
+  "network.usage.relay": {
+    "en": "582f954f",
+    "fr": "582f954f",
+    "zh": "582f954f"
+  },
+  "network.usage.https": {
+    "en": "c40fbf43",
+    "fr": "c40fbf43",
+    "zh": "c40fbf43"
+  },
+  "route.telegram.title": {
+    "en": "ad026228",
+    "fr": "ad026228",
+    "zh": "ad026228"
+  },
+  "route.relay.title": {
+    "en": "582f954f",
+    "fr": "582f954f",
+    "zh": "582f954f"
+  },
+  "route.system": {
+    "en": "65053aab",
+    "fr": "65053aab",
+    "zh": "65053aab"
+  },
+  "route.system_text": {
+    "en": "bfa81cb5",
+    "fr": "bfa81cb5",
+    "zh": "bfa81cb5"
+  },
+  "route.direct": {
+    "en": "a672e537",
+    "fr": "a672e537",
+    "zh": "a672e537"
+  },
+  "route.direct_text": {
+    "en": "2f8bfdf8",
+    "fr": "2f8bfdf8",
+    "zh": "2f8bfdf8"
+  },
+  "route.bridge": {
+    "en": "6a7eb50d",
+    "fr": "6a7eb50d",
+    "zh": "6a7eb50d"
+  },
+  "route.bridge_text": {
+    "en": "fa8ee6d2",
+    "fr": "fa8ee6d2",
+    "zh": "fa8ee6d2"
+  },
+  "route.bridge_saved": {
+    "en": "810b4b76",
+    "fr": "810b4b76",
+    "zh": "810b4b76"
+  },
+  "route.bridge_missing": {
+    "en": "58fc394f",
+    "fr": "58fc394f",
+    "zh": "58fc394f"
+  },
+  "route.custom": {
+    "en": "5c4ca3d4",
+    "fr": "5c4ca3d4",
+    "zh": "5c4ca3d4"
+  },
+  "route.custom_text": {
+    "en": "660bb715",
+    "fr": "660bb715",
+    "zh": "660bb715"
+  },
+  "route.custom_hint": {
+    "en": "4d4ceea3",
+    "fr": "4d4ceea3",
+    "zh": "4d4ceea3"
+  },
+  "route.tray_fill": {
+    "en": "5870aeda",
+    "fr": "5870aeda",
+    "zh": "5870aeda"
+  },
+  "bridge.add": {
+    "en": "daf18d3e",
+    "fr": "daf18d3e",
+    "zh": "daf18d3e"
+  },
+  "bridge.reconnect": {
+    "en": "67c06a6c",
+    "fr": "67c06a6c",
+    "zh": "67c06a6c"
+  },
+  "bridge.https": {
+    "en": "f1a0fcee",
+    "fr": "f1a0fcee",
+    "zh": "f1a0fcee"
+  },
+  "bridge.used_by": {
+    "en": "e4bd1c08",
+    "fr": "e4bd1c08",
+    "zh": "e4bd1c08"
+  },
+  "bridge.unused": {
+    "en": "e25b44db",
+    "fr": "e25b44db",
+    "zh": "e25b44db"
+  },
+  "bridge.ready": {
+    "en": "48a857e3",
+    "fr": "48a857e3",
+    "zh": "48a857e3"
+  },
+  "bridge.apply": {
+    "en": "e15f960d",
+    "fr": "e15f960d",
+    "zh": "e15f960d"
+  },
+  "bridge.applied.relay": {
+    "en": "250e34aa",
+    "fr": "250e34aa",
+    "zh": "250e34aa"
   }
 }

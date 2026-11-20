@@ -24,6 +24,7 @@ services:
       # Authenticated HTTP-over-UDS for hardbot. The endpoint reuses this
       # process' resident Whisper object and has no TCP listener.
       - PRAXIS_STT_RPC_ENABLED=1
+      - PRAXIS_OWNER_TELEGRAM_SOCKET=/run/praxis-owner-telegram/telegram.sock
       - PRAXIS_STT_RPC_SOCKET=/run/praxis-stt/stt.sock
       - PRAXIS_STT_RPC_TOKEN_FILE=/run/secrets/praxis-stt-client.token
       - PRAXIS_STT_RPC_MAX_BYTES=15728640
@@ -66,6 +67,7 @@ services:
       # PASS 23.2: сокет+токен root-демона praxis-serverd. ТОЛЬКО у praxis (не mailbot/serverapp);
       # доступ к самому демону всё равно закрыт cgroup-пином на этот контейнер.
       - /opt/praxis-serverd/run:/run/praxis-serverd:rw
+      - /opt/praxis-owner-telegram/run:/run/praxis-owner-telegram:ro
     # PASS 12.2: доступ к localhost хоста; адрес в конфиге тогда host.docker.internal, не 127.0.0.1
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -73,6 +75,24 @@ services:
     tmpfs:
       - /run/praxis-stt-tmp:size=32m,mode=0700,noexec,nosuid,nodev
     restart: unless-stopped
+  owner-telegram:
+    profiles: [owner-telegram]
+    build: .
+    container_name: praxis-owner-telegram
+    env_file:
+      - path: /opt/praxis-owner-telegram/service.env
+        required: false
+    command: python -m owner_telegram_service
+    volumes:
+      - ./:/app:ro
+      - /opt/praxis-owner-telegram/run:/run/praxis-owner-telegram
+      - /opt/praxis-owner-telegram/state:/var/lib/praxis-owner-telegram
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import owner_telegram_rpc as r; state = r.request('status', timeout=2)['status']; print(state); raise SystemExit(state != 'ready')"]
+      interval: 5s
+      timeout: 4s
+      retries: 3
   mailbot:
     build: .
     container_name: praxis-mailbot
