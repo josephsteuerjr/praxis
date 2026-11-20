@@ -1,0 +1,90 @@
+{
+  "FRONTENDS-2.8.13.json": {
+    "sha256": "049b295f6b8d33994f8959b5055a7e7676a2d4f622dad1e618a777fc98c19c5e",
+    "size": 25388
+  },
+  "Helene-2.8.13-fedora-x86_64.zip": {
+    "sha256": "cbd8b47d0842485736650f3460ed369c8f3f84cc0f29bb797afb5cc6235129ed",
+    "size": 858615532
+  },
+  "Helene-2.8.13-fedora-x86_64.zip.sha256": {
+    "sha256": "1565447cceb7b66165200b42540272d65bf82f9f282481413f016db8e3e5d06c",
+    "size": 98
+  },
+  "Helene-2.8.13-linux-x86_64.zip": {
+    "sha256": "6dc3847ecd41004df358d9f1a5a113bbb3288d07e98f8959878d60c22220c864",
+    "size": 858615513
+  },
+  "Helene-2.8.13-linux-x86_64.zip.sha256": {
+    "sha256": "2ac8c0211e5883e8f7ec9438c0e97e517434c0c4ae4420c7af54232d987114ad",
+    "size": 97
+  },
+  "Helene-2.8.13-macos-arm64.zip": {
+    "sha256": "4c75895f0146c8e9fc28758a3767ac81899f3bb98f5286a8953a1934dcdb4a92",
+    "size": 277242890
+  },
+  "Helene-2.8.13-macos-arm64.zip.sha256": {
+    "sha256": "bb70dc74dd9861eb7c446641abc69ddc3c59b88ef913cedd87d70b8cb4bfe03e",
+    "size": 96
+  },
+  "Helene-2.8.13-macos-x86_64.zip": {
+    "sha256": "8a68f3f6f413c3c23963f37f923589c12906631a2788c2690634392d99086e57",
+    "size": 272569874
+  },
+  "Helene-2.8.13-macos-x86_64.zip.sha256": {
+    "sha256": "1ebc96bf8d6850ec6c6ba9e7715c677138182156a80ca5ab5614b94ab70c3221",
+    "size": 97
+  },
+  "Helene-2.8.13-server-linux-arm64.zip": {
+    "sha256": "b32d2d0ca3aab7cb84a23cd5a2b55591f25fbf3dd80fa1efda0797b2a0193d71",
+    "size": 18850779
+  },
+  "Helene-2.8.13-server-linux-arm64.zip.sha256": {
+    "sha256": "0e2fb8843875957204d2bd8629a5fecd418ba9f86348bb919da069892b8dc158",
+    "size": 103
+  },
+  "Helene-2.8.13-source.zip": {
+    "sha256": "85912352437967af2735b950e35ff5ae8726608005e8416ad3ebcca2845268f2",
+    "size": 23516488
+  },
+  "Helene-2.8.13-source.zip.sha256": {
+    "sha256": "5b77d431de67114d7ffa04cc2c57f645e5b5d3663d079d06273666cfa9d072ee",
+    "size": 91
+  },
+  "Helene-2.8.13.zip": {
+    "sha256": "b1c0d4132f65fdef547f6ea3fa23cbc2f835ebcb3e91fbcb57597a44ee57822a",
+    "size": 531763504
+  },
+  "Helene-2.8.13.zip.sha256": {
+    "sha256": "3ff409464e5c3cf94662b339f1f23413a7ada4571f8987d62c40bbff4c9ac2c3",
+    "size": 84
+  },
+  "RELEASE-EVIDENCE.json": {
+    "sha256": "69072a89e905eb2ff1b7fde76783ba8e938544f4794ebc1ad18e17df3bbd3132",
+    "size": 14280
+  },
+  "RELEASE-NOTES.md": {
+    "sha256": "5dfe280b8cbe782d4870868815da4676459cf3055300ed68ff8b94c5cfb37347",
+    "size": 2261
+  },
+  "SOURCE-2.8.13.json": {
+    "sha256": "31d8f3e2ff1dc5664c99cfabd181f26c6d308bdeaebda5af5f75d965ce821d60",
+    "size": 701251
+  },
+  "START-HERE-2.8.13.txt": {
+    "sha256": "1b9370688506a72eb02fa33def964f5cd01733639c321b4182b37a32009790e9",
+    "size": 230
+  },
+  "UI-EVIDENCE-2.8.13.zip": {
+    "sha256": "754a23c4939a40367a14744ac3ba076867872b38d557c2f7f2c1e62ffd3ab2ea",
+    "size": 15952147
+  },
+  "UI-EVIDENCE-2.8.13.zip.sha256": {
+    "sha256": "67e2c53ae3352009c939f77661ceedde38285d21efb4fa455027553ee1509fc2",
+    "size": 89
+  },
+  "SHA256SUMS": {
+    "sha256": "ed58eb519b26337f2bdb8bd0b251f3459f8d446f23bddc39e3c3e7e3471b2345",
+    "size": 1998
+  }
+}

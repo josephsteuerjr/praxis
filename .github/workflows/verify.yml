@@ -1,0 +1,23 @@
+name: Verify Hélène 2.8.13 anonymous public downloads
+on:
+  push:
+    branches: [codex/helene2813-public-verify-2011]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download and verify all anonymous bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 verify_release_public.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-verification
+          path: PUBLIC-VERIFIED.json
+          if-no-files-found: error
