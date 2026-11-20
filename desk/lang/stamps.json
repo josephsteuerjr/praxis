@@ -21635,9 +21635,9 @@
     "zh": "4fc85b87"
   },
   "bridge.bundled.help": {
-    "en": "8a31e916",
-    "fr": "8a31e916",
-    "zh": "8a31e916"
+    "en": "9c475be9",
+    "fr": "9c475be9",
+    "zh": "9c475be9"
   },
   "bridge.existing.help": {
     "en": "8e06939e",
@@ -21820,9 +21820,9 @@
     "zh": "5d3df0c1"
   },
   "bridge.local_proxy": {
-    "en": "e2049747",
-    "fr": "e2049747",
-    "zh": "e2049747"
+    "en": "637b64e5",
+    "fr": "637b64e5",
+    "zh": "637b64e5"
   },
   "bridge.remove": {
     "en": "e1e4d46f",
@@ -21878,5 +21878,145 @@
     "en": "d32ea64d",
     "fr": "d32ea64d",
     "zh": "d32ea64d"
+  },
+  "network.intro": {
+    "en": "059dc785",
+    "fr": "059dc785",
+    "zh": "059dc785"
+  },
+  "network.sources.title": {
+    "en": "0d98724e",
+    "fr": "0d98724e",
+    "zh": "0d98724e"
+  },
+  "network.sources.external": {
+    "en": "4bc9faa5",
+    "fr": "4bc9faa5",
+    "zh": "4bc9faa5"
+  },
+  "network.routes.title": {
+    "en": "a8fb1e1b",
+    "fr": "a8fb1e1b",
+    "zh": "a8fb1e1b"
+  },
+  "network.usage.telegram": {
+    "en": "ad026228",
+    "fr": "ad026228",
+    "zh": "ad026228"
+  },
+  "network.usage.relay": {
+    "en": "582f954f",
+    "fr": "582f954f",
+    "zh": "582f954f"
+  },
+  "network.usage.https": {
+    "en": "c40fbf43",
+    "fr": "c40fbf43",
+    "zh": "c40fbf43"
+  },
+  "route.telegram.title": {
+    "en": "ad026228",
+    "fr": "ad026228",
+    "zh": "ad026228"
+  },
+  "route.relay.title": {
+    "en": "582f954f",
+    "fr": "582f954f",
+    "zh": "582f954f"
+  },
+  "route.system": {
+    "en": "65053aab",
+    "fr": "65053aab",
+    "zh": "65053aab"
+  },
+  "route.system_text": {
+    "en": "bfa81cb5",
+    "fr": "bfa81cb5",
+    "zh": "bfa81cb5"
+  },
+  "route.direct": {
+    "en": "a672e537",
+    "fr": "a672e537",
+    "zh": "a672e537"
+  },
+  "route.direct_text": {
+    "en": "2f8bfdf8",
+    "fr": "2f8bfdf8",
+    "zh": "2f8bfdf8"
+  },
+  "route.bridge": {
+    "en": "6a7eb50d",
+    "fr": "6a7eb50d",
+    "zh": "6a7eb50d"
+  },
+  "route.bridge_text": {
+    "en": "fa8ee6d2",
+    "fr": "fa8ee6d2",
+    "zh": "fa8ee6d2"
+  },
+  "route.bridge_saved": {
+    "en": "810b4b76",
+    "fr": "810b4b76",
+    "zh": "810b4b76"
+  },
+  "route.bridge_missing": {
+    "en": "58fc394f",
+    "fr": "58fc394f",
+    "zh": "58fc394f"
+  },
+  "route.custom": {
+    "en": "5c4ca3d4",
+    "fr": "5c4ca3d4",
+    "zh": "5c4ca3d4"
+  },
+  "route.custom_text": {
+    "en": "660bb715",
+    "fr": "660bb715",
+    "zh": "660bb715"
+  },
+  "route.custom_hint": {
+    "en": "4d4ceea3",
+    "fr": "4d4ceea3",
+    "zh": "4d4ceea3"
+  },
+  "route.tray_fill": {
+    "en": "5870aeda",
+    "fr": "5870aeda",
+    "zh": "5870aeda"
+  },
+  "bridge.add": {
+    "en": "daf18d3e",
+    "fr": "daf18d3e",
+    "zh": "daf18d3e"
+  },
+  "bridge.reconnect": {
+    "en": "67c06a6c",
+    "fr": "67c06a6c",
+    "zh": "67c06a6c"
+  },
+  "bridge.https": {
+    "en": "f1a0fcee",
+    "fr": "f1a0fcee",
+    "zh": "f1a0fcee"
+  },
+  "bridge.used_by": {
+    "en": "e4bd1c08",
+    "fr": "e4bd1c08",
+    "zh": "e4bd1c08"
+  },
+  "bridge.unused": {
+    "en": "e25b44db",
+    "fr": "e25b44db",
+    "zh": "e25b44db"
+  },
+  "bridge.ready": {
+    "en": "48a857e3",
+    "fr": "48a857e3",
+    "zh": "48a857e3"
+  },
+  "bridge.apply": {
+    "en": "e15f960d",
+    "fr": "e15f960d",
+    "zh": "e15f960d"
   }
 }

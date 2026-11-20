@@ -259,7 +259,10 @@ export interface Edition {
   /** Refresh route-specific controls only after a confirmed config write. */
   didSave?(config: Config): void;
   networkSettings?: HTMLElement;
-  useServerBridge?(bridge:ServerBridge,options?:{relay?:boolean}):void;
+  /** Where the user's Hélène bridges are listed inside «Network and proxy». */
+  networkSources?: HTMLElement;
+  /** Which routes currently go through a bridge, for its row in the list. */
+  bridgeUsage?(id:string):string[];
   /** Подпись под карточкой «Имена»: у изданий она разная. */
   namesHint: string;
   /**
@@ -393,25 +396,18 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
 
-  const chooseBridge=(bridge:ServerBridge,options:{relay?:boolean}={})=>{
+  // Mini App HTTPS picks a bridge for the phone only; Telegram and the relay
+  // choose their own routes in «Network and proxy».
+  const chooseBridge=(bridge:ServerBridge)=>{
     if(draft.mode==='remote')throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.18eb1ae156"));
-    useBridge(draft,bridge,options);built.useServerBridge?.(bridge,options);
+    useBridge(draft,bridge,{phone:true});
     phoneSettings.dispatchEvent(new CustomEvent('bridge-selected',{detail:bridge}));
     phoneSettings.dispatchEvent(new Event('input',{bubbles:true}));
     return uiText('bridge.routes.draft');
   };
   const phoneSettings=phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg,{onBridge:chooseBridge});
-  if (built.networkSettings && electron?.shell === 'python' && draft.mode !== 'remote') {
-    const bridge = el('details','fold');
-    bridge.append(el('summary','',uiText('connections.ssh_bridge')));
-    const openBridge = () => {
-      if (!bridge.open) return;
-      bridge.append(serverBridgePanel(chooseBridge));
-      bridge.removeEventListener('toggle',openBridge);
-    };
-    bridge.addEventListener('toggle',openBridge);
-    built.networkSettings.append(bridge);
-  }
+  if (built.networkSources && electron?.shell === 'python' && draft.mode !== 'remote')
+    built.networkSources.append(serverBridgePanel({usage:id=>built.bridgeUsage?.(id)??[]}));
   center.append(inGroup(phoneSettings, GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
@@ -1495,7 +1491,7 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
       try{
         const checked=await shell<{ok:boolean}>('server_bridge',{action:'check',request:JSON.stringify({id:selected.id})});
         if(!checked.ok)throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.19aae8d623"));
-        if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected);cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
+        if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected,{phone:true});cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
         profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.1f37c24b41");
         profiles.dispatchEvent(new Event('input',{bubbles:true}));
       }catch(error){profiles.value=draft.phone?.bridge_profile||'';profileNote.textContent=humanError(error).text;}

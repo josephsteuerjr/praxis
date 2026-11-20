@@ -16,6 +16,8 @@ from .private_files import write_private
 from .server_bridge_runtime import Bridge,ports
 
 FORMAT='helene-server-bridge.v1'
+# Config sections that may route through a saved bridge.
+CONSUMERS=('phone','network','relay')
 
 
 class BridgeCheckError(ValueError):
@@ -145,7 +147,7 @@ def selected_by(identity,owner):
     names=[]
     for agent in agents.roster(owner.root):
         cfg=agents.read_config(agent.config)
-        if identity in {(cfg.get(name) or {}).get('bridge_profile') for name in ('phone','network')}:
+        if identity in {(cfg.get(name) or {}).get('bridge_profile') for name in CONSUMERS}:
             names.append(str(getattr(agent,'name','') or getattr(agent,'id','') or agent.config))
     return names
 
@@ -244,18 +246,21 @@ class Manager:
                 if not agent.enabled or agent.conflict:continue
                 cfg=agents.read_config(agent.config)
                 if cfg.get('mode')=='remote':continue
-                for identity in {(cfg.get(name) or {}).get('bridge_profile') for name in ('phone','network')} - {None,''}:
+                # A bridge serves its local proxy while anyone routes through it:
+                # Telegram and Mini App (network), the ChatGPT relay, or both.
+                for identity in {(cfg.get(name) or {}).get('bridge_profile') for name in CONSUMERS} - {None,''}:
                     try:
                         value=read(identity);selected=configuration(value,agent)
-                        phone=cfg.get('phone') or {};network=cfg.get('network') or {}
+                        phone=cfg.get('phone') or {}
                         if phone.get('bridge_profile')!=identity or phone.get('mode')!='stable' or not phone.get('enabled'):
                             selected.pop('local_app_port',None);selected.pop('remote_app_port',None)
                         elif str(phone.get('external') or '').rstrip('/')!=value.get('external'):
                             raise ValueError('HTTPS-адрес отличается от сохранённого моста. Выбери подключение заново или отключи его привязку.')
-                        if network.get('bridge_profile')!=identity:
+                        routes=[name for name in ('network','relay') if (cfg.get(name) or {}).get('bridge_profile')==identity]
+                        if not routes:
                             selected.pop('local_proxy_port',None);selected.pop('remote_proxy_port',None)
-                        else:
-                            proxy=network.get('proxy') or {}
+                        for name in routes:
+                            proxy=(cfg.get(name) or {}).get('proxy') or {}
                             if (proxy.get('mode'),proxy.get('protocol'),proxy.get('host'),str(proxy.get('port'))) != ('proxy','http','127.0.0.1',str(selected.get('local_proxy_port'))) or proxy.get('username') or proxy.get('password'):
                                 raise ValueError('Маршрут прокси отличается от сохранённого моста. Выбери подключение заново или отключи его привязку.')
                         if not selected:continue

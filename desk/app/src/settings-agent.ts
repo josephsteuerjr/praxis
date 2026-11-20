@@ -14,7 +14,8 @@ import { t as uiText } from "../../lang/lang";
 // «блоки конфига СЛИВАЮТСЯ, а не пересобираются» держится там же: всё, что
 // пишется здесь, идёт через `keepBlock`.
 import QRCode from "qrcode";
-import { api, shell } from "../../ui-kit/window/api";
+import { api, electron, shell } from "../../ui-kit/window/api";
+import type { ServerBridge } from "../../ui-kit/window/server-bridge-config";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan, fastModeAvailability, type ModelDetails } from "../../ui-kit/providers";
 import { keepBlock } from "../../ui-kit/window/config";
 import { el, humanError, toast } from "../../ui-kit/window/lib";
@@ -246,9 +247,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   panes.anthropic.append(anthGrid, anthPresets, presetNote, anthModels, el("p", "field-hint", uiText("ui.app.src.settings.agent.bf696eb271")));
 
   const subscriptions = relayAccounts();
-  const relayConnection = relayProxy(draft.relay?.proxy);
-  const applicationConnection = relayProxy(draft.network?.proxy, { application: true });
-  let bridgeRoute=draft.network?.bridge_profile ? JSON.stringify(applicationConnection.collect()) : '';
+  const relayConnection = relayProxy(draft.relay?.proxy, { bridge: String(draft.relay?.bridge_profile || '') });
+  const applicationConnection = relayProxy(draft.network?.proxy, { application: true, bridge: String(draft.network?.bridge_profile || '') });
   const relayRefresh = subscriptions.refresh;
   let relayExecutable=String(draft.relay?.executable||'');
   const relayExecutableField=field(uiText("ui.app.src.settings.agent.536d9e28d6"),relayExecutable,v=>{relayExecutable=v;},{placeholder:uiText("ui.app.src.settings.agent.2c3cfbf2db")});
@@ -615,6 +615,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     proxyFields.hidden = !v;
   });
   proxyToggle.style.marginTop = "14px";
+  // 2.8.12: the old HTTPS gateway is superseded by «Network and proxy»; it
+  // stays visible only for an installation that still has it switched on.
+  const gatewayHint = el("p", "field-hint", uiText("ui.app.src.settings.agent.89574bde85"));
+  proxyToggle.hidden = gatewayHint.hidden = tgProxy.enabled !== true;
   const admission = String(draft.telegram.allow_from || "owner");
   const admissionHint = el("p", "field-hint", admission === "any"
     ? uiText("ui.app.src.settings.agent.506a3cd2c5")
@@ -623,40 +627,39 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       : uiText("ui.app.src.settings.agent.1bb7ba6826"));
   tgBox.append(el("p", "field-hint", uiText("ui.app.src.settings.agent.16bcc4fad4")),
     admissionHint, tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
-    proxyToggle, proxyFields, el("p", "field-hint", uiText("ui.app.src.settings.agent.89574bde85")));
+    proxyToggle, proxyFields, gatewayHint);
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
+  // 2.8.12 (owner, 20.11): «where the proxy comes from» and «who goes
+  // through it» are separate. Hélène bridges are sources (the frame mounts
+  // them into networkSources); Telegram and the relay each choose a route.
   const networkSettings = el('div');
-  const tray = {mode:'proxy',protocol:'http',host:'127.0.0.1',port:'8888',username:'',password:''};
-  // 2.8.11 (owner, 20.11): the buttons used to fill fields silently, and with
-  // 127.0.0.1:8888 already in place nothing visibly happened. Say what changed,
-  // that saving applies it, and whether anything actually answers on that port.
-  const trayNote = el('p','receipt'); trayNote.setAttribute('aria-live','polite');
-  const useTray = async (telegram: boolean) => {
-    const connection = telegram ? applicationConnection : relayConnection;
-    const before = JSON.stringify(connection.collect());
-    connection.set(tray);
-    if (telegram) delete draft.network?.bridge_profile;
-    const same = before === JSON.stringify(connection.collect());
-    const filled = uiText(telegram ? (same ? 'connections.tray_already_telegram' : 'connections.tray_filled_telegram')
-      : (same ? 'connections.tray_already_relay' : 'connections.tray_filled_relay'));
-    trayNote.textContent = filled + ' ' + uiText('connections.tray_probing');
-    try {
-      const probe = await shell<{ ok: boolean; state: string }>('local_proxy_probe', { port: Number(tray.port) });
-      trayNote.textContent = filled + ' ' + uiText(probe.ok ? 'connections.tray_alive'
-        : probe.state === 'absent' ? 'connections.tray_absent' : 'connections.tray_not_proxy');
-    } catch {
-      // A shell without the probe still reports the filled route.
-      trayNote.textContent = filled;
+  const networkSources = el('div', 'network-sources');
+  networkSettings.append(el('p', 'field-hint', uiText('network.intro')),
+    el('h4', '', uiText('network.sources.title')), networkSources,
+    el('p', 'field-hint', uiText('network.sources.external')),
+    el('h4', '', uiText('network.routes.title')),
+    applicationConnection.element, relayConnection.element);
+  const loadSources = () => {
+    if (!networkSettings.isConnected && sourcesLoaded) {
+      document.removeEventListener('helene-bridges-changed', loadSources);
+      return;
     }
+    sourcesLoaded = true;
+    if (electron?.shell !== 'python' || draft.mode === 'remote') {
+      applicationConnection.setSources([]); relayConnection.setSources([]);
+      return;
+    }
+    void shell<{ bridges: ServerBridge[] }>('server_bridge', { action: 'list' }).then(result => {
+      const list = result.bridges.filter(row => row.ports?.local_proxy_port && row.phase !== 'error')
+        .map(row => ({ id: row.id, name: row.name, port: row.ports.local_proxy_port }));
+      applicationConnection.setSources(list); relayConnection.setSources(list);
+    }).catch(() => { applicationConnection.setSources([]); relayConnection.setSources([]); });
   };
-  const useTrayForTelegram = button(uiText('connections.tray_telegram'),'quiet',()=>void useTray(true));
-  const useTrayForRelay = button(uiText('connections.tray_relay'),'quiet',()=>void useTray(false));
-  const trayActions = el('div','actions');
-  trayActions.append(useTrayForTelegram,useTrayForRelay);
-  networkSettings.append(el('p','field-hint',uiText('connections.tray_hint')),trayActions,trayNote,
-    applicationConnection.element,relayConnection.element);
+  let sourcesLoaded = false;
+  loadSources();
+  document.addEventListener('helene-bridges-changed', loadSources);
   cards.push(inGroup(card(uiText('connections.title'),networkSettings),GROUP.brain));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
@@ -791,12 +794,13 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   return {
     cards,
     networkSettings,
-    useServerBridge(bridge,options={}) {
-      if(bridge.ports.local_proxy_port){
-        applicationConnection.set({mode:'proxy',protocol:'http',host:'127.0.0.1',port:String(bridge.ports.local_proxy_port),username:'',password:''});
-        bridgeRoute=JSON.stringify(applicationConnection.collect());
-        if(options.relay)relayConnection.set(applicationConnection.collect());
-      }
+    networkSources,
+    bridgeUsage(id: string) {
+      const used: string[] = [];
+      if (applicationConnection.bridge() === id) used.push(uiText('network.usage.telegram'));
+      if (relayConnection.bridge() === id) used.push(uiText('network.usage.relay'));
+      if (draft.phone?.bridge_profile === id) used.push(uiText('network.usage.https'));
+      return used;
     },
     // Четыре карточки, которые вместе решают, что агенту разрешено на этом
     // компьютере, впервые оказываются рядом: режим ограды, песочница,
@@ -892,12 +896,17 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         const proxyError = relayConnection.error();
         if (proxyError) return proxyError;
         out.relay = keepBlock(out.relay, { proxy: relayConnection.collect(), executable: relayExecutable.trim() || undefined });
+        if (relayConnection.bridge()) out.relay.bridge_profile = relayConnection.bridge();
+        else delete out.relay.bridge_profile;
         const networkError = applicationConnection.error();
         if (networkError) return networkError;
         const networkDraft = applicationConnection.collect();
-        if (draft.network?.proxy || networkDraft.mode !== 'system')
+        if (draft.network?.proxy || networkDraft.mode !== 'system' || applicationConnection.bridge())
           out.network = keepBlock(out.network, { proxy: networkDraft });
-        if(out.network?.bridge_profile && bridgeRoute!==JSON.stringify(networkDraft))delete out.network.bridge_profile;
+        if (out.network) {
+          if (applicationConnection.bridge()) out.network.bridge_profile = applicationConnection.bridge();
+          else delete out.network.bridge_profile;
+        }
         const imageError = images.collect(out);
         if (imageError) return imageError;
         if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });

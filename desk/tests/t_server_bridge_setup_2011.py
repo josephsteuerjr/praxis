@@ -19,7 +19,8 @@ class Runtime:
     def state(self):return {'state':'connected','message':'fixture'}
 
 
-class Setup(unittest.TestCase):
+class Stand(unittest.TestCase):
+    """Scratch connection root, fixture agent and one busy local port."""
     def setUp(self):
         folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup);self.folder=Path(folder.name)
         patches=[mock.patch.object(connections,'root',return_value=self.folder),
@@ -42,6 +43,8 @@ class Setup(unittest.TestCase):
         return bridge.save_existing({'server_profile':'b'*32,'name':'',
                                      'ports':{'remote_proxy_port':8888,**ports}},self.agent)
 
+
+class Setup(Stand):
     def test_empty_local_port_takes_a_free_one_outside_tray_bridge(self):
         result=self.add(local_proxy_port='')
         port=result['bridge']['ports']['local_proxy_port']
@@ -86,6 +89,30 @@ class Setup(unittest.TestCase):
         result=bridge.invoke(self.owner,'repair-port',{'id':identity})
         port=bridge.read(identity)['ports']['local_proxy_port']
         self.assertNotEqual(port,self.busy_port);self.assertTrue(bridge.port_free(port));self.assertIn(str(port),result['message'])
+
+
+class RelayOnlyRoute(Stand):
+    """2.8.12: the relay alone keeps a bridge alive; Telegram may use another route."""
+    def manager(self,cfg):
+        identity=self.add(local_proxy_port='')['bridge']['id'];port=bridge.read(identity)['ports']['local_proxy_port']
+        proxy={'mode':'proxy','protocol':'http','host':'127.0.0.1','port':str(port)}
+        self.configs['0']=cfg(identity,proxy)
+        manager=bridge.Manager(self.owner);self.addCleanup(manager.close);Runtime.instances=[]
+        manager.sync();return manager,identity
+
+    def test_relay_route_alone_keeps_the_proxy_forward(self):
+        manager,identity=self.manager(lambda i,p:{'network':{'proxy':{'mode':'direct'}},'relay':{'bridge_profile':i,'proxy':p}})
+        self.assertFalse(manager.errors);self.assertEqual(len(Runtime.instances),1)
+        self.assertIn('local_proxy_port',Runtime.instances[0].ports)
+        self.assertEqual(bridge.selected_by(identity,self.owner),['Джарвис'])
+
+    def test_relay_route_that_drifted_from_the_bridge_is_reported(self):
+        manager,identity=self.manager(lambda i,p:{'relay':{'bridge_profile':i,'proxy':{**p,'port':'1'}}})
+        self.assertIn('прокси',manager.errors[identity]);self.assertEqual(Runtime.instances,[])
+
+    def test_both_routes_share_one_forward(self):
+        manager,identity=self.manager(lambda i,p:{'network':{'bridge_profile':i,'proxy':p},'relay':{'bridge_profile':i,'proxy':p}})
+        self.assertFalse(manager.errors);self.assertEqual(len(Runtime.instances),1)
 
 
 class TrayProbe(unittest.TestCase):

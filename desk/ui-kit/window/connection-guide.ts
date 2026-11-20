@@ -90,16 +90,16 @@ function drawBridge(host:HTMLElement) {
   const note=el('p','receipt');const restartButton=button(uiText("ui.ui.kit.window.connection.guide.bfa262aa90"),'quiet',async()=>{
     try{await restart(note);restartButton.hidden=true;}catch(error){receipt(note,humanError(error).text,true);}
   });restartButton.hidden=true;
-  host.append(serverBridgeCard(async(bridge,options)=>{
+  host.append(serverBridgeCard({apply:async(bridge,targets)=>{
     const session=await load();
     if(session.remote)throw new UiError(uiText("ui.ui.kit.window.connection.guide.e809df1a6d"));
-    const next=structuredClone(session.config);useBridge(next,bridge,options);
+    const next=structuredClone(session.config);useBridge(next,bridge,{phone:!!bridge.external,...targets});
     const patch:Partial<Config>={};if(bridge.external)patch.phone=next.phone;
-    if(bridge.ports.local_proxy_port)patch.network=next.network;
-    if(options.relay)patch.relay=next.relay;
-    await save(patch,session);restartButton.hidden=!bridge.ports.local_proxy_port;
+    if(targets.network)patch.network=next.network;
+    if(targets.relay)patch.relay=next.relay;
+    await save(patch,session);restartButton.hidden=!targets.network;
     return restartButton.hidden?uiText("ui.ui.kit.window.connection.guide.f9f2cbda7b"):uiText("ui.ui.kit.window.connection.guide.01b83734e0");
-  }),note,restartButton);
+  }}),note,restartButton);
 }
 /** Daily server operations stay available after onboarding has finished. */
 export async function mountServerManagement(host:HTMLElement) {
