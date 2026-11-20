@@ -216,6 +216,22 @@ def read_reboot_recovery(directory: Path) -> dict | None:
         return None
 
 
+def _settlement(forge, task_id: str, action: str) -> dict:
+    """The real forge module closes the finished queue; the shipped reader drives
+    this companion with a minimal owner surface and keeps the former answer."""
+    close = getattr(forge, '_recovery_settlement', None)
+    if close is None:
+        return {'unresolved_units': [], 'task_closed': False, 'task_status': ''}
+    return close(task_id, action)
+
+
+
+def _reason(forge, base: str, settlement: dict, *, selected: bool, show_outstanding: bool) -> str:
+    assemble = getattr(forge, '_recovery_reason', None)
+    if assemble is None:
+        return base
+    return assemble(base, settlement, selected=selected, show_outstanding=show_outstanding)
+
 def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_generation: str,
                      *, host_binding: str, reason: str) -> dict:
     """Explicit legacy migration: witness now, prove a later reboot, retain bytes.
@@ -223,6 +239,7 @@ def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_g
     Merely finding an old launch timestamp or absent PID cannot replace a
     pre-reboot witness on the independently confirmed original execution host.
     """
+    import frame_language
     try:
         if os.name != 'nt':
             raise ValueError('legacy Windows recovery must run on its original Windows host')
@@ -251,8 +268,11 @@ def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_g
                     elif row.get('status') in {'running', 'starting', 'finishing', 'queued'}:
                         raise ValueError('Stop the selected branch first; live or queued work remains')
             if not selected:
+                settlement = _settlement(forge, task_id, action)
                 return {'status': 'settled', 'action': action, 'task_id': task_id,
-                        'agent_id': agent_id, 'recovered_units': [], 'reason': 'no unresolved units'}
+                        'agent_id': agent_id, 'recovered_units': [], **settlement,
+                        'reason': _reason(forge, frame_language.text('forge.recovery.none'), settlement,
+                                          selected=False, show_outstanding=action == 'recover')}
             boundary = boot_boundary()
             prepared = []
             for d in selected:
@@ -300,12 +320,14 @@ def recovery_control(forge, task_id: str, action: str, agent_id: str, expected_g
                 forge._event(task_id, 'custody_recovery_prepared' if filename == WITNESS else 'custody_recovered',
                              unit_id=d.name, unit_kind=d.parent.name,
                              recovery_sha256=_sha(_bytes(d/filename)))
+            settlement = _settlement(forge, task_id, action)
             return {'status': 'prepared' if action == 'prepare_recovery' else 'settled',
                     'action': action, 'task_id': task_id, 'agent_id': agent_id,
-                    'units': [d.name for d in selected],
-                    'reason': ('Witness retained. Restart this Windows computer yourself, then verify recovery.'
-                               if action == 'prepare_recovery' else
-                               'Old process trees are extinct; historical outcomes and unsafe continuations are retained.')}
+                    'units': [d.name for d in selected], **settlement,
+                    'reason': _reason(forge, frame_language.text(
+                                            'forge.recovery.prepared' if action == 'prepare_recovery'
+                                            else 'forge.recovery.recovered'),
+                        settlement, selected=True, show_outstanding=action == 'recover')}
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         return {'status': 'refused', 'action': action, 'task_id': task_id,
                 'agent_id': agent_id, 'reason': str(exc)}

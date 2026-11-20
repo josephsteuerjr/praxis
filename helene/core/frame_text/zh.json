@@ -3540,5 +3540,13 @@
   "forge.history.prepared": "原 Linux 主机的见证记录和日志精确快照已保存，其中包括损坏的字节。进程归属尚未解除。所有者须自行重启该主机，再调用 recover；应用不会执行重启。",
   "forge.history.recovered": "已解除对经证实已终止的进程树的归属。旧结果、损坏的日志及未知结果均已保留。仍禁止不安全的继续执行和重复产生副作用。",
   "forge.history.refused": "恢复尚未确认。请检查 diagnostic.code 和已保留的证据。对于损坏的历史记录，需要明确确认原 Linux 主机，执行 prepare_recovery，由所有者随后重启该主机，再执行 recover。不要删除损坏记录或重复结果未知的操作。",
-  "forge.history.none": "所选分支中没有需要此类恢复的单元。历史记录未更改。"
+  "forge.history.none": "所选分支中没有需要此类恢复的单元。历史记录未更改。",
+  "forge.recovery.prepared": "已保留原始 Windows 主机的见证。进程监护尚未解除。所有者必须亲自重启这台计算机，然后调用 recover；应用绝不执行重启。",
+  "forge.recovery.recovered": "已确认消亡的进程树的监护已解除。旧结果与未知结局均予保留。仍然禁止不安全的续接与重复副作用。",
+  "forge.recovery.none": "所选分支中没有需要此恢复的单元。历史未改动。",
+  "forge.recovery.task_closed": "任务已作为已停止关闭：没有未解决的单元。不得继续旧检查点；新阶段是在同一 worktree 上的新任务。",
+  "forge.recovery.remaining": "仍有未解决的单元：{v0}。",
+  "forge.recovery.next_close": "用任务的分组 Stop 关闭它们，或用各自的 prepare_recovery → 重启 → recover。",
+  "forge.recovery.close_hint": "只剩任务本身需要关闭：不带代理再次调用 recover，或执行分组 Stop。",
+  "forge.recovery.stopped_recovered": "任务已由分组 Stop 关闭。不得继续旧检查点；新阶段是在同一 worktree 上的新任务。"
 }
