@@ -9780,9 +9780,9 @@
     "zh": "8f6923e3"
   },
   "ui.ui.kit.window.server.settings.7e4de143ff": {
-    "en": "7e4de143",
-    "fr": "7e4de143",
-    "zh": "7e4de143"
+    "en": "cd47ff50",
+    "fr": "cd47ff50",
+    "zh": "cd47ff50"
   },
   "ui.ui.kit.window.server.settings.d6105bb1f1": {
     "en": "d6105bb1",
@@ -9795,9 +9795,9 @@
     "zh": "f52c607e"
   },
   "ui.ui.kit.window.server.settings.7079f609f4": {
-    "en": "7079f609",
-    "fr": "7079f609",
-    "zh": "7079f609"
+    "en": "c61a7eb5",
+    "fr": "c61a7eb5",
+    "zh": "c61a7eb5"
   },
   "ui.ui.kit.window.server.settings.e0bb6718d5": {
     "en": "e0bb6718",
@@ -9960,9 +9960,9 @@
     "zh": "8c96c91a"
   },
   "ui.ui.kit.window.server.settings.a644a513f1": {
-    "en": "a644a513",
-    "fr": "a644a513",
-    "zh": "a644a513"
+    "en": "19d2c59a",
+    "fr": "19d2c59a",
+    "zh": "19d2c59a"
   },
   "ui.ui.kit.window.server.settings.5dc62ddfff": {
     "en": "5dc62ddf",
@@ -19115,9 +19115,9 @@
     "zh": "6f22f524"
   },
   "ui.ui.kit.window.server.bridge.manual.2d9c769830": {
-    "en": "c2314184",
-    "fr": "c2314184",
-    "zh": "c2314184"
+    "en": "35d7e965",
+    "fr": "35d7e965",
+    "zh": "35d7e965"
   },
   "native.first.b38b23d5de": {
     "en": "b38b23d5",
@@ -21890,9 +21890,9 @@
     "zh": "0d98724e"
   },
   "network.sources.external": {
-    "en": "4bc9faa5",
-    "fr": "4bc9faa5",
-    "zh": "4bc9faa5"
+    "en": "ebd22814",
+    "fr": "ebd22814",
+    "zh": "ebd22814"
   },
   "network.routes.title": {
     "en": "a8fb1e1b",
@@ -22018,5 +22018,10 @@
     "en": "e15f960d",
     "fr": "e15f960d",
     "zh": "e15f960d"
+  },
+  "bridge.applied.relay": {
+    "en": "250e34aa",
+    "fr": "250e34aa",
+    "zh": "250e34aa"
   }
 }

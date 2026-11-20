@@ -97,8 +97,12 @@ function drawBridge(host:HTMLElement) {
     const patch:Partial<Config>={};if(bridge.external)patch.phone=next.phone;
     if(targets.network)patch.network=next.network;
     if(targets.relay)patch.relay=next.relay;
+    // Telegram's route needs an engine restart; the relay restarts by itself
+    // when its route changes; the phone address is prepared in the background.
     await save(patch,session);restartButton.hidden=!targets.network;
-    return restartButton.hidden?uiText("ui.ui.kit.window.connection.guide.f9f2cbda7b"):uiText("ui.ui.kit.window.connection.guide.01b83734e0");
+    if(targets.network)return uiText("ui.ui.kit.window.connection.guide.01b83734e0");
+    return [targets.relay?uiText('bridge.applied.relay'):'',bridge.external?uiText("ui.ui.kit.window.connection.guide.f9f2cbda7b"):'']
+      .filter(Boolean).join(' ');
   }}),note,restartButton);
 }
 /** Daily server operations stay available after onboarding has finished. */

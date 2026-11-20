@@ -6,7 +6,7 @@ import { sshAccessForm } from './server-access-form';
 import type { ServerBridge } from './server-bridge-config';
 import { serverBridgeManual } from './server-bridge-manual';
 
-type Operation={id:string;name:string;phase:string;message:string;active?:boolean;plan?:{sha256:string;changes:Array<{message:string}>}};
+type Operation={id:string;name:string;phase:string;message:string;active?:boolean;bridge?:string;plan?:{sha256:string;changes:Array<{message:string}>}};
 type State={bridges:ServerBridge[];states:Record<string,{state:string;message:string;error_code?:string}>;component:{installed:boolean}};
 type Checked={ok:boolean;checks?:Array<{message:string}>;error_code?:string;message?:string;bridge?:ServerBridge};
 /** Guide only: apply a fresh bridge to the chosen routes right away. */
@@ -50,7 +50,9 @@ function confirmButton(text:string,confirm:string,action:()=>Promise<void>) {
 export function serverBridgePanel(options:PanelOptions={}):HTMLElement {
   const body=el('div'),list=el('div'),setup=el('div'),operations=el('div'),note=el('p','receipt');
   let installed=false,busy=false;let timer:ReturnType<typeof setTimeout>|undefined;
-  let last:State|undefined;let signature='';
+  // Undefined until the first list: the first bridge added to an empty list
+  // must reach the route choices too.
+  let last:State|undefined;let signature:string|undefined;
   const command=<T>(action:string,request:unknown={})=>shell<T>('server_bridge',{action,request:JSON.stringify(request)});
   const info=el('details','fold');info.append(el('summary','',uiText("ui.ui.kit.window.server.settings.8f6923e3b8")),
     el('p','field-hint',uiText("ui.ui.kit.window.server.settings.7e4de143ff")),
@@ -85,15 +87,17 @@ export function serverBridgePanel(options:PanelOptions={}):HTMLElement {
       return;
     }
     let network=!!port,relay=false;
-    const choices=el('div','bridge-use');
-    if(port)choices.append(line(toggle(uiText('network.usage.telegram'),true,value=>network=value)),
-      line(toggle(uiText('network.usage.relay'),false,value=>relay=value)));
+    const choices=el('div','bridge-use stack');
+    // Nothing to apply: no route chosen and no HTTPS for the phone.
+    const idle=()=>{use.disabled=!network&&!relay&&!bridge.external;};
+    if(port)choices.append(line(toggle(uiText('network.usage.telegram'),true,value=>{network=value;idle();})),
+      line(toggle(uiText('network.usage.relay'),false,value=>{relay=value;idle();})));
     const use=button(uiText('bridge.apply'),'primary',async()=>{
       use.disabled=true;
       try{const message=await options.apply!(bridge,{network,relay});out.textContent=message||uiText("ui.ui.kit.window.server.settings.2a012899e4");}
       catch(error){out.textContent=humanError(error).text;}
-      finally{use.disabled=false;}
-    });choices.append(use);out.after(choices);
+      finally{idle();}
+    });choices.append(use);out.after(choices);idle();
   }
   function repairOffer(bridge:ServerBridge,out:HTMLElement) {
     const repair=button(uiText('bridge.port.repair'),'quiet',async()=>{
@@ -149,11 +153,14 @@ export function serverBridgePanel(options:PanelOptions={}):HTMLElement {
       install.hidden=installed;last=state;drawRows();
       // Routes list bridges as choices: tell them when the set of sources changes.
       const next=state.bridges.map(row=>row.id+':'+(row.ports?.local_proxy_port||'')).join(',');
-      if(signature&&next!==signature)document.dispatchEvent(new CustomEvent('helene-bridges-changed'));
+      if(signature!==undefined&&next!==signature)document.dispatchEvent(new CustomEvent('helene-bridges-changed'));
       signature=next;
       const pending=await command<Operation[]>('operations');operations.replaceChildren();
+      const known=new Set(state.bridges.map(row=>row.id));
       for(const operation of pending){
-        const row=el('section','');row.append(el('h4','',operation.name||uiText("ui.ui.kit.window.server.settings.393a928d66")),el('p','receipt',operation.message));
+        // A finished setup is shown once, as its bridge in the list below.
+        if(operation.phase==='installed'&&known.has(operation.bridge||operation.id))continue;
+        const row=el('section','bridge-plan');row.append(el('h4','',operation.name||uiText("ui.ui.kit.window.server.settings.393a928d66")),el('p','receipt',operation.message));
         if(operation.plan){
           const changes=el('ul','field-hint');for(const change of operation.plan.changes)changes.append(el('li','',change.message));row.append(changes);
           row.append(button(operation.phase==='planned'?uiText("ui.ui.kit.window.server.settings.c1e64b0c76"):uiText("ui.ui.kit.window.server.settings.948f86fbb0"),'primary',async()=>{
@@ -213,14 +220,15 @@ export function serverBridgePanel(options:PanelOptions={}):HTMLElement {
           if(https)ports.remote_app_port=remoteApp;
           const result=await command<Checked>('add-existing',{server_profile:data.server_profile,name,external:https?external:'',ports,verify:true});
           if(!result.ok||!result.bridge){out.textContent=failure(result);return;}
-          await refresh();
+          setup.replaceChildren(out);await refresh();
           out.textContent=[uiText('bridge.ssh.verified'),...(result.checks||[]).map(check=>check.message)].join(' ');
           ready(result.bridge,out);
         }else{
           const result=await command<Checked>('prepare',{server_profile:data.server_profile,name,proxy,https,domain,public_address:publicAddress,
             ...(localPort?{local_proxy_port:localPort}:{}),remote_proxy_port:remoteProxy,remote_app_port:remoteApp});
           if(result&&result.ok===false){out.textContent=failure(result);return;}
-          out.textContent=uiText("ui.ui.kit.window.server.settings.83aff31a65");await refresh();
+          // The plan below, with its own message, takes the form's place.
+          setup.replaceChildren();await refresh();
         }
       }catch(error){out.textContent=humanError(error).text;}
       finally{running=false;submit.disabled=false;}
@@ -233,8 +241,9 @@ export function serverBridgePanel(options:PanelOptions={}):HTMLElement {
       field(uiText("ui.ui.kit.window.server.settings.8c96c91a7c"),'',value=>name=value),
       form,toggles,httpFields,advanced,submit,out);
   }
+  // Existing bridges first; then adding one, its form and plan; the how-to last.
   body.append(el('p','field-hint',uiText('bridge.bundled.help')),
-    actions,info,setup,operations,list,note);void refresh();return body;
+    list,note,actions,setup,operations,info);void refresh();return body;
 }
 
 export function serverBridgeCard(options:PanelOptions):HTMLElement {

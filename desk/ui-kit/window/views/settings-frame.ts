@@ -1476,32 +1476,43 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
       const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option);
     }
     route.value=draft.phone.mode || 'automatic';
+    // The bridge list shows who uses each bridge; HTTPS for the phone is one of them.
+    const routed=()=>document.dispatchEvent(new CustomEvent('helene-route-changed'));
     const profiles=el('select','field-input');profiles.setAttribute('aria-label',uiText("ui.ui.kit.window.views.settings.frame.025baa7c2a"));
     profiles.append(new Option(uiText("ui.ui.kit.window.views.settings.frame.bad301da45"),''));
     const profileNote=el('p','receipt');
-    const fixed=field(uiText("ui.ui.kit.window.views.settings.frame.1c8caa8990"),draft.phone.external || '',value=>{draft.phone!.external=value.trim();delete draft.phone!.bridge_profile;profiles.value='';sync()},
+    const fixed=field(uiText("ui.ui.kit.window.views.settings.frame.1c8caa8990"),draft.phone.external || '',value=>{draft.phone!.external=value.trim();delete draft.phone!.bridge_profile;profiles.value='';routed();sync()},
       {placeholder:'https://…',hint:uiText("ui.ui.kit.window.views.settings.frame.14cf28cced")});
     const stable=el('div');stable.append(profiles,fixed,profileNote);stable.hidden=route.value!=='stable';
-    route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;else delete draft.phone!.bridge_profile;stable.hidden=route.value!=='stable';sync()});
+    route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;else delete draft.phone!.bridge_profile;stable.hidden=route.value!=='stable';routed();sync()});
     let bridges:ServerBridge[]=[];
     profiles.addEventListener('change',async()=>{
       const selected=bridges.find(value=>value.id===profiles.value);
-      if(!selected){delete draft.phone!.bridge_profile;return;}
+      if(!selected){delete draft.phone!.bridge_profile;routed();return;}
       profiles.disabled=true;profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.e2d027a902");
       try{
         const checked=await shell<{ok:boolean}>('server_bridge',{action:'check',request:JSON.stringify({id:selected.id})});
         if(!checked.ok)throw new UiError(uiText("ui.ui.kit.window.views.settings.frame.19aae8d623"));
         if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected,{phone:true});cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
+        routed();
         profileNote.textContent=uiText("ui.ui.kit.window.views.settings.frame.1f37c24b41");
         profiles.dispatchEvent(new Event('input',{bubbles:true}));
       }catch(error){profiles.value=draft.phone?.bridge_profile||'';profileNote.textContent=humanError(error).text;}
       finally{profiles.disabled=false;}
     });
-    if(electron?.shell==='python')void shell<{bridges:ServerBridge[]}>('server_bridge',{action:'list'}).then(result=>{
-      bridges=result.bridges.filter(value=>value.external&&value.phase!=='error');
-      profiles.append(...bridges.map(value=>new Option(value.name+' · '+value.external,value.id)));
-      profiles.value=draft.phone?.bridge_profile||'';
-    }).catch(error=>{profileNote.textContent=humanError(error).text;});else profiles.hidden=true;
+    // A bridge added in «Network and proxy» on this same screen is offered here too.
+    let listed=false;
+    const loadProfiles=()=>{
+      if(listed&&!cardNode.isConnected){document.removeEventListener('helene-bridges-changed',loadProfiles);return;}
+      listed=true;
+      void shell<{bridges:ServerBridge[]}>('server_bridge',{action:'list'}).then(result=>{
+        bridges=result.bridges.filter(value=>value.external&&value.phase!=='error');
+        profiles.replaceChildren(new Option(uiText("ui.ui.kit.window.views.settings.frame.bad301da45"),''),
+          ...bridges.map(value=>new Option(value.name+' · '+value.external,value.id)));
+        profiles.value=draft.phone?.bridge_profile||'';
+      }).catch(error=>{profileNote.textContent=humanError(error).text;});
+    };
+    if(electron?.shell==='python'){loadProfiles();document.addEventListener('helene-bridges-changed',loadProfiles);}else profiles.hidden=true;
     phone.append(route,stable);
     // Update the existing card: its identity is retained by the settings index.
     queueMicrotask(()=>cardNode.addEventListener('bridge-selected',event=>{

@@ -637,9 +637,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const networkSettings = el('div');
   const networkSources = el('div', 'network-sources');
   networkSettings.append(el('p', 'field-hint', uiText('network.intro')),
-    el('h4', '', uiText('network.sources.title')), networkSources,
+    el('h4', 'network-step', uiText('network.sources.title')), networkSources,
     el('p', 'field-hint', uiText('network.sources.external')),
-    el('h4', '', uiText('network.routes.title')),
+    el('h4', 'network-step', uiText('network.routes.title')),
     applicationConnection.element, relayConnection.element);
   const loadSources = () => {
     if (!networkSettings.isConnected && sourcesLoaded) {
