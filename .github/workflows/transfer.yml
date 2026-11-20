@@ -1,0 +1,24 @@
+name: Stage exact Hélène 2.8.13 archives
+on:
+  push:
+    branches: [codex/helene2813-release-transfer-2011]
+permissions:
+  contents: write
+jobs:
+  archive:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, macos, macos-intel, debian, fedora]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: parts/${{ matrix.platform }}
+      - name: Reconstruct and stage one exact archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 upload.py '${{ matrix.platform }}'
