@@ -111,7 +111,6 @@ export class Scroller {
   private written = -1;
   private contentHeight = 0;
   private layoutMax = 0;
-  private vh = 0; // ui-fix 20261121: предыдущая высота вьюпорта для тихого перемера
   private lastWheel = 0;
   private wheelDir = 0;
   private wheelActive = false;
@@ -159,18 +158,15 @@ export class Scroller {
     const session = (window as Window & { __HELENE_SCROLL_SESSION?: ScrollSession }).__HELENE_SCROLL_SESSION;
     if (session) this.onScrollSession({detail: session} as CustomEvent<ScrollSession>);
     el.addEventListener("keydown", this.onKey);
-    // ui-fix 20261121: RO-срабатывания без реальной смены геометрии (например,
-    // строка статуса над композером меняет вид, но не высоту) не должны
-    // перезапускать пружину слежения. Полный contentChanged() остаётся путём
-    // настоящего изменения контента (preserve/notify).
-    this.vh = el.clientHeight;
-    this.ro = new ResizeObserver(() => {
-      // Виден только рост/убыль вьюпорта (окно сменило размер). Смена
-      // контента приходит через preserve()/contentChanged(), а не сюда.
-      const h = el.clientHeight;
-      if (Math.abs(h - this.vh) <= 1) this.viewportOnly();
-      else { this.vh = h; this.contentChanged(); }
-    });
+    // ui-fix 20261121, финал физики: ResizeObserver — ВСЕГДА тихий перемер.
+    // Пружина слежения запускается только намеренными событиями: человек
+    // (колесо/drag/fling) и новое сообщение (preserve() -> contentChanged()).
+    // Всё, что видит RO, — шум без смены геометрии (строка статуса над
+    // композером), рост/убыль вьюпорта (композер, окно) и асинхронный рост
+    // контента (картинки) — обрабатывается без анимации, со сдвигом якоря
+    // (см. viewportOnly): прочитанное остаётся на месте, прилепленный к низу
+    // остаётся внизу, поле ввода растёт молча.
+    this.ro = new ResizeObserver(() => this.viewportOnly());
     this.ro.observe(inner); this.ro.observe(el);
   }
 
@@ -307,17 +303,28 @@ export class Scroller {
       this.write(); this.kick();
     }
   }
-  // ui-fix 20261121: тихий перемер — контент/вьюпорт не изменились по сути;
-  // подрезаем цель и позицию в допустимый диапазон, не запуская пружину.
+  // ui-fix 20261121, финал физики: тихий перемер. Диапазон прокрутки сместился
+  // (вьюпорт или асинхронный контент) — СДВИГАЕМ позицию и цель на дельту:
+  // тот же контент остаётся перед глазами, прилепленный к низу остаётся внизу,
+  // и ни одна пружина не запускается. Шум без дельты — только подрезка, идущая
+  // пружина (если летит) не трогается.
   private viewportOnly() {
+    const oldMax = this.layoutMax;
     this.measureContent();
-    const max = this.max, wasPos = this.pos;
-    this.target = clamp(this.target,0,max);
-    this.pos = clamp(this.pos,0,max);
-    cancelAnimationFrame(this.raf);
-    this.raf = 0;
-    this.mode = "idle";
-    if (Math.abs(this.pos - wasPos) > .5) this.write();
+    const max = this.max;
+    const d = this.layoutMax - oldMax;
+    if (d !== 0 && !this.drag && !this.wheelActive) {
+      this.pos = clamp(this.pos + d,0,max);
+      this.target = clamp(this.target + d,0,max);
+      // Геометрия, за которой гналась пружина, устарела — честный снап на месте.
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      this.mode = "idle";
+    } else {
+      this.target = clamp(this.target,0,max);
+      this.pos = clamp(this.pos,0,max);
+    }
+    this.write();
   }
 
   private edgeLength(): number {

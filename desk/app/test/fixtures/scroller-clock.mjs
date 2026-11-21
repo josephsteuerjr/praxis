@@ -22,7 +22,7 @@ export function fixture(options = {}) {
   globalThis.window = { setTimeout, clearTimeout,
     addEventListener: (type, fn) => { windowHandlers[type] = fn; },
     removeEventListener: type => { delete windowHandlers[type]; } };
-  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.ResizeObserver = class { constructor(cb) { this.cb = cb; } observe() {} disconnect() {} };
   globalThis.getComputedStyle = () => ({ overflowY: "visible" });
   globalThis.HTMLElement = class {};
   function el(height, scrollHeight) {
