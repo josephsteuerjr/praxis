@@ -1,0 +1,49 @@
+name: Hélène 2.8.14 macos native qualification
+on:
+  push:
+    branches: [codex/helene2814-package-macos-main-2011]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download the exact donor and prepare a case-sensitive workspace
+        run: |
+          mkdir donor
+          curl --fail --show-error --silent --location --retry 4 --retry-all-errors --max-time 300 \
+            'https://github.com/josephsteuerjr/praxis/releases/download/v2.8.13/Helene-2.8.13-macos-arm64.zip' \
+            --output 'donor/Helene-2.8.13-macos-arm64.zip'
+          hdiutil create -size 20g -type SPARSE -fs 'Case-sensitive APFS' -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
+          python3 - <<'PY'
+          import hashlib, json, os, tarfile
+          from pathlib import Path
+          path = Path('inputs.tar.gz')
+          proof = json.loads(Path('PREPARED.json').read_bytes())
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == proof['archive_sha256']
+          with tarfile.open(path) as archive:
+              assert len(archive.getmembers()) == proof['files']
+              archive.extractall(Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification', filter='data')
+          PY
+      - name: Launch, exercise, and verify the native package
+        run: python3 -B "$RUNNER_TEMP/helene-case/qualification/equipment/mac_final.py" --target macos --donors "$PWD/donor" > driver.log 2>&1
+      - name: Collect the package and native evidence
+        if: always()
+        run: |
+          root="$RUNNER_TEMP/helene-case/qualification"
+          mkdir -p "$root/evidence"
+          touch driver.log
+          cp driver.log "$root/evidence/driver.log"
+          tail -55 driver.log
+          tar -czf native-macos.tar.gz -C "$root" evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-macos
+          path: native-macos.tar.gz
+          if-no-files-found: error
