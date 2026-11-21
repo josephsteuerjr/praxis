@@ -1295,5 +1295,22 @@ class TheCallTraceJournalIsBounded(unittest.TestCase):
                          "на шве ротации потерялись строки")
 
 
+class NoArtificialTokenCeilings(unittest.TestCase):
+    """2111: дефолты не должны душить reasoning-модели до первого символа.
+
+    Инцидент Джарвиса 21.11: glm-5.3 с effort high сжигал потолок 1024 на
+    размышлениях — ход умирал с «0 символов, блоков 0». Владелец: искусственных
+    ограничений не ставить, у моделей свои потолки. Дефолт — только для
+    конфигов без явного max_tokens; свой потолок живёт в llm.json.
+    """
+
+    def test_defaults_are_roomy(self):
+        self.assertGreaterEqual(llm.DEFAULT_MAX_TOKENS["voice"], 32768)
+        self.assertGreaterEqual(llm.DEFAULT_MAX_TOKENS["evaluator"], 8192)
+
+    def test_role_without_config_gets_roomy_ceiling(self):
+        self.assertEqual(llm.role_max_tokens("voice"), llm.DEFAULT_MAX_TOKENS["voice"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

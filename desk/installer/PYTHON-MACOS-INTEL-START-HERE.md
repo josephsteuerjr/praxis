@@ -29,3 +29,12 @@ Dependency licenses are in **licenses/** and beside Python packages in
 **runtime/**. The package's qualification receipt records the macOS version
 actually used for native testing; a declared minimum is not an execution test
 on every older macOS release.
+
+## Агент может менять себя
+
+Конфигурация модели (`data/memory/llm.json`) принадлежит агенту: потолки токенов,
+усилие, фолбэки — он правит её сам, изменения вступают в силу на следующем ходу.
+Исходники ядра и канала окна едут в поставке читаемым текстом, так что агент
+может чинить себя малыми правками на месте (с бэкапом) и подсказывать, что
+должно уехать в следующий выпуск. Фронты — собранный TypeScript: их меняют в
+исходниках и пересобирают, обновления приносят готовое.

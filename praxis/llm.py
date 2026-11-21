@@ -79,7 +79,7 @@ FRAMEWORKS = ("anthropic", "openai")
 ROLES = ("voice", "evaluator")
 _ROLE_RU = {"voice": "голос", "evaluator": "вспомогательная"}
 
-DEFAULT_MAX_TOKENS = {"voice": 1024, "evaluator": 400}
+DEFAULT_MAX_TOKENS = {"voice": 32768, "evaluator": 8192}
 
 # Ошибки, на которых имеет смысл фолбэк (по имени класса — одинаковы у обоих SDK).
 _FALLBACK_ERRORS = {
