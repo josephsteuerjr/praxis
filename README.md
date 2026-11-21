@@ -23,6 +23,14 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.8.14 Beta
+
+The chat window stops springing: status lines, agent replies and a growing
+composer no longer bounce the feed you are reading, and token ceilings no
+longer strangle reasoning models before their first word. Agents also get a
+map of how to change themselves.
+See the [2.8.14 release notes](desk/docs/RELEASE-2.8.14.md).
+
 ## Included in 2.8.13 Beta
 
 Custody recovery now finishes the job: a successful recover closes the old task
