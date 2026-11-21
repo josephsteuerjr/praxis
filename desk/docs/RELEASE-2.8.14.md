@@ -1,0 +1,8 @@
+# Hélène 2.8.14 Beta
+
+- **The window stops springing.** The feed's ResizeObserver is now always a silent remeasure: it measures quietly, and when the scroll range shifts (the composer grows as you type, the window resizes, an image finishes loading) the position and its target shift by exactly that delta — the content you are reading stays where it is, and a feed pinned to the bottom stays pinned, without a single animation frame. The follow spring now starts only from intent: your wheel, drag and fling, and a new message arriving through the app. A spring already in flight is not disturbed by observer noise and snaps only when the geometry it chases really changed.
+- **Steady composer.** The status row above the input keeps a constant height, so "thinking"/"working" chips and reply appearances no longer change the layout under your scroll.
+- **No artificial token ceilings.** Defaults for configurations without an explicit max_tokens rise from voice 1024 / evaluator 400 to 32768 / 8192: a reasoning model with high effort burned the old ceiling entirely on thinking and the turn died with zero visible characters. The models' own limits (on the order of 128K) apply. Your agent owns `memory/llm.json` and reads it on every turn.
+- **Agents get a map of themselves.** HOME.md now explains how an agent changes itself: its model configuration, its readable sources shipped beside it, in-place small repairs with a backup, and why minified front-end bundles are not for hand-editing. START-HERE tells human owners the same, briefly.
+
+Agent core and the subscription relay are unchanged from 2.8.13; the desktop window front and the shared UI kit changed, and the desk channel ships the new documentation.

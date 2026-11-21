@@ -46,3 +46,12 @@ remain beside their packages in **runtime/**. The application bundle is signed
 ad hoc for this distribution, without Apple notarization. Native CI evidence does
 not replace acceptance of microphone, screen recording and Accessibility
 permissions on the owner's Mac.
+
+## Агент может менять себя
+
+Конфигурация модели (`data/memory/llm.json`) принадлежит агенту: потолки токенов,
+усилие, фолбэки — он правит её сам, изменения вступают в силу на следующем ходу.
+Исходники ядра и канала окна едут в поставке читаемым текстом, так что агент
+может чинить себя малыми правками на месте (с бэкапом) и подсказывать, что
+должно уехать в следующий выпуск. Фронты — собранный TypeScript: их меняют в
+исходниках и пересобирают, обновления приносят готовое.

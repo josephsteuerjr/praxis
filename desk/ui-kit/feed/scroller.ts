@@ -158,7 +158,15 @@ export class Scroller {
     const session = (window as Window & { __HELENE_SCROLL_SESSION?: ScrollSession }).__HELENE_SCROLL_SESSION;
     if (session) this.onScrollSession({detail: session} as CustomEvent<ScrollSession>);
     el.addEventListener("keydown", this.onKey);
-    this.ro = new ResizeObserver(() => this.contentChanged());
+    // ui-fix 20261121, финал физики: ResizeObserver — ВСЕГДА тихий перемер.
+    // Пружина слежения запускается только намеренными событиями: человек
+    // (колесо/drag/fling) и новое сообщение (preserve() -> contentChanged()).
+    // Всё, что видит RO, — шум без смены геометрии (строка статуса над
+    // композером), рост/убыль вьюпорта (композер, окно) и асинхронный рост
+    // контента (картинки) — обрабатывается без анимации, со сдвигом якоря
+    // (см. viewportOnly): прочитанное остаётся на месте, прилепленный к низу
+    // остаётся внизу, поле ввода растёт молча.
+    this.ro = new ResizeObserver(() => this.viewportOnly());
     this.ro.observe(inner); this.ro.observe(el);
   }
 
@@ -294,6 +302,29 @@ export class Scroller {
       if (this.pos > max && !this.wheelActive) this.pos = max;
       this.write(); this.kick();
     }
+  }
+  // ui-fix 20261121, финал физики: тихий перемер. Диапазон прокрутки сместился
+  // (вьюпорт или асинхронный контент) — СДВИГАЕМ позицию и цель на дельту:
+  // тот же контент остаётся перед глазами, прилепленный к низу остаётся внизу,
+  // и ни одна пружина не запускается. Шум без дельты — только подрезка, идущая
+  // пружина (если летит) не трогается.
+  private viewportOnly() {
+    const oldMax = this.layoutMax;
+    this.measureContent();
+    const max = this.max;
+    const d = this.layoutMax - oldMax;
+    if (d !== 0 && !this.drag && !this.wheelActive) {
+      this.pos = clamp(this.pos + d,0,max);
+      this.target = clamp(this.target + d,0,max);
+      // Геометрия, за которой гналась пружина, устарела — честный снап на месте.
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      this.mode = "idle";
+    } else {
+      this.target = clamp(this.target,0,max);
+      this.pos = clamp(this.pos,0,max);
+    }
+    this.write();
   }
 
   private edgeLength(): number {

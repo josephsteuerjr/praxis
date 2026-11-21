@@ -1,3 +1,10 @@
+# 2.8.14 Beta
+
+- Quiet physics in the chat window: ResizeObserver is always a silent remeasure. Springs start only from intent — your wheel, drag and fling, and a new message. A growing composer, a changing status line or an asynchronously loading image shift the anchor quietly; read content stays put and a bottom-pinned feed stays pinned, with zero animation.
+- The composer status row keeps a constant height, so status chips appearing and disappearing no longer push the feed.
+- No artificial token ceilings: default max_tokens for configs without an explicit value rises voice 1024 -> 32768 and evaluator 400 -> 8192. A reasoning model burned the old tiny ceiling before producing a single visible character.
+- Self-modification hints: HOME.md gains a "how I change myself" map (llm.json belongs to the agent, sources ship readable, minified bundles are not for hand-editing), and START-HERE tells humans the agent can repair itself in place.
+
 # 2.8.13 Beta
 
 - Forge custody recovery closes the finished queue: once no unresolved units remain, recover marks the old task stopped; no result is ever invented.

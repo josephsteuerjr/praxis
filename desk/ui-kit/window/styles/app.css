@@ -1296,6 +1296,12 @@ html.electron #chrome a {
   display: none;
 }
 
+/* ui-fix 20261121: постоянная высота строки статуса — композер не пружинит,
+   когда статус-строка появляется/исчезает, а лента не дёргается при печати. */
+.composer-meta { display: flex; min-height: 22px; margin: 0 auto 8px; transition: none; }
+.composer-meta .composer-status { display: flex; min-height: 0; flex: 0 auto; }
+.composer-meta .composer-turn-controls { display: flex; min-height: 0; }
+
 .composer-files .chip {
   display: inline-flex;
   align-items: center;

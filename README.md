@@ -46,6 +46,14 @@ verification scope.
 The cloud snapshot also includes the qualified phone Stop and Forge history
 recovery repair: one cancellation identity, preserved corrupt bytes and explicit
 same-host reboot evidence. The cloud engine now runs a separate Telegram client for the owner's account, with its own named tools and wake rules; the server MiniApp/PWA controls it and shows its tool receipts.
+## Included in 2.8.14 Beta
+
+The chat window stops springing: status lines, agent replies and a growing
+composer no longer bounce the feed you are reading, and token ceilings no
+longer strangle reasoning models before their first word. Agents also get a
+map of how to change themselves.
+See the [2.8.14 release notes](desk/docs/RELEASE-2.8.14.md).
+
 ## Included in 2.8.13 Beta
 
 Custody recovery now finishes the job: a successful recover closes the old task

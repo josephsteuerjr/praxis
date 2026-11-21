@@ -1902,8 +1902,11 @@ def _brain_config(cfg: dict) -> dict:
         if not legacy["base_url"] and not legacy["api_key"]:
             legacy.update(base_url=spec["base_url"], api_key=spec["api_key"])
 
-    for role, block, default_tokens in (("voice", voice, 8192),
-                                        ("evaluator", judge if judge else voice, 1024)):
+    # 2111: искусственных потолков не ставим (инцидент Джарвиса 21.11 —
+    # переключение модели в окне возвращало 8192, и reasoning-модель сжигала
+    # его до первого символа). Дефолты выровнены с DEFAULT_MAX_TOKENS ядра.
+    for role, block, default_tokens in (("voice", voice, 32768),
+                                        ("evaluator", judge if judge else voice, 8192)):
         inherited = role == "evaluator" and judge is None
         # Фреймворк роли свёрток по умолчанию — ТОТ ЖЕ, что у голоса: там лежат
         # адрес и ключ. Прежнее умолчание "openai" при anthropic-голосе уводило

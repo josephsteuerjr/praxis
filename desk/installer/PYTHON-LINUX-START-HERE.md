@@ -28,3 +28,12 @@ conflicts requires a supported modern baseline and the update workflow.
 
 Runtime and native dependency notices accompany the archive. Optional voice
 components are offered only when a matching Linux payload has been qualified.
+
+## Агент может менять себя
+
+Конфигурация модели (`data/memory/llm.json`) принадлежит агенту: потолки токенов,
+усилие, фолбэки — он правит её сам, изменения вступают в силу на следующем ходу.
+Исходники ядра и канала окна едут в поставке читаемым текстом, так что агент
+может чинить себя малыми правками на месте (с бэкапом) и подсказывать, что
+должно уехать в следующий выпуск. Фронты — собранный TypeScript: их меняют в
+исходниках и пересобирают, обновления приносят готовое.

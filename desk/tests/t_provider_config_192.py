@@ -35,7 +35,8 @@ class ProviderProjection(unittest.TestCase):
                                                "max_tokens": 10000, "reasoning_effort": "high"}})
         judge = built["roles"]["evaluator"]
         self.assertEqual(built["frameworks"][judge["framework"]]["api_key"], "voice-key")
-        self.assertEqual(judge["max_tokens"], 1024)
+        # 2111: дефолты потолков комнатные (32768/8192) — искусственных не ставим.
+        self.assertEqual(judge["max_tokens"], 8192)
         self.assertNotIn("reasoning_effort", judge)
 
     def test_endpoint_protocol_and_api_mode_are_separate(self):
