@@ -111,6 +111,7 @@ export class Scroller {
   private written = -1;
   private contentHeight = 0;
   private layoutMax = 0;
+  private vh = 0; // ui-fix 20261121: предыдущая высота вьюпорта для тихого перемера
   private lastWheel = 0;
   private wheelDir = 0;
   private wheelActive = false;
@@ -158,7 +159,18 @@ export class Scroller {
     const session = (window as Window & { __HELENE_SCROLL_SESSION?: ScrollSession }).__HELENE_SCROLL_SESSION;
     if (session) this.onScrollSession({detail: session} as CustomEvent<ScrollSession>);
     el.addEventListener("keydown", this.onKey);
-    this.ro = new ResizeObserver(() => this.contentChanged());
+    // ui-fix 20261121: RO-срабатывания без реальной смены геометрии (например,
+    // строка статуса над композером меняет вид, но не высоту) не должны
+    // перезапускать пружину слежения. Полный contentChanged() остаётся путём
+    // настоящего изменения контента (preserve/notify).
+    this.vh = el.clientHeight;
+    this.ro = new ResizeObserver(() => {
+      // Виден только рост/убыль вьюпорта (окно сменило размер). Смена
+      // контента приходит через preserve()/contentChanged(), а не сюда.
+      const h = el.clientHeight;
+      if (Math.abs(h - this.vh) <= 1) this.viewportOnly();
+      else { this.vh = h; this.contentChanged(); }
+    });
     this.ro.observe(inner); this.ro.observe(el);
   }
 
@@ -294,6 +306,18 @@ export class Scroller {
       if (this.pos > max && !this.wheelActive) this.pos = max;
       this.write(); this.kick();
     }
+  }
+  // ui-fix 20261121: тихий перемер — контент/вьюпорт не изменились по сути;
+  // подрезаем цель и позицию в допустимый диапазон, не запуская пружину.
+  private viewportOnly() {
+    this.measureContent();
+    const max = this.max, wasPos = this.pos;
+    this.target = clamp(this.target,0,max);
+    this.pos = clamp(this.pos,0,max);
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.mode = "idle";
+    if (Math.abs(this.pos - wasPos) > .5) this.write();
   }
 
   private edgeLength(): number {
