@@ -1,6 +1,6 @@
 """Windowless update entries, including rollback to an older application."""
 import os
-from pathlib import Path
+from .windows_paths import Path
 
 
 def background_flags():

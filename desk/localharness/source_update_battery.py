@@ -11,7 +11,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, wide
 import re
 import shutil
 import stat
@@ -345,7 +345,7 @@ def _copy_composition(value, repository, manifest, base_app=None):
     # they are frozen/hash-bound verification inputs, never a live .env/profile
     # or an addition to the installable candidate inventory.
     # Replace runtime source, not overlay an absent candidate file with old code.
-    shutil.rmtree(core)
+    shutil.rmtree(wide(core))
     bundle.copy_files(value['core']['root'], value['core']['files'], core)
     for name, row in required_tests.items():
         if name not in value['core']['files']:
@@ -360,7 +360,7 @@ def _copy_composition(value, repository, manifest, base_app=None):
             shutil.copyfile(src, target)
     # Edition/direct-source tests must import M, not the old overlay or mirror.
     for base in (repository / 'praxis', repository / 'helene/core'):
-        shutil.rmtree(base)
+        shutil.rmtree(wide(base))
         bundle.copy_files(core, bundle.inventory(core), base)
     desk = repository / 'desk'
     app = value['app']
@@ -384,7 +384,7 @@ def _copy_composition(value, repository, manifest, base_app=None):
         if (bundle.digest(target)!=row['sha256'] or (os.name!='nt' and
                 ('100755' if target.stat().st_mode & 0o111 else '100644')!=row['mode'])):
             raise ValueError('Mapped application differs from accepted composition: '+name)
-    shutil.rmtree(desk / '.incoming-app')
+    shutil.rmtree(wide(desk / '.incoming-app'))
     return core, desk
 
 
@@ -725,10 +725,10 @@ def _cleanup_work(work, cache, *, retain_repository=False,retain_shared=False):
                     raise ValueError('Unexpected battery phase cleanup entry: '+str(child))
             for child in children:
                 if child.name!='shared-inputs' and (not retain_repository or child.name!='repository'):
-                    shutil.rmtree(child, onerror=readonly)
+                    shutil.rmtree(wide(child), onerror=readonly)
             result = {'state': 'slots-removed', 'work': str(work), 'retained': ['repository']}
         else:
-            shutil.rmtree(work, onerror=readonly)
+            shutil.rmtree(wide(work), onerror=readonly)
             result = {'state': 'removed', 'work': str(work)}
     except OSError as exc:
         result = {'state': 'pending', 'work': str(work), 'error': f'{type(exc).__name__}: {exc}'}

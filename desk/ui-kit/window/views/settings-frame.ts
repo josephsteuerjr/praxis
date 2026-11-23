@@ -113,7 +113,7 @@ export interface Config {
   // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
   phone?: { enabled?: boolean; mode?: string; external?: string; local_port?: number; bridge_profile?:string };
   port?: number;
-  update?: { url?: string };
+  update?: { url?: string; auto_prepare?: boolean };
   // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
   backup?: { every_days?: number; keep?: number; dir?: string };
@@ -223,11 +223,12 @@ export const GROUP = {
   look: "look",
 } as const;
 
-export function focusUpdates(container: HTMLElement): void {
+export function focusUpdates(container: HTMLElement, preserve = false): void {
   container.querySelector<HTMLButtonElement>('[role="tab"][data-group="app"]')?.click();
   // The section navigation owns the custom scroller and sticky-tab offset.
   const about=Array.from(container.querySelectorAll<HTMLAnchorElement>('nav a'))
     .find(link=>link.textContent?.trim()===uiText("ui.ui.kit.window.views.settings.frame.254f667d9a"));
+  if (preserve) container.querySelector<HTMLElement>('[data-updates]')?.dispatchEvent(new Event('helene:select-preserve'));
   if (about)about.click();
   else container.querySelector<HTMLElement>('[data-updates]')?.scrollIntoView({block:'start'});
 }
@@ -558,6 +559,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     agentProposalId = row.id;
     confirmAgentUpdate.hidden = false;
   };
+  about.addEventListener('helene:select-preserve', () => {
+    void loadSourceModes().then(() => {
+      about.querySelector<HTMLInputElement>('[data-source-mode="preserve"] input')?.click();
+    }).catch(error => toast(humanError(error).text));
+  });
+  if (pythonUpdate) about.append(toggle(uiText('update.auto.prepare'), draft.update.auto_prepare !== false,
+    enabled => { draft.update!.auto_prepare = enabled; }));
   if (pythonUpdate) void loadSourceModes().catch(() => { sourceHint.textContent = uiText("ui.ui.kit.window.views.settings.frame.427c3fa715"); });
   // Reconnecting the old UI reads the same operation, not a fresh invented
   // progress counter. Poll only while that operation is nonterminal; leaving
@@ -960,6 +968,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // The confirmed write owns this reload. A newer unsaved form is retained.
         setTimeout(() => { if (!container.dataset.settingsDirty) location.reload(); }, 0);
       }
+      window.dispatchEvent(new Event('helene:update-preference'));
       phoneSettings.dispatchEvent(new CustomEvent('configuration-saved',{detail:saved}));
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";

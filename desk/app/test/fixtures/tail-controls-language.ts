@@ -14,6 +14,6 @@ const state={changes:[] as string[],opened:0,preview:replyPreview({reply_to_mess
 const preview=document.createElement('p');preview.id='preview';preview.textContent=state.preview?.text||'';root.append(preview);
 const raw=document.createElement('p');raw.id='raw-preview';raw.textContent=state.rawPreview?.text||'';root.append(raw);
 const cards=sourceModeCards(value=>state.changes.push(value));cards.configure(['clean','preserve'],'clean');root.append(cards.el);
-const notice=document.createElement('section');root.append(notice);releaseNotice(notice,async()=>({current:'fixture-old',latest:'AUTHORED_version_日本語',newer:true}),()=>state.opened++);
+const notice=document.createElement('section');root.append(notice);releaseNotice(notice,async()=>({state:'ready',latest:'AUTHORED_version_日本語',sha256:'a'.repeat(64)}),async()=>{state.opened++;},()=>state.opened++,error=>{throw error;});
 const lock=document.createElement('button');lock.id='lock';lock.textContent='Fixture: lock selected source mode';lock.onclick=()=>cards.lock();root.append(lock);
 Object.assign(window,{controlsFixture:state,ownedCaption:t('ui.ui.kit.window.text.menu.1399431d76')});

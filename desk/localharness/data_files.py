@@ -2,7 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 import errno,hashlib,os,stat,tempfile
-from pathlib import Path
+from .windows_paths import wide, Path, walk
 
 
 def identity(info):
@@ -30,7 +30,7 @@ def unlink_regular(path):
     api.SetFileInformationByHandle.argtypes=[w.HANDLE,c.c_int,c.c_void_p,w.DWORD]
     api.SetFileInformationByHandle.restype=w.BOOL
     api.CloseHandle.argtypes=[w.HANDLE];api.CloseHandle.restype=w.BOOL
-    handle=api.CreateFileW(str(path),0x10000|0x80|0x100,7,None,3,0x00200000,None)
+    handle=api.CreateFileW(wide(path),0x10000|0x80|0x100,7,None,3,0x00200000,None)
     if handle==c.c_void_p(-1).value:raise c.WinError(c.get_last_error())
     fd=None
     try:
@@ -90,7 +90,7 @@ def inventory(root):
     from .validation_read import checkpoint
     root=plain(root);directories=['.'];files=[];aliases=[]
     def unreadable(error):raise error
-    for here,dirs,names in os.walk(root,followlinks=False,onerror=unreadable):
+    for here,dirs,names in walk(root,followlinks=False,onerror=unreadable):
         checkpoint()
         for name in dirs:
             child=plain(Path(here)/name)

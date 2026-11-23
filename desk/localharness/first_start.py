@@ -13,7 +13,7 @@ import datetime as dt
 import hashlib
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, walk, wide
 import shutil
 import socket
 import stat
@@ -58,7 +58,7 @@ def linked(path):
 
 def plain(path):
     from .posix_paths import system_absolute
-    path=system_absolute(path)
+    path=Path(system_absolute(path))
     for part in (path,*path.parents):
         try:info=part.lstat()
         except FileNotFoundError:continue
@@ -171,7 +171,7 @@ def _roots(base,current,*,require_marker=False,empty_only=None,temporary=()):
             # linked(), and never follow a reparse point or symlink here.
             if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):continue
             if getattr(entry.stat(follow_symlinks=False),'st_file_attributes',0)&0x400:continue
-            with os.scandir(entry.path) as children:
+            with os.scandir(wide(entry.path)) as children:
                 nested.extend(child for child in children if branded(child.name))
         except OSError:
             continue  # An inaccessible unrelated vendor is not an installation.
@@ -615,7 +615,7 @@ def _move(source,target):
         if identity(backing.stat())!=identity(before):raise NativeValueError('first_alias_changed', 'Transferred alias target changed')
         if identity(plain(path).stat())!=generation:raise NativeValueError('first_source_changed', 'Source data reference changed')
         unlink_regular(path)
-    for here,dirs,_files in os.walk(source,topdown=False):
+    for here,dirs,_files in walk(source,topdown=False):
         for name in dirs:(Path(here)/name).rmdir()
     source.rmdir()
 
@@ -628,11 +628,11 @@ def reset_execution(data):
         def writable(function,name,_error):
             os.chmod(name,stat.S_IWRITE|stat.S_IREAD);function(name)
         try:
-            if path.is_dir():shutil.rmtree(path,onerror=writable)
+            if path.is_dir():shutil.rmtree(wide(path),onerror=writable)
             else:path.unlink()
         except PermissionError:
             os.chmod(path,stat.S_IWRITE|stat.S_IREAD)
-            if path.is_dir():shutil.rmtree(path,onerror=writable)
+            if path.is_dir():shutil.rmtree(wide(path),onerror=writable)
             else:path.unlink()
     for name in ('.desktop-owner.lock','.python-desktop-status','body/bridge/spool.db','body/bridge/spool.db-wal','body/bridge/spool.db-shm'):
         path=data/name
@@ -696,9 +696,34 @@ def legacy_plan(root,places,backend):
     """The receipt, not a caller's keep-list, protects a modern programme."""
     empty_only=[]
     old_roots,siblings=discover(root,places,empty_only=empty_only)
-    for path in getattr(backend,'registered',lambda _places:[])(places):
+    registered=getattr(backend,'registered',lambda _places:[])(places)
+    for path in registered:
         path=plain(path)
         if path!=root and path not in old_roots:old_roots.append(path)
+    # An unregistered AppData cache can have an arbitrary name, depth and
+    # files resembling agent memory. It grants no authority to retire its tree.
+    # Keep an ambiguous unbound container in place; recognized installs still
+    # pass the full custody checks, including another inspection after stop.
+    preserved=[]
+    local=next((p for p in places.appdata if p.name.casefold()=='local'),None)
+    for candidate in list(old_roots):
+        if local is None or not candidate.is_relative_to(local) or linked(candidate):
+            continue
+        if candidate in registered or (candidate/'helene.json').is_file() or list((candidate/'agents').glob('*/helene.json')):
+            continue
+        try:
+            sources=data_sources([candidate],[],places)
+            guard_cleanup_data([candidate],places,sources)
+        except NativeValueError as exc:
+            if exc.native_caption['code'] not in ('first_cleanup_data','first_found_external'):
+                raise
+        except OSError as exc:
+            if not isinstance(exc,PermissionError) and getattr(exc,'winerror',None)!=206:
+                raise
+        else:
+            continue
+        preserved.append(candidate)
+        old_roots.remove(candidate)
     all_roots=[*old_roots,*[p for p in siblings if p.is_dir() and not linked(p)]]
     admitted={path:receipted_programs(path,places) for path in all_roots}
     retained=list(dict.fromkeys(p for programs in admitted.values() for p in programs))
@@ -717,7 +742,7 @@ def legacy_plan(root,places,backend):
             for path in protected if ready(path,places)}
     plan={'old_roots':old_roots,'siblings':siblings,'all_roots':all_roots,
           'retained':retained,'retained_roots':containers,'protected':protected,'receipts':stamps,
-          'empty_only':[path for path in empty_only if path in old_roots]}
+          'empty_only':[path for path in empty_only if path in old_roots], 'preserved_unbound':preserved}
     validate_legacy_plan(plan,places)
     return plan
 
@@ -805,7 +830,7 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
             else:backend.remove(path)
     backend.shortcuts(roots,root if shortcuts else None)
     backend.assert_quiet(roots)
-    return cleanup_leftovers(backend,[*old_roots,*siblings])
+    return cleanup_leftovers(backend,[*old_roots,*siblings])+[str(path) for path in plan.get('preserved_unbound',[])]
 
 
 def cleanup_leftovers(backend,roots,*,notes=True):

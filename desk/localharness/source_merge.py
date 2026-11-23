@@ -9,7 +9,8 @@ import hashlib
 import errno
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
+from .windows_paths import Path, walk
 import re
 import shutil
 import subprocess
@@ -52,7 +53,7 @@ def inventory(root,*,application=False):
     if not root.is_dir():
         raise FileNotFoundError(root)
     result = {}
-    for directory, dirs, names in os.walk(root, followlinks=False):
+    for directory, dirs, names in walk(root, followlinks=False):
         checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if allowed((here / d).relative_to(root).as_posix()))

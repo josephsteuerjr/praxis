@@ -3,7 +3,7 @@
 The immutable plan is sealed by first-start admission. Progress never restores
 elapsed wall time, and a commit never discovers additional deletion targets.
 """
-from pathlib import Path
+from .windows_paths import Path
 from contextlib import contextmanager
 import datetime as dt
 import copy,hashlib,json,os,subprocess,sys,time,uuid

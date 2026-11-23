@@ -1,6 +1,6 @@
 """Bounded parallel file work with complete validation and serialized progress."""
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from .windows_paths import Path, reserved
 import hashlib
 import os
 import shutil
@@ -72,7 +72,8 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS,*
     for entry in entries:
         relative=Path(entry.filename);out=(destination/relative).resolve()
         key=os.path.normcase(str(out))
-        if (not out.is_relative_to(destination) or '\\' in entry.filename or ':' in entry.filename
+        if (os.name=='nt' and any(reserved(part) for part in relative.parts)
+                or not out.is_relative_to(destination) or '\\' in entry.filename or ':' in entry.filename
                 or '..' in relative.parts or relative.is_absolute()
                 or not (entry.filename.startswith(prefix) or entry.filename.rstrip('/')==prefix.rstrip('/'))
                 or (entry.external_attr>>16)&0o170000==0o120000 or key in seen):
@@ -99,7 +100,7 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS,*
         if entry.is_dir():return
         target=destination/entry.filename;target.parent.mkdir(parents=True,exist_ok=True)
         if not target.resolve().is_relative_to(destination):raise ValueError('Archive output escaped destination')
-        temporary=target.with_name('.'+target.name+'.'+uuid.uuid4().hex+'.part')
+        temporary=target.with_name('.'+uuid.uuid4().hex+'.part')
         try:
             # Each worker has an independent reader, avoiding ZipFile's shared
             # seek lock. Reading to EOF checks CRC for every single member.

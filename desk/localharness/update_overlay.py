@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, walk
 import time
 
 from .update_io import stamp, proof, measured_digest, copy_verified, remove_created_file
@@ -48,7 +48,7 @@ def _program_files(source):
     """The running setup window's browser profile is never program payload."""
     from .component_store import export_references
     pinned=set(export_references(source)['pins'])
-    for directory,dirs,names in os.walk(source,followlinks=False):
+    for directory,dirs,names in walk(source,followlinks=False):
         here=Path(directory)
         dirs[:]=sorted(d for d in dirs if d not in {'.helene','.migration-webview','.webview','__pycache__'}
                       and (here/d).relative_to(source).as_posix() not in pinned)

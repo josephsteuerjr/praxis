@@ -1,5 +1,5 @@
 """In-place updates retain profile paths; only executable code gets a candidate."""
-from pathlib import Path
+from .windows_paths import Path, walk
 import shutil
 import uuid
 import hashlib
@@ -64,7 +64,7 @@ def selection(old):
         checkpoint()
         root = Path(code)
         files = {}
-        for directory, dirs, names in os.walk(root, followlinks=False):
+        for directory, dirs, names in walk(root, followlinks=False):
             checkpoint()
             here = Path(directory)
             dirs[:] = sorted(n for n in dirs if allowed((here / n).relative_to(root).as_posix()))

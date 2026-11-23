@@ -531,6 +531,10 @@ class Host:
                     if command == 'components_start':
                         self.owner.start()
                         return {'ok': True}
+                if command=='update_ready_restart':
+                    from .prepared_update import restart_args
+                    arguments=restart_args(self.owner,**arguments)
+                    command='update_start'
                 durable_restore=False
                 if command=='restore_upstream':
                     from .upstream_recovery import modern
@@ -619,6 +623,10 @@ class Host:
             self.publish('running')
             server = threading.Thread(target=self.server.serve_forever, name='helene-session-control', daemon=True)
             server.start()
+            if self.migration_request is None:
+                from .prepared_update import monitor
+                threading.Thread(target=monitor,args=(self.owner,self.stop),daemon=True,
+                    name='helene-release-monitor').start()
             if self.migration_request is not None:
                 from . import migration_job, desktop_update_request as jobs
                 value=read(self.migration_request)

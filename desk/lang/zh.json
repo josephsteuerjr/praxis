@@ -1,4 +1,7 @@
 {
+  "update.ready.restart": "更新 {version} 已准备好。点击以新代码重启。若要保留修改，请在设置中选择带审查面板的更新。",
+  "update.ready.preserve": "保留修改…",
+  "update.auto.prepare": "自动下载并解压更新",
   "setup.typewriter.next_finish": "直接写完",
   "setup.typewriter.next": "下一步",
   "setup.name.title": "给智能体起什么名字？",

@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import os
-from pathlib import Path
+from .windows_paths import wide, Path
 import shutil
 import subprocess
 import threading
@@ -472,7 +472,7 @@ def finish(old,new,note,*,stopped=lambda:False):
         if function in (os.rmdir,os.scandir,os.open) and any(Path(p)==Path(path) or Path(p).is_relative_to(path) for p in protected):return
         if isinstance(error[1],PermissionError):protected.append(path);return
         raise error[1]
-    if old.exists():shutil.rmtree(old,onerror=readonly)
+    if old.exists():shutil.rmtree(wide(old),onerror=readonly)
     leftovers=list(note['integrations'].get('retained') or []) if isinstance(note['integrations'],dict) else []
     if protected:
         leftovers.append(f'Не удалось без прав администратора удалить {len(protected)} элемент(ов) прежней программы в {old}. '

@@ -11,7 +11,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, walk
 import re
 import shutil
 import stat
@@ -119,7 +119,7 @@ def inventory(root):
     if not root.is_dir():
         raise ValueError('Verification directory unavailable: ' + str(root))
     rows = {}
-    for directory, dirs, names in os.walk(root):
+    for directory, dirs, names in walk(root):
         checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED)

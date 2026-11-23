@@ -3,7 +3,7 @@
 No PATH discovery, downloads, credentials, global installers or authority to
 weaken the source battery. The verification manifest binds every shipped byte.
 """
-from pathlib import Path
+from .windows_paths import Path, walk, wide
 import hashlib,json,os,shutil,stat,sys
 from . import source_verification_bundle as bundle
 
@@ -12,7 +12,7 @@ def inventory(root):
     if root.is_symlink() or not root.is_dir() or getattr(root.lstat(),'st_file_attributes',0)&0x400:
         raise ValueError('Native verification tools unavailable')
     result={}
-    for directory,dirs,names in os.walk(root):
+    for directory,dirs,names in walk(root):
         for name in sorted([*dirs,*names]):
             p=Path(directory)/name;relative=p.relative_to(root).as_posix();bundle.relative(relative)
             mode=p.lstat()
@@ -73,7 +73,7 @@ def provision(program,manifest,directory,stopped=lambda:False):
     else:
         if stopped():raise InterruptedError('Owner stopped native tool preparation')
         target.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copytree(root/row['npm_cache'],target)
+        shutil.copytree(wide(root/row['npm_cache']),wide(target))
         if stopped():raise InterruptedError('Owner stopped native tool preparation; private cache retained')
         receipt.write_bytes(bundle.encoded({'input_sha256':identity}))
     return {**{tool:str(root/name) for tool,name in row['tools'].items()},'npm_config_cache':str(target)}

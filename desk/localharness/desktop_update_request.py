@@ -4,7 +4,7 @@ The session Controller's existing watcher executes it. No UI thread owns the job
 no age timer revokes admitted semantic work, and crash recovery rejoins its exact
 staging/worker identities rather than issuing another model or download request.
 """
-from pathlib import Path
+from .windows_paths import Path
 import hashlib
 import os
 import re

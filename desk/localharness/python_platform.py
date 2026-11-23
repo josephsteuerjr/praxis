@@ -1,5 +1,5 @@
 """Python application target identity shared by packaging and update readers."""
-from pathlib import Path
+from .windows_paths import Path
 import json
 import platform
 import sys

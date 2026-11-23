@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from .windows_paths import Path
 import tempfile
 import uuid
 import zipfile
@@ -105,6 +105,7 @@ def preflight(old, new, *, notify=True):
     app_source=app_source_update.changed(old,new)
     shared_repair=shared_repair or app_source is not None
     if not sources:
+        if (source_choice or {}).get('require_review'):raise ValueError('Для ревью сохранённых правок нужен локальный профиль')
         if app_source is not None:raise ValueError('Сохранение правок оболочки требует локального агента для совмещения и проверки')
         return {'state': 'ready', 'plans': []}
     with tempfile.TemporaryDirectory(prefix='baseline-', dir=root) as temporary:
@@ -138,6 +139,8 @@ def preflight(old, new, *, notify=True):
                 plan['app_source']=app_source
             if shared_repair and not plan.get('shared_app_required'):
                 plan['shared_app_required'] = True
+            if (source_choice or {}).get('require_review'):
+                plan['require_review']=True
             write(directory / 'plan.json', plan)
             plans.append({'source': source, 'tree':str(Path(agent['tree']).resolve()), 'directory': str(directory), 'state': state,
                           'error': str(detail.get('error') or detail.get('reason') or '')})

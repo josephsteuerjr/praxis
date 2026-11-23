@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from .windows_paths import Path, walk
 import shutil
 import time
 from . import source_merge as merge
@@ -61,7 +61,7 @@ def _runtime_inventory(program,state):
     runtime=dict(parallel(scoped,selected,workers=os.cpu_count() or 1))
     if not runtime:raise ValueError('Incoming runtime inventory is empty')
     actual=set()
-    for here,dirs,names in os.walk(program/'runtime',followlinks=False):
+    for here,dirs,names in walk(program/'runtime',followlinks=False):
         checkpoint(check)
         dirs[:]=[name for name in dirs if name!='__pycache__']
         for name in [*dirs,*names]:
@@ -104,7 +104,7 @@ def app_inventory(root):
     from .validation_read import checkpoint
     checkpoint();root=Path(root).resolve()
     files={}
-    for here,dirs,names in os.walk(root,followlinks=False):
+    for here,dirs,names in walk(root,followlinks=False):
         checkpoint()
         dirs[:]=[name for name in dirs if name!='__pycache__']
         for name in [*dirs,*names]:

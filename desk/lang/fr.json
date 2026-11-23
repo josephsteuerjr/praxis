@@ -1,4 +1,7 @@
 {
+  "update.ready.restart": "La mise à jour {version} est prête. Cliquez pour redémarrer avec le nouveau code. Pour conserver vos modifications, choisissez la mise à jour avec revue dans les paramètres.",
+  "update.ready.preserve": "Conserver les modifications…",
+  "update.auto.prepare": "Télécharger et décompresser automatiquement les mises à jour",
   "setup.typewriter.next_finish": "Tout afficher",
   "setup.typewriter.next": "Suivant",
   "setup.name.title": "Comment nommer l'agent ?",

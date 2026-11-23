@@ -1,4 +1,7 @@
 {
+  "update.ready.restart": "Update {version} is ready. Click to restart on the new code. To keep your edits, choose the update with a review panel in Settings.",
+  "update.ready.preserve": "Keep edits…",
+  "update.auto.prepare": "Automatically download and unpack updates",
   "setup.typewriter.next_finish": "Show the rest",
   "setup.typewriter.next": "Next",
   "setup.name.title": "What will you call the agent?",

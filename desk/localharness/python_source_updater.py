@@ -9,7 +9,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, wide
 import shutil
 import subprocess
 import sys
@@ -624,7 +624,7 @@ os.execv(entry,command)
             if function is not os.unlink or not isinstance(failure[1], PermissionError):
                 raise failure[1]
             remove_created_file(path)  # retries only read-only Windows files
-        shutil.rmtree(staging, onerror=remove_readonly_file)
+        shutil.rmtree(wide(staging), onerror=remove_readonly_file)
         for archive in args.archive:archive.unlink(missing_ok=True)
         if getattr(args,'discard_preimages',''):
             retire_preimages(old,Path(__file__).resolve().parent,args.discard_preimages)
