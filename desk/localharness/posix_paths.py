@@ -1,6 +1,6 @@
 """Canonicalize only Apple's fixed system aliases, never user symlinks."""
 import os,sys
-from pathlib import Path
+from .windows_paths import Path
 
 def system_absolute(path):
     path=Path(os.path.abspath(path))

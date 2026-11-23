@@ -9,7 +9,10 @@ import argparse
 import hashlib
 import json
 import os
-from .windows_paths import Path, wide
+if __package__:
+    from .windows_paths import Path, wide
+else:
+    from pathlib import Path  # Standalone copy locates its incoming app after argparse.
 import shutil
 import subprocess
 import sys
@@ -371,6 +374,7 @@ def recover_startup(old, migration_id=''):
 
 
 def main():
+    global Path,wide
     parser=argparse.ArgumentParser()
     parser.add_argument('--old',type=Path,required=True)
     parser.add_argument('--new',type=Path,required=True)
@@ -385,7 +389,13 @@ def main():
     parser.add_argument('--job-id',default='')
     parser.add_argument('--admission-name',default='updater-admitted.json')
     args=parser.parse_args()
-    sys.path.insert(0,str(args.new.resolve()/'app'))
+    sys.path.insert(0,os.path.join(os.path.abspath(args.new),'app'))
+    if not __package__:
+        from localharness.windows_paths import Path as FilePath, wide as extended
+        Path,wide=FilePath,extended
+        args.old,args.new,args.staging=map(Path,(args.old,args.new,args.staging))
+        args.archive=list(map(Path,args.archive))
+        if args.job:args.job=Path(args.job)
     if args.cleanup:return perform(args)
     validate_staging(args)
     if Path(args.admission_name).name != args.admission_name:
@@ -523,8 +533,10 @@ entry=command[0]
 if os.name=='nt':command=[subprocess.list2cmdline([part]) for part in command]
 os.execv(entry,command)
 """
-            subprocess.Popen([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),str(executable),str(old/'app/python_app.py'),*presentation],
-                cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
+            from localharness.update_process import python_launch
+            command,cwd=python_launch([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),str(executable),str(old/'app/python_app.py'),*presentation],new)
+            subprocess.Popen(command,executable=command[0],
+                cwd=cwd,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=background_flags(),start_new_session=os.name!='nt')
         return True
     def reopen_clean_failure(target):
@@ -679,8 +691,10 @@ os.execv(entry,command)
             from localharness.python_platform import desktop_argv
             command=desktop_argv(old,arguments)
         else:command=[str(executable),str(old/'app/python_app.py'),*arguments]
+        from localharness.update_process import python_launch
+        command,cwd=python_launch(command,old)
         child=JobChild.spawn(command,
-                             cwd=old,env=permanent_environment(),log=log,stopped=lambda:False)
+                             cwd=cwd,env=permanent_environment(),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
             if stopped():raise InterruptedError('Owner stopped updated startup; restoring previous version')
@@ -746,7 +760,9 @@ os.execv(entry,command)
         command.extend(['--discard-preimages',note['id']])
     for archive in args.archive:command.extend(['--archive',str(archive)])
     with log.open('ab') as output:
-        subprocess.Popen(command,cwd=old.parent,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
+        from localharness.update_process import python_launch
+        command,cwd=python_launch(command,old.parent)
+        subprocess.Popen(command,executable=command[0],cwd=cwd,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                          creationflags=background_flags(),start_new_session=os.name!='nt')
     return 0
 

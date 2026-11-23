@@ -79,6 +79,44 @@ class Prepared(unittest.TestCase):
         self.assertEqual(self.prepare()['state'],'error')
         with self.assertRaises(ValueError):ready.restart_args(self.owner,self.sha)
 
+    def test_copied_update_helper_is_an_independent_script(self):
+        import subprocess
+        from localharness import python_source_updater
+        helper=self.root/'copied-update-helper.py'
+        shutil.copyfile(python_source_updater.__file__,helper)
+        result=subprocess.run([sys.executable,'-I',str(helper),'--help'],capture_output=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(b'--admission-name',result.stdout)
+
+    @unittest.skipUnless(os.name=='nt','Win32 process launch limits')
+    def test_native_child_can_start_from_a_deep_installation(self):
+        import subprocess
+        from localharness.update_process import python_launch
+        deep=self.root/('long'*22)/('deep'*22)/('last'*22)
+        deep.mkdir(parents=True)
+        executable=deep/'cmd.exe'
+        shutil.copyfile(os.environ['COMSPEC'],executable)
+        command,cwd=python_launch([str(executable),'/d','/c','echo','ready'],deep)
+        run=subprocess.run(command,executable=command[0],cwd=cwd,capture_output=True,timeout=15)
+        self.assertEqual(run.returncode,0,run.stderr)
+        self.assertEqual(run.stdout.strip(),b'ready')
+
+    def test_deep_profile_backup_and_resumed_preserve_copy(self):
+        from localharness import app_migration, essential_backup
+        profile=self.root/'data'
+        rel=FilePath('memory')/('nested'*15)/('more'*20)/('last'*19)/('a'*242+'.txt')
+        original=profile/rel
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b'keep')
+        self.config.write_text(json.dumps({'tree':str(profile)}))
+        self.assertIn(('data/'+rel.as_posix(),b'keep'),
+                      [(name,path.read_bytes()) for path,name in essential_backup.inventory(self.root)])
+        target=FilePath(self.temp.name)/'copied'
+        delta=FilePath(self.temp.name)/'previous'
+        target.mkdir();delta.mkdir()
+        app_migration.refresh_preserved(profile,target,delta)
+        self.assertEqual((target/rel).read_bytes(),b'keep')
+
     def test_component_length_and_nested_paths(self):
         archive=self.root/'long.zip'
         with zipfile.ZipFile(archive,'w') as z:z.writestr('Helene/'+self.deep+'/'+('z'*242),b'stock')

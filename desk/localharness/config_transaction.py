@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, wide
 import tempfile
 
 from .phone_tunnel.platform_support import acquire_file_lock, release_file_lock, PlatformSupportError
@@ -50,7 +50,7 @@ def replace_config(staged, target):
     hidden=False
     if os.name=='nt' and target.exists():
         import ctypes
-        flags=ctypes.windll.kernel32.GetFileAttributesW(str(target))
+        flags=ctypes.windll.kernel32.GetFileAttributesW(wide(target))
         hidden=flags!=-1 and bool(flags&2)
     # Keep the checked transaction while Windows readers finish; exhausted
     # sharing/permission refusals still fail with the old document intact.

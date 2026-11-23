@@ -581,7 +581,7 @@ def _move(source,target):
         except OSError as exc:
             if getattr(exc,'winerror',None)!=17 and exc.errno!=18:raise
             import tempfile
-            descriptor,name=tempfile.mkstemp(prefix=out.name+'.first-start-',dir=out.parent);os.close(descriptor)
+            descriptor,name=tempfile.mkstemp(prefix='.first-start-',dir=out.parent);os.close(descriptor)
             part=Path(name)
             try:
                 shutil.copyfile(path,part)

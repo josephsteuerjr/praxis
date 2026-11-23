@@ -704,7 +704,9 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
     # Verified input ZIPs remain a reusable cache, not disposable updater output.
     log=destination/'update.log'
     with log.open('ab') as output:
-        child=subprocess.Popen(argv,cwd=destination,stdin=subprocess.DEVNULL,
+        from .update_process import python_launch
+        argv,cwd=python_launch(argv,destination)
+        child=subprocess.Popen(argv,executable=argv[0],cwd=cwd,stdin=subprocess.DEVNULL,
             stdout=output,stderr=subprocess.STDOUT,
             creationflags=background_flags(),
             start_new_session=os.name!='nt')

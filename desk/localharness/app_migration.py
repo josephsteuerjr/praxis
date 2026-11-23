@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import uuid
-from pathlib import Path
+from .windows_paths import Path, wide
 
 from .essential_backup import configs, load, tree_path, snapshot
 
@@ -25,6 +25,7 @@ def preserve_source(source: Path, destination: Path, progress=None, *, source_on
     common repository first, then overlay every working byte (including dirty
     and untracked files); never reset or checkout over the agent's changes.
     """
+    source,destination=Path(source),Path(destination)
     if not source.is_dir():
         raise FileNotFoundError(source)
     from .component_store import preserve_models
@@ -164,6 +165,7 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
     extra files from the unsuccessful generation are retained there, not merged
     into the selected old owner's message queues or executable source.
     """
+    source,destination,delta=map(Path,(source,destination,delta))
     from .app_components import digest
     from .component_store import preserve_models
     pinned = {row['root'] for row in preserve_models(source, destination)}
@@ -210,7 +212,7 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
             if dst.exists() or dst.is_symlink():
                 saved=delta/dst.relative_to(destination);safe_parent(saved,delta);saved.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(dst,saved,follow_symlinks=False)
-            temporary=dst.with_name(dst.name+'.migration-part');shutil.copy2(src,temporary)
+            temporary=dst.with_name('.migration-'+uuid.uuid4().hex+'.part');shutil.copy2(src,temporary)
             if digest(temporary)!=expected:raise IOError('Preserved data copy changed')
             temporary.replace(dst);copied+=1
         if progress:progress({'stage':'preserving','source':str(source),'files':reused+copied,'reused_files':reused,'copied_files':copied})
@@ -223,7 +225,7 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
             if target.is_symlink():
                 saved=delta/item.relative_to(source);safe_parent(saved,delta);saved.parent.mkdir(parents=True,exist_ok=True)
                 target.replace(saved)
-    shutil.copytree(source,destination,dirs_exist_ok=True,symlinks=True,ignore=ignored,copy_function=copy_file)
+    shutil.copytree(wide(source),wide(destination),dirs_exist_ok=True,symlinks=True,ignore=ignored,copy_function=copy_file)
     return {'reused_files':reused,'copied_files':copied,'prior_delta':str(delta)}
 
 
@@ -416,7 +418,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         write_note(new_root,note)
         return note
     finally:
-        shutil.rmtree(staged)
+        shutil.rmtree(wide(staged))
 
 
 def confirm_started(new_root: Path, operation: str, *, proof):

@@ -11,7 +11,8 @@ from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import PureWindowsPath
+from localharness.windows_paths import Path
 import shutil
 import subprocess
 import sys
@@ -115,10 +116,10 @@ def copy_program(package, new, progress, extensions=None):
             if target.exists():
                 saved=new/'.migration-program-previous'/relative
                 if saved.exists() and hash_file(saved)!=hash_file(target):
-                    saved=saved.with_name(saved.name+'.'+uuid.uuid4().hex)
+                    saved=new/'.migration-program-previous'/uuid.uuid4().hex/relative
                 saved.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(target,saved)
             target.parent.mkdir(parents=True,exist_ok=True)
-            temporary=target.with_name(target.name+'.migration-part')
+            temporary=target.with_name('.migration-'+uuid.uuid4().hex+'.part')
             # Only publisher-owned checkpoint files share blocks with prepared
             # cache. Mutable source/config always receives independent bytes.
             immutable=(relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth') or (relative.parts[:3]==('components','xtts','runtime') and item.suffix.lower() in ('.dll','.pyd','.exe','.lib'))
@@ -303,8 +304,10 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
     try:
         progress('starting_new')
         from localharness.python_platform import desktop_argv
-        child=JobChild.spawn(desktop_argv(new,['--root',str(new),'--migration',note['id']]),
-                             cwd=new,env=dict(os.environ),log=new/'migration-start.log',stopped=lambda:False)
+        from localharness.update_process import python_launch
+        command,cwd=python_launch(desktop_argv(new,['--root',str(new),'--migration',note['id']]),new)
+        child=JobChild.spawn(command,
+                             cwd=cwd,env=dict(os.environ),log=new/'migration-start.log',stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
             current=json.loads(receipt.read_text(encoding='utf-8'))

@@ -38,7 +38,7 @@ import time
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from .windows_paths import Path
 
 # Константы продукта — как везде в дереве: объявлены здесь, сверены с
 # `ui-kit/contract.json` стендом `tests/t_contract.py`. Читать контракт в
