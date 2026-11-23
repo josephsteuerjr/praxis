@@ -221,12 +221,12 @@ class TestFormationMarker(unittest.TestCase):
         import formation
         import people
 
-        candidate = {"subject": "Арет", "kind": "person",
+        candidate = {"subject": "Морган", "kind": "person",
                      "text": "пишет длинные письма",
                      "visibility": "public", "salience": 1,
                      "confidence": "inferred"}
         formation._apply_supported(candidate, "clm-fedcba9876543210")
-        text = people.read_text("арет")
+        text = people.read_text("Морган")
         self.assertIn("[source:clm-fedcba9876543210|inferred]", text)
 
     def test_append_fact_keeps_pipe_in_source_ref(self):

@@ -223,7 +223,7 @@ class TheShadowLivesOnDisk(ShadowCase):
         self.assertIsNone(first["e_drift"], "первая заморозка — какой drift?")
         # Источник E изменился (карта памяти) — замороженная эпоха обязана не шелохнуться.
         (self.base / "memory" / "INDEX.md").write_text(
-            "# INDEX — карта памяти\n- люди: alex · arete\n", encoding="utf-8")
+            "# INDEX — карта памяти\n- люди: alex · Morgan\n", encoding="utf-8")
         second = self._capture(1)
         self.assertEqual(first["sizes"]["e"], second["sizes"]["e"],
                          "эпоха поехала за источником — заморозка не работает")
@@ -1548,7 +1548,7 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
                                         tools=[], now=NOW)
         first = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                    user_msg="х", tools=[], now=NOW, plan=plan)
-        (self.base / "memory" / "people" / "arete.md").write_text("гость",
+        (self.base / "memory" / "people" / "Morgan.md").write_text("гость",
                                                                   encoding="utf-8")
         second = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                     user_msg="х", tools=[], now=NOW, plan=plan)

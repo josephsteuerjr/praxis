@@ -1504,7 +1504,7 @@ def _foreign_self(summary: str, authors: set[str]) -> str | None:
     """Имя другого автора окна (или движка), которое сводка назвала «я», или None.
 
     Живые формы: «Я — Hope (@ai_sapience_bot)», «Я (torvn77) вёл обсуждение», «Я — Sol, мозг
-    и голос Praxis», «Я — Арете (голос Praxis)». Сверяется с авторами этого окна и с именами
+    и голос Praxis», «Я — собеседник (голос Praxis)». Сверяется с авторами этого окна и с именами
     движков, цитаты «…» не проверяются: «я — ИИ», «я — не оракул» и чужое «Я — Hope» в
     кавычках не ловятся."""
     text = _QUOTED.sub(" ", summary or "")
@@ -1515,7 +1515,7 @@ def _foreign_self(summary: str, authors: set[str]) -> str | None:
         if name in authors or name in _BRAIN_NAMES:
             return m.group(1)
         tail = text[m.end():m.end() + 40].casefold().lstrip(" ,()")
-        if tail.startswith(("голос praxis", "мозг")):  # «Я — Арете (голос Praxis)», «Я — Sol, мозг…»
+        if tail.startswith(("голос praxis", "мозг")):  # «Я — собеседник (голос Praxis)», «Я — Sol, мозг…»
             return m.group(1)
     return None
 

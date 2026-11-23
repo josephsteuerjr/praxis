@@ -183,7 +183,7 @@ class TestAfterRunHold(Base):
         self.assertTrue(again["when"], "и получило следующий срок")
 
     def test_after_run_is_held_out_of_due_until_cleared(self):
-        t = tasks.add("window", "написать Арету: журнал готов", after_run="run-abc123")
+        t = tasks.add("window", "написать Моргану: журнал готов", after_run="run-abc123")
         self.assertEqual(t.get("after_run"), "run-abc123")
         # удержание: без when задача созрела бы немедленно, но after_run её держит
         self.assertEqual(tasks.due(), [])

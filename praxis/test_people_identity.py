@@ -2,7 +2,7 @@
 
 01.08.2026 на живом дереве лежало ПЯТЬ файлов на одного владельца («владелец», «владелец-автор»,
 «владелец-автор-example_profile», «owner-Example», «owner-Example-example_profile»)
-и три на Арета. Плодил их не сбой, а механизм: имя файла делалось из того ярлыка, под
+и три на Моргана. Плодил их не сбой, а механизм: имя файла делалось из того ярлыка, под
 которым человек пришёл в конкретный ход, — её слова, display-имени Telegram или подписи
 квитанции с хэндлом.
 
@@ -45,7 +45,7 @@ class IdentityKey(unittest.TestCase):
                          people.identity_key("Alex Miller"))
 
     def test_diacritics_fold(self):
-        self.assertEqual(people.identity_key("Arête"), people.identity_key("Арете"))
+        self.assertEqual(people.identity_key("Arête"), people.identity_key("Морган"))
 
     def test_transliteration_variants_fold(self):
         self.assertEqual(people.identity_key("Хабиб"), people.identity_key("Khabib"))
@@ -57,7 +57,7 @@ class IdentityKey(unittest.TestCase):
         """Стойка «молча не сливаю»: Example и Exampel — не одно написание."""
         self.assertNotEqual(people.identity_key("Alex Miller"),
                             people.identity_key("Alex Miles"))
-        self.assertNotEqual(people.identity_key("Арет"), people.identity_key("Арете"))
+        self.assertNotEqual(people.identity_key("Морган"), people.identity_key("Морган"))
         self.assertNotEqual(people.identity_key("Анна"), people.identity_key("Ана"))
 
     def test_empty_is_empty(self):

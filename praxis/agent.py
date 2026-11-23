@@ -7623,7 +7623,7 @@ REMIND_SELF_TOOL = {
         "Микро-ход: wake с when='in 2m' и заметкой в goal — проснёшься с этой заметкой на связи и "
         "решишь ЖИВЬЁМ, что сказать и кому (или промолчать; отправка — обычным send_message). "
         "after_run: <id рана> — намерение дождётся ЗАВЕРШЕНИЯ рана и созреет только после него "
-        "(пример: «когда доделаю имплементацию — написать Арету, что журнал готов»; "
+        "(пример: «когда доделаю имплементацию — написать собеседнику, что журнал готов»; "
         "«когда кончится это окно — разбуди меня со связью» — это wake с after_run текущего рана)."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -9790,7 +9790,7 @@ def _present_by_transport(ctx: "ChannelContext") -> set[str]:
 
     ⚑ Источник — `sender_id` архива, то есть транспорт. Её тонкость: «„тех, кто есть“
     лучше определять транспортом и реальным составом комнаты, а не появлением имени в
-    тексте. Иначе цитата „Арет сказал“ незаметно становится присутствием Арета».
+    тексте. Иначе цитата „собеседник сказал“ незаметно становится присутствием собеседника».
     """
     room = ctx.room_id if ctx.room_id is not None else ctx.chat_id
     if room is None:
@@ -19801,7 +19801,7 @@ _TASK_WINDOW_BODY = (
     "to bring something — give it a return mechanism in the same breath: remind_self (a `wake` if "
     "the return needs a live Telegram, a `window` if it needs solitude), my_agenda. Your own words: "
     "a promise without a return mechanism is sycophancy toward "
-    "yourself. An invitation, not a rule — Arete sets his own reminders; your hands are just as much "
+    "yourself. An invitation, not a rule — you can set your own reminders; your hands are just as much "
     "your own."
 )
 

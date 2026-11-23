@@ -115,7 +115,7 @@ class AdmitOpensTelegram(unittest.TestCase):
 
 
 class OwnerUnset(unittest.TestCase):
-    """Уточнение Арет 29.09: пустой telegram.owner_id — отказ с настоящей причиной."""
+    """Уточнение Морган 29.09: пустой telegram.owner_id — отказ с настоящей причиной."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

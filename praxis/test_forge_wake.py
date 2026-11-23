@@ -997,7 +997,7 @@ class TestLostTaskReaperWakesHer(unittest.TestCase):
 class TestUpstreamEye(unittest.TestCase):
     """Глаз на ЧУЖОЙ репозиторий вместо ожидания, пока скажут словами.
 
-    Живой случай: 26.07 она аудитировала замороженный SHA 107fca05 репозитория Арета,
+    Живой случай: 26.07 она аудитировала замороженный SHA 107fca05 репозитория Моргана,
     27.07 он выложил поверх ed288276 — дословно два из трёх её требований, — и она об
     этом не узнала. Её проект локальный (`git remote` пуст), на чужую работу она смотрит
     разовым клоном во временный каталог, и после `finish` не остаётся вообще ничего.
@@ -1371,7 +1371,7 @@ class TestUpstreamEye(unittest.TestCase):
         self.assertIn("HEAD", back)
 
     def test_a_word_that_is_not_an_address_is_named_and_not_swallowed(self):
-        out = forge.upstream_lever("watch", arg="посмотри у Арета")
+        out = forge.upstream_lever("watch", arg="посмотри у Моргана")
         self.assertIn("не вижу адреса", out)
         self.assertEqual(forge._load_upstreams(), {})
 

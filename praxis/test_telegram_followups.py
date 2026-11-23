@@ -417,8 +417,8 @@ class FollowUpLedgerTests(unittest.TestCase):
             notify_owner=True, notice_source="owner")
         self.ledger.observe_incoming(
             peer_id=ABSTRACT_DL, sender_id=555000333, message_id=94251,
-            text="ответ Ареты", reply_to_message_id=94250,
-            sender_name="Арет", sender_is_owner=False, received_at=130,
+            text="ответ Морган", reply_to_message_id=94250,
+            sender_name="Морган", sender_is_owner=False, received_at=130,
         )
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [other["id"]])
@@ -477,7 +477,7 @@ class FollowUpLedgerTests(unittest.TestCase):
 
         self.ledger.observe_incoming(
             peer_id=ABSTRACT_DL, sender_id=555, message_id=94244, text="ответ",
-            reply_to_message_id=94243, sender_name="Арет", received_at=120)
+            reply_to_message_id=94243, sender_name="Морган", received_at=120)
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [thread["id"]])
 

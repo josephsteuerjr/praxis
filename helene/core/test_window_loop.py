@@ -186,7 +186,7 @@ class TestTheMissingCapability(Base):
 
     def test_the_confirmation_requires_actual_connection_rather_than_promising_it(self):
         with self.online():
-            out = self.remind("wake", "ответить Арету", when="in 30m")
+            out = self.remind("wake", "ответить Моргану", when="in 30m")
         self.assertIn("фактическим подключением при выполнении", out)
         self.assertNotIn("Telegram будет открыт", out)
 

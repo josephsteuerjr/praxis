@@ -186,7 +186,7 @@ class TestTheMissingCapability(Base):
 
     def test_the_confirmation_says_the_connection_will_be_live(self):
         with self.online():
-            out = self.remind("wake", "ответить Арету", when="in 30m")
+            out = self.remind("wake", "ответить Моргану", when="in 30m")
         self.assertIn("Telegram будет открыт", out)
 
     def test_a_wake_may_wait_for_the_very_window_it_is_born_in(self):

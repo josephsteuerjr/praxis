@@ -219,7 +219,7 @@ class ResolveEntityCandidateTests(unittest.IsolatedAsyncioTestCase):
         # полная выгрузка адресной книги, и раньше ДВАЖДЫ за вызов.
         self.assertEqual(await self._calls_for("-100500"), [-100500])
         self.assertEqual(await self._calls_for(-100500), [-100500])
-        self.assertEqual(await self._calls_for("-100999999999999999"), [-100999999999999999])
+        self.assertEqual(await self._calls_for("-1008881234567"), [-1008881234567])
 
     async def test_positive_digits_keep_the_phone_book_hand_but_number_first(self):
         # Телефон в её адресной книге по-прежнему резолвится строкой — но только ПОСЛЕ
@@ -760,7 +760,7 @@ class _DirectSendTraceHarness(unittest.TestCase):
     """Стенд прямой отправки: свои архив, записка, буфер и леджер — живая память не тронута."""
 
     OWNER = 555000100
-    GROUP = -100999999999999999
+    GROUP = -1008881234567
     SAID = ("Поправка к моей реплике выше: я неточно сказала «у меня на Opus 5». "
             "Мой рабочий движок — gpt-5.6-sol, а Opus 5 у меня в терминале.")
 
@@ -834,7 +834,7 @@ class DirectSendLeavesTheSameTraceAsVoiceTests(_DirectSendTraceHarness):
     отправка оставляла один след из четырёх — буфер комнаты, который живёт только внутри
     хода по этой комнате. Пульс в комнату не заходит. На проде 22 из 22 её прямых
     сообщений в группы отсутствуют в `memory/groups/*/archive.jsonl` (у голоса там 591),
-    а в `.scratch/-100999999999999999.md` того дня стоят 17:20 и 18:45 — и дырка на 18:44.
+    а в `.scratch/-1008881234567.md` того дня стоят 17:20 и 18:45 — и дырка на 18:44.
     """
 
     def test_direct_group_send_leaves_note_archive_and_buffer(self):
@@ -951,7 +951,7 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
         p = patch.object(runner.telegram_followups, "LEDGER", self.ledger)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(runner._buf.pop, "-100999999999999999", None)
+        self.addCleanup(runner._buf.pop, "-1008881234567", None)
 
     def _restore(self):
         (agent._RUN_MANAGER, agent._MEDIA_SPOOL, runner._DIRECT_OUTBOX,
@@ -985,17 +985,17 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
                                 {"to": "@abstractDL", "text": text},
                                 side_effect=True, idempotency_key=key)
         entry = self.outbox.prepare_text(
-            key, peer_id=-100999999999999999, text=text, run_id=run_id, call_id=call_id,
+            key, peer_id=-1008881234567, text=text, run_id=run_id, call_id=call_id,
             purpose="tool:send_message")
         agent.run_direct_outbox_prepared(
-            entry, target_label="AbstractDL Chat", target_user_id=None,
+            entry, target_label="Example Forum", target_user_id=None,
             pulse_id="pulse-1", followup_request="")
         entry = self.outbox.mark_accepted(key, message_id=94243)
 
         self.assertTrue(agent.project_direct_outbox_acceptance(entry))
         self.assertTrue(agent.project_direct_outbox_acceptance(entry))
 
-        scratch = notes.path_for("-100999999999999999").read_text(encoding="utf-8")
+        scratch = notes.path_for("-1008881234567").read_text(encoding="utf-8")
         self.assertEqual(scratch.count("сказала (голос)"), 1, scratch)
         self.assertEqual(len(self.ledger.list()), 1)
 
@@ -1010,7 +1010,7 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
 
     def test_a_plain_direct_send_leaves_a_trace_that_never_becomes_owner_mail(self):
         proof, entry = self._accepted(peer_id=self.GROUP, text=self.SAID,
-                                      projection={"target_label": "AbstractDL Chat"})
+                                      projection={"target_label": "Example Forum"})
         runner._project_direct_outbox_acceptance(proof, entry)
         items = self.ledger.list()
         self.assertEqual(len(items), 1)
@@ -1020,13 +1020,13 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
         self.assertEqual(items[0].get("sent_excerpt"), self.SAID)
         self.ledger.observe_incoming(
             peer_id=self.GROUP, sender_id=1240, message_id=94244,
-            text="принял", reply_to_message_id=94243, sender_name="Арет")
+            text="принял", reply_to_message_id=94243, sender_name="Морган")
         self.assertEqual(self.ledger.pending_notifications(), [])
 
     def test_the_owner_s_own_words_are_what_orders_the_report(self):
         proof, entry = self._accepted(
             peer_id=self.GROUP, text=self.SAID, message_id=94244,
-            projection={"target_label": "AbstractDL Chat",
+            projection={"target_label": "Example Forum",
                         "followup_request": "Пракс, поправь там же и сообщи, когда ответят."})
         runner._project_direct_outbox_acceptance(proof, entry)
         item = self.ledger.list()[0]
@@ -1034,7 +1034,7 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
         self.assertEqual(item.get("notice_source"), "owner")
         self.ledger.observe_incoming(
             peer_id=self.GROUP, sender_id=1240, message_id=94245,
-            text="принял", reply_to_message_id=94244, sender_name="Арет")
+            text="принял", reply_to_message_id=94244, sender_name="Морган")
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [item["id"]])
 
@@ -1104,13 +1104,13 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
                         call_id="call-order-1"):
         """Прогнать прямую отправку в группу и вернуть проекцию её расписки."""
         captured: dict = {}
-        entity = types.SimpleNamespace(id=999999999999999, title="AbstractDL Chat",
+        entity = types.SimpleNamespace(id=8881234567, title="Example Forum",
                                        megagroup=True)
         runner._buf[str(self.OWNER)] = list(owner_lines)
         execution = {"run_id": "run-order", "call_id": call_id, "tool": "send_message"}
         key = f"telegram-outbox:run-order:tool:{call_id}"
         prepared = self.outbox.prepare_text(
-            key, peer_id=-100999999999999999, text=text, run_id="run-order",
+            key, peer_id=-1008881234567, text=text, run_id="run-order",
             call_id=call_id, purpose="tool:send_message")
         accepted = dict(prepared, state="accepted",
                         receipt={"message_id": 94243,
@@ -1137,7 +1137,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
             patch.object(runner.social_pulse, "allow_outbound", return_value=(True, "")),
             patch.object(runner, "_threadsafe_result", side_effect=_threadsafe),
         ):
-            runner._sync_send_message("-100999999999999999", text)
+            runner._sync_send_message("-1008881234567", text)
         return captured
 
     def test_a_plain_owner_line_does_not_order_a_report(self):
@@ -1151,20 +1151,20 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
     def test_explicit_words_still_order_it(self):
         # Закон 1: способность не отнята — просто у отчёта появился заказчик.
         projection = self._projection_for(
-            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"])
+            owner_lines=["Алекс: спроси у Моргана и сообщи, когда он ответит"])
         self.assertIn("сообщи", projection.get("followup_request", ""))
 
     def test_her_own_pulse_initiative_no_longer_orders_a_report_for_him(self):
         # 21 запись из 32 родилась здесь: каждая её реплика из пульса становилась письмом.
         projection = self._projection_for(
-            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"],
+            owner_lines=["Алекс: спроси у Моргана и сообщи, когда он ответит"],
             pulse_id="pulse-1", active_chat="")
         self.assertEqual(projection.get("followup_request"), "")
 
     def test_a_turn_that_is_not_in_his_dm_orders_nothing_either(self):
         projection = self._projection_for(
-            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"],
-            active_chat="-100999999999999999")
+            owner_lines=["Алекс: спроси у Моргана и сообщи, когда он ответит"],
+            active_chat="-1008881234567")
         self.assertEqual(projection.get("followup_request"), "")
 
 
@@ -1272,7 +1272,7 @@ class FollowUpPendingDeliveryRevisionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
-    """27.07: письмо в ЛС владельца называлось «AbstractDL Chat ответил(а)». Чат не отвечает —
+    """27.07: письмо в ЛС владельца называлось «Example Forum ответил(а)». Чат не отвечает —
     отвечает человек, и имя было под рукой: строкой выше раннер печатает «получен ответ
     #94244 от owner Example»."""
 
@@ -1294,14 +1294,14 @@ class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
         return str(emitted.get("title") or "")
 
     def _item(self, **response):
-        return {"id": "tgfu_x", "target_label": "AbstractDL Chat (@abstractdl_chat, id 999999999999999)",
+        return {"id": "tgfu_x", "target_label": "Example Forum (@example_forum, id 8881234567)",
                 "target_user_id": None, "sent_message_id": 94243,
-                "response": dict({"peer_id": "-100999999999999999", "message_id": 94244,
+                "response": dict({"peer_id": "-1008881234567", "message_id": 94244,
                                   "text": "принял"}, **response)}
 
     async def test_a_group_answer_names_the_human_and_the_room(self):
-        title = await self._title_for(self._item(sender_name="Арет", sender_id=1240))
-        self.assertTrue(title.startswith("Арет ответил(а) в AbstractDL Chat"), title)
+        title = await self._title_for(self._item(sender_name="Морган", sender_id=1240))
+        self.assertTrue(title.startswith("Морган ответил(а) в Example Forum"), title)
 
     async def test_a_dm_answer_names_only_the_human(self):
         item = dict(self._item(sender_name="Виктория", sender_id=555000333),
@@ -1324,7 +1324,7 @@ class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
         # Закон 3: «не знаю кто» обязано выглядеть как «не знаю кто», а не как метка чата.
         title = await self._title_for(self._item())
         self.assertTrue(title.startswith("не знаю кто ответил(а)"), title)
-        self.assertNotIn("AbstractDL Chat ответил", title)
+        self.assertNotIn("Example Forum ответил", title)
 
 
 class SheCanAskForTheReportHerselfTests(unittest.TestCase):
@@ -1344,8 +1344,8 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.item = self.ledger.create(
-            target_ref="-100999999999999999", target_label="AbstractDL Chat",
-            target_peer_id=-100999999999999999, target_user_id=None,
+            target_ref="-1008881234567", target_label="Example Forum",
+            target_peer_id=-1008881234567, target_user_id=None,
             sent_message_id=94243, request_text="", sent_excerpt="Поправка…",
             idempotency_key="k1")
 
@@ -1353,8 +1353,8 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
         answer = runner._sync_followups("watch", self.item["id"])
         self.assertIn("включила", answer)
         self.ledger.observe_incoming(
-            peer_id=-100999999999999999, sender_id=1240, message_id=94244, text="принял",
-            reply_to_message_id=94243, sender_name="Арет")
+            peer_id=-1008881234567, sender_id=1240, message_id=94244, text="принял",
+            reply_to_message_id=94243, sender_name="Морган")
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [self.item["id"]])
         self.assertIn("выключила", runner._sync_followups("unwatch", self.item["id"]))

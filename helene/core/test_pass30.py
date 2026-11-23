@@ -499,10 +499,10 @@ class PromiseWakeTests(unittest.TestCase):
         self.assertIsNotNone(promises.detect(
             "Спасибо за гард. Теперь обратно к audit-demo — плод пора встречать."))
         # 14:34 — «принесу до 18:00» без механизма (и не принеслось)
-        self.assertIsNotNone(promises.detect("Пакет принесу до 18:00, Арет ждёт."))
+        self.assertIsNotNone(promises.detect("Пакет принесу до 18:00, Морган ждёт."))
         self.assertIsNotNone(promises.detect("Теперь сделаю зеркало придержек."))
         self.assertIsNotNone(promises.detect("К 19 соберу baseline и выложу."))
-        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Арета."))
+        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Моргана."))
         # прошедшее время и чужие слова обещанием не считаются
         self.assertIsNone(promises.detect("Теперь всё понятно, спасибо."))
         self.assertIsNone(promises.detect("Он обещал, что принесёт до 18:00."))
@@ -547,7 +547,7 @@ class PromiseWakeTests(unittest.TestCase):
         import promises
         # рабочее «обратно к X» — ловим
         self.assertIsNotNone(promises.detect("Теперь обратно к audit-demo."))
-        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Арета."))
+        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Моргана."))
         # разговорные филлеры (без ACT-глагола/срока рядом) — НЕ ловим
         self.assertIsNone(promises.detect("Возвращаюсь к твоему вопросу: да, согласна."))
         self.assertIsNone(promises.detect("Обратно к теме: ты прав про хэши."))
@@ -569,7 +569,7 @@ class PromiseWakeTests(unittest.TestCase):
         import tasks
 
         first = promises.note_self_intent(
-            "task_window", "Разобрала гард. Теперь сделаю зеркало для Арета.")
+            "task_window", "Разобрала гард. Теперь сделаю зеркало для Моргана.")
         self.assertIsNotNone(first)
         self.assertEqual(first["target"], "promise:self")
         self.assertIn("в своём окне", first["goal"])

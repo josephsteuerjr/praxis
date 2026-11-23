@@ -30,7 +30,7 @@ class TheDossierContract(unittest.TestCase):
         self.people.mkdir(parents=True)
         self.groups.mkdir(parents=True)
         self._write("алекс", "Алекс Миллер", "424242424", "- он мой автор\n")
-        self._write("арет", "Арете", "700000201", "- бот-собеседник\n")
+        self._write("Морган", "Морган", "700000201", "- бот-собеседник\n")
         self._write("дмитрий", "Дмитрий", "700000202", "- знакомый по комнате\n")
         self._write("никто", "Совершенно Посторонний", "5550001", "- не при делах\n")
         import group_context
@@ -86,9 +86,9 @@ class TheDossierContract(unittest.TestCase):
 
     # ── 2 ────────────────────────────────────────────────────────────────────────────
     def test_presence_comes_from_transport_not_from_a_name(self) -> None:
-        """Её тонкость: цитата «Арет сказал» не делает Арета присутствующим."""
+        """Её тонкость: цитата «Морган сказал» не делает Моргана присутствующим."""
         self._room("-100777", [(700000202, "Дмитрий", "привет"),
-                               (424242424, "Алекс", "Арете вчера писал интересное")])
+                               (424242424, "Алекс", "Морган вчера писал интересное")])
         block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertIn("знакомый по комнате", block, "говоривший в комнате не приехал")
@@ -97,11 +97,11 @@ class TheDossierContract(unittest.TestCase):
 
     # ── 3 ────────────────────────────────────────────────────────────────────────────
     def test_mentioned_gets_a_pointer_not_a_body(self) -> None:
-        self._room("-100777", [(424242424, "Алекс", "что там Арете говорил")])
+        self._room("-100777", [(424242424, "Алекс", "что там Морган говорил")])
         block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertIn("УПОМЯНУТЫ В ОКНЕ", block, "указателя нет вовсе")
-        self.assertIn("memory/people/арет.md", block, "путь к карточке не назван")
+        self.assertIn("memory/people/Морган.md", block, "путь к карточке не назван")
         self.assertNotIn("бот-собеседник", block, "тело упомянутого всё-таки приехало")
 
     # ── 4 ────────────────────────────────────────────────────────────────────────────
@@ -116,13 +116,13 @@ class TheDossierContract(unittest.TestCase):
 
     # ── 5 ────────────────────────────────────────────────────────────────────────────
     def test_the_pointer_dies_when_the_mention_leaves_the_window(self) -> None:
-        old = [(424242424, "Алекс", "Арете писал")]
+        old = [(424242424, "Алекс", "Морган писал")]
         filler = [(424242424, "Алекс", "рабочая строка %d" % i)
                   for i in range(agent.MENTION_WINDOW_MESSAGES + 5)]
         self._room("-100777", old + filler)
         block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
-        self.assertNotIn("memory/people/арет.md", block,
+        self.assertNotIn("memory/people/Морган.md", block,
                          "упоминание вышло из окна, а указатель остался грузом")
 
     # ── 6 ────────────────────────────────────────────────────────────────────────────

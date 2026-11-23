@@ -387,10 +387,10 @@ class TheRoomKeepsItsRealName(unittest.TestCase):
 
     def test_a_name_someone_already_chose_is_never_overwritten(self):
         """У места может быть имя лучше телеграмного — и оно чужое, не наше."""
-        self._profile(title="# Курилка, где живёт Арет")
+        self._profile(title="# Курилка, где живёт Морган")
         self.assertFalse(rooms.remember_title("-1003701205730", "Ouroboros AI"))
         self.assertEqual(rooms.profile_read("-1003701205730")["title"],
-                         "# Курилка, где живёт Арет")
+                         "# Курилка, где живёт Морган")
 
     def test_nothing_is_written_for_a_room_without_a_profile(self):
         self.assertFalse(rooms.remember_title("-100999", "Пустая"))

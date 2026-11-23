@@ -384,7 +384,7 @@ class TestTheLockAnswersHonestly(unittest.TestCase):
         """Поведение, а не внутренности: тик обязан пройти насквозь."""
         import absence
         orig = {k: getattr(absence, k) for k in ("due", "window", "schedule_note")}
-        absence.due = lambda: [{"chat_id": "77", "name": "Арет"}]
+        absence.due = lambda: [{"chat_id": "77", "name": "Морган"}]
         absence.window = lambda: {"until": 1}
         absence.schedule_note = lambda: "нет до вечера"
         self.addCleanup(lambda: [setattr(absence, k, v) for k, v in orig.items()])
@@ -430,7 +430,7 @@ class TestAbsenceWaitsWithoutFreezingTheClock(unittest.TestCase):
         mtproto_runner._ONE_MIND = mtproto_runner._OneMind()
         self.addCleanup(lambda: setattr(mtproto_runner, "_ONE_MIND", self._lock))
         self._orig = {k: getattr(absence, k) for k in ("due", "window", "schedule_note")}
-        absence.due = lambda: [{"chat_id": "77", "name": "Арет"}]
+        absence.due = lambda: [{"chat_id": "77", "name": "Морган"}]
         absence.window = lambda: {"until": 1}
         absence.schedule_note = lambda: "нет до вечера"
         self.addCleanup(lambda: [setattr(absence, k, v) for k, v in self._orig.items()])
