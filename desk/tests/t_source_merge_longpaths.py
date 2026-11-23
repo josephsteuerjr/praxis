@@ -41,6 +41,35 @@ class PortableLongPaths(unittest.TestCase):
             self.assertEqual(merge.inventory(plan/'result'),result['automatic'])
             for side in sides:self.assertFalse((side/'.git').exists())
 
+    @unittest.skipUnless(os.name=='nt','Windows process cwd limit')
+    def test_merge_repository_and_input_paths_exceed_win32_cwd_limit(self):
+        from localharness.windows_paths import Path as FilePath, wide
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root=FilePath(directory)/('part'*19)/('part'*21)/('part'*21)/('part'*21)
+            try:
+                sides=[]
+                for name in ('base','local','incoming'):
+                    side=root/name;side.mkdir(parents=True)
+                    (side/'tool.py').write_text('shared')
+                    sides.append(side)
+                (sides[1]/'kept.py').write_text('local')
+                (sides[2]/'new.py').write_text('incoming')
+                out=root/'plan';self.assertGreater(len(str(out)),320)
+                result=merge.create(*sides,out,exe=shutil.which('git'))
+                self.assertEqual(result['state'],'ready')
+                self.assertEqual((out/'result/kept.py').read_text(),'local')
+                self.assertEqual((out/'result/new.py').read_text(),'incoming')
+            finally:
+                first=FilePath(directory)/('part'*19)
+                def writable(action, name, error):
+                    if not isinstance(error[1], PermissionError):
+                        raise error[1]
+                    os.chmod(name, 0o600)
+                    action(name)
+                if first.exists():
+                    shutil.rmtree(wide(first), onerror=writable)
+
     def test_git_longpath_setting_is_per_command_not_user_configuration(self):
         original=subprocess.run;seen=[]
         def observe(command,*args,**kwargs):

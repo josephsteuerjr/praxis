@@ -85,6 +85,20 @@ class TemporaryScope(unittest.TestCase):
         self.assertEqual(marker.read_bytes(),b'unbound cache')
         self.assertIn(str(cache),result['cleanup_errors'])
 
+    def test_bound_profile_can_move_while_ambiguous_sibling_stays_in_place(self):
+        from localharness.windows_paths import Path as FilePath, wide
+        import shutil
+        old,data=self.fx.old()
+        memory=FilePath(old)/('a'*95)/('b'*95)/'untagged/notes/memory'
+        memory.mkdir(parents=True)
+        (memory/'keep.txt').write_bytes(b'unknown sibling')
+        self.addCleanup(lambda:shutil.rmtree(wide(old)) if old.exists() else None)
+        result=self.prepare()
+        self.assertTrue(result['agent'])
+        self.assertIn(str(old),result['cleanup_errors'])
+        self.assertEqual((memory/'keep.txt').read_bytes(),b'unknown sibling')
+        self.assertTrue((self.places.data/'memory/groups/window.jsonl').is_file())
+
     def test_unbound_local_data_is_preserved_without_blocking_installation(self):
         real = self.local/'Helene unknown'
         memory = real/'deep/agent-data/memory'

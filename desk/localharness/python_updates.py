@@ -281,19 +281,20 @@ def update_download(owner,url,sha256=None,extensions=None):
     if report:report.phase('downloading')
     selected=installed_extensions(owner.root) if extensions is None else extensions
     if not isinstance(selected,list) or any(s not in EXTENSION_ASSETS for s in selected):raise ValueError('Unknown extension selection')
-    result=_download(url,folder/name,sha256 or asset_sha(url),report)
+    progress=report or getattr(owner,'prefetch_progress',None)
+    result=_download(url,folder/name,sha256 or asset_sha(url),progress)
     components=[]
     cache=folder/'components'/name.removesuffix('.zip');cache.mkdir(parents=True,exist_ok=True)
     from . import component_downloads
     manifest=component_downloads.incoming(result['path'])
     if manifest is not None:
         changed=component_downloads.changed_extensions(owner.root,manifest,selected) if extensions is None else selected
-        components=component_downloads.fetch(owner.root,manifest,changed,report)
+        components=component_downloads.fetch(owner.root,manifest,changed,progress)
     else:
         # Old packages have no map. Only that legacy format uses same-tag URLs.
         for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):
             component_url=urllib.parse.urlunsplit(parsed._replace(path=parsed.path.rsplit('/',1)[0]+'/'+component))
-            components.append(_download(component_url,cache/component,asset_sha(component_url),report))
+            components.append(_download(component_url,cache/component,asset_sha(component_url),progress))
     receipt=folder/(name+'.download.json')
     from .package_notice import write
     write(receipt,{'archive':result,'components':components,'extensions':selected,

@@ -700,19 +700,18 @@ def legacy_plan(root,places,backend):
     for path in registered:
         path=plain(path)
         if path!=root and path not in old_roots:old_roots.append(path)
-    # An unregistered AppData cache can have an arbitrary name, depth and
-    # files resembling agent memory. It grants no authority to retire its tree.
-    # Keep an ambiguous unbound container in place; recognized installs still
-    # pass the full custody checks, including another inspection after stop.
+    # Local may contain both a valid profile and a second, unidentifiable
+    # data-like subtree. Preserve the container and migrate only its explicit
+    # profile. An unbound cache is excluded from every migration/cleanup step.
     preserved=[]
+    keep_program_files=[]
     local=next((p for p in places.appdata if p.name.casefold()=='local'),None)
     for candidate in list(old_roots):
         if local is None or not candidate.is_relative_to(local) or linked(candidate):
             continue
-        if candidate in registered or (candidate/'helene.json').is_file() or list((candidate/'agents').glob('*/helene.json')):
-            continue
+        configs=configurations([candidate],places)
         try:
-            sources=data_sources([candidate],[],places)
+            sources=data_sources([candidate],configs,places)
             guard_cleanup_data([candidate],places,sources)
         except NativeValueError as exc:
             if exc.native_caption['code'] not in ('first_cleanup_data','first_found_external'):
@@ -720,10 +719,15 @@ def legacy_plan(root,places,backend):
         except OSError as exc:
             if not isinstance(exc,PermissionError) and getattr(exc,'winerror',None)!=206:
                 raise
+            if configs or candidate in registered:
+                raise  # A selected profile must be readable before migrating it.
         else:
             continue
         preserved.append(candidate)
-        old_roots.remove(candidate)
+        if configs or candidate in registered:
+            keep_program_files.append(candidate)
+        else:
+            old_roots.remove(candidate)
     all_roots=[*old_roots,*[p for p in siblings if p.is_dir() and not linked(p)]]
     admitted={path:receipted_programs(path,places) for path in all_roots}
     retained=list(dict.fromkeys(p for programs in admitted.values() for p in programs))
@@ -742,7 +746,7 @@ def legacy_plan(root,places,backend):
             for path in protected if ready(path,places)}
     plan={'old_roots':old_roots,'siblings':siblings,'all_roots':all_roots,
           'retained':retained,'retained_roots':containers,'protected':protected,'receipts':stamps,
-          'empty_only':[path for path in empty_only if path in old_roots], 'preserved_unbound':preserved}
+          'empty_only':[path for path in empty_only if path in old_roots], 'preserved_local':preserved,'keep_program_files':keep_program_files}
     validate_legacy_plan(plan,places)
     return plan
 
@@ -801,12 +805,13 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
     """Shared retirement/move boundary; callers retain their own config policy."""
     validate_legacy_plan(plan,places)
     old_roots,siblings=plan['old_roots'],plan['siblings']
+    keep_files=plan.get('keep_program_files',[])
     settle_legacy_jobs(root,places,plan,configurations([*old_roots,*[p for p in siblings if p.is_dir()]],places))
     if old_roots:report({'stage':'removing','label':'Удаляем прежние программы'})
     for old in old_roots:
         if old in plan.get('empty_only',[]):continue
         backend.retire(old)
-        if old.is_dir():
+        if old.is_dir() and old not in keep_files:
             if hasattr(backend,'prune'):backend.prune(old,sources)
             else:_prune_program(old,sources,backend)
     report({'stage':'data','label':'Переносим данные' if any(p!=target for p in sources) else 'Подключаем данные'})
@@ -825,12 +830,12 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
     report({'stage':'cleanup','label':'Убираем старые копии и ярлыки'})
     validate_legacy_plan(plan,places)
     for path in [*old_roots,*siblings]:
-        if os.path.lexists(path):
+        if path not in keep_files and os.path.lexists(path):
             if path in plan.get('empty_only',[]):path.rmdir()  # Atomic empty-only removal; never recursive/elevated.
             else:backend.remove(path)
     backend.shortcuts(roots,root if shortcuts else None)
     backend.assert_quiet(roots)
-    return cleanup_leftovers(backend,[*old_roots,*siblings])+[str(path) for path in plan.get('preserved_unbound',[])]
+    return cleanup_leftovers(backend,[p for p in [*old_roots,*siblings] if p not in keep_files])+[str(path) for path in plan.get('preserved_local',[])]
 
 
 def cleanup_leftovers(backend,roots,*,notes=True):
@@ -874,7 +879,7 @@ def sweep_legacy(root,*,places=None,backend=None,progress=None):
         roots=[*plan['old_roots'],*[p for p in plan['siblings'] if p.is_dir() and not linked(p)]]
         configs=configurations(roots,places)
         sources=data_sources(plan['old_roots'],configs,places)
-        guard_cleanup_data([*plan['old_roots'],*plan['siblings']],places,sources)
+        guard_cleanup_data([*plan['old_roots'],*plan['siblings']],places,[*sources,*plan.get('keep_program_files',[])])
         snapshots={Path(row['directory'])/'helene.json':hashlib.sha256((Path(row['directory'])/'helene.json').read_bytes()).hexdigest() for row in configs}
         from .first_start_assets import prepare as prepare_assets,retain as retain_assets
         prepare_assets(target,roots,sources,copy.deepcopy(configs),{},None)
@@ -893,7 +898,7 @@ def sweep_legacy(root,*,places=None,backend=None,progress=None):
         # Shutdown can publish final data or backups after the preview. Never
         # prune using a discovery snapshot from before the writers stopped.
         sources=data_sources(plan['old_roots'],configs,places)
-        guard_cleanup_data([*plan['old_roots'],*plan['siblings']],places,sources)
+        guard_cleanup_data([*plan['old_roots'],*plan['siblings']],places,[*sources,*plan.get('keep_program_files',[])])
         assets=prepare_assets(target,roots,sources,configs,{},None)
         for source in sources:
             if any(source.is_relative_to(base) for base in places.program_files):
@@ -977,7 +982,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
             previous=load(receipt(root))
             if previous.get('format')!=FORMAT:raise NativeValueError('first_unknown_receipt', 'Unknown first-start receipt')
         preview_sources=data_sources(old_roots,configs,places)
-        guard_cleanup_data([*old_roots,*siblings],places,preview_sources)
+        guard_cleanup_data([*old_roots,*siblings],places,[*preview_sources,*plan.get('keep_program_files',[])])
         primary=target if agent_exists(target) else max(preview_sources,key=lambda p:_score(p,configs),default=target)
         selected=next((row for row in configs if Path(row['tree'])==primary),None)
         snapshots={Path(row['directory'])/'helene.json':hashlib.sha256((Path(row['directory'])/'helene.json').read_bytes()).hexdigest() for row in configs}
@@ -1003,7 +1008,7 @@ def prepare(root,*,places=None,backend=None,progress=None):
         if set(owner_sources)-set(protected):backend.stop(all_roots,owner_sources)
         else:backend.assert_quiet(all_roots,protected)
         sources=list(dict.fromkeys([*sources,*data_sources(old_roots,configs,places)]))
-        guard_cleanup_data([*old_roots,*siblings],places,sources)
+        guard_cleanup_data([*old_roots,*siblings],places,[*sources,*plan.get('keep_program_files',[])])
         settled_configs={Path(row['directory'])/'helene.json' for row in configurations(all_roots,places)}
         if settled_configs!=set(snapshots) or any(not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest for path,digest in snapshots.items()):
             raise NativeValueError('first_settings_finish', 'Прежние настройки изменились при завершении. Исходные файлы сохранены. Повтори запуск.')

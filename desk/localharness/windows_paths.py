@@ -1,10 +1,13 @@
 """Win32 extended paths at installer/updater I/O boundaries; receipts keep DOS spelling."""
+from contextlib import contextmanager
 import os
-from pathlib import Path as StandardPath, WindowsPath, PureWindowsPath
+import tempfile
+from pathlib import Path as StandardPath, WindowsPath, PurePath, PureWindowsPath
 
 
 def logical(path):
-    text = str(path)
+    text = str(path) if isinstance(path,PurePath) else os.fspath(path)
+    if not isinstance(text,str):raise TypeError('Expected a Windows text path')
     if text[:8].lower() == '\\\\?\\unc\\':
         return '\\\\' + text[8:]
     if text.startswith('\\\\?\\') and text[5:7] == ':\\':
@@ -77,3 +80,59 @@ def reserved(name):
 def walk(root, *args, **options):
     for here, directories, files in os.walk(wide(root), *args, **options):
         yield logical(here), directories, files
+
+def _tool_junction(alias, target):
+    """Attach a freshly created temporary directory directly to a verified target."""
+    import ctypes as c
+    from ctypes import wintypes as w
+    import struct
+    kernel=c.WinDLL('kernel32',use_last_error=True)
+    kernel.CreateFileW.argtypes=[w.LPCWSTR,w.DWORD,w.DWORD,w.LPVOID,w.DWORD,w.DWORD,w.HANDLE]
+    kernel.CreateFileW.restype=w.HANDLE
+    kernel.DeviceIoControl.argtypes=[w.HANDLE,w.DWORD,w.LPVOID,w.DWORD,w.LPVOID,w.DWORD,c.POINTER(w.DWORD),w.LPVOID]
+    kernel.DeviceIoControl.restype=w.BOOL
+    kernel.CloseHandle.argtypes=[w.HANDLE]
+    # MOUNT_POINT_REPARSE_BUFFER, offsets in bytes from PathBuffer. Omit the
+    # optional print name; it does not determine resolution of this junction.
+    substitute=(chr(92)+'??'+chr(92)+wide(target)[4:]).encode('utf-16-le')
+    names=struct.pack('<4H',0,len(substitute),len(substitute)+2,0)+substitute+bytes(4)
+    data=struct.pack('<IHH',0xa0000003,len(names),0)+names
+    alias.mkdir()
+    handle=kernel.CreateFileW(str(alias),0x40000000,0,None,3,0x02000000|0x00200000,None)
+    if handle==w.HANDLE(-1).value:raise c.WinError(c.get_last_error())
+    try:
+        count=w.DWORD()
+        if not kernel.DeviceIoControl(handle,0x000900a4,c.create_string_buffer(data),len(data),None,0,c.byref(count),None):
+            raise c.WinError(c.get_last_error())
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@contextmanager
+def child_directory(path):
+    """Present a private short cwd to Win32 tools that reject a long cwd at startup."""
+    path = Path(path)
+    if os.name != 'nt' or len(str(path).encode('utf-16-le')) < 480:
+        yield str(path)
+        return
+    temp = Path(tempfile.gettempdir())
+    # Redirected TEMP may itself be long. Create only a uniquely named child.
+    for base in dict.fromkeys((temp, *temp.parents, *path.parents)):
+        if len(str(base).encode('utf-16-le')) > 390:
+            continue
+        try:
+            folder = tempfile.TemporaryDirectory(prefix='helene-cwd-', dir=str(base))
+            break
+        except (PermissionError, FileNotFoundError):
+            continue
+    else:
+        raise OSError('No writable short working directory for the update tool')
+    with folder as temporary:
+        alias = StandardPath(temporary)/'work'
+        _tool_junction(alias, path)
+        try:
+            if not os.path.samefile(alias,wide(path)):
+                raise OSError('Update working directory identity differs')
+            yield str(alias)
+        finally:
+            alias.rmdir()

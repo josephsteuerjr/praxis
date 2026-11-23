@@ -170,9 +170,20 @@ def build(source, work, output, version, target, inputs, fetch):
     else:
         bundle, bundle_hash = verification(source, donor, work, version)
         kind = target.split("-")[0]
+        bootstrap = None
+        if kind == "windows":
+            from windows_archive_entry import bootstrap_matches, launcher
+            with zipfile.ZipFile(donor) as archive:
+                previous = json.loads(archive.read("Helene/helene-bootstrap.json"))
+            if not bootstrap_matches(previous, source/"desk") or previous.get("icon_sha256") != digest(source/"desk/shell/icons/icon.ico"):
+                manifest = source/"desk/python-launcher/Cargo.toml"
+                subprocess.run(["cargo", "fetch", "--locked", "--manifest-path", str(manifest)], check=True)
+                native = work/"windows-bootstrap"
+                native.mkdir()
+                bootstrap = launcher(native)
         plan, changes, removed = portable_refresh.plan(
             donor, source, version, kind, expected_sha256=item["sha256"], frontend_receipt=receipt,
-            verification_bundle=bundle, verification_sha256=bundle_hash)
+            verification_bundle=bundle, verification_sha256=bundle_hash, windows_bootstrap=bootstrap)
         built = work / item["asset"].replace(inputs["version"], version, 1)
         portable_refresh.build(donor, built, plan, changes, removed, expected_plan=plan["sha256"])
     with zipfile.ZipFile(built) as z:

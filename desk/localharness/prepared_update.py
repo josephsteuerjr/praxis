@@ -3,10 +3,12 @@ import hashlib
 import shutil
 import threading
 import time
+import uuid
 from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit
 
 from . import package_notice, program_state
+from .config_transaction import transaction
 from .windows_paths import Path, walk, wide
 
 _guard = threading.RLock()
@@ -50,7 +52,8 @@ def status(owner):
                 return {'state': 'checking'}
             return _public(previous)
         if previous and previous['options'] == options and not previous['cancel'].is_set() and time.monotonic() < previous['until']:
-            return _public(previous)
+            if previous['state'] != 'ready' or _owns_cache(previous):
+                return _public(previous)
         row = dict(state='checking', options=options, cancel=threading.Event(), until=0)
         worker = threading.Thread(target=_prepare, args=(root, row, previous),
                                   daemon=True, name='helene-prepare-update')
@@ -73,37 +76,48 @@ def _prepare(root, row, previous):
         name = asset_name(latest, target(root), distribution(root))
         if len(digest)!=64 or not url.startswith('https://') or unquote(urlsplit(url).path).split('/')[-1]!=name:
             raise ValueError('The release has no verified package for this platform')
-        if previous and previous.get('state')=='ready' and previous.get('sha256')==digest and previous['options']==row['options']:
+        if previous and previous.get('state')=='ready' and previous.get('sha256')==digest and previous['options']==row['options'] and _owns_cache(previous):
             with _guard:
-                row.update({key:previous[key] for key in ('state','latest','sha256','url','archives','proofs','cache')})
+                row.update({key:previous[key] for key in ('state','latest','sha256','url','archives','proofs','cache','generation')})
             return
         if row['cancel'].is_set():return
         row['state'] = 'preparing'
-        download = updates.update_download(SimpleNamespace(root=root, prefetch_only=True), url, digest)
+        def still_wanted(_progress=None):
+            if row['cancel'].is_set():
+                raise InterruptedError('Automatic update preparation was disabled')
+        download = updates.update_download(SimpleNamespace(root=root, prefetch_only=True, prefetch_progress=still_wanted), url, digest)
         cache = program_state.directory(root, 'prefetch') / 'incoming'
-        with _guard:
-            # take() owns the same lock when it claims the cached directory.
+        archives = [download, *download['components']]
+        generation = uuid.uuid4().hex
+        # A second profile can have its own session host. A reader may only
+        # consume the finished generation that its own worker verified.
+        with transaction(cache):
+            still_wanted()
             if cache.is_symlink() or getattr(cache,'is_junction',lambda:False)():raise ValueError('Linked update cache')
             if cache.exists():shutil.rmtree(wide(cache))
             cache.mkdir()
-        archives = [download, *download['components']]
-        proofs = {}
-        for asset in archives:
+            proofs = {}
+            for asset in archives:
+                still_wanted()
+                proofs.update(updates._extract(asset['path'], cache, still_wanted))
+            package_notice.write(cache/'generation.json',{'generation':generation})
+            package = cache / 'Helene'
+            require_runtime(package, root)
+            if updates.version(package)!=latest or not (package/'app/python_app.py').is_file():
+                raise ValueError('Extracted package identity differs from release')
             if row['cancel'].is_set():return
-            proofs.update(updates._extract(asset['path'], cache))
-        package = cache / 'Helene'
-        require_runtime(package, root)
-        if updates.version(package)!=latest or not (package/'app/python_app.py').is_file():
-            raise ValueError('Extracted package identity differs from release')
-        if row['cancel'].is_set():return
-        with _guard:
-            row.update(state='ready', latest=latest, sha256=digest, url=url, cache=cache,
-                       archives=[str(Path(a['path']).resolve()) for a in archives],
-                       proofs={Path(path).relative_to(cache).as_posix():v['sha256'] for path,v in proofs.items()})
+            with _guard:
+                row.update(state='ready', latest=latest, sha256=digest, url=url, cache=cache, generation=generation,
+                           archives=[str(Path(a['path']).resolve()) for a in archives],
+                           proofs={Path(path).relative_to(cache).as_posix():v['sha256'] for path,v in proofs.items()})
     except Exception as exc:
         row.update(state='error', error=str(exc))
     finally:
         row['until'] = time.monotonic() + (60 if row['state']=='error' else CHECK_SECONDS)
+
+
+def _owns_cache(row):
+    return package_notice.read(row['cache']/'generation.json').get('generation')==row['generation'] and (row['cache']/'Helene').is_dir()
 
 
 def restart_args(owner, sha256):
@@ -112,7 +126,7 @@ def restart_args(owner, sha256):
     with _guard:
         row = _states.get(Path(owner.root).resolve()) or {}
         if (not options[2] or row.get('options')!=options or row.get('state')!='ready'
-                or row.get('sha256')!=sha256 or row['cancel'].is_set()):
+                or row.get('sha256')!=sha256 or row['cancel'].is_set() or not _owns_cache(row)):
             raise ValueError('The prepared update is no longer current')
         return {'url':row['url'], 'sha256':sha256, 'sourceMode':'clean'}
 
@@ -126,6 +140,8 @@ def take(root, destination, archives, digest):
             return False
         cache, expected = row['cache'], row.pop('proofs')
         row.update(state='used', until=time.monotonic()+CHECK_SECONDS)
+    with transaction(cache):
+        if not _owns_cache(row):return False
         if cache.is_symlink() or getattr(cache,'is_junction',lambda:False)():raise ValueError('Linked update cache')
         source, claimed = cache/'Helene', destination/'Helene'
         if source.is_symlink() or getattr(source,'is_junction',lambda:False)():raise ValueError('Linked update package')
