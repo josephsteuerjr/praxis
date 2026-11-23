@@ -221,7 +221,7 @@ class TestOwnerToolset(Base):
         names = [t["name"] for t in agent.OWNER_TOOLS]
         for n in ("shell", "manage_room", "write_skill", "restart_self"):
             self.assertIn(n, names)
-        self.assertNotIn("admit", names)  # Егор 10.11: рука старого мини-аппа удалена
+        self.assertNotIn("admit", names)  # владелец 10.11: рука старого мини-аппа удалена
 
 
 if __name__ == "__main__":

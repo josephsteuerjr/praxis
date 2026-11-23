@@ -77,7 +77,7 @@ class OrganEndpointsTests(PanelOrgansBase):
         revised = identity.revise(
             "self", identity.read("self") + "\nУточнённая мысль.", reason="тест ревизии")
         self.assertTrue(revised["ok"], revised)
-        # Ревизия → откат Егора с пульта; его действие видно ей в журнале ([пульт]).
+        # Ревизия → откат владельца с пульта; его действие видно ей в журнале ([пульт]).
         res = panel.identity_rollback("self", 1)
         self.assertTrue(res["ok"], res)
         journal = "".join(p.read_text(encoding="utf-8")

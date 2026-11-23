@@ -236,7 +236,7 @@ class MemoryIndexAdversarialTests(unittest.TestCase):
             self._search("runcontext basilisk", purpose="automatic"), []
         )
 
-        # 02.08.2026, решение Праксис и Егора по замеру: транспортный снимок хода
+        # 02.08.2026, решение Праксис и владельца по замеру: транспортный снимок хода
         # (`memory/runs/**/context.md`) больше не подмешивается в ОБЫЧНЫЙ явный recall.
         # Прежняя посылка «explicit recall sees run artifacts» была верна по намерению
         # («остаётся доступным для аудита»), но на практике означала другое: в

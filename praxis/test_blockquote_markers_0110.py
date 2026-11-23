@@ -1,4 +1,4 @@
-# Блочное цитирование: "> "-маркер → MessageEntityBlockquote (PASS 0110, Егор #111016/#111019).
+# Блочное цитирование: "> "-маркер → MessageEntityBlockquote (PASS 0110, владелец #111016/#111019).
 # Проверяет _apply_blockquote_markers: снятие маркера, офсеты UTF-16, сдвиг чужих
 # entities, подряд идущие цитаты, кириллица, отсутствие маркеров, hermetic-фолбэк.
 import copy

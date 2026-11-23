@@ -247,8 +247,8 @@ mod owner_stop_tests {
     fn linux_dir_is_owner_state_outside_the_data_tree() {
         // XDG-state, не дерево данных: снос data/ не должен снимать стоп владельца.
         assert_eq!(
-            linux_owner_stop_dir(Some("/home/egor".into())),
-            Some(std::path::PathBuf::from("/home/egor/.local/state/helene"))
+            linux_owner_stop_dir(Some("/home/owner".into())),
+            Some(std::path::PathBuf::from("/home/owner/.local/state/helene"))
         );
         assert_eq!(linux_owner_stop_dir(Some("".into())), None);
         assert_eq!(linux_owner_stop_dir(None), None);

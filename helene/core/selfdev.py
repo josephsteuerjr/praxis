@@ -737,7 +737,7 @@ def reconcile() -> dict:
 
 
 @frame_language.pinned
-def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
+def apply(pid: str, by: str = "owner", override_reason: str = "") -> dict:
     """Merge the reviewed proposal into the live tree and request a soft restart.
 
     ``by`` records authorship for the receipt; it is not an approval role. Red tests stay
@@ -796,7 +796,7 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
 
 
 @frame_language.pinned
-def reject(pid: str, reason: str = "", by: str = "egor") -> dict:
+def reject(pid: str, reason: str = "", by: str = "owner") -> dict:
     """Отклонить: копия и ветка убираются, причина — ей в дневник (отказ — тоже сигнал)."""
     t = get(pid)
     if not t:

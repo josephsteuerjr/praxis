@@ -201,7 +201,7 @@ def _lost_task_payload(task_id="hcode-c584ba6e", quiet_h=5.6, scope="host",
 class LostTaskInvitationTests(unittest.TestCase):
     """R3: жнец брошенных задач ходит контуром субагентов, и до правки `invitation`
     писала про ЛЮБОЙ payload «воркер по «…» упал». На проде 27.07 в очереди пять таких
-    задач; у четырёх воркеров не было ни одного, а пятая — прямая просьба Егора."""
+    задач; у четырёх воркеров не было ни одного, а пятая — прямая просьба владельца."""
 
     def test_lost_task_is_not_reported_as_a_fallen_worker(self):
         text = core_subagents.invitation([_lost_task_payload()])

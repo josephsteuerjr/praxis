@@ -1164,7 +1164,7 @@ class TheEpochIsScopedToItsAudience(ShadowCase):
             self.assertNotIn(byte_of_it, e_text)
 
     def test_the_owner_stream_keeps_the_whole_book_with_its_marks(self):
-        """Сужение — только вниз: у Егора книга остаётся полной, с метками и умолчаниями."""
+        """Сужение — только вниз: у владельца книга остаётся полной, с метками и умолчаниями."""
         self._capture(_ctx(chat_id=101, owner_audience=True))
         e_text = self._frozen("dm-101")["e_text"]
         rows = self._book_rows(e_text)

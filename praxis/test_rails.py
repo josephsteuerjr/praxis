@@ -79,7 +79,7 @@ EXPECTED_RAILS = {
     "absence_cap",        # кап «в отсутствие»
     "window_gates",       # тихие часы/зазор/кап/дедуп окон
     "tool_budget",        # max_tool_iters / context budget
-    "appetite_pause",     # PASS 18: пауза фона по слову Егора / её состоянию
+    "appetite_pause",     # PASS 18: пауза фона по слову владельца / её состоянию
     "server_eyes",        # hostview за токеном
     "server_hands",       # services файл-сигнал
     "host_edits",         # hostops stage / hostagent

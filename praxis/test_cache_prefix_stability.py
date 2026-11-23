@@ -46,7 +46,7 @@ class CachePrefixStability(unittest.TestCase):
         )
 
     def test_every_speaker_gets_the_identical_tool_schemas(self):
-        # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — owner-пары больше нет, поэтому схемы рук в комнате
+        # владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — owner-пары больше нет, поэтому схемы рук в комнате
         # совпадают байт-в-байт при любом говорящем, и кэш не делится на говорящих.
         owner = agent.catalog_tools_for(room_ctx(owner=True))
         for other in (agent.catalog_tools_for(room_ctx(owner=False)),

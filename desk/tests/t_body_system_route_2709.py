@@ -1,6 +1,6 @@
 """`computer run execution=system` — поручением брокеру службы (1.2.3).
 
-27.09 агент Егора позвал руку `computer` с execution=system и получил «open local router
+27.09 агент владельца позвал руку `computer` с execution=system и получил «open local router
 \\\\.\\pipe\\PraxisBodySystem»: у Hélène этого маршрута тела нет, права системы — у брокера
 службы. Стенд держит: вызов уходит в `broker_request` op=exec полным путём PowerShell с
 командой отдельным аргументом, без брокера — отказ словами, а не труба Праксис.

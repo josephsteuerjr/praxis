@@ -83,7 +83,7 @@ class Config(unittest.TestCase):
         self.assertFalse(modes.computer_state({})["explicit"])
         option = modes.computer_option()
         self.assertEqual([s["key"] for s in option["scopes"]], list(body.SCOPES))
-        # 28.09 (слово Егора): оговорки «для энтузиастов» у рук экрана нет — она у
+        # 28.09 (слово владельца): оговорки «для энтузиастов» у рук экрана нет — она у
         # тумблера нулевой сессии, в миг включения.
         self.assertEqual(option["warning"], "")
         self.assertIn("Слабая модель", modes.SESSION0_WARNING)
@@ -648,7 +648,7 @@ class Platform(unittest.TestCase):
 
     def test_pointer_and_owner_block_speak_mac(self):
         """20.09, Mac 0.8.1: «на маке не реализовано» — модель читала указатель
-        «Yegor's Windows computer: … PowerShell» и блок владельца «The Windows PC is
+        «owner's Windows computer: … PowerShell» и блок владельца «The Windows PC is
         your DIRECT body»; схему describe_for_mac переводил, а эти два места — нет."""
         ru = "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки"
         en = "Yegor's Windows computer: files, PowerShell, screen, app windows, tools"

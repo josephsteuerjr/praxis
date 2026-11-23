@@ -360,10 +360,10 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertNotEqual(deleted.get("notice_skipped"),
                             "ответ удалён до отправки отчёта")
 
-    # --- 27.07: след нити ≠ почта Егору ------------------------------------
+    # --- 27.07: след нити ≠ почта владельцу ------------------------------------
 
     def test_trace_is_not_owner_mail(self):
-        """Нить без заказчика — её память. Ответ по ней Егору не уходит."""
+        """Нить без заказчика — её память. Ответ по ней владельцу не уходит."""
         trace = self.ledger.create(
             target_ref="@vika", target_label="Вика (@vika_test, id 555000333)",
             target_peer_id=555000333, target_user_id=555000333,
@@ -411,7 +411,7 @@ class FollowUpLedgerTests(unittest.TestCase):
                          "пересылать человеку его собственную реплику нечего")
         self.assertIn("письма не будет: ответил сам владелец", self.ledger.context())
 
-        # Контрольная сторона границы: ответил НЕ Егор — письмо обязано уйти.
+        # Контрольная сторона границы: ответил НЕ владелец — письмо обязано уйти.
         other = self._group_thread(
             94250, request_text="сообщи, когда ответит",
             notify_owner=True, notice_source="owner")
@@ -487,7 +487,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.pending_notifications(), [],
                          "выключила — нить остаётся её следом")
 
-        # Егор ответил сам → отчёта нет; но если она решит иначе — она автор.
+        # владелец ответил сам → отчёта нет; но если она решит иначе — она автор.
         owner_thread = self._group_thread(
             94250, notify_owner=True, notice_source="owner")
         self.ledger.observe_incoming(
@@ -561,7 +561,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         # отправленный текст — единственное место кадра, отвечающее на вопрос «что я уже
         # сказала этому человеку», называло её речь причиной. Теперь два разных факта
         # подписаны по-разному, и здесь же проверяется, что чужая просьба не выдаётся
-        # за её слова (сам тест заводит request_text = «слова Егора, а не мои»).
+        # за её слова (сам тест заводит request_text = «слова владельца, а не мои»).
         self.assertIn("я сказала: «Поправка: мой рабочий движок",
                       self._row(text, trace["id"]))
         self.assertNotIn("я сказала: «слова Егора", self._row(text, trace["id"]))

@@ -1,6 +1,6 @@
 """
 Тесты PASS 18 — суверенитет и аппетиты: тул manage_appetite через respond, STATE-строка,
-гейты фона (окна/сон) по её плану и слову Егора, расход окна в кольце, ручки пульта,
+гейты фона (окна/сон) по её плану и слову владельца, расход окна в кольце, ручки пульта,
 фиксы контролов. Герметичны (test_perceive.Base / test_pass10.RingBase, модель — фейк).
 
 Запуск:  python praxis_test.py test_pass18 -v
@@ -87,7 +87,7 @@ class TestTool(AppetiteBase):
         self.assertIn("умерила", reply)
         s = appetite.state()
         self.assertEqual(s["mode"], "considerate")
-        self.assertEqual(s["owner_request"]["raw"], "умерь аппетиты")  # слово Егора из чата
+        self.assertEqual(s["owner_request"]["raw"], "умерь аппетиты")  # слово владельца из чата
         self.assertIn("моё толкование", appetite.CONTRACT_MD.read_text(encoding="utf-8"))
 
     def test_status_action_direct(self):
@@ -132,7 +132,7 @@ class TestWindowGates(AppetiteBase):
         было правдой — и полной фикцией в проде: единственный вызывающий window_goal
         (`_heartbeat_once`) не стоял ни в одной строке `_clock_jobs()`. Ровно тот
         случай, ради которого написан CONTRACTS.md: тест проходил, соврав соседу.
-        Контур выброшен 25.07 по решению Егора; проверяем то, что осталось правдой.
+        Контур выброшен 25.07 по решению владельца; проверяем то, что осталось правдой.
         """
         appetite.interpret("considerate", "окна закрываю", windows=False)
         plan = (appetite.state().get("interpretation") or {}).get("plan") or {}

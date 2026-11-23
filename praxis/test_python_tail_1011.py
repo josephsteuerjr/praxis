@@ -1,4 +1,4 @@
-"""Every hand is native in every turn; h.hand is a scripting tool, not a context saving (Egor 10.11)."""
+"""Every hand is native in every turn; h.hand is a scripting tool, not a context saving (owner 10.11)."""
 import json
 import os
 import unittest
@@ -7,7 +7,7 @@ from unittest.mock import patch
 import agent
 import test_hand_bridge_1011 as bridge_tests
 
-REMOVED = {'admit', 'computer_access'}  # Egor 10.11: leftovers of the old mini app
+REMOVED = {'admit', 'computer_access'}  # owner 10.11: leftovers of the old mini app
 
 
 class AllHandsNative(unittest.TestCase):

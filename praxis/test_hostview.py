@@ -35,7 +35,7 @@ OVERVIEW = {
     "disk_root": {"mount": "/", "total": 200 * 1024 ** 3, "free": 100 * 1024 ** 3, "used_pct": 50.0},
     "docker": {"total": 11, "running": 10},
     "praxis": {"head": "b8e2ce6", "ts": 1783600000, "subject": "pass 16.4"},
-    # чувствительное, что обсерватория умеет отдавать Егору и НЕ должна отдавать в эту дверь:
+    # чувствительное, что обсерватория умеет отдавать владельцу и НЕ должна отдавать в эту дверь:
     "users": 2, "sessions": 1,
 }
 
@@ -106,7 +106,7 @@ class TestAgentDoorIsClosedByDefault(unittest.TestCase):
         self.assertTrue(serverapp._is_agent("правильный-секрет"))
 
     def test_owner_gate_is_a_different_door(self):
-        """Гейт Егора (HMAC initData) и гейт агента — разные субъекты, не путаются."""
+        """Гейт владельца (HMAC initData) и гейт агента — разные субъекты, не путаются."""
         serverapp.AGENT_TOKEN = "секрет"
         self.assertFalse(serverapp._is_owner("секрет"), "токен агента не делает тебя Егором")
 

@@ -68,7 +68,7 @@ WRAPPED_FUNCTIONS = ("_presence_frame",)
 CONTRACT_CONSTANTS = ("_OWNER_TOOLS_CONTRACT", "_APPETITE_CONTRACT", "_ROOM_TOOLS_CONTRACT_STABLE")
 
 #: Словари дерева вне `agent` с авторскими строками про владельца: полномочия говорящего
-#: для строки «говорит» зоны «СЕЙЧАС» под стабильной головой («впустить может только Егор»).
+#: для строки «говорит» зоны «СЕЙЧАС» под стабильной головой («впустить может только владелец»).
 MODULE_DICTS = (("frame_layout", "AUTHORITY"),)
 
 #: Списки схем тулов у дерева — те же, что у `body._TOOL_LISTS`. Сверх них правятся все
@@ -76,7 +76,7 @@ MODULE_DICTS = (("frame_layout", "AUTHORITY"),)
 TOOL_LISTS = ("BASE_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS", "SHARED_CONTEXT_TOOLS",
               "TOOLS", "ABSENCE_TOOLS", "FAMILY_TOOLS", "WORKSHOP_TOOLS", "FORGE_TOOLS")
 
-#: Строки, где имя — не обращение к владельцу, а пример про досье Егора.
+#: Строки, где имя — не обращение к владельцу, а пример про досье владельца.
 SKIP_IF_CONTAINS = ("yegor-kosyrev",)
 
 #: История, а не отношения: снимаем имя, оставляя факт. Стенд сверяет каждую пару с

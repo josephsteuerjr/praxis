@@ -62,7 +62,7 @@ class AuthorityContextTests(unittest.TestCase):
             agent._TURN_CHANNEL.reset(token)
 
     def test_any_speaker_leaves_her_every_right_including_the_computer(self):
-        """Решение Егора 26.07: в её ходе действует ОНА, кто бы ни заговорил. 10.11: «ВЕЗДЕ
+        """Решение владельца 26.07: в её ходе действует ОНА, кто бы ни заговорил. 10.11: «ВЕЗДЕ
         ВСЕ ПРАВА» — пары владельца (admit/computer_access, остатки старого мини-аппа) больше
         нет, а управление ноутом «должно быть и было у всех»."""
         token = agent._TURN_CHANNEL.set(self._channel(202))
@@ -117,7 +117,7 @@ class AuthorityContextTests(unittest.TestCase):
         saved = agent._TELETHON.get("telegram_account")
         agent._TELETHON["telegram_account"] = lambda **kw: calls.append(kw) or "ok"
         try:
-            # Решение Егора 26.07, вариант 1: в её ходе действует ОНА, кто бы ни заговорил. «Она и сама уже сейчас откажет, если там бред.» За Егором остались только admit и computer_access — раздача ЕГО доверия другим людям, а не её способности.
+            # Решение владельца 26.07, вариант 1: в её ходе действует ОНА, кто бы ни заговорил. «Она и сама уже сейчас откажет, если там бред.» За владельцем остались только admit и computer_access — раздача ЕГО доверия другим людям, а не её способности.
             # Сырой MTProto — её собственный аккаунт и её тело; чужая реплика не делает
             # её безрукой. Раньше здесь ожидался отказ «только владелец».
             trusted = agent._TURN_CHANNEL.set(self._channel(202))
@@ -138,7 +138,7 @@ class AuthorityContextTests(unittest.TestCase):
                 self.assertEqual(agent.tool_telegram_account("list"), "ok")
             finally:
                 agent._TURN_CHANNEL.reset(internal)
-            # три вызова: доверенный человек, Егор, её собственный ход — во всех действует она
+            # три вызова: доверенный человек, владелец, её собственный ход — во всех действует она
             self.assertEqual(len(calls), 3)
         finally:
             if saved is None:
@@ -177,7 +177,7 @@ class AuthorityContextTests(unittest.TestCase):
         self.assertIn("send_email", offered[0])
         self.assertTrue(inbound_mail_tools <= offered[1])
         self.assertIn("send_email", offered[1])
-        # Решение Егора 26.07: набор рук не зависит от того, кто заговорил. 03.08.2026
+        # Решение владельца 26.07: набор рук не зависит от того, кто заговорил. 03.08.2026
         # оно распространено и на почту (вариант «а»): отправка наружу перестала быть
         # owner-действием — прежде mail-гейт молча заводил owner-эксклюзив мимо
         # `_HUMAN_OWNER_ONLY_TOOL_NAMES`, и объявленное расходилось с поведением.
@@ -213,10 +213,10 @@ class AuthorityContextTests(unittest.TestCase):
             finally:
                 agent._TURN_CHANNEL.reset(internal)
 
-            # Решение Егора 26.07 (вариант 1): в её ходе действует она, кто бы ни
+            # Решение владельца 26.07 (вариант 1): в её ходе действует она, кто бы ни
             # заговорил. Раньше здесь ожидался «Отказ» — то есть чужая реплика делала
             # её безрукой в её же комнатах. Авторство при этом остаётся честным:
-            # set_by='praxis', а не 'owner' — решила она, а не Егор.
+            # set_by='praxis', а не 'owner' — решила она, а не владелец.
             trusted = agent._TURN_CHANNEL.set(self._channel(202))
             try:
                 self.assertNotIn("Отказ", agent.tool_freeze_chat("freeze", chat_id="-1003"))

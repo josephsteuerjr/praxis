@@ -564,7 +564,7 @@ class TestLiveRecording(TurnsBase):
         self.assertEqual(r["why"], "")
 
     def test_credential_floor_hold_recorded(self):
-        # Кред-пол — единственное, что держит слово на выходе (Егор 10.11, «сними»).
+        # Кред-пол — единственное, что держит слово на выходе (владелец 10.11, «сними»).
         self._orig.append((agent._core_secrets, "credential_floor",
                            agent._core_secrets.credential_floor))
         agent._core_secrets.credential_floor = lambda text, context="": "api-token"
@@ -642,7 +642,7 @@ class TestLiveRecording(TurnsBase):
 class TestConsumers(TurnsBase):
     def test_group_turn_makes_one_model_call_and_no_judge_call(self):
         # Раньше вторым вызовом шёл outbound-советник приватности со свежими ходами канала.
-        # Егор 10.11 («сними»): советника нет — ход группы стоит ровно одного вызова мозга.
+        # владелец 10.11 («сними»): советника нет — ход группы стоит ровно одного вызова мозга.
         self._mk(chat_id="-100", scope="group", who="вася", out="MARKER_GRP ответила в группе")
         sc = ScriptedClient(["ответ в группу"])
         llm.use_test_client(sc)

@@ -69,7 +69,7 @@ def dispatch(ctx: agent.ChannelContext, tool_name: str, **arguments):
 class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
     def test_lever_off_keeps_the_old_frame_and_its_speaker_dependence(self):
         # Регрессия на умолчание: без рычага владелец и чужой по-прежнему дают РАЗНЫЕ system,
-        # а руки (Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА») у всех говорящих одни и те же.
+        # а руки (владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА») у всех говорящих одни и те же.
         self.assertNotIn("PRAXIS_FRAME_HEAD_STABLE", os.environ)
         owner = frame_for(room_ctx(owner=True))
         guest = frame_for(room_ctx(owner=False, known=False))
@@ -232,7 +232,7 @@ class RuntimeAuthorizationDispatch(unittest.TestCase):
         self.guest = room_ctx(owner=False, known=False, principal="202")
 
     def test_removed_trust_hands_are_not_dispatchable_and_the_computer_is_hers(self):
-        # Егор 10.11: admit/computer_access — остатки старого мини-аппа, удалены; «управление
+        # владелец 10.11: admit/computer_access — остатки старого мини-аппа, удалены; «управление
         # ноутом должно быть и было у всех».
         for ctx in (self.owner, self.guest):
             self.assertFalse({"admit", "computer_access"} & set(names(ctx)))

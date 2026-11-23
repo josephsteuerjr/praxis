@@ -269,7 +269,7 @@ class TheKnockingThinsOutButNeverStops(unittest.TestCase):
                       "ран сдвинулся — отсрочка обязана обнулиться")
 
     def test_a_hand_saying_resume_beats_the_backoff(self):
-        """Явное «возобнови» от неё или от Егора не упирается в автоматическую отсрочку."""
+        """Явное «возобнови» от неё или от владельца не упирается в автоматическую отсрочку."""
         for _ in range(agent.RESUME_FREE_ATTEMPTS):
             self._tick()
         self.assertNotIn(self.run_id, self._tick(elapsed=1.0))

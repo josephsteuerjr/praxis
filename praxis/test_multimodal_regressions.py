@@ -447,7 +447,7 @@ class TestAgentGuardRegressions(RegressionBase):
 
     def _turn_with_staged_photo(self, *, caption="diagram"):
         """Ход гостя с одним вложением -> (конверт, staged-копии). Модель на выходе не зовётся:
-        судьи приватности нет (Егор 10.11, «сними»), и любой вызов llm.chat — регрессия."""
+        судьи приватности нет (владелец 10.11, «сними»), и любой вызов llm.chat — регрессия."""
         source = self.photo_path()
         staged: list[media.OutboundMedia] = []
         known_dm = agent.ChannelContext(chat_id="778", is_dm=True, owner=False, known=True)
@@ -480,7 +480,7 @@ class TestAgentGuardRegressions(RegressionBase):
     def test_guest_image_goes_out_with_her_word_and_no_judge_call(self) -> None:
         # Раньше вложение гостю шло судье второй моделью (единственный стоп — кред на
         # пикселях, и только при PRAXIS_OUTBOUND_ADVISOR=on; вживую он был выключен).
-        # Егор 10.11 («сними»): судьи нет вовсе — слово и вложение уходят как написаны.
+        # владелец 10.11 («сними»): судьи нет вовсе — слово и вложение уходят как написаны.
         envelope, staged = self._turn_with_staged_photo()
 
         self.assertEqual(envelope.text, "Safe-looking wrapper.")

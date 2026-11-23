@@ -84,7 +84,7 @@ class GraphTraverse(unittest.TestCase):
 
     def test_path_found_and_readable(self):
         t = graph.path_text("misha", "тема-праксис")
-        self.assertIn("Миша", t)     # миша — вика — егор — тема-праксис
+        self.assertIn("Миша", t)     # миша — вика — владелец — тема-праксис
         self.assertIn("Егор", t)
         self.assertIn("тема-праксис", t)
 
@@ -111,7 +111,7 @@ class GraphTraverse(unittest.TestCase):
 
 
 class Pass86Aliases(unittest.TestCase):
-    """PASS 8.6: алиасы — «Егор» и yegor-kosyrev — один узел."""
+    """PASS 8.6: алиасы — «владелец» и owner-Example — один узел."""
 
     def setUp(self):
         _clean()

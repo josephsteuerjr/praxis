@@ -788,7 +788,7 @@ async function loadContacts() {
     <div class="card"><h3>Важные люди (${list.length})</h3>${rows || `<div class="muted small">список пуст</div>`}</div>
     <div class="card"><h3>Записка на отсутствие</h3>
       <div class="small muted" style="margin-bottom:8px">Пока идёт окно и важный человек пишет, а ответа нет —
-      она ответит <b>от своего лица</b> (не от твоего): «я Praxis, Егор офлайн, помогу / передам». Эта записка —
+      она ответит <b>от своего лица</b> (не от твоего): «я Praxis, владелец офлайн, помогу / передам». Эта записка —
       что можно сказать про твою доступность. До 3 ответов на человека за окно; о каждом сообщит тебе.</div>
       <textarea id="schedNote" rows="3" style="width:100%;box-sizing:border-box"
         placeholder="если срочное — скажи, что вечером на связи; про X скажи Y">${esc(st.schedule_note || "")}</textarea>
@@ -1003,19 +1003,19 @@ async function loadSelf() {
 async function loadPercept() {
   const b = $("#b-percept"); b.innerHTML = `<div class="skel"></div><div class="skel"></div>`;
   let p; try { p = await api("/api/panel/perception"); } catch (e) { b.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  const SRC = { default: "дефолт", env: "env", praxis: "она", egor: "ты" };
+  const SRC = { default: "дефолт", env: "env", praxis: "она", owner: "ты" };
   b.innerHTML = `
     <div class="card"><h3>Рычаги (живые — применяются без рестарта)</h3>${(p.knobs || []).map(k => `
       <div class="list-item">
         <div style="display:flex;gap:8px;align-items:center">
           <span class="mono small" style="flex:1">${esc(k.knob)}</span>
-          <span class="pill ${k.source === "praxis" ? "approved" : k.source === "egor" ? "drafted" : "gray"}">${SRC[k.source] || esc(k.source)}</span>
+          <span class="pill ${k.source === "praxis" ? "approved" : k.source === "owner" ? "drafted" : "gray"}">${SRC[k.source] || esc(k.source)}</span>
         </div>
         <div class="small muted" style="margin:2px 0 6px">${esc(k.desc)}${k.bounds ? ` · [${k.bounds[0]}..${k.bounds[1]}]` : ""}${k.reason ? ` · «${esc(k.reason)}»` : ""}</div>
         <div style="display:flex;gap:8px">
           <input type="text" class="mono" data-pk="${esc(k.knob)}" value="${esc(String(k.value))}" style="flex:1">
           <button class="btn sec" data-pset="${esc(k.knob)}">OK</button>
-          ${(k.source === "praxis" || k.source === "egor") ? `<button class="btn sec" data-preset="${esc(k.knob)}">↺</button>` : ""}
+          ${(k.source === "praxis" || k.source === "owner") ? `<button class="btn sec" data-preset="${esc(k.knob)}">↺</button>` : ""}
         </div>
       </div>`).join("")}
       <p class="small muted">Источник честный: «она» — её решение (manage_perception), «ты» — правка отсюда, env — дефолт старта.</p></div>
@@ -1185,7 +1185,7 @@ async function loadAppetite() {
   const rows = [];
   rows.push(`<div class="row"><span class="k">режим</span><span class="v mono">${esc(a.mode)}</span></div>`);
   if (a.background_hold) rows.push(`<div class="small" style="color:var(--warn,#e6a23c)">⏸ ${esc(a.background_hold)}</div>`);
-  if (req) rows.push(`<div class="small ${fresh ? "" : "muted"}">просьба Егора (${esc(req.source || "?")}): ${esc(req.raw || kindRu[req.kind] || req.kind)}${fresh ? " · <b>ждёт её толкования</b>" : ""}</div>`);
+  if (req) rows.push(`<div class="small ${fresh ? "" : "muted"}">просьба владельца (${esc(req.source || "?")}): ${esc(req.raw || kindRu[req.kind] || req.kind)}${fresh ? " · <b>ждёт её толкования</b>" : ""}</div>`);
   if (interp) rows.push(`<div class="small muted">её толкование: ${esc(interp.text || "—")} (окна: ${plan.windows === false ? "нет" : "да"} · сон: ${esc(plan.sleep_depth || "full")})</div>`);
   if (hasProm) {
     const pcs = [];
@@ -1197,7 +1197,7 @@ async function loadAppetite() {
   }
   rows.push(`<div class="small muted">сегодня: ${kk(obs.tokens_today || 0)} ток (${obs.calls_today || 0} выз.)${obs.estimated_cost_today != null ? ` · ≈$${obs.estimated_cost_today.toFixed(2)}` : ""} · остаток провайдера: ${esc(obs.provider_remaining || "unknown")}</div>`);
   if (a.external_provider_boundary && a.external_provider_boundary !== "absent")
-    rows.push(`<div class="small muted">внешний лимит провайдера: ${esc(a.external_provider_boundary)} (граница Егора, не её)</div>`);
+    rows.push(`<div class="small muted">внешний лимит провайдера: ${esc(a.external_provider_boundary)} (граница владельца, не её)</div>`);
   if (a.denials_today) rows.push(`<div class="small muted">отказов рельсов сегодня: ${a.denials_today} (память/.state/denials.jsonl)</div>`);
   box.innerHTML = `<h3>Аппетит</h3>${rows.join("")}
     <div class="chips" style="margin-top:8px">

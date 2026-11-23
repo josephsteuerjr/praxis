@@ -2928,7 +2928,7 @@ def _name_the_owner(owner: str) -> None:
     в слоте, а чужие значения приезжают в кавычках «…», поэтому хвост строки
     ни с чем не спутать.
     """
-    if not owner or owner == "Егор":
+    if not owner:
         return
     try:
         import frame_layout
@@ -2940,19 +2940,21 @@ def _name_the_owner(owner: str) -> None:
     original = getattr(frame_layout, "_speaker", None)
     if original is None or getattr(original, "_helene_owner", ""):
         return
-    tail = "это Егор"
+    tails = ("это владелец", "это Егор")  # Also recognize the older authored frame.
 
     def _speaker(ctx, speaker, snap):
         text, kind = original(ctx, speaker, snap)
         body = str(text)
-        if body.endswith(tail):
-            text = gutter.Own(body[:-len(tail)] + "это " + owner,
-                              getattr(text, "guest", False))
+        for tail in tails:
+            if body.endswith(tail):
+                text = gutter.Own(body[:-len(tail)] + "это " + owner,
+                                  getattr(text, "guest", False))
+                break
         return text, kind
 
     _speaker._helene_owner = owner
     frame_layout._speaker = _speaker
-    log.info("кадр: собеседник назван «%s» (в дереве стоял литерал «Егор»)", owner)
+    log.info("кадр: собеседник назван «%s»", owner)
 
 
 def _announce_git(tree: Path) -> None:

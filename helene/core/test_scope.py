@@ -270,7 +270,7 @@ class TestBuildSystemPartsScope(unittest.TestCase):
 class TestOutboundAudienceFrame(unittest.TestCase):
     def test_group_guard_sends_her_word_without_any_model_call(self):
         # Раньше гард передавал аудиторию и канал советнику приватности второй моделью.
-        # Егор 10.11 («сними»): советника нет — её слово уходит как написано, модель на
+        # владелец 10.11 («сними»): советника нет — её слово уходит как написано, модель на
         # выходе не зовётся (держит только механический кред-пол).
         old_configured, old_chat = agent.llm.configured, agent.llm.chat
         agent.llm.configured = lambda *_a, **_kw: True

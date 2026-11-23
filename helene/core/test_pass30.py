@@ -218,7 +218,7 @@ class ObserveFileTests(unittest.TestCase):
         ctx = agent.ChannelContext(chat_id="202", principal_id="202", is_dm=True, known=True)
         token = agent._TURN_CHANNEL.set(ctx)
         try:
-            # Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
+            # Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
             # заговорил. Грант, выданный человеку, больше не сужает ЕЁ руки: раньше
             # «computer.apps» у собеседника закрывал ей чтение файла с её же тела.
             with mock.patch("body_client.call",
@@ -644,7 +644,7 @@ class HeldSelfWakeTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _hold(self, reply, floor, chat="-100200"):
-        """Придержать ход кред-полом — с 10.11 (Егор, «сними») другого стопа на выходе нет."""
+        """Придержать ход кред-полом — с 10.11 (владелец, «сними») другого стопа на выходе нет."""
         import agent
 
         group = agent.ChannelContext(chat_id=chat, principal_id="202", is_dm=False)

@@ -137,7 +137,7 @@ class TestTheHandDoesWhatThePromptPromises(Base):
             agent._TURN_CHANNEL.reset(token)
 
     def test_without_evidence_the_hand_returns_the_whole_room(self):
-        """Недоказанное — не форум. Решение Егора 06.08, принято Праксис.
+        """Недоказанное — не форум. Решение владельца 06.08, принято Праксис.
 
         ⚠ Тест назывался `..._stays_in_the_branch` и держал ОБРАТНУЮ политику: пока про
         комнату ничего не доказано, её рука отдавала ветку. Но форум — это то, о чём

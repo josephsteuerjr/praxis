@@ -863,7 +863,7 @@ class TestRemoteRunDeadlineIsNamed(unittest.TestCase):
 
 
 class TestLostTaskReaperWakesHer(unittest.TestCase):
-    """26.07 18:56:19 задача hcode-c584ba6e открыта по ПРЯМОЙ просьбе Егора и брошена
+    """26.07 18:56:19 задача hcode-c584ba6e открыта по ПРЯМОЙ просьбе владельца и брошена
     через 34 секунды; ещё четыре такие же висели с 19.07. Потерять её намерение молча
     хуже, чем выполнить поздно."""
 

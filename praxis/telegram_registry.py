@@ -7,7 +7,7 @@ without a Telegram session and cannot quietly create a second client or brain.
 
 The generic ``raw`` path is available only to sovereign principals: the human owner
 and Praxis herself.  Account-critical/auth/session constructors are dispatched the same
-way (Egor 10.11 removed the separate owner-confirmation gate); they stay *sensitive*:
+way (owner 10.11 removed the separate owner-confirmation gate); they stay *sensitive*:
 their parameters and results are never echoed into receipts.  Transport wrapper requests are
 visible in the registry (schema completeness) but are never dispatchable: accepting
 ``InvokeWith*`` would let a nested request bypass the policy applied here.

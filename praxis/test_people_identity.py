@@ -1,7 +1,7 @@
 """Один человек — одно досье: ключ имени против расщепления памяти о людях.
 
-01.08.2026 на живом дереве лежало ПЯТЬ файлов на одного Егора («егор», «егор-косырев»,
-«егор-косырев-example_profile», «yegor-kosyrev», «yegor-kosyrev-example_profile»)
+01.08.2026 на живом дереве лежало ПЯТЬ файлов на одного владельца («владелец», «владелец-автор»,
+«владелец-автор-example_profile», «owner-Example», «owner-Example-example_profile»)
 и три на Арета. Плодил их не сбой, а механизм: имя файла делалось из того ярлыка, под
 которым человек пришёл в конкретный ход, — её слова, display-имени Telegram или подписи
 квитанции с хэндлом.
@@ -54,7 +54,7 @@ class IdentityKey(unittest.TestCase):
         self.assertEqual(people.identity_key("Maxim"), people.identity_key("Максим"))
 
     def test_different_letters_stay_different(self):
-        """Стойка «молча не сливаю»: Kosyrev и Kosyrew — не одно написание."""
+        """Стойка «молча не сливаю»: Example и Exampel — не одно написание."""
         self.assertNotEqual(people.identity_key("Yegor Kosyrev"),
                             people.identity_key("Yegor Kosyrew"))
         self.assertNotEqual(people.identity_key("Арет"), people.identity_key("Арете"))
@@ -91,7 +91,7 @@ class ResolveDoesNotSplit(unittest.TestCase):
         _mk("yegor-kosyrev", "Yegor Kosyrev")
 
     def test_russian_name_without_any_alias(self):
-        """До 01.08 «Егор» резолвился в себя и заводил второе досье."""
+        """До 01.08 «владелец» резолвился в себя и заводил второе досье."""
         self.assertEqual(graph.resolve("Егор Косырев"), "yegor-kosyrev")
 
     def test_receipt_label_with_handle(self):
@@ -176,7 +176,7 @@ class HerDetectorSeesTheClass(unittest.TestCase):
 
 
 class AddressBookSpeaksHerLanguage(unittest.TestCase):
-    """01.08 08:31: «„Егор“ пока нет в моей адресной книге» — через два часа после
+    """01.08 08:31: «„владелец“ пока нет в моей адресной книге» — через два часа после
     того, как она дважды ему написала."""
 
     def setUp(self):

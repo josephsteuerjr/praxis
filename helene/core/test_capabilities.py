@@ -173,7 +173,7 @@ class TestScopeHonesty(Base):
     def test_group_channel_honest(self):
         t = capabilities.describe("group")
         self.assertIn("всей своей внутренней памяти", t)
-        # 10.11 (Егор, «сними»): советника на голосе нет — граница названа её суждением.
+        # 10.11 (владелец, «сними»): советника на голосе нет — граница названа её суждением.
         self.assertIn("только кред-пол", t)
         self.assertNotIn("outbound-советник", t)
         tools_line = next(l for l in t.splitlines() if "тулы канала" in l)

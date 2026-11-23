@@ -301,17 +301,17 @@ mod linux_service_tests {
 
     #[test]
     fn owners_are_named_plainly_and_root_is_refused_with_words() {
-        assert!(linux_svc_owner_ok("egor", Some(1000)).is_ok());
+        assert!(linux_svc_owner_ok("owner", Some(1000)).is_ok());
         assert!(linux_svc_owner_ok("ivan.petrov", Some(1001)).is_ok());
         assert!(linux_svc_owner_ok("astra-admin", Some(1002)).is_ok());
         let root = linux_svc_owner_ok("root", Some(0)).unwrap_err();
         assert!(root.contains("не root"), "{root}");
-        assert!(linux_svc_owner_ok("egor", Some(0)).is_err());
+        assert!(linux_svc_owner_ok("owner", Some(0)).is_err());
         assert!(linux_svc_owner_ok("", None).is_err());
-        assert!(linux_svc_owner_ok("егор", Some(1000)).is_err());
+        assert!(linux_svc_owner_ok("владелец", Some(1000)).is_err());
         assert!(linux_svc_owner_ok("a b", Some(1000)).is_err());
         assert!(linux_svc_owner_ok("-x", Some(1000)).is_err());
-        assert_eq!(linux_svc_instance("egor"), "helene@egor.service");
+        assert_eq!(linux_svc_instance("owner"), "helene@owner.service");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 предсетевая сверка proof сравнивала леджер с СЫРЫМИ аргументами → детерминированный
 отказ; рука сказала «очередь дошлёт сама, вручную не повторяй», а воркер очереди
 требовал тот самый proof, чьё создание падало константой, — 12 ретраев за 2,5 часа
-и молчаливый dead_letter. Егор ждал ответ час; RECAP прогона говорил Delivery `sent`.
+и молчаливый dead_letter. владелец ждал ответ час; RECAP прогона говорил Delivery `sent`.
 
 Полный разбор: `_state/ИНЦИДЕНТ-DEADLETTER-17.08.md`. Здесь — четыре границы починки:
 сверка той же нормализацией; ошибка-константа не ретраится; dead_letter объявляет
@@ -103,7 +103,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
 
     def test_trailing_space_in_model_args_no_longer_kills_the_delivery(self):
         # 17.08: аргументы кончались пробелом (806 зн.), леджер нёс strip (805 зн.) —
-        # и этого хватило, чтобы реплика в личку Егора не ушла никогда.
+        # и этого хватило, чтобы реплика в личку владельца не ушла никогда.
         context = self._create_run("strip")
         self._start_reply(context.run_id, "corporate». ")
         entry = self._reply_entry(context.run_id, ledger_text="corporate».")

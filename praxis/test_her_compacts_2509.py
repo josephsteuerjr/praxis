@@ -1,4 +1,4 @@
-"""Свёртку пишет она (25.09, слово Егора).
+"""Свёртку пишет она (25.09, слово владельца).
 
 Раньше свёртку писал «хроникёр» — отдельный промпт про неё в третьем лице, ролью
 evaluator. Теперь свёртку пишет сама действующая Praxis: prepare выбирает точные источники,
@@ -285,7 +285,7 @@ class HistoryIsOutsideTheRecallCorpus(unittest.TestCase):
 
 
 class FoldByHand(unittest.TestCase):
-    """25.09, слово Егора: свёртка предлагается, а делает её она — рукой memory_compact(fold)."""
+    """25.09, слово владельца: свёртка предлагается, а делает её она — рукой memory_compact(fold)."""
 
     def test_fold_applies_only_the_authors_selected_text(self):
         import agent

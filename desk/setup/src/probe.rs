@@ -319,7 +319,7 @@ mod tests {
         std::fs::write(r.join("data").join("soul").join("SOUL.md"), "Я — Мира.").unwrap();
         std::fs::write(
             r.join("helene.json"),
-            r#"{"setup_complete":true,"agent":{"name":"Мира"},"owner":{"name":"Егор"},"installed":{"version":"1.1.1"}}"#,
+            r#"{"setup_complete":true,"agent":{"name":"Мира"},"owner":{"name":"владелец"},"installed":{"version":"1.1.1"}}"#,
         )
         .unwrap();
         std::fs::create_dir_all(r.join("agents").join("atlas")).unwrap();
@@ -327,7 +327,7 @@ mod tests {
         let f = look(&r, "", "user").expect("находка");
         assert_eq!(f.kind, "leftover");
         assert_eq!(f.agent, "Мира");
-        assert_eq!(f.owner, "Егор");
+        assert_eq!(f.owner, "владелец");
         assert_eq!(f.version, "1.1.1");
         assert!(!f.program);
         assert_eq!(f.agents, vec!["Атлас".to_string()]);

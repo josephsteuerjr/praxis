@@ -1,4 +1,4 @@
-"""25.09 — память комнаты (слово Егора: «как следует поднять горячий контекст комнаты»,
+"""25.09 — память комнаты (слово владельца: «как следует поднять горячий контекст комнаты»,
 «сделать приватные данные более доступными»).
 
 Что здесь прибито:
@@ -55,7 +55,7 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
         self.assertLess(hi, hard)
 
     def test_dm_defaults_are_150_250_300(self):
-        # слово Егора 25.09: «150–250 максимум»; рычаги PRAXIS_HOT_* остаются
+        # слово владельца 25.09: «150–250 максимум»; рычаги PRAXIS_HOT_* остаются
         if any(os.getenv(k) for k in ("PRAXIS_HOT_LO", "PRAXIS_HOT_HI", "PRAXIS_HOT_HARD_HI",
                                      "PRAXIS_HOT_TOKEN_CAP")):
             self.skipTest("пороги заданы окружением")
@@ -315,7 +315,7 @@ class RecallNamesForeignRoomsInsteadOfHiding(unittest.TestCase):
 
 
 class FoldIsOfferedNotForced(unittest.TestCase):
-    """Слово Егора 25.09: «минимум 150, при 250 или 400 свёртка — отдельная задача, которая ей
+    """Слово владельца 25.09: «минимум 150, при 250 или 400 свёртка — отдельная задача, которая ей
     ПРЕДЛАГАЕТСЯ»."""
 
     def setUp(self) -> None:

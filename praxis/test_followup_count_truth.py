@@ -46,7 +46,7 @@ class FollowupCardCarriesCountingKeys(unittest.TestCase):
 class ClientRepeatsTheServerRule(unittest.TestCase):
     """Два пересказа одного факта расходятся всегда. Клиентский бейдж обязан считать
     по тем же двум признакам, что и сервер, иначе он снова покажет её собственный
-    след как ожидание Егора."""
+    след как ожидание владельца."""
 
     def test_pending_followups_filters_by_notify_owner(self):
         js = (Path(praxis_app.__file__).resolve().parent

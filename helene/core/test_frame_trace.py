@@ -916,7 +916,7 @@ class NoTokensAndNoContent(FrameBase):
     MODE = "on"
 
     def test_not_a_single_token_quantity(self):
-        """Решение Егора, закреплённое механически: прибор печатает наблюдённое."""
+        """Решение владельца, закреплённое механически: прибор печатает наблюдённое."""
         encoded = json.dumps(self.run_turn()["meta"], ensure_ascii=False).lower()
         self.assertNotIn("token", encoded)
         self.assertNotIn("токен", encoded)

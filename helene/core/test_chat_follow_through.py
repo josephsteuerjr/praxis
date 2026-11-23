@@ -42,7 +42,7 @@ class OrdinaryTalkIsNotAccused(unittest.TestCase):
     def test_a_plain_reply_closes_the_turn_and_is_never_accused(self):
         """⚠ 13.08 НОЧЬЮ зеркало по инициативе системы снято с прода: что бы она ни
         сказала после него, это становилось её сообщением. Три поломки подряд в личке
-        Егора; разбор — в `test_answer_from_the_source.TheSystemMirrorIsOffInChat`.
+        владельца; разбор — в `test_answer_from_the_source.TheSystemMirrorIsOffInChat`.
 
         Здесь охраняется прежнее: обычная речь закрывает ход и НЕ обвиняется в
         невыполненном обещании.

@@ -123,7 +123,7 @@ class DirectOutboxProjectionTests(unittest.TestCase):
             "followup_request": "угу, выходи:)",
         }
         # Второй заход того же call_id — ровно то, что делает resume-исполнитель через
-        # 3.1с: пульс уже не активен, буфер Егора уехал вперёд.
+        # 3.1с: пульс уже не активен, буфер владельца уехал вперёд.
         drifted = dict(first, pulse_id="",
                        followup_request="Твой пост в абстракт не ушёл: @abstractDL — канал.")
 
@@ -1001,9 +1001,9 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
 
 
 class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
-    """След нити ≠ отчёт Егору.
+    """След нити ≠ отчёт владельцу.
 
-    27.07 02:32 Егору в ЛС уехала его же реплика из AbstractDL под заголовком «AbstractDL
+    27.07 02:32 владельцу в ЛС уехала его же реплика из AbstractDL под заголовком «AbstractDL
     Chat ответил(а)». На проде: 32 записи леджера, заказано словами 0, писем ему 17 (89%
     его личного ящика от неё), шесть она погасила руками.
     """
@@ -1041,13 +1041,13 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
     def test_her_own_dm_to_the_owner_leaves_a_trace_but_never_mail(self):
         """⚠ 01.08: контракт изменён, и вот чем опровергнута прежняя посылка.
 
-        Здесь стояло «след здесь был бы бухгалтерией ради бухгалтерии: Егору её
+        Здесь стояло «след здесь был бы бухгалтерией ради бухгалтерии: владельцу её
         слово видно и так». Посылка про ЕГО видимость — а след это ЕЁ память.
         Внутри часового пульса Telethon разорван и буфер лички не читается вовсе
         (chat_id=None), `said_recently` из боевого кода не зовётся, скретч без
         chat_id не подхватывается — леджер остаётся ЕДИНСТВЕННЫМ каналом «что я
         уже сказала и кому». 01.08 в 07:30 и 09:30 по её часам два часовых пульса
-        подряд поздоровались с Егором: второй дважды спросил ленту нитей и оба раза
+        подряд поздоровались с владельцем: второй дважды спросил ленту нитей и оба раза
         получил чужие нитки 62-часовой давности, потому что записей по его личке в
         леджере было НОЛЬ из 80.
 
@@ -1080,7 +1080,7 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
 
 
 class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
-    """`explicit_only=False` выключал единственный гейт: любая последняя фраза Егора
+    """`explicit_only=False` выключал единственный гейт: любая последняя фраза владельца
     («им отправить», «[Голосовое]») читалась как заказ «доложи мне ответ». Из 11 реальных
     owner-записей прода явную просьбу не содержит НИ ОДНА."""
 
@@ -1272,9 +1272,9 @@ class FollowUpPendingDeliveryRevisionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
-    """27.07: письмо в ЛС Егора называлось «AbstractDL Chat ответил(а)». Чат не отвечает —
+    """27.07: письмо в ЛС владельца называлось «AbstractDL Chat ответил(а)». Чат не отвечает —
     отвечает человек, и имя было под рукой: строкой выше раннер печатает «получен ответ
-    #94244 от Yegor Kosyrev»."""
+    #94244 от owner Example»."""
 
     async def _title_for(self, item) -> str:
         emitted: dict = {}
@@ -1370,7 +1370,7 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
 
 
 class IncomingCarriesWhoAnsweredTests(unittest.TestCase):
-    """Раннер знает имя и «это сам Егор» — в модуле леджера OWNER_ID неизвестен вовсе."""
+    """Раннер знает имя и «это сам владелец» — в модуле леджера OWNER_ID неизвестен вовсе."""
 
     def test_the_incoming_handler_passes_the_name_and_the_owner_flag(self):
         import inspect

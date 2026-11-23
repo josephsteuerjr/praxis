@@ -32,7 +32,7 @@ class CatalogFamilies(unittest.TestCase):
         self.assertFalse(RETIRED & agent.TOOL_IMPL.keys())
 
     def test_every_speaker_gets_the_same_catalogue(self):
-        # Egor 10.11: all rights everywhere; the old owner pair (admit/computer_access) is removed.
+        # owner 10.11: all rights everywhere; the old owner pair (admit/computer_access) is removed.
         owner=agent.catalog_tools_for(self.ctx()); guest=agent.catalog_tools_for(self.ctx(False))
         self.assertEqual(owner,guest)
         self.assertFalse({'admit','computer_access'}&{t.get('name') for t in owner})
@@ -47,7 +47,7 @@ class CatalogFamilies(unittest.TestCase):
         self.assertFalse(RETIRED & set(names))
         self.assertTrue({'memory_compact','coding_review','coding_control','second_look'}<=set(names))
         contract=agent._hands_contract_text()
-        # Egor 10.11: every schema is native again, so K carries no rare signatures; it is the
+        # owner 10.11: every schema is native again, so K carries no rare signatures; it is the
         # family map plus the shared outcome and scripting contract, kept compact.
         self.assertLess(len(contract),4000)
         for word in ('confirmed','refused','in_doubt','partial','expected_sha256','Stop','Python'):

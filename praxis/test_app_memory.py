@@ -98,7 +98,7 @@ class TestMemoryMapRendererIsBuiltNotConcatenated(unittest.TestCase):
     def test_only_http_targets_ever_become_real_links(self):
         """href ставится ровно в одной ветке — под проверкой схемы http(s).
 
-        Цели внутри карт относительные («../people/егор.md»); такой файл аппу не отдаёт
+        Цели внутри карт относительные («../people/владелец.md»); такой файл аппу не отдаёт
         ни один маршрут, поэтому живой ссылкой он быть не должен, а чужая схема
         (javascript:, data:) не должна попасть в href вовсе.
         """

@@ -103,9 +103,9 @@ class TestOffered(PointerBase):
                 os.environ.pop("PRAXIS_CHAT_REPLY_HAND", None)
             live = list(offered) + [by_name[n] for n in ("reply", "end_turn")]
             live.append({"type": "web_search"})
-            # 22.10: по прямому решению Егора #8044 бюджет поднят до 32k;
+            # 22.10: по прямому решению владельца #8044 бюджет поднят до 32k;
             # измерение реальной сериализованной схемы остаётся обязательным.
-            # 10.11: пакетные вложенные схемы files/edits и их договор добавлены по слову Егора; бюджет 38k.
+            # 10.11: пакетные вложенные схемы files/edits и их договор добавлены по слову владельца; бюджет 38k.
             self.assertLess(len(json.dumps(live, ensure_ascii=False)), 38000,
                             "боевой состав (с reply/end_turn/web_search) — тоже под 38000")
 
@@ -115,7 +115,7 @@ class TestOffered(PointerBase):
         owner_names = _names(agent.catalog_tools_for(owner))
         self_names = _names(agent.catalog_tools_for(own))
         self.assertIn("shell", owner_names)
-        # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен набору хода владельца (кроме reply,
+        # владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен набору хода владельца (кроме reply,
         # которому в её собственном ходе некому отвечать); пары владельца больше нет.
         self.assertEqual(set(owner_names) - {"reply"}, set(self_names) - {"reply"})
         self.assertFalse({"admit", "computer_access"} & set(owner_names))

@@ -1,6 +1,6 @@
 """Install a new server agent and update an installed one from the window (11.11.2026).
 
-Yegor: «установка серверного агента непосредственно из приложения и обновление непосредственно
+owner: «установка серверного агента непосредственно из приложения и обновление непосредственно
 из приложения, без пользовательского запуска отдельных ручных скриптов». He chose (11.11) that the
 window finds a new server agent through its Telegram bot menu, as after a transfer, and that a
 server without an updater is updated over SSH from the window.

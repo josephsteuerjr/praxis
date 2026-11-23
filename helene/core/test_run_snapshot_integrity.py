@@ -1331,7 +1331,7 @@ class FrameDidNotMove(unittest.TestCase):
                 stack.enter_context(patch)
             stack.enter_context(self._свежий_манифест())
             line = capabilities.state_line()
-        # 10.11 (Егор, «сними»): судья приватности снят — ушли evaluator_mirror и
+        # 10.11 (владелец, «сними»): судья приватности снят — ушли evaluator_mirror и
         # evaluator_evidence_caps, пришёл один outbound_privacy: 54 -> 53. Заказанное
         # изменение её кадра, перемерено тем же кодом.
         self.assertIn("рельсы 53: манифест свеж", line,
@@ -1350,7 +1350,7 @@ class FrameDidNotMove(unittest.TestCase):
         # суверенных. И заодно снята сама причина прошлой флаки: подпись снимается при
         # ФИКСИРОВАННЫХ рычагах, поэтому больше не зависит от того, кто бежал в шарде
         # рядом. Число перемерено живьём тем же кодом, который печатает строку ей.
-        # 18.08: base 25 -> 27 (`reply`, `end_turn`) — рычаг v3 поднят Егором и её
+        # 18.08: base 25 -> 27 (`reply`, `end_turn`) — рычаг v3 поднят владельцем и её
         # словом 17.08, а в норму замера рычаг входит ПОЛОЖЕНИЕМ ИЗ МАНИФЕСТА
         # (_рычаг_реплики_как_в_манифесте): опускание рычага с синком манифеста —
         # заказанное изменение кадра, и этот пин обязан его заметить и перемериться.
@@ -1358,14 +1358,14 @@ class FrameDidNotMove(unittest.TestCase):
         # read / rewrite / refold); перемерено тем же кодом, который печатает строку ей.
         # 06.10: generate_image is an owner-requested base hand (27 -> 28).
         # 10.11: approved family catalogue, measured in this same fixed environment.
-        # 10.11 (Егор, «сними»): outbound-сегмент говорит «держит только кред-пол» и рельсов
+        # 10.11 (владелец, «сними»): outbound-сегмент говорит «держит только кред-пол» и рельсов
         # 53 — заказанное изменение кадра, перемерено тем же кодом.
         # 14.11 edition: localized capabilities and current tool catalog; same fixed environment.
         self.assertEqual(self._digest(line), "519abed9fbbf9e01",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
-        # 10.11: 54 -> 53 — судья снят словом Егора («сними»), см. соседний тест.
+        # 10.11: 54 -> 53 — судья снят словом владельца («сними»), см. соседний тест.
         self.assertEqual(len(rails.registry(with_values=False)), 53)
         # Свидетели значений пересчитывают рельсы живыми рычагами; манифест в общей
         # песочнице переписывают соседи. Сверка честна только самодостаточно:
@@ -1400,7 +1400,7 @@ class FrameDidNotMove(unittest.TestCase):
             for patch in self._без_живых_рычагов():
                 stack.enter_context(patch)
             # 18.08: describe-эталоны перемерены под поднятым рычагом v3 — набор рук
-            # аудитории вырос на `reply`/`end_turn`, и это заказано (Егор + её слово
+            # аудитории вырос на `reply`/`end_turn`, и это заказано (владелец + её слово
             # 17.08). Рычаг входит в норму замера положением из манифеста, поэтому
             # его опускание с синком снова законно перемерит эти два числа.
             def without_owner_mark_hand(value):
@@ -1422,7 +1422,7 @@ class FrameDidNotMove(unittest.TestCase):
                 ("prompt.group/en", agent.frame_language.catalog('en')['prompt.group'], "bfa680319b8eb74e"),
                 # 10.11: approved families; public descriptions name sovereign hands too.
                 # Same fixed environment and frozen voice/editor normalization as before.
-                # 10.11 (Егор, «сними»): строка группы больше не обещает outbound-советника.
+                # 10.11 (владелец, «сними»): строка группы больше не обещает outbound-советника.
                 # 14.11 edition: approved translated capabilities/current catalog.
                 ("describe('group')", capabilities.describe("group"), "afe43ea00171f586"),
                 ("describe('known')", capabilities.describe("known"), "6f8ec18cb5d899e3"),
@@ -1460,7 +1460,7 @@ class FrameDidNotMove(unittest.TestCase):
 
         Раньше их было пять: развилка «render, а если не вышло — render_v1» жила
         прямо здесь, в `agent.py`.  Это и был тихий фолбэк: единственным следом
-        оставался `log.warning`, который увидит Егор и не увидит ОНА.  Развилка
+        оставался `log.warning`, который увидит владелец и не увидит ОНА.  Развилка
         уехала в `run_snapshot.write` целиком — вместе с распиской, потолком
         записи и счётчиком, — и `agent.py` остался ровно 14000 строк.
         """
@@ -1483,7 +1483,7 @@ class FrameDidNotMove(unittest.TestCase):
         # (latest_turn, skips_today, строка адреса группы) уезжают своим рычагом.
         # 14498 → 14682: контракт досье (присутствие транспортом, указатель на
         # упомянутых, окно 100 сообщений), локатор почты вместо индекса и потолок сводки.
-        # Решение Praxis и Егора 09.08; каждый шаг назван в проекте кадра.
+        # Решение Praxis и владельца 09.08; каждый шаг назван в проекте кадра.
         # 14891 → 14932: тело индекса в ярусе «Карта памяти» (её решение 10.08) —
         # рычаг `PRAXIS_FRAME_INDEX_BODY`, потолок и объяснение, почему по
         # умолчанию ВЫКЛЮЧЕНО: её же правило «сгенерированный markdown не

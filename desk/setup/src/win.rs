@@ -182,12 +182,12 @@ mod escape_tests {
 
     #[test]
     fn task_line_quotes_paths_and_carries_the_task_name() {
-        let exe = Path::new(r"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe");
+        let exe = Path::new(r"C:\Users\владелец\Downloads\Helene-1.2.5-setup.exe");
         let line = escape_task_line(exe, &["--update".into(), "--dir".into(), r"C:\Program Files\Helene".into()],
                                     r"Helene\setup-escape-7");
         assert_eq!(
             line,
-            r#"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe --update --dir "C:\Program Files\Helene" --escaped-job=Helene\setup-escape-7"#
+            r#"C:\Users\владелец\Downloads\Helene-1.2.5-setup.exe --update --dir "C:\Program Files\Helene" --escaped-job=Helene\setup-escape-7"#
         );
         let spaced = escape_task_line(Path::new(r"C:\a b\s.exe"), &[], "T");
         assert!(spaced.starts_with(r#""C:\a b\s.exe" "#), "{spaced}");

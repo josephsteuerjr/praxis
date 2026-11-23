@@ -266,7 +266,7 @@ class DirectOutboxReplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_note_to_herself_wakes_her_and_never_reaches_the_owner(self):
         """⚠ КОНТРАКТ ИЗМЕНЁН 13.08, И ЭТО ПОЧИНКА ЖИВОГО ДЕФЕКТА.
 
-        Раньше `note` уходил Егору в личку текстом «[напоминание] {goal}». 13.08 в 17:19
+        Раньше `note` уходил владельцу в личку текстом «[напоминание] {goal}». 13.08 в 17:19
         так к нему приехала её инженерная заметка СЕБЕ: «вернуться к предложенной починке
         отправки медиа только при новом подтверждённом дефекте — спроектировать
         read-after-write проверку message.media/type, отдельно записывать RPC acceptance

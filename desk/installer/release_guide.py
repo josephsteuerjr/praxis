@@ -34,7 +34,7 @@ def documents(source, version, target, start):
                "[RELEASE-ORIGIN.json](RELEASE-ORIGIN.json).\n")
     files = {"START-HERE.md": (start.rstrip() + section + "\n[Команды сборки](release/README.md)\n").encode(),
              "RELEASE-ORIGIN.json": (json.dumps(metadata, indent=2) + "\n").encode()}
-    for name in ("kit.py", "build.py", "source_archive.py", "privacy.py", "README.md", "inputs.json"):
+    for name in ("kit.py", "build.py", "source_archive.py", "privacy.py", "ci.py", "ci_worker.py", "README.md", "inputs.json"):
         files["release/" + name] = (source / "release" / name).read_bytes()
     return files
 

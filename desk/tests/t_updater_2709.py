@@ -1229,7 +1229,7 @@ class Recovery(Base):
 
 @unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
 class Simple(Base):
-    """«Всё максимально просто» (Егор, 27.09): одна кнопка, одно слово, одна команда."""
+    """«Всё максимально просто» (владелец, 27.09): одна кнопка, одно слово, одна команда."""
 
     def test_кнопка_окна_одним_нажатием(self):
         up.Shared(self.install / "data").write(*up.CTL, control.UPDATER_BEAT,

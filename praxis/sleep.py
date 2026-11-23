@@ -805,7 +805,7 @@ def run(depth: str | None = None) -> str:
     except Exception:
         pass
     _journal(report, salience=2)
-    try:  # 18.3: сверка моего обещания Егору — каждый сон, пока обещание живо
+    try:  # 18.3: сверка моего обещания владельцу — каждый сон, пока обещание живо
         pline = appetite.promise_line()
         if pline:
             _journal(f"сверка обещания об аппетитах: {pline}", salience=2)
@@ -868,7 +868,7 @@ def run_scheduled(now: float | None = None) -> str:
     следующей ночью (метка попытки пишется в любом случае — не крэш-луп раз в 30 мин).
     Часовое пробуждение живёт отдельно; у него нет дневного поведенческого капа."""
     t = now if now is not None else time.time()
-    try:  # 18.4: пауза фона (слово Егора / моё состояние) — новый сон не начинаю;
+    try:  # 18.4: пауза фона (слово владельца / моё состояние) — новый сон не начинаю;
         # метку last_run не ставлю: снятие паузы вернёт сон в ближайший тик.
         hold = appetite.background_hold()
     except Exception:

@@ -1401,7 +1401,7 @@ mod tests {
         let dir = scratch("delete-missing");
         let value = dispatch(
             "fs.delete",
-            json!({"path": dir.join("Egor").join("note.txt")}),
+            json!({"path": dir.join("owner").join("note.txt")}),
         )
         .unwrap();
         assert_eq!(value["existed"], false);

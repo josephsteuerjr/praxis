@@ -212,6 +212,9 @@ def main():
     restore_cmd.add_argument("--commit", required=True)
     sub.add_parser("prepare").add_argument("version")
     inputs = json.loads(LOCK.read_bytes())
+    ci = sub.add_parser("ci", help="Dispatch parallel native GitHub jobs")
+    ci.add_argument("--repo", required=True, metavar="OWNER/REPO")
+    ci.add_argument("--target", default="all", choices=["all", *inputs["targets"]])
     for command in ("source", "build", "publish"):
         cmd = sub.add_parser(command)
         cmd.add_argument("--out", type=Path, required=True)
@@ -224,7 +227,12 @@ def main():
             cmd.add_argument("--channel-url", default="http://127.0.0.1:8765")
             cmd.add_argument("--github-draft", metavar="OWNER/REPO")
     args = p.parse_args()
-    if args.cmd == "restore":
+    if args.cmd == "ci":
+        from ci import dispatch
+        with tempfile.TemporaryDirectory() as tmp:
+            source, commit = output_source(ROOT, Path(tmp))
+            dispatch(ROOT, source, commit, args.repo, args.target)
+    elif args.cmd == "restore":
         print(restore(ROOT, args.to, args.commit))
     elif args.cmd == "prepare":
         prepare(ROOT, args.version)

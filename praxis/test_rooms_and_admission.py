@@ -221,7 +221,7 @@ class TestManageRoom(Base):
         self.assertNotIn("-100600", rooms.allowed_chats())
 
     def test_room_management_is_hers_in_every_turn(self):
-        """Решение Егора 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
+        """Решение владельца 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
         names = _tools_for(False, full=True)
         self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Егора")
         self.assertIn("manage_room", _tools_for(False), "схема родная, не через h.hand")

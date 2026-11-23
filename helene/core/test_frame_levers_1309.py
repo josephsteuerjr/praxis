@@ -80,7 +80,7 @@ class TapeLevers(unittest.TestCase):
 class SummaryLever(unittest.TestCase):
     def test_summary_frame_chars_is_a_lever_with_a_wider_default(self):
         import agent
-        # 25.09: 12 000 → 40 000 (слово Егора; см. test_room_memory_2509)
+        # 25.09: 12 000 → 40 000 (слово владельца; см. test_room_memory_2509)
         self.assertEqual(agent.SUMMARY_FRAME_CHARS, 40000)
         with mock.patch.dict(os.environ, {"PRAXIS_SUMMARY_FRAME_CHARS": "3000"}):
             self.assertEqual(max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "40000") or 0)), 3000)

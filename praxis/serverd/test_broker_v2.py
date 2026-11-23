@@ -1319,7 +1319,7 @@ class _HostProcStand(unittest.TestCase):
 
 @LINUX_ONLY
 class RootDoesNotKillStrangersCase(_HostProcStand):
-    """[P0] Демон работает от рута рядом с praxis/mailbot/relay/ollama Егора.
+    """[P0] Демон работает от рута рядом с praxis/mailbot/relay/ollama владельца.
 
     Стенд ревью 27.07: три сценария, в каждом рут сносил ЧУЖУЮ безлидерную группу и
     докладывал «остановлен (SIGKILL)». Тождество должно доказываться, а недоказанное —
