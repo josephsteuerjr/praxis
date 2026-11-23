@@ -119,6 +119,25 @@ session.Host(Path(sys.argv[2]),controller_factory=FixtureController).run()
         self.addCleanup(client.close)
         return client
 
+    def test_reopen_after_primary_data_rebind_joins_the_same_owner(self):
+        self.start()
+        client = self.client()
+        generation = client.descriptor['generation']
+        client.close()
+        current = session.control_path(self.root)
+        cfg = self.root / 'helene.json'
+        write(cfg, {**read(cfg), 'tree': str(self.root / 'returned-data')})
+        self.assertEqual(session.control_path(self.root), current)
+        origin = 'http://127.0.0.1:39402'
+        reopened = session.attach(self.root, lambda *args: None, origin)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.descriptor['generation'], generation)
+        self.assertTrue(session.configured_origin(cfg, origin))
+        self.assertFalse(session.configured_origin(cfg, 'http://127.0.0.1:39403'))
+        reopened.close()
+        self.stop()
+        self.assertEqual(session.control_path(self.root), self.root / 'returned-data/memory/.control/desktop-session.json')
+
     def test_detach_rejoin_keeps_same_real_owner_and_effect_not_replayed(self):
         self.start();first=self.client()
         self.assertEqual(first.invoke('effect',{})['count'],1)

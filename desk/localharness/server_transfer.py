@@ -265,14 +265,18 @@ def digest(path):
 SERVER_ARCHES=('x86_64','aarch64')
 
 
-def make_program(root:Path,path:Path,*,arch:str='x86_64'):
+def make_program(root:Path,path:Path,*,arch:str='x86_64', profile_roots=None):
     allowed=('app','tree','server','requirements.txt','helene-build.json')
-    if any(not (root/name).exists() for name in allowed):raise TransferError('В поставке нет полного комплекта для сервера. Скачай полную Windows-поставку Hélène')
+    sources = {name: root / name for name in allowed}
+    if profile_roots is not None:
+        sources.update(tree=profile_roots['code'], app=profile_roots['application'])
+    if any(not source.exists() for source in sources.values()):raise TransferError('В поставке нет полного комплекта для сервера. Скачай полную Windows-поставку Hélène')
     def include(info):
         if info.issym() or info.islnk() or any(part in ('.git','__pycache__','node_modules','target') or part=='.env' or part.startswith('.env.') for part in Path(info.name).parts):return None
         return info
     with tarfile.open(path,'w:gz') as target:
-        for name in allowed:target.add(root/name,arcname=name,filter=include)
+        for name, source in sources.items():
+            target.add(source, arcname=name, filter=include)
         legacy=root/'helene-relay'
         # The legacy relay binary in a desktop delivery is x86-64 Linux. An ARM64 server
         # gets no foreign binary: the server image builds natively; only the ChatGPT
@@ -374,13 +378,16 @@ def _run(raw,config_path:Path,program:Path):
             archive_root=receipt_path(config_path).parent/'server-transfer-archives'/secrets.token_hex(12)
             archive_root.mkdir(parents=True,mode=0o700)
             projects=chosen_projects(config_path,raw.get('projects') or [])
-            archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'),preserve_phone_lease=True,projects=projects)['archive'])
+            archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'),preserve_phone_lease=True,projects=projects,program=program)['archive'])
             row={'id':secrets.token_hex(12),'destination':list(parameters(raw)),'fingerprint':checked['fingerprint'],
                  'archive':str(archive),'archive_sha':digest(archive),'version':expected,'phase':'archive','deployment':target}
             save_transfer(config_path,row)
     stage=directory+'.transfer-'+row['id']
     with tempfile.TemporaryDirectory(prefix='helene-server-kit-') as temporary:
-        kit=Path(temporary)/'program.tar.gz';make_program(program,kit,arch=checked.get('arch') or 'x86_64')
+        from localharness.carry_scope import program_roots
+        kit = Path(temporary) / 'program.tar.gz'
+        make_program(program, kit, arch=checked.get('arch') or 'x86_64',
+                     profile_roots=program_roots(config_path, config, program))
         signature=kit_signature(kit)
         if row.get('program_sha') and row['program_sha']!=signature:
             raise TransferError('Исходники программы изменились после начала переноса. Сохранённая серверная установка не заменена')

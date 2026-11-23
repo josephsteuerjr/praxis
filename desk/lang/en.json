@@ -4406,5 +4406,15 @@
   "bridge.unused": "Nothing goes through it yet: choose it below, in «Who goes through it».",
   "bridge.ready": "The bridge serves {p0}. Below, in «Who goes through it», choose it for Telegram, the relay or both, then save the settings.",
   "bridge.apply": "Apply",
-  "bridge.applied.relay": "The relay route is saved: the relay picks it up by itself, no restart needed."
+  "bridge.applied.relay": "The relay route is saved: the relay picks it up by itself, no restart needed.",
+  "server.return.private_copy_failed": "Could not create an independent copy of the code. Check links and access to the folder.",
+  "server.return.review_again": "To change shared code, enable Stop for the whole installation and review the profile list again.",
+  "server.return.private_ready": "Memory, code and projects have returned. You can now start this agent.",
+  "server.return.global_stop": "Stop is active for the whole installation. Use the installation controls to resume.",
+  "server.return.private_choice": "Profiles {agents} also use this code. By default, edits return to a separate copy for this agent.",
+  "server.return.shared_choice": "Apply edits to the code shared by the listed profiles (requires stopping all agents)",
+  "server.return.resume": "Start the returned agent",
+  "server.return.resumed": "The returned agent has started.",
+  "server.return.nested_data": "The code folder {path} contains agent data or settings. Choose a separate code folder.",
+  "server.return.invalid_receipt": "Could not verify the return of the selected agent."
 }

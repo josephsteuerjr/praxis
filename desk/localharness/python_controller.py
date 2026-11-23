@@ -111,12 +111,6 @@ class Controller:
             for agent in agents.roster(self.root):
                 changed=ensure_available(agent.config)
                 if changed:self.event('channel-port-changed',{'agent':agent.id,**changed})
-            if agents.read_config(self.root/'helene.json').get('mode') == 'remote':
-                self.stop=threading.Event()
-                from .windows_mcp_runtime import manager
-                manager(self).start()
-                self.sync_publishers()
-                return
             self.stop = threading.Event()
             self.commands = Queue()
             self.nonce = secrets.token_hex(16)
@@ -187,9 +181,6 @@ class Controller:
 
     def refresh(self):
         if not self.thread or not self.thread.is_alive():
-            self.sync_publishers()
-            return
-        if agents.read_config(self.root/'helene.json').get('mode')=='remote':
             self.sync_publishers()
             return
         identity = secrets.token_hex(16)

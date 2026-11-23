@@ -105,7 +105,7 @@ def run(evidence):
             browser = pw.chromium.launch(channel='msedge', headless=True)
             try:
                 forward(browser, origin, evidence, results)
-                for width, unfinished in ((390, False), (820, True)):
+                for width, unfinished in ((390, False), (820, True), (1024, False)):
                     config = copy.deepcopy(ProgramFixture.config)
                     config.update(mode='remote', base='https://agent.example.org', key='window-key')
                     context = browser.new_context(viewport={'width': width, 'height': 960}, reduced_motion='reduce')
@@ -136,16 +136,21 @@ def run(evidence):
                         action, raw = args['action'], json.loads(args.get('request') or '{}')
                         calls.append((action, raw))
                         if action == 'status':
-                            back = {'returned': False, 'phase': state['phase'],
+                            back = {'returned': bool(state.get('pending_resume')), 'pending_resume': bool(state.get('pending_resume')),
+                                    'phase': state['phase'],
                                     'projects': [{'path': PROJECTS[0], 'bring': True}, {'path': PROJECTS[1], 'bring': False}] if unfinished else [],
                                     'progress': {'done': 314572800, 'total': 734003200} if state['phase'] == 'snapshot' else None}
-                            return request.fulfill(json={'ok': True, 'pending': True, 'phase': 'ready', 'host': 'fixture.example.org',
+                            return request.fulfill(json={'ok': True, 'pending': True, 'config_path': 'C:/Fixture/helene.json',
+                                                         'phase': 'ready', 'host': 'fixture.example.org',
                                                          'login': 'root', 'ssh_port': 22, 'message': '',
                                                          'deployment': {'directory': '/opt/helene', 'project': 'helene', 'container': 'helene', 'port': 8094},
                                                          'return': back})
+                        if action == 'transfer-scope':
+                            return request.fulfill(json=LOCAL)
                         if action == 'return-scope':
                             assert raw['expected_config'] == 'C:/Fixture/helene.json' and raw['host'] == 'fixture.example.org'
-                            return request.fulfill(json=SCOPE)
+                            return request.fulfill(json={**SCOPE, 'code_scope': {
+                                'agents': ['peer'], 'binding': 'reviewed-code', 'stopped': width == 1024}})
                         if action == 'return':
                             state['returns'] += 1
                             if not unfinished and state['returns'] == 1:
@@ -153,7 +158,10 @@ def run(evidence):
                                 return request.fulfill(json={'ok': False, 'local_data_kept': True,
                                                              'message': 'Связь с сервером оборвалась при скачивании. Повтори возврат: загрузка продолжится с места обрыва.'})
                             state['phase'] = None
-                            return request.fulfill(json=DONE)
+                            return request.fulfill(json={**DONE, 'restart': 'profile' if width == 390 else 'application'})
+                        if action == 'resume-returned':
+                            assert raw == {'expected_config': 'C:/Fixture/helene.json'}
+                            return request.fulfill(json={'ok': True, 'agent_id': 'main'})
                         raise AssertionError((command, action))
                     page.route('**/*', route)
                     try:
@@ -190,6 +198,10 @@ def run(evidence):
                             screen.get_by_text('Память, навыки и рабочая папка — файлов 5120', exact=False).wait_for()
                             screen.get_by_text('проект привязан к другому устройству', exact=False).wait_for(state='attached')
                             assert [row for row in calls if row[0] in ('return',)] == []
+                            scope = screen.get_by_role('checkbox', name='Применить правки к общему коду', exact=False)
+                            assert not scope.is_checked() and scope.is_enabled() == (width == 1024)
+                            if width == 1024:
+                                scope.check()
                             screen.get_by_role('switch', name=PROJECTS[1], exact=True).click()
                             screen.scroll_into_view_if_needed()
                             page.screenshot(path=str(evidence / f'review-{width}.png'))
@@ -197,26 +209,48 @@ def run(evidence):
                             screen.get_by_text('Связь с сервером оборвалась', exact=False).wait_for()
                             sent = [row for row in calls if row[0] == 'return'][-1][1]
                             assert sent['projects'] == [{'path': PROJECTS[0], 'bring': True}, {'path': PROJECTS[1], 'bring': False}]
+                            assert sent['expected_config'] == 'C:/Fixture/helene.json'
+                            assert sent['shared_code'] == ('reviewed-code' if width == 1024 else None)
+                            assert scope.is_enabled() == (width == 1024)
                             assert screen.get_by_role('button', name='Отменить незавершённый возврат', exact=True).is_visible()
                             page.screenshot(path=str(evidence / f'interrupted-{width}.png'))
                             screen.get_by_role('button', name='Продолжить возврат', exact=True).click()
                         screen.get_by_text('правок агента в коде: 3', exact=False).wait_for()
-                        # MiniApp presentation: the computer's programme window performs the restart.
-                        restart = screen.get_by_role('button', name='Перезапустить программу на компьютере', exact=True)
+                        profile_only = width == 390
+                        label = 'Запустить вернувшегося агента' if profile_only else 'Перезапустить программу на компьютере'
+                        if profile_only:
+                            screen.get_by_role('button', name=label, exact=True).wait_for()
+                            # Reopen after the local mode switch, before explicitly starting the returned profile.
+                            state['pending_resume'] = True
+                            config.update(mode='local')
+                            page.reload(wait_until='networkidle')
+                            page.locator('#toggle-rail').click()
+                            page.locator('[data-view="settings"]').click()
+                            page.get_by_role('heading', name='Имена', exact=True).first.wait_for()
+                            tab = page.get_by_role('tab', name='Программа', exact=True)
+                            if tab.count():
+                                tab.click()
+                            placement.get_by_role('button', name='Открыть управление сервером', exact=True).click()
+                            placement.get_by_role('button', name=label, exact=True).click()
+                        restart = screen.get_by_role('button', name=label, exact=True)
                         restart.wait_for()
                         page.screenshot(path=str(evidence / f'done-{width}.png'))
                         restart.click()
                         for _ in range(50):
-                            if restarts:
+                            if restarts or any(action == 'resume-returned' for action, _ in calls):
                                 break
                             page.wait_for_timeout(100)
-                        assert restarts == [{'full': True}], restarts
+                        if profile_only:
+                            screen.get_by_text('Вернувшийся агент запущен.', exact=True).wait_for()
+                            assert not restarts
+                        else:
+                            assert restarts == [{'full': True}], restarts
                         assert not screen.get_by_text('Не получилось.', exact=True).count()
                         assert not page.evaluate('document.documentElement.scrollWidth>innerWidth')
                         assert not errors, errors
                         results.append({'width': width, 'unfinished_reopen': unfinished, 'review_before_stop': not unfinished,
                                         'project_decisions_sent': True, 'interrupted_then_continued': not unfinished,
-                                        'computer_restart_named': True, 'errors': errors})
+                                        'profile_only_resume': profile_only, 'applied_shared_choice': width == 1024, 'errors': errors})
                     except BaseException:
                         page.screenshot(path=str(evidence / f'failure-{width}.png'))
                         (evidence / f'failure-{width}.txt').write_text(page.locator('body').inner_text(), encoding='utf8')

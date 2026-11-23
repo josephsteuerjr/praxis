@@ -4406,5 +4406,15 @@
   "bridge.unused": "Rien ne passe encore par lui : choisissez-le ci-dessous, dans « Qui passe par lui ».",
   "bridge.ready": "Le pont sert {p0}. Ci-dessous, dans « Qui passe par lui », choisissez-le pour Telegram, le relais ou les deux, puis enregistrez les réglages.",
   "bridge.apply": "Appliquer",
-  "bridge.applied.relay": "L’itinéraire du relais est enregistré : le relais le prend en compte de lui-même, sans redémarrage."
+  "bridge.applied.relay": "L’itinéraire du relais est enregistré : le relais le prend en compte de lui-même, sans redémarrage.",
+  "server.return.private_copy_failed": "Impossible de créer une copie indépendante du code. Vérifiez les liens et les droits sur le dossier.",
+  "server.return.review_again": "Pour modifier le code partagé, arrêtez tous les agents avec Stop et vérifiez de nouveau la liste des profils.",
+  "server.return.private_ready": "La mémoire, le code et les projets ont été rapatriés. Vous pouvez démarrer cet agent.",
+  "server.return.global_stop": "Tous les agents sont arrêtés. Utilisez les commandes de l’installation pour reprendre.",
+  "server.return.private_choice": "Ces profils utilisent aussi ce code : {agents}. Par défaut, les modifications sont rapatriées dans une copie propre à cet agent.",
+  "server.return.shared_choice": "Appliquer les modifications au code partagé par les profils indiqués (nécessite l’arrêt de tous les agents)",
+  "server.return.resume": "Démarrer l’agent rapatrié",
+  "server.return.resumed": "L’agent rapatrié a démarré.",
+  "server.return.nested_data": "Le dossier de code {path} contient les données ou les paramètres de l’agent. Choisissez un dossier de code distinct.",
+  "server.return.invalid_receipt": "Impossible de confirmer le retour de l’agent sélectionné."
 }

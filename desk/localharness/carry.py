@@ -66,7 +66,7 @@ CONFIG_NAME = "helene.json"
 #: Блоки конфига, которые едут с агентом (архив побеждает при импорте).
 AGENT_KEYS = ("agent", "owner", "model", "telegram", "relay", "env", "update", "voice")
 #: Блоки конфига, которые остаются за местом (архив их не трогает).
-HOST_KEYS = ("mode", "python", "app", "runner", "tree", "code", "port", "agent_mode",
+HOST_KEYS = ("return_pending", "mode", "python", "app", "runner", "tree", "code", "port", "agent_mode",
              "sandbox", "service", "computer", "phone", "installed", "setup_complete",
              "read_dotenv", "base", "key")
 
@@ -332,25 +332,28 @@ def _code_base(cc, root: Path, version: str, work: Path):
     return None, prints, ("prints" if prints else "")
 
 
-def _export_code(zf: zipfile.ZipFile, root: Path, cfg: dict) -> dict:
+def _export_code(zf: zipfile.ZipFile, config_path: Path, cfg: dict, program: Path) -> dict:
     """Правки агента в `tree/` и `app/` — в архив. -> строка для паспорта."""
     cc = _codecarry()
     if cc is None:
         return {"note": "переносчика правок кода нет в этой установке — код не поехал"}
-    if not (root / "tree" / "agent.py").is_file():
+    from localharness.carry_scope import program_roots
+    roots = program_roots(config_path, cfg, program)
+    directories = {"tree": roots["code"], "app": roots["application"]}
+    if not (directories["tree"] / "agent.py").is_file():
         return {"note": "кода агента рядом с настройками нет — везти нечего"}
-    version = _install_version(root, cfg)
+    version = _install_version(program, cfg)
     work = Path(tempfile.mkdtemp(prefix="helene-carry-code-"))
     try:
-        base_root, prints, base_kind = _code_base(cc, root, version, work)
-        manifest = {"version": version, "flavor": cc.flavor_of(root), "base": base_kind,
+        base_root, prints, base_kind = _code_base(cc, program, version, work)
+        manifest = {"version": version, "flavor": cc.flavor_of(program), "base": base_kind,
                     "edited": [], "prints": {}, "whole": False}
         if not base_kind:
             # Сравнить не с чем — весь прежний код: пусть агент разберёт сам (как на сервере).
             manifest["whole"] = True
             for name in cc.CODE_DIRS:
-                for rel, kind in cc.snapshot(root / name, tuple(cc.DESK_SKIP[name])).items():
-                    blob = cc.read_plain(root / name / rel) if kind[0] == "file" else None
+                for rel, kind in cc.snapshot(directories[name], tuple(cc.DESK_SKIP[name])).items():
+                    blob = cc.read_plain(directories[name] / rel) if kind[0] == "file" else None
                     if blob is not None:
                         zf.writestr(f"{CODE_PREFIX}whole/{name}/{rel}", blob)
             zf.writestr(CODE_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1))
@@ -359,10 +362,10 @@ def _export_code(zf: zipfile.ZipFile, root: Path, cfg: dict) -> dict:
             skip = tuple(cc.DESK_SKIP[name])
             snap = cc.hashes_snapshot(prints, name) if base_root is None else None
             base_dir = base_root / name if base_root is not None else None
-            for rel in cc.code_edits(base_dir, root / name, skip=skip, base_snap=snap):
+            for rel in cc.code_edits(base_dir, directories[name], skip=skip, base_snap=snap):
                 path = f"{name}/{rel}"
                 manifest["edited"].append(path)
-                mine = cc.read_plain(root / name / rel)
+                mine = cc.read_plain(directories[name] / rel)
                 if mine is not None:
                     zf.writestr(f"{CODE_PREFIX}mine/{path}", mine)
                 if base_dir is not None:
@@ -479,7 +482,7 @@ def _portable_git(scan, config_path, cfg, temporary):
 
 
 def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: bool = False,
-           projects=()) -> dict:
+           projects=(), program: Path | None = None) -> dict:
     """Собрать архив переноса. -> паспорт (он же лежит в архиве).
 
     `projects` — внешние папки, которые владелец решил взять с агентом: они едут внутрь
@@ -574,7 +577,7 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
             passport["voice_samples"] = voice_files
             passport["files"] = files
             passport["bytes"] = total
-            passport["code"] = _export_code(zf, config_path.parent, cfg)
+            passport["code"] = _export_code(zf, config_path, cfg, program or config_path.parent)
             zf.writestr(CONFIG_NAME, json.dumps(exported_cfg, ensure_ascii=False, indent=2) + "\n")
             zf.writestr(PASSPORT, json.dumps(passport, ensure_ascii=False, indent=2) + "\n")
         # Reopen the persisted central directory: Windows ZipInfo.from_file

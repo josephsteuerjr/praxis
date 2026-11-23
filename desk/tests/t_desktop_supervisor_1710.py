@@ -276,6 +276,15 @@ class Policy(unittest.TestCase):
             self.assertEqual(set(_plans(base / "helene.json", session_host=False)), {"main"})
             self.assertEqual(set(_plans(base / "helene.json", session_host=False,
                                          desktop_roster=True)), {"main", "peer"})
+            main = base / "helene.json"
+            initial = json.loads(main.read_text())
+            for held in ({"mode": "remote"}, {"return_pending": "receipt"}):
+                main.write_text(json.dumps({**initial, **held}), encoding="utf-8")
+                self.assertEqual(set(_plans(main, session_host=False, desktop_roster=True)), {"peer"})
+                config.write_text(json.dumps({**data, "tree": "../../data"}), encoding="utf-8")
+                self.assertEqual(_plans(main, session_host=False, desktop_roster=True), {})
+                config.write_text(json.dumps(data), encoding="utf-8")
+            main.write_text(json.dumps(initial), encoding="utf-8")
             data["mode"] = "remote"
             config.write_text(json.dumps(data), encoding="utf-8")
             self.assertEqual(set(_plans(base / "helene.json", session_host=False,desktop_roster=True)),{'main'})

@@ -22038,5 +22038,55 @@
     "en": "250e34aa",
     "fr": "250e34aa",
     "zh": "250e34aa"
+  },
+  "server.return.private_copy_failed": {
+    "en": "73c0483a",
+    "fr": "73c0483a",
+    "zh": "73c0483a"
+  },
+  "server.return.review_again": {
+    "en": "4a47432b",
+    "fr": "4a47432b",
+    "zh": "4a47432b"
+  },
+  "server.return.private_ready": {
+    "en": "5cb4c23b",
+    "fr": "5cb4c23b",
+    "zh": "5cb4c23b"
+  },
+  "server.return.global_stop": {
+    "en": "f7c8c585",
+    "fr": "f7c8c585",
+    "zh": "f7c8c585"
+  },
+  "server.return.private_choice": {
+    "en": "764551ae",
+    "fr": "764551ae",
+    "zh": "764551ae"
+  },
+  "server.return.shared_choice": {
+    "en": "f06e922b",
+    "fr": "f06e922b",
+    "zh": "f06e922b"
+  },
+  "server.return.resume": {
+    "en": "c1d372ae",
+    "fr": "c1d372ae",
+    "zh": "c1d372ae"
+  },
+  "server.return.resumed": {
+    "en": "bec9aee6",
+    "fr": "bec9aee6",
+    "zh": "bec9aee6"
+  },
+  "server.return.nested_data": {
+    "en": "4e566ea4",
+    "fr": "4e566ea4",
+    "zh": "4e566ea4"
+  },
+  "server.return.invalid_receipt": {
+    "en": "223fd6ed",
+    "fr": "223fd6ed",
+    "zh": "223fd6ed"
   }
 }

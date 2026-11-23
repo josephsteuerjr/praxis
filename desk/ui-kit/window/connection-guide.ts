@@ -180,7 +180,11 @@ function drawServer(host:HTMLElement,session:Session) {
   const back=button(uiText("ui.ui.kit.window.connection.guide.91672be89e"),"quiet",()=>{if(!transferBusy)drawReturn(body);});
   back.hidden=!session.remote;buttons.append(back);
   void shell<{pending?:boolean;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"})
-    .then(result=>{if(result.pending&&!result.return?.returned)back.hidden=false;}).catch(()=>{});
+    .then(result=>{
+      if(result.return?.pending_resume){
+        back.textContent=uiText("server.return.resume");back.hidden=false;
+      }else if(result.pending&&!result.return?.returned)back.hidden=false;
+    }).catch(()=>{});
   if(session.remote)buttons.append(button(uiText("ui.ui.kit.window.connection.guide.b5f7920af5"),"quiet",async()=>{
     const out=el("p","receipt");body.replaceChildren(out);
     try{
@@ -330,10 +334,10 @@ function drawNewServer(host:HTMLElement) {
 // download, a new home beside the retained local copy, and one live copy. Resume stays separate.
 type ReturnRoot={kind:string;path:string;files:number;bytes:number;git:Array<{path:string;kind:string}>;
   links:Array<{path:string;target:string;error:string}>;errors:unknown[];special:unknown[];empty_directories:number};
-type ReturnScope={ok:boolean;message?:string;version?:string;local_version?:string;compatible?:boolean;
+type ReturnScope={code_scope?:{agents:string[];binding:string;stopped:boolean};ok:boolean;message?:string;version?:string;local_version?:string;compatible?:boolean;
   scope?:{roots:ReturnRoot[];projects:Array<{path:string;via:string[]}>;unavailable:Array<{path:string;via?:string;reason:string}>};
   host_exclusions?:Array<{path:string;reason:string}>};
-type ReturnStatus={returned?:boolean;phase?:string|null;progress?:{done:number;total:number}|null;projects?:Array<{path:string;bring:boolean}>};
+type ReturnStatus={pending_resume?:boolean;returned?:boolean;phase?:string|null;progress?:{done:number;total:number}|null;projects?:Array<{path:string;bring:boolean}>};
 const RETURN_PHASES:Record<string,string>={get started() { return uiText("ui.ui.kit.window.connection.guide.713c87da71"); },get fenced() { return uiText("ui.ui.kit.window.connection.guide.298ea4cf21"); },
   get snapshot() { return uiText("ui.ui.kit.window.connection.guide.39eb6fff9a"); },get downloaded() { return uiText("ui.ui.kit.window.connection.guide.e18d08d5a9"); },
   get staged() { return uiText("ui.ui.kit.window.connection.guide.0846aecb00"); },get activating() { return uiText("ui.ui.kit.window.connection.guide.429b1bf7ee"); }};
@@ -365,6 +369,7 @@ function drawReturn(host:HTMLElement) {
   const data:Record<string,unknown>={login:"root",port:22,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
   let decisions:Array<{path:string;bring:boolean}>=[];let reviewed=false;let busy=false;let continuing=false;
   const out=el("p","receipt");const review=el("div","return-review");const live=el("p","receipt");live.setAttribute("aria-live","polite");
+  let reviewedConfig="", sharedCode:string|null=null, resumeProfile=false;
   const changed=()=>{if(continuing)return;reviewed=false;start.disabled=true;review.replaceChildren();};
   const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
   const deployment=data.deployment as Record<string,unknown>;
@@ -372,19 +377,26 @@ function drawReturn(host:HTMLElement) {
   const start=button(uiText("ui.ui.kit.window.connection.guide.dfffca24a0"),"primary",()=>void bring());start.disabled=true;
   const restartApp=button(uiText("ui.ui.kit.window.connection.guide.a489a6740a"),"primary",async()=>{
     restartApp.disabled=true;
-    try{await shell("restart_self",{full:true});}catch(error){receipt(out,humanError(error).text,true);restartApp.disabled=false;}
+    try{
+      if(resumeProfile){
+        const result=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"resume-returned",request:JSON.stringify({expected_config:reviewedConfig})});
+        if(!result.ok)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.d6584be0b8"));
+        restartApp.hidden=true;
+        receipt(out,uiText("server.return.resumed"));
+      }else await shell("restart_self",{full:true});
+    }catch(error){receipt(out,humanError(error).text,true);restartApp.disabled=false;}
   });restartApp.hidden=true;
   const cancel=button(uiText("ui.ui.kit.window.connection.guide.e910269f8a"),"quiet",async()=>{
     if(busy)return;busy=true;cancel.disabled=true;
     try{
       const source=await shell<Loaded>("config_load");
-      const reply=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"return-cancel",request:JSON.stringify({expected_config:source.path})});
+      const reply=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"return-cancel",request:JSON.stringify({expected_config:reviewedConfig||source.path})});
       if(!reply.ok)throw new Error(reply.message||uiText("ui.ui.kit.window.connection.guide.371c99ad6e"));
       continuing=false;cancel.hidden=true;start.textContent=uiText("ui.ui.kit.window.connection.guide.dfffca24a0");reviewed=false;start.disabled=true;
       receipt(out,reply.message||uiText("ui.ui.kit.window.connection.guide.6d03b45dc4"));
     }catch(error){receipt(out,humanError(error).text,true);}finally{busy=false;cancel.disabled=false;}
   });cancel.hidden=true;
-  function lock(on:boolean){host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>{if(node!==restartApp)node.disabled=on;});}
+  function lock(on:boolean){host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>{if(node!==restartApp)node.disabled=on||node.dataset.requiresStop==="true";});}
   async function inspect() {
     if(busy||transferBusy)return;busy=true;check.disabled=true;
     receipt(out,uiText("ui.ui.kit.window.connection.guide.c3604f658c"));
@@ -392,12 +404,21 @@ function drawReturn(host:HTMLElement) {
       const source=await shell<Loaded>("config_load");
       const result=await shell<ReturnScope>("server_transfer",{action:"return-scope",request:JSON.stringify({...data,expected_config:source.path})});
       if(!result.ok||!result.scope)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.83972d185e"));
+      reviewedConfig=source.path;sharedCode=null;
       decisions=result.scope.projects.map(item=>({path:item.path,bring:true}));
       const version=el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.5542171c47")+(result.version||uiText("ui.ui.kit.window.connection.guide.8d699d8c65"))+uiText("ui.ui.kit.window.connection.guide.4b000be118")+(result.local_version||uiText("ui.ui.kit.window.connection.guide.8d699d8c65"))+"."
         +(result.compatible===false?uiText("ui.ui.kit.window.connection.guide.ed8962d012"):""));
       review.replaceChildren(el("h5","",uiText("ui.ui.kit.window.connection.guide.be7ddb0d9a")),...scopeReview(result,decisions,
         uiText("ui.ui.kit.window.connection.guide.4b1ab907b9"),
         uiText("ui.ui.kit.window.connection.guide.7ddaa4ce64")),version);
+      const scope=result.code_scope;
+      if(scope?.agents.length){
+        review.append(el("p","field-hint",uiText("server.return.private_choice",{agents:scope.agents.join(", ")})));
+        const label=el("label","field-hint");const apply=document.createElement("input");
+        apply.type="checkbox";apply.disabled=!scope.stopped;apply.dataset.requiresStop=String(!scope.stopped);
+        apply.addEventListener("change",()=>{sharedCode=apply.checked?scope.binding:null;});
+        label.append(apply,document.createTextNode(uiText("server.return.shared_choice")));review.append(label);
+      }
       reviewed=true;start.disabled=false;out.textContent="";
     }catch(error){reviewed=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
@@ -411,8 +432,8 @@ function drawReturn(host:HTMLElement) {
     }).catch(()=>{}),1500);
     try{
       const source=await shell<Loaded>("config_load");
-      const result=await shell<{ok:boolean;message?:string;code?:{summary?:string;folder?:string};previous_data?:string}>("server_transfer",
-        {action:"return",request:JSON.stringify({...data,projects:decisions,expected_config:source.path})});
+      const result=await shell<{ok:boolean;message?:string;restart?:string;code?:{summary?:string;folder?:string};previous_data?:string}>("server_transfer",
+        {action:"return",request:JSON.stringify({...data,projects:decisions,...(reviewed?{shared_code:sharedCode}:{}),expected_config:reviewedConfig||source.path})});
       if(!result.ok)throw new Error(result.message||uiText("ui.ui.kit.window.connection.guide.d6584be0b8"));
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
       const code=result.code?.summary?uiText("ui.ui.kit.window.connection.guide.dec37b12c9")+result.code.summary+(result.code.folder?uiText("ui.ui.kit.window.connection.guide.1ec1ee99f1")+result.code.folder+")":"")+".":"";
@@ -420,6 +441,8 @@ function drawReturn(host:HTMLElement) {
       live.textContent="";cancel.hidden=true;start.hidden=true;check.hidden=true;
       // From the MiniApp the computer's own programme window performs the restart.
       if(electron?.presentation==="miniapp")restartApp.textContent=uiText("ui.ui.kit.window.connection.guide.6c73988e0b");
+      resumeProfile=result.restart==="profile";
+      if(resumeProfile){reviewedConfig=reviewedConfig||source.path;restartApp.textContent=uiText("server.return.resume");}
       restartApp.hidden=false;
     }catch(error){
       const text=humanError(error).text;
@@ -431,7 +454,7 @@ function drawReturn(host:HTMLElement) {
   host.replaceChildren(el("h4","",uiText("ui.ui.kit.window.connection.guide.543a04f3bc")),
     el("p","field-hint",uiText("ui.ui.kit.window.connection.guide.2af1c56579")),
     grid,advanced,review,actions,live,out);
-  void shell<{pending:boolean;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
+  void shell<{pending:boolean;config_path:string;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
     if(!host.isConnected)return;
     if(result.host&&!data.host){
       data.host=result.host;data.login=result.login||"root";data.port=result.ssh_port||22;
@@ -439,7 +462,13 @@ function drawReturn(host:HTMLElement) {
       if(result.deployment)Object.assign(deployment,result.deployment);
       const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
     }
-    if(result.return?.returned){receipt(out,uiText("ui.ui.kit.window.connection.guide.c128e7fa7d"));start.hidden=true;check.hidden=true;return;}
+    if(result.return?.phase||result.return?.returned)reviewedConfig=result.config_path;
+    if(result.return?.returned){
+      if(result.return.pending_resume){
+        resumeProfile=true;
+        restartApp.textContent=uiText("server.return.resume");restartApp.hidden=false;
+      }
+      receipt(out,uiText("ui.ui.kit.window.connection.guide.c128e7fa7d"));start.hidden=true;check.hidden=true;return;}
     if(result.return?.phase){
       continuing=true;decisions=result.return.projects||[];start.textContent=uiText("ui.ui.kit.window.connection.guide.9f7c63856d");start.disabled=false;cancel.hidden=false;
       receipt(out,uiText("ui.ui.kit.window.connection.guide.fb943adbd0")+(RETURN_PHASES[result.return.phase]||result.return.phase).toLowerCase()+uiText("ui.ui.kit.window.connection.guide.71c7079dd3"));

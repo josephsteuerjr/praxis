@@ -137,6 +137,9 @@ def invoke(owner, command, args):
             from . import owner_resume,startup_diagnostics
             try:
                 removed=owner_resume.clear(cancelled=lambda:getattr(owner,'exiting',False))
+                if cfg.get('return_pending'):
+                    from . import server_return
+                    server_return.release_pending(agent.config, owner.root)
                 deadline=time.monotonic()+600
                 owner.start()
                 proof=owner.readiness(timeout=600,require_runner=True,
@@ -230,18 +233,31 @@ def invoke(owner, command, args):
         if action=='status':
             from . import server_return
             # Polled while a return downloads: progress lives in the durable receipt.
-            return {**server_transfer.status(agent.config),'return':server_return.status(agent.config)}
+            return {**server_transfer.status(agent.config), 'config_path': str(agent.config.resolve()),
+                    'return': server_return.status(agent.config)}
         if action=='locate':return {'ok':True,'base':remote_locator.locate(cfg)}
         if action=='telegram-check':return server_transfer.check_telegram(cfg)
         if action=='transfer-scope':return server_transfer.transfer_scope(agent.config)
-        if action in ('run','recover-local','return-scope','return','return-cancel'):
+        if action in ('run','recover-local','return-scope','return','return-cancel','resume-returned'):
             from . import server_return
             if Path(str(payload.get('expected_config',''))).resolve()!=agent.config.resolve():
                 raise ValueError('Selected agent changed; reload server transfer')
-            if owner.status().get('agents',{}).get(agent.id,{}).get('roles'):
+            if action != 'resume-returned' and owner.status().get('agents',{}).get(agent.id,{}).get('roles'):
                 raise RuntimeError('Stop the local agent before server transfer')
             if not owner.transfer_lock.acquire(blocking=False):raise RuntimeError('Server transfer already in progress')
             try:
+                if action=='resume-returned':
+                    from . import owner_stop
+                    row = server_transfer.saved_transfer(agent.config)
+                    if row.get('phase') != 'server-stopped' or not row.get('returned') or cfg.get('mode') != 'local':
+                        raise server_return.ReturnError(server_return._caption(owner.root, 'invalid_receipt'))
+                    if owner_stop.stopped():
+                        raise server_return.ReturnError(server_return._caption(owner.root, 'global_stop'))
+                    server_return.release_pending(agent.config, owner.root)
+                    owner.start()
+                    owner.refresh()
+                    owner.readiness(agent=agent, require_runner=True, timeout=120)
+                    return {'ok': True, 'agent_id': agent.id}
                 if action=='run':return server_transfer.run(payload,agent.config,owner.root)
                 if action=='recover-local':return server_transfer.recover_local(payload,agent.config)
                 if action=='return-scope':return server_return.scope(payload,agent.config,owner.root)
@@ -295,7 +311,7 @@ def invoke(owner, command, args):
         raise ValueError('Unknown server install action')
     if command=='carry_export':
         from . import carry
-        return carry.export(agent.config)['archive']
+        return carry.export(agent.config, program=owner.root)['archive']
     if command=='probe_model':
         from .model_catalog import read, relay_revision
         base, key, framework = args['baseUrl'], args.get('key', ''), args.get('framework', 'openai')

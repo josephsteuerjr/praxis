@@ -83,6 +83,22 @@ def configured_roots(config_path,cfg):
             'application':at(str(cfg.get('app') or 'app/deskapp.py')).parent}
 
 
+def program_roots(config_path, cfg, program, *, for_copy=True):
+    """Older standalone configs can omit the paths to a separate installed programme."""
+    roots = configured_roots(config_path, cfg)
+    for field, kind, default in (('code', 'code', 'tree'), ('app', 'application', 'app')):
+        if not cfg.get(field) and not roots[kind].is_dir():
+            roots[kind] = Path(program).resolve() / default
+    if not for_copy:
+        return roots
+    for source in (roots['code'], roots['application']):
+        if roots['data'].is_relative_to(source) or Path(config_path).resolve().is_relative_to(source):
+            from localharness import ui_language
+            raise ValueError(ui_language.text('server.return.nested_data', ui_language.for_root(Path(program)),
+                                              {'path': str(source)}))
+    return roots
+
+
 def discover(config_path):
     """Find actual configured roots plus local project candidates, without copying."""
     config_path=Path(config_path).resolve();cfg=read_config(config_path)

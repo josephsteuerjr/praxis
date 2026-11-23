@@ -4406,5 +4406,15 @@
   "bridge.unused": "目前还没有任何连接使用它：请在下方“谁通过它连接”中选择它。",
   "bridge.ready": "桥接已在 {p0} 提供代理。请在下方“谁通过它连接”中为 Telegram、中继或两者选择它，然后保存设置。",
   "bridge.apply": "应用",
-  "bridge.applied.relay": "中继路线已保存：中继会自动采用，无需重启。"
+  "bridge.applied.relay": "中继路线已保存：中继会自动采用，无需重启。",
+  "server.return.private_copy_failed": "无法创建独立的代码副本。请检查目录中的链接和访问权限。",
+  "server.return.review_again": "要修改共享代码，请先用 Stop 停止所有智能体，再重新核对配置列表。",
+  "server.return.private_ready": "记忆、代码和项目已返回。现在可以单独启动此智能体。",
+  "server.return.global_stop": "整套安装已停止。请通过安装管理界面恢复运行。",
+  "server.return.private_choice": "以下配置也使用这份代码：{agents}。默认将修改恢复到此智能体的独立副本。",
+  "server.return.shared_choice": "将修改应用到所列配置的共享代码（需要先停止所有智能体）",
+  "server.return.resume": "启动已返回的智能体",
+  "server.return.resumed": "已返回的智能体已启动。",
+  "server.return.nested_data": "代码目录 {path} 包含智能体的数据或配置。请选择独立的代码目录。",
+  "server.return.invalid_receipt": "无法确认所选智能体已返回。"
 }

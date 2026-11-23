@@ -36,7 +36,23 @@ def control_path(root):
     primary = agents.find(Path(root), agents.BASE_ID)
     if primary is None:
         raise ValueError('Select an existing installation/profile before starting its host')
-    return primary.tree.resolve() / 'memory/.control/desktop-session.json'
+    current = primary.tree.resolve() / 'memory/.control/desktop-session.json'
+    from .program_state import directory
+    hint = read(directory(root, 'desktop-supervisor', create=False) / 'session-location.json')
+    if hint.get('tree') and hint['tree'] != str(primary.tree.resolve()):
+        # A server return may rebind main.tree while this installation still
+        # owns other runners. Rejoin only the exact observed host generation.
+        tree = Path(hint['tree'])
+        previous = tree / 'memory/.control/desktop-session.json'
+        descriptor = read(previous)
+        if (tree.is_absolute() and descriptor.get('format') == FORMAT
+                and descriptor.get('program') == str(Path(root).resolve())
+                and descriptor.get('tree') == str(tree)
+                and all(descriptor.get(key) == hint.get(key) for key in ('pid', 'birth', 'generation'))
+                and descriptor.get('state') in ('starting', 'running', 'owner-stopped')
+                and process_state(descriptor) in ('alive', 'unknown')):
+            return previous
+    return current
 
 
 def process_state(value):
@@ -93,10 +109,9 @@ def configured_origin(config, origin):
             descriptor=observer_descriptor(root,package,identity,tree=selected)
         except (OSError,ValueError,TypeError):return False
         return _registered_origin(descriptor,selected,origin)
-    value = read(control_path(root))
-    if value.get('program') != str(root):
-        return False
-    return allowed_origin(primary.tree, origin)
+    path = control_path(root)
+    value = read(path)
+    return value.get('program') == str(root) and _registered_origin(value, path.parents[2], origin)
 
 
 def _rpc(descriptor, action, args=None, *, timeout=30):
@@ -621,6 +636,10 @@ class Host:
             if self.migration_request is None:
                 self.owner.start()
             self.publish('running')
+            if self.migration_request is None:
+                from .program_state import directory
+                location = directory(self.root, 'desktop-supervisor') / 'session-location.json'
+                write(location, {key: self.descriptor[key] for key in ('tree', 'pid', 'birth', 'generation')})
             server = threading.Thread(target=self.server.serve_forever, name='helene-session-control', daemon=True)
             server.start()
             if self.migration_request is None:
