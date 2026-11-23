@@ -11,7 +11,10 @@ import datetime as dt
 import json
 import os
 import zipfile
-from .windows_paths import Path, walk
+if __package__:
+    from .windows_paths import Path, walk
+else:
+    from windows_paths import Path, walk
 
 ESSENTIAL = ("soul", "memory", "dossiers", "graph", "state", "workspace/inbox")
 SKIP = {"__pycache__", "node_modules", ".git", ".venv", ".cache", "cache",

@@ -53,6 +53,35 @@ class BacklogRecovery(unittest.TestCase):
         obj.owner_control.assert_called_once()
         self.assertIsNone(obj.pop_pending())
 
+    def test_addressed_reply_survives_temporary_disconnect_once(self):
+        obj=self.transport()
+        now=[10000.]
+        calls=[]
+        def api(method, **kwargs):
+            if method=='getMe':return {'id':99,'username':'lira_bot'}
+            self.assertEqual(method,'getUpdates')
+            calls.append(kwargs.get('offset'))
+            if len(calls)==1:return []
+            if len(calls)==2:raise TimeoutError()
+            obj._stop.set()
+            return [dict(update_id=i,message=self.message('Ответ на вопрос',message_id=i,
+                        date=stamp,reply_to_message={'from':{'id':99},'message_id':35}))
+                    for i,stamp in ((70,9000),(71,10005))]
+        received=[]
+        ingest=obj._ingest
+        def record(update):
+            received.append((update['update_id'],bool(update.get('_catchup'))))
+            ingest(update)
+        obj._ingest=record
+        obj.client.call=api
+        with mock.patch.object(botapi.time,'time',side_effect=lambda:now[0]), \
+                mock.patch.object(obj,'_wait_connection_retry',side_effect=lambda delay:now.__setitem__(0,10104.)):
+            obj._poll_forever()
+        self.assertEqual(received,[(70,True),(71,False)])
+        self.assertEqual(obj._load_offset(),72)
+        self.assertEqual(obj.pop_pending(),'-100777')
+        self.assertIsNone(obj.pop_pending())
+
     def test_reconnect_poll_archives_old_before_advancing_offset(self):
         obj = self.transport()
         old = self.message('Лира, пропущено', message_id=37)

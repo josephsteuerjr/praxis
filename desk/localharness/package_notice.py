@@ -3,7 +3,10 @@ import hashlib
 import json
 import os
 import re
-from .windows_paths import Path, wide
+if __package__:
+    from .windows_paths import Path, wide
+else:
+    from windows_paths import Path, wide
 import time
 import tempfile
 

@@ -75,6 +75,11 @@ _STALE_SEC = 90            # связь считается живой, пока 
 _RECONNECT_WAKE_GRACE = 30  # свежие сообщения вокруг подключения ещё могут будить
 
 
+# During an active session a short Telegram/proxy outage can span several
+# long polls. Keep recent addressed messages eligible when the socket returns.
+_RECENT_RECONNECT_SECONDS = 5 * 60
+
+
 def _catchup_update(update: dict, wake_not_before: float) -> dict:
     """Retain missed history without turning old mentions into new conversations.
 
@@ -834,16 +839,21 @@ class BotTransport:
 
     def _poll_forever(self) -> None:
         offset = self._load_offset()
-        wake_not_before = 0.0
+        wake_not_before = int(time.time()) - _RECONNECT_WAKE_GRACE
+        connected_once = self._ready
         while not self._stop.is_set():
             try:
                 self._last_attempt=time.time()
+                request_method = 'getMe'
                 if not self._ready:
                     self._record_connection('connecting')
                     self._connect()
-                    wake_not_before = int(time.time()) - _RECONNECT_WAKE_GRACE
+                    grace = _RECENT_RECONNECT_SECONDS if connected_once else _RECONNECT_WAKE_GRACE
+                    wake_not_before = max(wake_not_before, int(time.time()) - grace)
+                    connected_once = True
                 elif time.monotonic() - self._last_profile_ok >= 60:
                     self.refresh_identity()
+                request_method = 'getUpdates'
                 updates = self.client.call(
                     "getUpdates", _http_timeout=_POLL_TIMEOUT + 10,
                     offset=offset or None, timeout=_POLL_TIMEOUT,
@@ -871,8 +881,11 @@ class BotTransport:
                 self._ready = False
                 self._connection_state = "retrying"
                 # Exception strings may contain credential-bearing request URLs.
-                log.warning("Telegram: подключение не удалось (%s) — повтор через 5 с",
-                            type(exc).__name__)
+                cause = getattr(exc, 'reason', exc)
+                errno = getattr(cause, 'winerror', None) or getattr(cause, 'errno', None)
+                log.warning("Telegram %s: %s (%s, errno=%s) — повтор через 5 с",
+                            request_method, type(exc).__name__, type(cause).__name__,
+                            errno if isinstance(errno,int) else '-')
                 self._record_connection('error',error='Не удалось подключиться к Telegram: '+type(exc).__name__,retry_after=5)
                 self._wait_connection_retry(5)
                 continue

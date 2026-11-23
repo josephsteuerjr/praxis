@@ -4,7 +4,10 @@ import hashlib
 import ipaddress
 import json
 import os
-from .windows_paths import Path, wide
+if __package__:
+    from .windows_paths import Path, wide
+else:
+    from windows_paths import Path, wide
 import re
 import subprocess
 import time
