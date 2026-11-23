@@ -49,7 +49,7 @@ class DestroyedWordIsNamedNotShown(unittest.TestCase):
                             "owner_request": {"kind": "pause_background", "raw": DESTROYED,
                                               "ts": 1.0, "source": "panel"}})
             text = appetite.describe()
-            self.assertIn("Просьба Егора", text)
+            self.assertIn("Просьба владельца", text)
             self.assertNotIn("???", text)
             self.assertIn("утрачен", text)
         finally:

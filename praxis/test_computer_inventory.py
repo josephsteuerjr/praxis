@@ -27,7 +27,7 @@ class ComputerInventoryCase(unittest.TestCase):
             "schema": "praxis.computer.inventory.payload.v1",
             "captured_at": "2026-07-13T04:30:00Z",
             "hostname": "LOVE",
-            "user": "yegor",
+            "user": "alex",
             "os": {"caption": "Windows 11 Pro", "version": "10.0", "build": "26200",
                    "architecture": "64-bit", "last_boot": "2026-07-13T02:38:16Z"},
             "machine": {"manufacturer": "HONOR", "model": "BMH-WCX9",

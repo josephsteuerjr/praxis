@@ -35,7 +35,7 @@ class _AcceptedText(_dl._RunScaffold):
     def _start_message(self, run_id: str, args_text: str) -> str:
         key = f"telegram-outbox:{run_id}:tool:call-m"
         self.manager.start_tool(
-            run_id, "call-m", "send_message", {"to": "Егор", "text": args_text},
+            run_id, "call-m", "send_message", {"to": "Алекс", "text": args_text},
             side_effect=True, idempotency_key=key,
         )
         # accepted-калитка отвечает только за crash/timeout-путь: ран стоит в паузе

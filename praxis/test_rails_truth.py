@@ -1659,22 +1659,22 @@ class TestCapabilitiesTellTheTruth(Base):
                 if isinstance(t, dict) and t.get("name")}
         self.assertTrue(mine <= printed, f"её собственные руки потерялись: {mine - printed}")
         self.assertEqual(mine, {t["name"] for t in agent.OWNER_TOOLS},
-                         "Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному")
+                         "Алекс 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному")
 
     def test_owner_view_still_names_what_only_yegor_has(self):
         """Убрать из списка — не значит промолчать: закон 2 держится и на этой строке."""
         text = capabilities.describe("owner")
-        self.assertNotIn("owner-тулы (в личке с Егором)", text,
+        self.assertNotIn("owner-тулы (в личке с Алексом)", text,
                          "список описывает РУКИ, а скобка описывала аудиторию — "
                          "с 26.07 эти руки при ней в любом канале")
-        line = next(l for l in text.splitlines() if l.startswith("- сверх моих рук только у Егора"))
+        line = next(l for l in text.splitlines() if l.startswith("- сверх моих рук только у владельца"))
         self.assertTrue(line.endswith(": ничего"), line)
 
     def test_human_only_line_is_the_difference_of_the_two_sets(self):
         s = capabilities.snapshot()
         expected = sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"]))
         self.assertEqual(capabilities._human_only_line(s), ", ".join(expected) or "ничего")
-        self.assertEqual(expected, [], "Егор 10.11: рук только у Егора нет")
+        self.assertEqual(expected, [], "Алекс 10.11: рук только у владельца нет")
 
     def test_human_only_line_catches_the_gated_owner_extra(self):
         """Строка «что не моё» считается РАЗНИЦЕЙ наборов, а не копией frozenset.
@@ -1718,9 +1718,9 @@ class TestCapabilitiesTellTheTruth(Base):
         with mock.patch.object(capabilities, "snapshot", return_value=fake):
             text = capabilities.describe("group", offered=[mine, human[0], "recall"])
         line = next(l for l in text.splitlines() if l.startswith("- руки В ЭТОМ ходе"))
-        head, marker, tail = line.partition("плюс делегированное Егором")
+        head, marker, tail = line.partition("плюс делегированное Алексом")
         self.assertTrue(marker, "делегированный тул в ходе есть, а назван не был")
-        self.assertNotIn(human[0], head, "делегирование доверия Егора выдано за мою руку")
+        self.assertNotIn(human[0], head, "делегирование доверия владельца выдано за мою руку")
         self.assertIn(human[0], tail)
         self.assertIn(mine, head)
 
@@ -1942,7 +1942,7 @@ class TestFollowupTraceIsNamed(Base):
                 if rel == "mtproto_runner.py" else original(rel))
             value = rails._followup_notice_value()
             self.assertIn("ТОЛЬКО по нити, где отчёт заказан", value)
-            self.assertIn("на явную просьбу Егора словами", value)
+            self.assertIn("на явную просьбу владельца словами", value)
             self.assertIn("72ч", value)
             self.assertIn("PRAXIS_FOLLOWUP_TRACE_TTL_SEC", value)
             self.assertIn("12 нитей", value)
@@ -1980,13 +1980,13 @@ class TestFollowupTraceIsNamed(Base):
         original = rails._source_text
         try:
             rails._source_text = lambda rel: (
-                '# 27.07: здесь стояло explicit_only=False — любая реплика Егора\n'
+                '# 27.07: здесь стояло explicit_only=False — любая реплика владельца\n'
                 '# и ветка "Praxis initiative from social pulse" — оба сняты\n'
                 'followup_request = telegram_followups.request_from_owner_buffer(buf)\n'
                 'return "action должен быть list | watch | unwatch | cancel."\n'
                 if rel == "mtproto_runner.py" else original(rel))
             gate = rails._followup_report_gate()
-            self.assertIn("на явную просьбу Егора словами", gate)
+            self.assertIn("на явную просьбу владельца словами", gate)
             self.assertNotIn("ЛЮБАЯ последняя реплика", gate)
             self.assertNotIn("часового пульса", gate)
         finally:
@@ -2165,7 +2165,7 @@ class TestStatusIsNotCanon(unittest.TestCase):
         block = re.search(r"\*\*Открытые направления[^\n]*\n(?:\s+[^\n]*\n)*", self.text)
         self.assertIsNotNone(block, "секция открытых направлений потеряла форму")
         self.assertNotIn("Этап 4", block.group(0),
-                         "PASS 30 Этап 4 закрыт решением Егора — держать его открытым значит "
+                         "PASS 30 Этап 4 закрыт решением владельца — держать его открытым значит "
                          "показывать ей несуществующую работу")
 
 
@@ -2197,8 +2197,8 @@ class TestCredentialFloorPromisesOnlyWhatItReads(Base):
     def test_the_owner_dm_exemption_is_named(self):
         body = self._direct_file_body()
         self.assertIn("if not _dest_is_owner:", body,
-                      "исключение для личка Егора исчезло — рельс о нём всё ещё говорит")
-        self.assertIn("к самому Егору в личку вложение не сканируется",
+                      "исключение для личка владельца исчезло — рельс о нём всё ещё говорит")
+        self.assertIn("к самому владельцу в личку вложение не сканируется",
                       self.text("credential_floor"))
 
     def test_the_read_window_is_named_with_its_number(self):

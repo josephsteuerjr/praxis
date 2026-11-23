@@ -115,7 +115,7 @@ class TestEmbeddingsOff(Base):
         called = []
         self._orig.append((mi, "embed", mi.embed))
         mi.embed = lambda t: called.append(1) or [0.0]
-        pe.append_fact("егор", "Егор", "любит горы и кофе")
+        pe.append_fact("алекс", "Алекс", "любит горы и кофе")
         # Explicit recall only reads an already materialized accelerator.
         memory_fts.rebuild(base=mi.BASE, memory_dir=mi.MEM_DIR, skills_dir=mi.SKILLS_DIR)
         res = mi.search("горы", k=5)  # PRAXIS_EMBEDDINGS не задан → off
@@ -131,7 +131,7 @@ class TestWebSearchGate(Base):
     def _tools(self):
         sc = ScriptedClient(["ответ"])
         llm.use_test_client(sc)
-        agent.voice_turn("777", "егор: что нового по llm?", speaker="Егор", is_owner=True)
+        agent.voice_turn("777", "алекс: что нового по llm?", speaker="Алекс", is_owner=True)
         return [t.get("name") or t.get("type") for t in sc.calls[0].get("tools", [])]
 
     def test_off_by_default(self):
@@ -184,7 +184,7 @@ class TestToolDispatchNoneFilter(Base):
                 return FakeResp("готово")
 
         llm.use_test_client(_Client())
-        agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
+        agent.voice_turn(None, "Алекс: тест", speaker="Алекс", is_owner=True)
         self.assertEqual(received.get("required_field"), "x")
         self.assertEqual(received.get("optional_field"), "default",
                          "None (openai strict-mode вместо пропуска необязательного поля) "
@@ -245,8 +245,8 @@ class TestToolTurnsAndTrace(Base):
         self.offer_test_tool("probe_tool")
         sc = ToolOnceClient("probe_tool", {}, replies)
         llm.use_test_client(sc)
-        out = agent.voice_turn("777" if owner_dm else "-777", "Егор: проверь и скажи",
-                               speaker="Егор", is_owner=True, is_dm=owner_dm)
+        out = agent.voice_turn("777" if owner_dm else "-777", "Алекс: проверь и скажи",
+                               speaker="Алекс", is_owner=True, is_dm=owner_dm)
         return sc, out
 
     def test_group_tool_turn_has_no_judge_call(self):
@@ -324,7 +324,7 @@ class TestOwnerDmNoStonewall(Base):
     def _turn(self, replies):
         sc = ScriptedClient(replies)
         llm.use_test_client(sc)
-        out = agent.voice_turn("777", "Егор: какому Евгению писать?", speaker="Егор",
+        out = agent.voice_turn("777", "Алекс: какому Евгению писать?", speaker="Алекс",
                                is_owner=True, is_dm=True)
         return sc, out
 

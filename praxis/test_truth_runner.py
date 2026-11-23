@@ -79,7 +79,7 @@ class DirectOutboxProjectionTests(unittest.TestCase):
             chat_id="555000100", room_id="555000100", principal_id="555000100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=1245, address_kind="direct",
-            reply_targets=((1245, "Yegor", "continue"),),
+            reply_targets=((1245, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=run_id, kind="chat_turn", goal="напиши в абстракт",
@@ -1065,9 +1065,9 @@ class FollowUpTraceIsHerMemoryNotOwnerMailTests(_DirectSendTraceHarness):
         self.assertEqual(items[0].get("notice_source"), "")
         self.ledger.observe_incoming(
             peer_id=self.OWNER, sender_id=int(self.OWNER), message_id=1272,
-            text="ок", reply_to_message_id=1271, sender_name="Егор")
+            text="ок", reply_to_message_id=1271, sender_name="Алекс")
         self.assertEqual(self.ledger.pending_notifications(), [],
-                         "ответ Егора не имеет права породить ему же уведомление")
+                         "ответ Алекса не имеет права породить ему же уведомление")
 
     def test_a_ledger_failure_costs_the_trace_loudly_but_not_the_delivery(self):
         proof, entry = self._accepted(peer_id=self.GROUP, text=self.SAID)
@@ -1142,8 +1142,8 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
 
     def test_a_plain_owner_line_does_not_order_a_report(self):
         # Живые строки из его буфера на проде: ни одна не проходит wants_followup.
-        for line in ("Егор: им отправить", "Егор: [Голосовое]",
-                     "Егор: предложи Вике помощь с эксельками, если ей нужно"):
+        for line in ("Алекс: им отправить", "Алекс: [Голосовое]",
+                     "Алекс: предложи Вике помощь с эксельками, если ей нужно"):
             with self.subTest(line=line):
                 projection = self._projection_for(owner_lines=[line])
                 self.assertEqual(projection.get("followup_request"), "", line)
@@ -1151,19 +1151,19 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
     def test_explicit_words_still_order_it(self):
         # Закон 1: способность не отнята — просто у отчёта появился заказчик.
         projection = self._projection_for(
-            owner_lines=["Егор: спроси у Арета и сообщи, когда он ответит"])
+            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"])
         self.assertIn("сообщи", projection.get("followup_request", ""))
 
     def test_her_own_pulse_initiative_no_longer_orders_a_report_for_him(self):
         # 21 запись из 32 родилась здесь: каждая её реплика из пульса становилась письмом.
         projection = self._projection_for(
-            owner_lines=["Егор: спроси у Арета и сообщи, когда он ответит"],
+            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"],
             pulse_id="pulse-1", active_chat="")
         self.assertEqual(projection.get("followup_request"), "")
 
     def test_a_turn_that_is_not_in_his_dm_orders_nothing_either(self):
         projection = self._projection_for(
-            owner_lines=["Егор: спроси у Арета и сообщи, когда он ответит"],
+            owner_lines=["Алекс: спроси у Арета и сообщи, когда он ответит"],
             active_chat="-100999999999999999")
         self.assertEqual(projection.get("followup_request"), "")
 

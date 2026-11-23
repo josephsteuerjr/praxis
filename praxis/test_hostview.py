@@ -108,7 +108,7 @@ class TestAgentDoorIsClosedByDefault(unittest.TestCase):
     def test_owner_gate_is_a_different_door(self):
         """Гейт владельца (HMAC initData) и гейт агента — разные субъекты, не путаются."""
         serverapp.AGENT_TOKEN = "секрет"
-        self.assertFalse(serverapp._is_owner("секрет"), "токен агента не делает тебя Егором")
+        self.assertFalse(serverapp._is_owner("секрет"), "токен агента не делает тебя Алексом")
 
     def test_non_ascii_never_crashes_the_gate(self):
         """Регресс: compare_digest на не-ASCII строках бросает TypeError. Гейт, падающий
@@ -338,7 +338,7 @@ class TestToolIsOwnerOnlyAndReadOnly(unittest.TestCase):
         self.assertIn("server_status", agent.TOOL_IMPL)
         self.assertIn("server_status", [t["name"] for t in agent.OWNER_TOOLS])
         self.assertNotIn("server_status", [t["name"] for t in agent.BASE_TOOLS],
-                         "чужим каналам машина Егора не показывается")
+                         "чужим каналам машина Алекса не показывается")
         self.assertNotIn("server_status", [t["name"] for t in agent.FAMILY_TOOLS])
         self.assertIn("server_status", agent._SCOUT_TOOL_NAMES,
                       "разведчику можно: он read-only по построению")

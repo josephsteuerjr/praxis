@@ -216,7 +216,7 @@ class TestConsistencyAndVisibility(Base):
     def test_state_line_is_honest(self):
         line = hostops.state_line()
         self.assertIn("стейдж", line.lower())
-        self.assertIn("применяет егор", line.lower())
+        self.assertIn("применяет владелец", line.lower())
 
 
 # --------------------------------------------------------------------------- #

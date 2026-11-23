@@ -137,11 +137,11 @@ class Receipt(unittest.TestCase):
             "ok": True, "did": "set_value", "mutating": True,
             "element": {"role": "edit", "value": ""},
             "element_after": {"role": "edit", "automation_id": "login",
-                              "value": "егор", "state": {"focused": True}},
+                              "value": "алекс", "state": {"focused": True}},
             "waited_ms": 84, "polls": 1,
         })
         self.assertIn("set_value", said)
-        self.assertIn("егор", said)
+        self.assertIn("алекс", said)
         self.assertIn("focused", said)
         self.assertIn("84", said)
         # Слова «получилось» здесь нет и быть не должно: вызов паттерна и достигнутая

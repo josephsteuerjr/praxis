@@ -95,7 +95,7 @@ class PromptLanguages(unittest.TestCase):
                             if key in seen:
                                 self.assertEqual(frame, seen[key])
                             seen[key] = frame
-                            self.assertNotIn('Yegor', frame)
+                            self.assertNotIn('Alex', frame)
                             self.assertNotIn('Praxis', frame)
                             self.assertIn('reply_to' if hands else 'ОТВЕТ->#<id>', frame)
                             self.assertEqual('[молчу]' in frame, not hands)

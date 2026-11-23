@@ -7,7 +7,7 @@ from unittest.mock import Mock,patch
 import agent
 import frame_language as frame
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class ProducerTail(unittest.TestCase):
     def setUp(self):

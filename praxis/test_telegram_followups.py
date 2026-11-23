@@ -68,19 +68,19 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertFalse(followups.wants_followup("Напиши Жене привет"))
         self.assertEqual(
             followups.request_from_owner_buffer([
-                "Егор: старое", "Praxis: хорошо",
-                "Егор: Напиши Жене и дай знать, что он ответит",
+                "Алекс: старое", "Praxis: хорошо",
+                "Алекс: Напиши Жене и дай знать, что он ответит",
             ]),
             "Напиши Жене и дай знать, что он ответит",
         )
         self.assertEqual(followups.request_from_owner_buffer([
-            "Егор: сообщи, когда ответит", "Praxis: уже отправила", "Егор: спасибо",
+            "Алекс: сообщи, когда ответит", "Praxis: уже отправила", "Алекс: спасибо",
         ]), "", "authority comes from the latest owner line, not a stale request")
         self.assertEqual(followups.request_from_owner_buffer([
-            "Егор: Напиши Жене привет",
+            "Алекс: Напиши Жене привет",
         ], explicit_only=False), "Напиши Жене привет")
         self.assertEqual(followups.request_from_owner_buffer([
-            "Егор: Напиши Жене привет, но не надо сообщать, если она ответит",
+            "Алекс: Напиши Жене привет, но не надо сообщать, если она ответит",
         ], explicit_only=False), "")
 
     def test_explicit_expiry_detection_is_narrow(self):
@@ -377,7 +377,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertEqual(matched["status"], "answered",
                          "ответ обязан закрыть нить: это её память об уже сказанном")
         self.assertEqual(self.ledger.pending_notifications(), [],
-                         "след в почту Егору не превращается")
+                         "след в почту Алексу не превращается")
 
         ordered = self.ledger.create(
             target_ref="@vika", target_label="Вика (@vika_test, id 555000333)",
@@ -400,7 +400,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         matched = self.ledger.observe_incoming(
             peer_id=ABSTRACT_DL, sender_id=OWNER_ID, message_id=94244,
             text="да, вот так и есть", reply_to_message_id=94243,
-            sender_name="Yegor Kosyrev", sender_is_owner=True, received_at=120,
+            sender_name="Alex Miller", sender_is_owner=True, received_at=120,
         )
         self.assertEqual(matched["id"], thread["id"], "матч обязан состояться")
         self.assertEqual(matched["status"], "answered",
@@ -428,10 +428,10 @@ class FollowUpLedgerTests(unittest.TestCase):
         matched = self.ledger.observe_incoming(
             peer_id=ABSTRACT_DL, sender_id=OWNER_ID, message_id=94244,
             text="ответ", reply_to_message_id=94243,
-            sender_name="Yegor Kosyrev", received_at=120,
+            sender_name="Alex Miller", received_at=120,
         )
         self.assertEqual(matched["id"], named["id"])
-        self.assertEqual(matched["response"]["sender_name"], "Yegor Kosyrev")
+        self.assertEqual(matched["response"]["sender_name"], "Alex Miller")
 
         anonymous = self._group_thread(94250)
         matched = self.ledger.observe_incoming(
@@ -546,7 +546,7 @@ class FollowUpLedgerTests(unittest.TestCase):
     def test_context_names_its_caps_and_who_ordered_the_report(self):
         trace = self._group_thread(
             1, sent_excerpt="Поправка: мой рабочий движок gpt-5.6-sol",
-            request_text="слова Егора, а не мои")
+            request_text="слова Алекса, а не мои")
         ordered = self._group_thread(2, notify_owner=True, notice_source="owner")
         mine = self._group_thread(3, notify_owner=True, notice_source="praxis")
 
@@ -556,7 +556,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertIn(f"гаснет через {followups.TRACE_TTL_SEC / 3600:.0f}ч", text)
         self.assertIn("заказанный отчёт не гаснет никогда", text)
 
-        self.assertIn("отчёт Егору: нет — это мой след", self._row(text, trace["id"]))
+        self.assertIn("отчёт владельцу: нет — это мой след", self._row(text, trace["id"]))
         # ⚠ 04.08: ярлык был «повод отправки», и под ним печатался ЕЁ СОБСТВЕННЫЙ
         # отправленный текст — единственное место кадра, отвечающее на вопрос «что я уже
         # сказала этому человеку», называло её речь причиной. Теперь два разных факта
@@ -564,9 +564,9 @@ class FollowUpLedgerTests(unittest.TestCase):
         # за её слова (сам тест заводит request_text = «слова владельца, а не мои»).
         self.assertIn("я сказала: «Поправка: мой рабочий движок",
                       self._row(text, trace["id"]))
-        self.assertNotIn("я сказала: «слова Егора", self._row(text, trace["id"]))
-        self.assertIn("отчёт Егору: заказан им словами", self._row(text, ordered["id"]))
-        self.assertIn("отчёт Егору: мой — я включила сама", self._row(text, mine["id"]))
+        self.assertNotIn("я сказала: «слова Алекса", self._row(text, trace["id"]))
+        self.assertIn("отчёт владельцу: заказан им словами", self._row(text, ordered["id"]))
+        self.assertIn("отчёт владельцу: мой — я включила сама", self._row(text, mine["id"]))
 
     def test_context_names_the_truncation_it_actually_applies(self):
         """Раннер отдаёт текст целиком, доверяя леджеру НАЗВАТЬ оба реза.
@@ -599,13 +599,13 @@ class FollowUpLedgerTests(unittest.TestCase):
 
     def test_explicit_only_is_the_default_for_the_owner_buffer(self):
         """Все 11 owner-записей прода — вот такие; отчёта он не заказывал ни разу."""
-        for line in ("Егор: им отправить", "Егор: [Голосовое]",
-                     "Егор: предложи Вике помощь с эксельками, если ей нужно"):
+        for line in ("Алекс: им отправить", "Алекс: [Голосовое]",
+                     "Алекс: предложи Вике помощь с эксельками, если ей нужно"):
             with self.subTest(line=line):
                 self.assertEqual(followups.request_from_owner_buffer([line]), "")
         self.assertEqual(
             followups.request_from_owner_buffer(
-                ["Егор: Напиши Жене и дай знать, что он ответит"]),
+                ["Алекс: Напиши Жене и дай знать, что он ответит"]),
             "Напиши Жене и дай знать, что он ответит")
 
 

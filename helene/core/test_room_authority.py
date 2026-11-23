@@ -109,7 +109,7 @@ class TestHonestAuthorship(RoomsHarness):
         for cid in ("-101", "-102"):
             self.assertEqual(rooms.profile_read(cid)["mode_set_by"], "unknown", cid)
             self.assertNotIn("owner", self._raw(cid),
-                             f"{cid}: в файле не должно быть подставленного Егора")
+                             f"{cid}: в файле не должно быть подставленного Алекса")
 
     def test_a_named_author_is_kept_verbatim(self):
         for cid, who in (("-111", "owner"), ("-112", "praxis"), ("-113", "protocol")):
@@ -142,7 +142,7 @@ class TestHonestAuthorship(RoomsHarness):
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: protocol\ndisclosure: standard\n")
         self.assertIn("никто не выбирал", line)
-        self.assertNotIn("Егор", line)
+        self.assertNotIn("Алекс", line)
 
     def test_the_room_line_names_the_owner_when_it_was_their_choice(self):
         line = rooms.context_from_text(
@@ -165,7 +165,7 @@ class TestHerModeLever(RoomsHarness):
 
     def test_she_may_lift_a_mode_the_owner_set(self):
         """Забор «его режим снимает только он» здесь запрещён — специально."""
-        rooms.set_mode("-202", "frozen", set_by="owner", reason="Егор заморозил")
+        rooms.set_mode("-202", "frozen", set_by="owner", reason="Алекс заморозил")
         ok, _ = rooms.set_own_mode("-202", "normal")
         self.assertTrue(ok, "любой обратимый режим она вправе снять сама")
         self.assertEqual(rooms.effective_mode("-202"), "normal")

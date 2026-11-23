@@ -149,7 +149,7 @@ class TestPointerText(PointerBase):
         ctx = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
         missing = [t["name"] for t in agent.catalog_tools_for(ctx)
                    if t.get("name") and t["name"] not in agent.HAND_PURPOSE]
-        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Егора 12.09)")
+        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Алекса 12.09)")
 
     def test_roster_knows_the_section(self):
         self.assertIn("contract.hands_pointer", frame_trace.SYSTEM_ROSTER)
@@ -264,7 +264,7 @@ class TestLoopEndToEnd(PointerBase):
                                return_value=False), \
              mock.patch.object(agent.body_client, "available",
                                return_value=False):
-            agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
+            agent.voice_turn(None, "Алекс: тест", speaker="Алекс", is_owner=True)
         self.assertEqual(received.get("required_field"), "x")
         self.assertEqual(received.get("optional_field"), "default")
         offered = _names(client.calls[0].get("tools", []))

@@ -387,7 +387,7 @@ class TestAuthoredRepeat(Base):
 
     def test_voice_turn_records_gist(self):
         self._client("ну смотри, кэш греет вход")
-        out = agent.voice_turn("777", "егор: расскажи про кэш", speaker=None, is_owner=True)
+        out = agent.voice_turn("777", "алекс: расскажи про кэш", speaker=None, is_owner=True)
         self.assertEqual(out, "ну смотри, кэш греет вход")
         # ⚠ Ход АВТОРСТВА больше не пишет «сказала»: между авторством и приёмкой лежат
         # отмена преемником, privacy hold, permanent failure и рестарт. Заметку пишет
@@ -400,7 +400,7 @@ class TestAuthoredRepeat(Base):
         # переходить нечему. Раньше здесь стоял произвольный "run-gist", тест был
         # зелёным и не проверял связь расписки с ходом — та же болезнь, что мы лечим.
         import turns
-        turn = turns.begin(kind="chat", chat_id="777", scope="owner", who="Егор")
+        turn = turns.begin(kind="chat", chat_id="777", scope="owner", who="Алекс")
         turn["out"] = "ну смотри, кэш греет вход"
         turn["run_id"] = "run-gist"
         turns.record(turn)
@@ -437,7 +437,7 @@ class TestControlPlaneEnglish(unittest.TestCase):
         self.assertIn("your own initiative window", agent._HEARTBEAT_FRAME)
         self.assertIn("check whether somebody replied", agent._HEARTBEAT_FRAME)
         self.assertIn("this frame does not rank", agent._HEARTBEAT_FRAME)
-        for coercive in ("Don't send Yegor status reports", "Silence is presence",
+        for coercive in ("Don't send Alex status reports", "Silence is presence",
                          "be frugal", "Nothing to say — stay silent"):
             self.assertNotIn(coercive, agent._HEARTBEAT_FRAME)
 

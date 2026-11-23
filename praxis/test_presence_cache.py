@@ -103,10 +103,10 @@ class TestSystemCache(Base):
         self.assertEqual(agent._system("СТАТИКА", "динамика"), "СТАТИКАдинамика")
 
     def test_parts_split_persona_and_dynamic(self):
-        pe.set_telegram_id("егор", "Егор", "101")
-        pe.append_fact("егор", "Егор", "любит горы")
+        pe.set_telegram_id("алекс", "Алекс", "101")
+        pe.append_fact("алекс", "Алекс", "любит горы")
         persona, dynamic, evidence = agent._build_prompt_parts(
-            speaker="Егор", ctx=agent.ChannelContext(principal_id="101", known=True),
+            speaker="Алекс", ctx=agent.ChannelContext(principal_id="101", known=True),
         )
         self.assertIn("Мой характер сейчас", persona, "персона — это душа")
         self.assertNotIn("любит горы", persona, "память не должна попасть в кэш-персону")
@@ -114,7 +114,7 @@ class TestSystemCache(Base):
         self.assertIn("любит горы", evidence, "портрет остаётся полным контекстом")
 
     def test_build_system_prompt_still_string(self):
-        sp = agent.build_system_prompt(speaker="Егор")
+        sp = agent.build_system_prompt(speaker="Алекс")
         self.assertIsInstance(sp, str)
         self.assertIn("Мой характер сейчас", sp)
 

@@ -215,6 +215,8 @@ def main():
     ci = sub.add_parser("ci", help="Dispatch parallel native GitHub jobs")
     ci.add_argument("--repo", required=True, metavar="OWNER/REPO")
     ci.add_argument("--target", default="all", choices=["all", *inputs["targets"]])
+    ci_init = sub.add_parser("ci-init", help="Initialize a public builders repository or verify existing runners")
+    ci_init.add_argument("--repo", required=True, metavar="OWNER/REPO")
     for command in ("source", "build", "publish"):
         cmd = sub.add_parser(command)
         cmd.add_argument("--out", type=Path, required=True)
@@ -227,7 +229,10 @@ def main():
             cmd.add_argument("--channel-url", default="http://127.0.0.1:8765")
             cmd.add_argument("--github-draft", metavar="OWNER/REPO")
     args = p.parse_args()
-    if args.cmd == "ci":
+    if args.cmd == "ci-init":
+        from ci import initialize
+        initialize(ROOT, args.repo)
+    elif args.cmd == "ci":
         from ci import dispatch
         with tempfile.TemporaryDirectory() as tmp:
             source, commit = output_source(ROOT, Path(tmp))

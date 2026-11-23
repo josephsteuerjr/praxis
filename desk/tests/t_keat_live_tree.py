@@ -57,7 +57,7 @@ SCRIPT = textwrap.dedent(r'''
     # run_manager отказывает корню со ссылкой в пути (1.0.1, Mac-прогон 36196933373).
     tree = Path(tmp.name).resolve() / "data"; tree.mkdir()
     import boot
-    cfg = {"telegram": {"owner_id": "4242"}, "agent": {"name": "Hélène"}, "owner": {"name": "Егор"}}
+    cfg = {"telegram": {"owner_id": "4242"}, "agent": {"name": "Hélène"}, "owner": {"name": "Алекс"}}
     os.environ.update(boot.env_knobs(cfg, tree=tree))
     os.environ["PRAXIS_BASE"] = str(tree)
     sys.path.insert(0, str(code))
@@ -66,11 +66,11 @@ SCRIPT = textwrap.dedent(r'''
     out = {"ready": keat_readiness.receipt()["serve_ready"]}
     runner._life, runner._agent = memory_life, agent
     rooms = botapi.Rooms(tree, memory_life, "Hélène")
-    rooms.describe("4242", title="Егор", is_dm=True, sender=("Егор", "4242"))
+    rooms.describe("4242", title="Алекс", is_dm=True, sender=("Алекс", "4242"))
     for mid, outgoing, text in [(10, False, "Привет, как отчёт?"), (11, True, "Почти готов."),
                                 (12, False, "Покажи таблицу."), (13, True, "К вечеру пришлю."),
                                 (14, False, "А тесты?")]:
-        rooms.record("4242", text, outgoing=outgoing, sender=("Hélène" if outgoing else "Егор"),
+        rooms.record("4242", text, outgoing=outgoing, sender=("Hélène" if outgoing else "Алекс"),
                      source_id=str(mid))
     sidecar = {}
     history, current = runner._dialogue("4242", sidecar)
@@ -90,11 +90,11 @@ SCRIPT = textwrap.dedent(r'''
         rooms.record(str(chat_id), text, outgoing=True, sender="Hélène", source_id="15")
         return "delivered"
     ctx = agent.ChannelContext(chat_id="4242", is_dm=True, owner=True, principal_id="4242",
-                               known=True, addressed=True, title="Егор")
+                               known=True, addressed=True, title="Алекс")
     with mock.patch.object(llm, "chat", side_effect=chat), \
          mock.patch.object(llm, "configured", return_value=True), \
          mock.patch.dict(agent._TELETHON, {"reply": reply}):
-        envelope = agent.voice_turn_envelope("4242", "\n".join(rooms.lines("4242", 80)), "Егор",
+        envelope = agent.voice_turn_envelope("4242", "\n".join(rooms.lines("4242", 80)), "Алекс",
             ctx=ctx, history=history, current_text=current, occurrence_sidecar=sidecar)
     out["first_tape"] = len(voice[0]) if voice else 0
     receipts, canary = [], []

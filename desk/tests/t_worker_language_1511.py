@@ -12,7 +12,7 @@ from test_tool_language_1511 import structural
 import test_forge_worker_durability_2610 as durability
 from localharness import self_review_worker,source_update_worker
 
-RAW='Windows body praxis.body.v1 Yegor Егор 中文 {literal} $& C:/данные/file.txt'
+RAW='Windows body praxis.body.v1 Alex Алекс 中文 {literal} $& C:/данные/file.txt'
 
 
 def suppliers(worker=forge_worker):

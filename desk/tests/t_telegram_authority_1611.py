@@ -74,7 +74,7 @@ class TelegramAuthority(unittest.TestCase):
         self.continuity.install()
 
     def write(self, owner):
-        self.config.write_text(json.dumps({"owner": {"name": "Egor"}, "telegram": {"owner_id": owner}}),
+        self.config.write_text(json.dumps({"owner": {"name": "Alex"}, "telegram": {"owner_id": owner}}),
                                encoding="utf-8")
 
     def check(self, runtime):

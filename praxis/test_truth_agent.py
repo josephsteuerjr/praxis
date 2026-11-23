@@ -68,7 +68,7 @@ class _RunHarness(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-truth-{suffix}",
@@ -1317,7 +1317,7 @@ class RoomLeversTests(unittest.TestCase):
         self.assertEqual(agent.rooms.effective_mode("-1001999"), "observer",
                          "решение обязано доехать до профиля комнаты")
         state = agent.rooms.room_state("-1001999")
-        self.assertEqual(state["mode_set_by"], "praxis", "автор режима — она, не Егор")
+        self.assertEqual(state["mode_set_by"], "praxis", "автор режима — она, не Алекс")
         self.assertIn("наблюдай", out)
 
     def test_the_english_name_from_the_profile_works_too(self):
@@ -1379,7 +1379,7 @@ class RoomLeversTests(unittest.TestCase):
             self._in_room("mode", mode="замри", reason="давят")
         wrote = " ".join(str(c.args[0]) for c in journal.call_args_list)
         self.assertIn("[режим]", wrote, "её собственное решение обязано быть в дневнике")
-        self.assertTrue(cards, "заморозку комнаты Егор обязан увидеть карточкой")
+        self.assertTrue(cards, "заморозку комнаты Алекс обязан увидеть карточкой")
 
     def test_disclosure_is_hers_and_the_answer_names_the_edge_of_the_lever(self):
         out = self._in_room("disclosure", disclosure="open")

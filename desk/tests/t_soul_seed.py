@@ -31,7 +31,7 @@ sys.path.insert(0, str(DESK / "localharness"))
 import agents  # noqa: E402
 import boot  # noqa: E402
 
-CFG = {"agent": {"name": "Мира"}, "owner": {"name": "Егор"}}
+CFG = {"agent": {"name": "Мира"}, "owner": {"name": "Алекс"}}
 SEED = "# Моя конституция\n\nМеня зовут {{agent}}. Я живу у {{owner}}.\n"
 
 
@@ -42,7 +42,7 @@ class SoulSeed(unittest.TestCase):
         lay_out(self.root, {"helene.json": {
             "mode": "local", "python": "runtime/python.exe", "app": "app/deskapp.py",
             "runner": "app/localharness/runner.py", "code": "tree", "tree": "data",
-            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Егор", "room": "Hélène"},
+            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Алекс", "room": "Hélène"},
             "model": {"framework": "openai", "key": "sk-live", "model": "gpt-5"},
             "telegram": {"bot_token": "111:AAA", "owner_id": 42},
             "setup_complete": True,
@@ -59,7 +59,7 @@ class SoulSeed(unittest.TestCase):
         boot.ensure_layout(made.tree, CFG, soul_seed=SEED)
         soul = (made.tree / "soul" / "SOUL.md").read_text(encoding="utf-8")
         self.assertIn("Меня зовут Мира", soul)
-        self.assertIn("Я живу у Егор", soul)
+        self.assertIn("Я живу у Алекс", soul)
         self.assertNotIn("{{", soul, "плейсхолдер не подставлен")
         # конфиг души не знает: машина пишет конфиг, владелец — сид
         self.assertNotIn("soul", agents.read_config(made.config))

@@ -73,7 +73,7 @@ class TestAgentMultimodal(unittest.TestCase):
         return photo, audio
 
     def test_photo_and_audio_reach_model_content(self):
-        text, content = agent._media_prompt("Егор: посмотри и послушай", self._refs(), self.ctx)
+        text, content = agent._media_prompt("Алекс: посмотри и послушай", self._refs(), self.ctx)
         self.assertIn("Проверочная расшифровка", text)
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "text")
@@ -92,7 +92,7 @@ class TestAgentMultimodal(unittest.TestCase):
         agent._voice = fake_voice
         agent.guard_outbound_reply = lambda reply, *a, **k: reply
         try:
-            turn = agent.voice_turn_envelope("777", "Егор: ответь аудио", "Егор", ctx=self.ctx)
+            turn = agent.voice_turn_envelope("777", "Алекс: ответь аудио", "Алекс", ctx=self.ctx)
         finally:
             agent.llm.configured, agent._voice, agent.guard_outbound_reply = old_configured, old_voice, old_guard
         self.assertEqual(turn.text, "Готово.")
@@ -116,7 +116,7 @@ class TestAgentMultimodal(unittest.TestCase):
         agent._voice = fake_voice
         agent.guard_outbound_reply = lambda *a, **k: ""
         try:
-            turn = agent.voice_turn_envelope("777", "Егор: тест", "Егор", ctx=self.ctx)
+            turn = agent.voice_turn_envelope("777", "Алекс: тест", "Алекс", ctx=self.ctx)
         finally:
             agent.llm.configured, agent._voice, agent.guard_outbound_reply = old_configured, old_voice, old_guard
         self.assertFalse(turn.text)

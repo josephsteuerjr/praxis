@@ -64,11 +64,11 @@ class SeamBase(TurnsBase):
     def _guard(self, reply, ctx=None, **turn_fields):
         ctx = ctx or self._ctx()
         turn = turns.begin(kind="chat", chat_id=ctx.chat_id, scope=ctx.scope,
-                           who="Егор", gist_in="Егор: привет")
+                           who="Алекс", gist_in="Алекс: привет")
         turn.update(turn_fields)
         token = agent._TURN_CHANNEL.set(ctx)
         try:
-            out = agent.guard_outbound_reply(reply, "Егор: привет", ctx=ctx, turn=turn)
+            out = agent.guard_outbound_reply(reply, "Алекс: привет", ctx=ctx, turn=turn)
         finally:
             agent._TURN_CHANNEL.reset(token)
         return out, turn
@@ -225,7 +225,7 @@ class TestC2C3Compensation(SeamBase):
 
     def test_turn_keeps_run_id(self):
         """Без run_id на ходе спроецировать доставку в память нечем."""
-        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Егор")
+        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Алекс")
         t["out"] = "ответ"
         t["run_id"] = "run-contract-1"
         turns.record(t)
@@ -317,7 +317,7 @@ class TestM1ArchiveFailRetain(SeamBase):
         turns.ARCHIVE_DIR = blocker
 
         for i in range(9):
-            t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Егор")
+            t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Алекс")
             t["out"] = f"реплика-{i}"
             turns.record(t)
 

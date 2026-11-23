@@ -418,7 +418,7 @@ class TestRetiringTheOldStates(Base):
 
     def test_a_place_of_its_own_is_never_touched(self):
         self._say(ROOM, "корневой ключ")
-        self._say("555000100", "личка Егора")
+        self._say("555000100", "личка Алекса")
         out = ml.retire_split_states()
         self.assertEqual(out["moved"], [])
         self.assertEqual(len(out["kept"]), 2)

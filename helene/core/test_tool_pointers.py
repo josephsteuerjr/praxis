@@ -180,7 +180,7 @@ class TestPointerText(PointerBase):
         curated = set(agent.HAND_PURPOSE) | set(agent.windows_mcp_tools.PURPOSES)
         missing = [t["name"] for t in agent.catalog_tools_for(ctx)
                    if t.get("name") and t["name"] not in curated]
-        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Егора 12.09)")
+        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Алекса 12.09)")
 
     def test_roster_knows_the_section(self):
         self.assertIn("contract.hands_pointer", frame_trace.SYSTEM_ROSTER)
@@ -320,7 +320,7 @@ class TestLoopEndToEnd(PointerBase):
              mock.patch.object(agent.serverd_client, "state_line", return_value=None), \
              mock.patch.object(agent.serverd_client, "available", return_value=False), \
              mock.patch.object(agent.body_client, "available", return_value=False):
-            agent.voice_turn(None, "Егор: поправь и проверь пример", speaker="Егор", is_owner=True)
+            agent.voice_turn(None, "Алекс: поправь и проверь пример", speaker="Алекс", is_owner=True)
 
         after = hashlib.sha256(target.read_bytes()).hexdigest()
         self.assertEqual(target.read_text(encoding="utf-8"), "beta\n")
@@ -384,7 +384,7 @@ class TestLoopEndToEnd(PointerBase):
                                return_value=False), \
              mock.patch.object(agent.body_client, "available",
                                return_value=False):
-            agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
+            agent.voice_turn(None, "Алекс: тест", speaker="Алекс", is_owner=True)
         self.assertEqual(received.get("required_field"), "x")
         self.assertEqual(received.get("optional_field"), "default")
         offered = _names(client.calls[0].get("tools", []))

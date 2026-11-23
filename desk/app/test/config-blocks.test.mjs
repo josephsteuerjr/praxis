@@ -39,7 +39,7 @@ const win = join(here, "..", "..", "ui-kit", "window");   // общее окно
 const sandboxWas = {
   enabled: true,
   network: false,
-  mounts: [{ path: "C:\\Users\\Егор\\Документы", access: "write" }],
+  mounts: [{ path: "C:\\Users\\Алекс\\Документы", access: "write" }],
   mounts_denied: [{ path: "C:\\Windows", at: "04.09.2026 10:00" }],
 };
 const sandboxNow = keepBlock(sandboxWas, { enabled: false, network: true });

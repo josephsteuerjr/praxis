@@ -183,7 +183,7 @@ class RoomsShowTheServerWording(unittest.TestCase):
 
     def test_card_uses_mode_word_and_provenance(self):
         card = between(APP_CODE, "function roomCard(room) {", chr(10) + "function membershipCard")
-        self.assertIn("room.mode_word", card, "на экране Егора снова латинский идентификатор")
+        self.assertIn("room.mode_word", card, "на экране Алекса снова латинский идентификатор")
         self.assertIn("room.reason", card)
         self.assertIn("room.until", card)
         self.assertIn("room.author", card)

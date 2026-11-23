@@ -8,7 +8,7 @@ import frame_language as lang
 import rooms
 from test_room_authority import RoomsHarness
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class RoomControls(RoomsHarness):
     def setUp(self):

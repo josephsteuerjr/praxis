@@ -197,7 +197,7 @@ function toggles({ initial0 = false, toggles: list }) {
   made.session0 = false;
   made.syncToggles();
 
-  // Прямой клик по тумблеру С оговоркой — не включает сразу (слово Егора
+  // Прямой клик по тумблеру С оговоркой — не включает сразу (слово Алекса
   // 28.09): сброс в false + диалог подтверждения. Факт не меняется.
   s0.sw.click(); // flips → true внутри клика, но оговорка обязана вернуть
   assert.equal(s0.sw.getAttribute("aria-checked"), "false", "оговорка не вернула тумблер");

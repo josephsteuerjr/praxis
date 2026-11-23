@@ -160,7 +160,7 @@ class TestConsolidateTool(Base):
         agent.llm.configured = lambda *a, **k: True
         try:
             agent.voice_turn_envelope(
-                "101", "Егор: новое", "Егор",
+                "101", "Алекс: новое", "Алекс",
                 ctx=agent.ChannelContext.from_legacy(
                     "101", is_dm=True, owner=True, known=True),
                 history=hist, current_text="новое",
@@ -187,7 +187,7 @@ class TestConsolidateTool(Base):
         agent._terminal_tool_loop = fake_loop
         try:
             agent._voice(
-                "новое", hist, "Егор",
+                "новое", hist, "Алекс",
                 ctx=agent.ChannelContext.from_legacy(
                     "101", is_dm=True, owner=True, known=True),
                 history_persistent=True,
@@ -204,7 +204,7 @@ class TestNudge(Base):
         fc = FakeClient()
         llm.use_test_client(fc)
         try:
-            agent.respond("привет", history, "Егор", force_voice=True)
+            agent.respond("привет", history, "Алекс", force_voice=True)
         finally:
             llm.clear_test_clients()
         s = fc.last.get("system", "")

@@ -447,7 +447,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     if rg["status"] == "missing":
         _deny("proposal_reviewer", "submit", f"{pid}: гномье ревью {rg['note']}")
         return ("Не отправляю: гномье ревью " + rg["note"] + ". Обязательный пункт мёржа "
-                "наравне с тестами (слово Егора 27.09): прогони адверсарный ревьюер со свежим "
+                "наравне с тестами (слово владельца 27.09): прогони адверсарный ревьюер со свежим "
                 "контекстом — coding_agent(role=\"reviewer\") по диффу, а в Forge-задаче finish "
                 "подставит его вердикт сам — и передай результат в reviewer=, либо "
                 "reviewer=\"skip: <записанная причина>\". «Я сама прочитала дифф» — не замена: "
@@ -517,7 +517,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
                      "тесты красные, override_reason не дан. Стоит в proposed — "
                      "исправь тесты или дай осознанный override_reason.")
             return (f"Предложение {pid} «{title.strip()}» НЕ смёржено (зона {zone}): "
-                    f"гейт красный ({state0}). Иммунитет по слову Егора от 26.09: "
+                    f"гейт красный ({state0}). Иммунитет по слову владельца от 26.09: "
                     "красные тесты блокируют автомёрж. Исправь тесты/код или передай "
                     "override_reason с объяснением, почему красное в этом диффе не относится к нему.")
         res = apply(pid, by="auto", override_reason=override_reason)
@@ -535,12 +535,12 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
             elif override_reason:
                 proof = f"красные тесты; объяснение: {override_reason}"
             else:
-                proof = "тесты красные; Егору уйдёт предупреждение постфактум"
+                proof = "тесты красные; владельцу уйдёт предупреждение постфактум"
             return (f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржила сама. "
                     f"{res['msg']}")
         return f"Предложение {pid} ({how}), но технически не смёржилось: {res['msg']}."
     return (f"Предложение {pid} «{title.strip()}» не получило известную risk-зону {zone!r}; "
-            "это неисправность классификатора, а не запрос Егору на мёрж.")
+            "это неисправность классификатора, а не запрос владельцу на мёрж.")
 
 
 def diff_text(pid: str, cap: int | None = 12000) -> str:
@@ -772,7 +772,7 @@ def apply(pid: str, by: str = "owner", override_reason: str = "") -> dict:
     _cleanup(pid, drop_branch=True)
     _update(pid, status="merged", decided_by=by, notified=(by != "auto"),
             override_reason=override_reason)
-    actor = "сама, после собственного review" if by == "auto" else "Егор одобрил"
+    actor = "сама, после собственного review" if by == "auto" else "владелец одобрил"
     _journal(f"«{title}» ({pid}) смёржено ({actor})"
              + (f"; override: {override_reason}" if override_reason else "")
              + " — перезапущусь на новом коде.")
@@ -791,7 +791,7 @@ def reject(pid: str, reason: str = "", by: str = "owner") -> dict:
     _cleanup(pid, drop_branch=True)
     _update(pid, status="rejected", decided_by=by, reason=(reason or "").strip())
     title = t.get("title") or t.get("why") or pid
-    _journal(f"Егор отклонил «{title}» ({pid})" + (f": {reason.strip()}" if reason.strip() else " (без причины)")
+    _journal(f"владелец отклонил «{title}» ({pid})" + (f": {reason.strip()}" if reason.strip() else " (без причины)")
              + ". Это сигнал, не поражение — учту.")
     log.info("proposal %s rejected: %s", pid, (reason or "")[:80])
     return {"ok": True, "msg": "отклонено"}
@@ -832,7 +832,7 @@ def list_text() -> str:
                      "timed_out": "таймаут/пропущены", "not_run": "—"}.get(state, state)
         out.append(f"#{t['id']} [{mark}] «{t.get('title') or t.get('why') or '—'}» "
                    f"({t.get('diffstat') or 'без диффа'}; тесты: {test_mark})"
-                   + (f" — ответ Егора: {t['reason']}" if t.get("reason") else ""))
+                   + (f" — ответ владельца: {t['reason']}" if t.get("reason") else ""))
     return "\n".join(out)
 
 

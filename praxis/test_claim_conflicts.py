@@ -25,7 +25,7 @@ class ConflictCardTests(unittest.TestCase):
         self.dir.cleanup()
 
     def _note(self, old="clm-a", new="clm-b"):
-        return self.cc.note(subject="Егор", field="город", old_id=old, new_id=new,
+        return self.cc.note(subject="Алекс", field="город", old_id=old, new_id=new,
                             reason="новое поддержанное противоречит старому",
                             old_text="живёт в Самаре", new_text="живёт в Безенчуке")
 
@@ -34,7 +34,7 @@ class ConflictCardTests(unittest.TestCase):
         self.assertTrue(cid.startswith("cfl-"))
         cards = self.cc.cards()
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["subject"], "Егор")
+        self.assertEqual(cards[0]["subject"], "Алекс")
         self.assertIn("Самаре", cards[0]["old_text"])
 
     def test_repeat_does_not_multiply(self):

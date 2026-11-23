@@ -23,7 +23,7 @@ from localharness import windows_mcp_remote as protocol,windows_mcp_runtime as r
 from localharness import python_desktop_commands as commands,owner_stop
 from localharness.remote_computer_client import Publisher,grant
 
-RAW='Windows body praxis.body.v1 Егор 中文 {literal} $& C:/данные/file.txt'
+RAW='Windows body praxis.body.v1 Алекс 中文 {literal} $& C:/данные/file.txt'
 
 
 class RemoteMCPContract(unittest.TestCase):

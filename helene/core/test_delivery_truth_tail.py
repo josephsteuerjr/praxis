@@ -34,7 +34,7 @@ class TestMediaOnlyTurnIsNotLeftUnconfirmed(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _turn(self, run_id="run-media"):
-        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Егор")
+        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Алекс")
         t["out"] = "вот файл"
         t["run_id"] = run_id
         turns.record(t)

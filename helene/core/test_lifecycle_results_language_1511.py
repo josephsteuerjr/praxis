@@ -12,7 +12,7 @@ import frame_language as lang
 import tasks
 from test_window_loop import FakeRuns
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 NOW=dt.datetime(2031,4,10,12,0)
 
 class LifecycleResults(unittest.TestCase):

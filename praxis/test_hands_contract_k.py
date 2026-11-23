@@ -37,7 +37,7 @@ class TheContractIsInK(unittest.TestCase):
 
     def test_every_frame_carries_the_contract_whoever_speaks(self):
         marker = "## Мои руки: договор"
-        self.assertIn(marker, agent.build_system_prompt(speaker="Егор", owner=True))
+        self.assertIn(marker, agent.build_system_prompt(speaker="Алекс", owner=True))
         self.assertIn(marker, agent.build_system_prompt(speaker="Кто-то", owner=False))
 
     def test_every_named_hand_exists(self):

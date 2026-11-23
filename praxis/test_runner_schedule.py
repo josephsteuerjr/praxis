@@ -219,7 +219,7 @@ class TestWakeKeepsTheLineOpen(unittest.TestCase):
         marked: list[str] = []
         tasks.mark_fired = lambda tid: marked.append(tid)
         orig_hold = appetite.background_hold
-        appetite.background_hold = lambda: "Егор попросил остановить фон"
+        appetite.background_hold = lambda: "Алекс попросил остановить фон"
         try:
             asyncio.run(mtproto_runner._fire_task(
                 {"id": "r1", "kind": "wake", "goal": "ежедневный обзор",
@@ -234,7 +234,7 @@ class TestWakeKeepsTheLineOpen(unittest.TestCase):
         import appetite
         tasks.mark_fired = lambda tid: None
         orig_hold = appetite.background_hold
-        appetite.background_hold = lambda: "Егор попросил остановить фон"
+        appetite.background_hold = lambda: "Алекс попросил остановить фон"
         try:
             asyncio.run(mtproto_runner._fire_task(
                 {"id": "r2", "kind": "wake", "goal": "довести обещанное"}))

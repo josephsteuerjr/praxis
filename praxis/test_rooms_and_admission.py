@@ -223,7 +223,7 @@ class TestManageRoom(Base):
     def test_room_management_is_hers_in_every_turn(self):
         """Решение владельца 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
         names = _tools_for(False, full=True)
-        self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Егора")
+        self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Алекса")
         self.assertIn("manage_room", _tools_for(False), "схема родная, не через h.hand")
         self.assertIn("python", _tools_for(False))
         self.assertEqual(set(names), set(_tools_for(True, full=True)))
@@ -317,7 +317,7 @@ class TestIntegration(Base):
         try:
             with self.owner_turn("-100900", is_dm=False, room_id="-100900"):
                 reply = agent.respond(
-                    "добавь эту группу в доверенные", [], "Егор",
+                    "добавь эту группу в доверенные", [], "Алекс",
                     force_voice=True, is_owner=True, chat_id="-100900",
                     principal_id=123456789,
                 )

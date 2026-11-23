@@ -43,7 +43,7 @@ class RelUnderIsExactlyRelativeTo(unittest.TestCase):
     def test_matches_on_hostile_inputs(self) -> None:
         root = Path(os.sep + "app" + os.sep + "memory")
         cases = [
-            (root / "people" / "egor.md", root),
+            (root / "people" / "alex.md", root),
             (root / "a" / "b" / "c" / "d.md", root),
             (root, root),
             # Сосед с ОБЩИМ ПРЕФИКСОМ ИМЕНИ — классический способ обмануть startswith.
@@ -52,7 +52,7 @@ class RelUnderIsExactlyRelativeTo(unittest.TestCase):
             # Совсем не внутри: обязан прилететь ValueError с обеих сторон.
             (Path(os.sep + "etc") / "passwd", root),
             # Не-ASCII в имени: кириллица, пробелы, точка в начале имени файла.
-            (root / "люди" / "Егор Косырев.md", root),
+            (root / "люди" / "Алекс Миллер.md", root),
             (root / ".hidden" / "note.md", root),
             # Обратный слэш — на Linux это ЗАКОННЫЙ символ имени, а не разделитель.
             (root / "wei\\rd" / "n.md", root),
@@ -100,7 +100,7 @@ class RelUnderIsExactlyRelativeTo(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"
             (root / "people").mkdir(parents=True)
-            (root / "people" / "egor.md").write_text("- x\n", encoding="utf-8")
+            (root / "people" / "alex.md").write_text("- x\n", encoding="utf-8")
             (root / "заметка.md").write_text("- y\n", encoding="utf-8")
             seen = []
             real = Path.relative_to
@@ -111,7 +111,7 @@ class RelUnderIsExactlyRelativeTo(unittest.TestCase):
 
             with mock.patch.object(Path, "relative_to", spy):
                 rels = sorted(memory_fts._rel_under(p, root) for p in root.rglob("*.md"))
-            self.assertEqual(rels, ["people/egor.md", "заметка.md"])
+            self.assertEqual(rels, ["people/alex.md", "заметка.md"])
             self.assertEqual(seen, [], "строковый путь не сработал — упал в relative_to")
 
 
@@ -130,8 +130,8 @@ class TheCorpusIsWalkedOncePerSearch(unittest.TestCase):
         self.skills = self.base / "soul" / "skills"
         (self.memory / "people").mkdir(parents=True)
         self.skills.mkdir(parents=True)
-        (self.memory / "people" / "egor.md").write_text(
-            "- Егор просил ускорить руку памяти\n", encoding="utf-8")
+        (self.memory / "people" / "alex.md").write_text(
+            "- Алекс просил ускорить руку памяти\n", encoding="utf-8")
         memory_fts.clear_path_cache()
         # Explicit recall must not build its disposable index in the request.
         memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
@@ -160,14 +160,14 @@ class TheCorpusIsWalkedOncePerSearch(unittest.TestCase):
 
     def test_answer_is_unchanged_by_the_shared_roster(self) -> None:
         """Ready background index preserves the canonically validated answer."""
-        first = self._search("Егор")
-        second = self._search("Егор")
+        first = self._search("Алекс")
+        second = self._search("Алекс")
         self.assertTrue(first)
         self.assertEqual([row["id"] for row in first], [row["id"] for row in second])
 
     def test_second_attempt_walks_afresh(self) -> None:
         """Stale row fails closed and asks the night job; no sync retry is allowed."""
-        source = self.memory / "people" / "egor.md"
+        source = self.memory / "people" / "alex.md"
         source.write_text("- канон уже изменился\n", encoding="utf-8")
         with mock.patch.object(memory_fts, "rebuild",
                                side_effect=AssertionError("не в интерактивной руке")):
@@ -199,7 +199,7 @@ class TheLazyCanonPathAnswersIdentically(unittest.TestCase):
         (self.memory / "people").mkdir(parents=True)
         (self.memory / "life" / "events").mkdir(parents=True)
         self.skills.mkdir(parents=True)
-        for name in ("egor", "praxis", "sasha"):
+        for name in ("alex", "praxis", "sasha"):
             (self.memory / "people" / f"{name}.md").write_text(
                 f"- {name} говорит про провенанс кадра и про память\n"
                 f"- второй факт про {name}: гуттер и лента\n", encoding="utf-8")
@@ -404,7 +404,7 @@ class TheRunTreeIsWalkedForWhatIsActuallyThere(unittest.TestCase):
         for i in range(30):
             (run / "results" / f"{i:04d}-model-input.log").write_text("x", encoding="utf-8")
         (self.memory / "people").mkdir(parents=True)
-        (self.memory / "people" / "egor.md").write_text("- факт\n", encoding="utf-8")
+        (self.memory / "people" / "alex.md").write_text("- факт\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -419,7 +419,7 @@ class TheRunTreeIsWalkedForWhatIsActuallyThere(unittest.TestCase):
                       "подрезка съела её рабочий продукт из artifacts/")
         self.assertIn("RECAP.md", found)
         self.assertIn("context.md", found)
-        self.assertIn("egor.md", found, "подрезка задела память вне прогонов")
+        self.assertIn("alex.md", found, "подрезка задела память вне прогонов")
 
     def test_jsonl_is_still_found(self) -> None:
         self.assertIn("events.jsonl", self._walk("*.jsonl"))

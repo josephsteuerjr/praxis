@@ -42,7 +42,7 @@ class RememberWritesEdge(unittest.TestCase):
             graph.GRAPH_MD.unlink()
 
     def test_remember_with_relates_to(self):
-        out = agent.tool_remember("Вика", "работает юристом", relates_to="Егор", relation="коллега")
+        out = agent.tool_remember("Вика", "работает юристом", relates_to="Алекс", relation="коллега")
         self.assertIn("Запомнила", out)
         self.assertIn("Связала", out)
         self.assertTrue(graph.edges())
@@ -59,12 +59,12 @@ class ConnectionsScopeGate(unittest.TestCase):
 
     def test_owner_sees(self):
         agent._CURRENT_SCOPE = "owner"
-        self.assertNotIn("не для этого канала", agent.tool_connections("Егор"))
+        self.assertNotIn("не для этого канала", agent.tool_connections("Алекс"))
 
     def test_group_refused(self):
         for scope in ("group", "known", "unknown"):
             agent._CURRENT_SCOPE = scope
-            self.assertIn("не для этого канала", agent.tool_connections("Егор"))
+            self.assertIn("не для этого канала", agent.tool_connections("Алекс"))
 
 
 class StateShowsProposals(unittest.TestCase):
@@ -108,7 +108,7 @@ class GraphTierInPrompt(unittest.TestCase):
 
     def test_links_tier_owner_only(self):
         people.write("vika", "Вика", {})
-        graph.add_edge("vika", "egor-hozyain", "коллега")
+        graph.add_edge("vika", "alex-hozyain", "коллега")
         _, dyn_owner = agent.build_system_parts(speaker="Вика", owner=True, known=True, is_dm=True)
         self.assertNotIn("Связи Вика (граф памяти)", dyn_owner)
         _, dyn_group = agent.build_system_parts(speaker="Вика", owner=False, known=True, is_dm=False)

@@ -13,7 +13,7 @@ import shell_words
 from test_general_tool_language_1511 import stock
 from test_tool_language_1511 import structural
 
-RAW = 'Yegor — Егор — 日本語 {literal} $&'
+RAW = 'Alex — Алекс — 日本語 {literal} $&'
 
 
 class NativeSchemaLanguages(unittest.TestCase):

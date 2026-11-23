@@ -167,7 +167,7 @@ class TestManageLoop(Base):
         ]
         llm.use_test_client(ScriptedClient(steps))
         try:
-            reply = agent.respond("отложи нить про маршрут", [], "Егор",
+            reply = agent.respond("отложи нить про маршрут", [], "Алекс",
                                   force_voice=True, is_owner=True, chat_id="7777")
         finally:
             llm.clear_test_clients()

@@ -55,12 +55,12 @@ function card(run, status = 'live') {
   assert.equal(live.fields['.turn-cause'].textContent, trigger, 'late foreign response ignored');
   context.Mn(live, {id: 'current-run', origin: {text: ''}});
   assert.equal(live.fields['.turn-cause'].hidden, true, 'unknown origin clears stale subtitle');
-  rows = [{run_id: 'current-run', kind: 'chat_turn', in: trigger, out: 'Новый ответ', who: 'Егор', ts: 1}];
+  rows = [{run_id: 'current-run', kind: 'chat_turn', in: trigger, out: 'Новый ответ', who: 'Алекс', ts: 1}];
   context.Vn = () => '';
   await context.Un();
   assert.equal(items[0].status, 'done');
   assert.equal(items[0].title, 'Новый ответ');
-  assert.equal(items[0].cause, `Егор: «${trigger}»`, 'history transition uses per-run input');
+  assert.equal(items[0].cause, `Алекс: «${trigger}»`, 'history transition uses per-run input');
   const archived = card('current-run', 'done');
   archived.fields['.turn-cause'].textContent = items[0].cause;
   context.Mn(archived, detail);

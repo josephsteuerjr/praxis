@@ -184,7 +184,7 @@ class TestAgentGuardRegressions(RegressionBase):
             patch.object(agent.turns, "begin", return_value={"kind": "chat"}),
         ):
             envelope = agent.voice_turn_envelope(
-                "777", "Егор: ответь голосом", "Егор", ctx=self.owner_ctx)
+                "777", "Алекс: ответь голосом", "Алекс", ctx=self.owner_ctx)
 
         self.assertEqual(envelope.text, "Готово.")
         self.assertEqual(len(envelope.outbound), 1)
@@ -301,7 +301,7 @@ class TestRunnerRetryRegressions(RegressionBase):
             with patch.object(agent, "voice_turn_envelope", side_effect=blocking_turn):
                 task = asyncio.create_task(
                     runner._await_despite_cancellation(
-                        runner._voice_turn_offloaded("777", "hello", "Егор")
+                        runner._voice_turn_offloaded("777", "hello", "Алекс")
                     )
                 )
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
@@ -333,7 +333,7 @@ class TestRunnerRetryRegressions(RegressionBase):
                 "is_owner": True,
                 "known": True,
                 "family": False,
-                "name": "Егор",
+                "name": "Алекс",
                 "title": "room",
                 "size": 2,
                 # Rolling metadata has already moved to an unrelated later speaker.
@@ -343,9 +343,9 @@ class TestRunnerRetryRegressions(RegressionBase):
             }
         }
         wake = runner.GroupWake(
-            message_id=1, message_ts=100.0, kind="reply", speaker="Егор",
+            message_id=1, message_ts=100.0, kind="reply", speaker="Алекс",
             sender_id=123, owner=True, known=True, family=False,
-            context_snapshot="Егор: фото", reply_targets_snapshot=((1, "Егор", "фото"),),
+            context_snapshot="Алекс: фото", reply_targets_snapshot=((1, "Алекс", "фото"),),
             media_snapshot=(ref,))
         wakes = {chat_id: wake}
         # Медиа из более позднего фонового сообщения остаётся за frozen-границей.
@@ -414,7 +414,7 @@ class TestRunnerRetryRegressions(RegressionBase):
                 "is_owner": True,
                 "known": True,
                 "family": False,
-                "name": "Егор",
+                "name": "Алекс",
             }
         }
 

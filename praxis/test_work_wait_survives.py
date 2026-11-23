@@ -521,7 +521,7 @@ class TheRevivedTurnIsTheSameWork(WorkWaitBase):
             chat_id="777", room_id="777", principal_id="777",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=9, address_kind="direct",
-            reply_targets=((9, "Yegor", "continue"),),
+            reply_targets=((9, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id="run-work-wait-addressed-boundary", kind="chat_turn",

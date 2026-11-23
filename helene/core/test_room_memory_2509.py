@@ -443,7 +443,7 @@ def contextlib_all(patches):
 
 class OwnerDmTurnsAreLabelledInRecall(unittest.TestCase):
     HITS = [
-        {"path": "memory/self/turns-2026-09.jsonl", "text": "вошло: «Егор: у меня диагноз»", "source": "Praxis"},
+        {"path": "memory/self/turns-2026-09.jsonl", "text": "вошло: «Алекс: у меня диагноз»", "source": "Praxis"},
         {"path": "memory/people/x.md", "text": "факт", "source": "x"},
     ]
 

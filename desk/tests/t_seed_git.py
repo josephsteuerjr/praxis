@@ -27,7 +27,7 @@ sys.path.insert(0, str(LIVE))          # self_model живёт в дереве �
 
 import boot  # noqa: E402
 
-CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Егор"}}
+CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Алекс"}}
 
 
 def git(tree: Path, *args: str) -> str:

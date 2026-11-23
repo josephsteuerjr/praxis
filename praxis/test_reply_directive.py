@@ -22,7 +22,7 @@ class ReplyDirectiveHead(unittest.TestCase):
 
     def test_directive_below_preamble_is_stripped(self):
         """Живой случай: план моделью напечатан в текст, директива — строкой ниже."""
-        raw = ("Теперь у меня полная картина. Отвечу Егору.\n\n"
+        raw = ("Теперь у меня полная картина. Отвечу Алексу.\n\n"
                "ОТВЕТ->#94884\n\n"
                "Thinking уже включён на статике промпта.")
         text, mid = agent.split_reply_directive(raw)

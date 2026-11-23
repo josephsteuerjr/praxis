@@ -18,7 +18,7 @@ import mailer
 import mailroom
 import mailroom_bot
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 CFG={'addr':'sender@example.invalid','pw':'fake','smtp_host':'smtp.example.invalid','smtp_port':465}
 
 class MailResults(unittest.TestCase):

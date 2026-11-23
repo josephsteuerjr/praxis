@@ -101,10 +101,10 @@ class SaidSameFuzzyTests(unittest.TestCase):
 
     def test_paraphrase_duplicates_of_real_incident(self):
         a = ("Рома, привет. Результаты синхронизации у тебя в папке в оперзадачах — "
-             "Егор просил передать.")
-        b = ("Рома, привет. Это Praxis, ассистент Егора. Он передаёт: результаты "
+             "Алекс просил передать.")
+        b = ("Рома, привет. Это Praxis, ассистент Алекса. Он передаёт: результаты "
              "синхронизации у тебя в папке в оперзадачах.")
-        c = ("Ром, привет — это Праксис, от Егора: результаты синхронизации лежат "
+        c = ("Ром, привет — это Праксис, от Алекса: результаты синхронизации лежат "
              "у тебя в папке в оперзадачах.")
         self.assertTrue(followups._said_same(a, b), "перефраз b инцидента 07.10 должен ловиться")
         self.assertTrue(followups._said_same(a, c), "перефраз c инцидента 07.10 должен ловиться")
@@ -122,7 +122,7 @@ class SaidSameFuzzyTests(unittest.TestCase):
 
     def test_different_message_is_not_duplicate(self):
         a = ("Рома, привет. Результаты синхронизации у тебя в папке в оперзадачах — "
-             "Егор просил передать.")
+             "Алекс просил передать.")
         d = "Ром, привет! Как продвигается сборка релиза? Нужна твоя оценка по срокам."
         self.assertFalse(followups._said_same(a, d))
         self.assertFalse(followups._said_same(a, "Доброе утро! Напоминаю про созвон в 14:00."))
@@ -186,7 +186,7 @@ class SweepOlderThreadsTests(unittest.TestCase):
         owing = [self.ledger.get(x["id"]) for x in owed]
         carriers = [x for x in owing if followups._owes_owner_notice(x)]
         self.assertEqual(len(carriers), 1,
-                         "письмо Егору несёт ровно одна нить, не три")
+                         "письмо Алексу несёт ровно одна нить, не три")
         skipped = [x for x in owing
                    if x.get("notice_skipped") == "тот же ответ — отчёт уходит по свежей нити"]
         self.assertEqual(len(skipped), 2, "остальные гаснут с названной причиной")

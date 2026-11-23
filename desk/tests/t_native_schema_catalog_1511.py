@@ -17,7 +17,7 @@ SUPPLIERS=(('mount','fence','MOUNT_TOOL'),('self_review','self_review_integratio
  ('kit','kit_proposals','_TOOL'),('inspection','update_inspection','TOOL'),
  ('source_update','source_update','TOOL'),('update_server','updates','TOOL'),
  ('update_desktop','updates','TOOL_DESK'))
-RAW='Yegor Егор 中文 {key,value} $&'
+RAW='Alex Алекс 中文 {key,value} $&'
 
 
 def fake():

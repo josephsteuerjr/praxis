@@ -43,7 +43,7 @@ class CapabilityLanguage(unittest.TestCase):
                     snapshot = capabilities.snapshot()
                     text = capabilities.describe('owner')
                     self.assertTrue(text.startswith(headings[frame]), (ui, frame, text[:80]))
-                    self.assertNotIn('Егор', text)
+                    self.assertNotIn('Алекс', text)
                     row = next(row for row in snapshot['skills'] if row['name'] == 'private')
                     self.assertEqual(row['line'], authored)
                     self.assertIn(authored, capabilities.skill_navigation(skills/'INDEX.md'))

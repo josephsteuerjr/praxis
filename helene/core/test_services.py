@@ -191,7 +191,7 @@ class TestReceipts(Base):
         text = services.describe()
         self.assertIn("serverapp", text)
         self.assertIn("1/3", text)
-        self.assertIn("только Егор", text)
+        self.assertIn("только владелец", text)
         self.assertIn("relay", text)
 
 

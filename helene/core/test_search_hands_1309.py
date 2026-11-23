@@ -31,7 +31,7 @@ class Base(unittest.TestCase):
             "# Кадр как документ\nтекст\n", encoding="utf-8")
         (self.tmp / "workspace/inbox/groups/abstract/файл.txt").write_text("x\n", encoding="utf-8")
         (self.tmp / "memory/runs/run-1/manifest.md").write_text("иголка в прогоне\n", encoding="utf-8")
-        (self.tmp / "memory/dossiers/егор.md").write_text("иголка в досье\n", encoding="utf-8")
+        (self.tmp / "memory/dossiers/алекс.md").write_text("иголка в досье\n", encoding="utf-8")
         (self.tmp / "soul/HOME.md").write_text("иголка в душе\n", encoding="utf-8")
         (self.tmp / "core.py").write_text("VALUE = 1\n", encoding="utf-8")
         self._orig = [(workshop, k, getattr(workshop, k))

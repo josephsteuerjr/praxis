@@ -34,12 +34,12 @@ class MemoryCatalogueTests(unittest.TestCase):
     def test_catalogue_maps_layers_and_keeps_sql_derived(self):
         import memory_catalog
         (self.base / "memory/people").mkdir(parents=True)
-        (self.base / "memory/people/egor.md").write_text("# Егор\n\n- владелец\n", encoding="utf-8")
+        (self.base / "memory/people/alex.md").write_text("# Алекс\n\n- владелец\n", encoding="utf-8")
         (self.base / "memory/computer").mkdir(parents=True)
         (self.base / "memory/computer/MAP.md").write_text("# map\n", encoding="utf-8")
         text = memory_catalog.rebuild().read_text(encoding="utf-8")
         self.assertIn("## Люди", text)
-        self.assertIn("people/egor.md", text)
+        self.assertIn("people/alex.md", text)
         self.assertIn("computer/MAP.md", text)
         self.assertIn("только пересобираемые индексы", text)
 
@@ -48,8 +48,8 @@ class MemoryCatalogueTests(unittest.TestCase):
 
         memory = self.base / "memory"
         sources = {
-            memory / "people/egor.md": (
-                "# Egor\n\n- owner\n- [ ] ask whether the kraken replied\n"
+            memory / "people/alex.md": (
+                "# Alex\n\n- owner\n- [ ] ask whether the kraken replied\n"
             ),
             memory / "rooms/-100.md": (
                 "# Kraken room\n\nmode: observer\nmembership: left\n"
@@ -406,10 +406,10 @@ class MemoryCatalogueTests(unittest.TestCase):
     def test_inventory_writes_snapshot_and_device_card(self, status, run):
         import computer_inventory
         status.return_value = {"ok": True, "identity": {"kind": "interactive", "integrity": "high"}, "manifest": {}}
-        payload = {"captured_at": "2026-07-13T05:00:00.0000000Z", "hostname": "PC", "user": "egor",
+        payload = {"captured_at": "2026-07-13T05:00:00.0000000Z", "hostname": "PC", "user": "alex",
                    "os": {"caption": "Windows", "version": "11", "build": "1", "architecture": "64-bit"},
                    "machine": {"manufacturer": "X", "model": "Y", "memory_bytes": 8 * 1024**3},
-                   "volumes": [], "tools": [], "apps": [{"name": "Word"}], "known_roots": ["C:\\Users\\egor"], "project_roots": []}
+                   "volumes": [], "tools": [], "apps": [{"name": "Word"}], "known_roots": ["C:\\Users\\alex"], "project_roots": []}
         run.return_value = {"ok": True, "stdout_tail": json.dumps(payload)}
         observed = dt.datetime(2026, 7, 13, 5, 0, tzinfo=dt.timezone.utc)
         with mock.patch("computer_inventory._utc_now", return_value=observed):

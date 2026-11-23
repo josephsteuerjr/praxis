@@ -28,7 +28,7 @@ OWNER = 123456789
 
 
 def make_init(token=TOKEN, user_id=OWNER, auth_date=None, tamper=False) -> str:
-    user = f'{{"id":{user_id},"first_name":"Yegor"}}'
+    user = f'{{"id":{user_id},"first_name":"Alex"}}'
     params = {"auth_date": str(auth_date if auth_date is not None else int(time.time())),
               "query_id": "AAExample", "user": user}
     dcs = "\n".join(f"{k}={params[k]}" for k in sorted(params))

@@ -60,7 +60,7 @@ class _LifelikeBridge:
 
     def __call__(self, chat_id, text, reply_to=""):
         self.calls.append((str(chat_id), str(text), str(reply_to)))
-        return f"Отправила → Егор (chat_id={chat_id}, message_id=901): {text}"
+        return f"Отправила → Алекс (chat_id={chat_id}, message_id=901): {text}"
 
 
 class _RefusingBridge:

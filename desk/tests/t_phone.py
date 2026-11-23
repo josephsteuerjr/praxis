@@ -54,10 +54,10 @@ def _init_data(user: dict, token: str = TOKEN, auth_date: int | None = None) -> 
 
 class Signature(unittest.TestCase):
     def test_valid_signature_yields_user(self):
-        user = {"id": 42, "first_name": "Егор", "username": "yegor"}
+        user = {"id": 42, "first_name": "Алекс", "username": "alex"}
         got = deskapp._telegram_init_user(_init_data(user), ["другой:токен", TOKEN])
         self.assertEqual(got["id"], 42)
-        self.assertEqual(got["first_name"], "Егор")
+        self.assertEqual(got["first_name"], "Алекс")
 
     def test_wrong_token_is_refused(self):
         with self.assertRaises(ValueError) as caught:
@@ -94,11 +94,11 @@ class Login(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_one_device_per_telegram_user(self):
-        first = deskapp._tg_login({"id": 42, "first_name": "Егор"}, "10.0.0.5")
-        second = deskapp._tg_login({"id": 42, "first_name": "Егор"}, "10.0.0.6")
+        first = deskapp._tg_login({"id": 42, "first_name": "Алекс"}, "10.0.0.5")
+        second = deskapp._tg_login({"id": 42, "first_name": "Алекс"}, "10.0.0.6")
         rows = deskapp._devices()
         self.assertEqual(len(rows), 1, "повторный вход заменил строку, а не добавил")
-        self.assertEqual(rows[0]["name"], "Telegram · Егор")
+        self.assertEqual(rows[0]["name"], "Telegram · Алекс")
         self.assertEqual(rows[0]["pair"], "tg:42")
         self.assertTrue(deskapp._device_ok(second["key"]))
         self.assertFalse(deskapp._device_ok(first["key"]), "прежний ключ отозван заменой")

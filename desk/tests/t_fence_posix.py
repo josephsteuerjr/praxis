@@ -98,14 +98,14 @@ class CommandLine(unittest.TestCase):
     def test_смонтированная_папка_по_праву_доступа(self):
         box = self.make()
         box.sync_mounts([
-            {"path": "/home/yegor/docs", "link": str(self.workspace / "mnt" / "docs"),
+            {"path": "/home/alex/docs", "link": str(self.workspace / "mnt" / "docs"),
              "access": "read"},
-            {"path": "/home/yegor/work", "link": str(self.workspace / "mnt" / "work"),
+            {"path": "/home/alex/work", "link": str(self.workspace / "mnt" / "work"),
              "access": "write"},
         ])
         line = " ".join(box.argv(["true"], self.workspace))
-        self.assertIn("--ro-bind-try /home/yegor/docs", line)
-        self.assertIn("--bind-try /home/yegor/work", line)
+        self.assertIn("--ro-bind-try /home/alex/docs", line)
+        self.assertIn("--bind-try /home/alex/work", line)
 
     def test_дети_умирают_вместе_с_нами(self):
         line = self.make().argv(["true"], self.workspace)

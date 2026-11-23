@@ -120,7 +120,7 @@ from test_authorship_support_1910 import AuthoredMemoryBase
 class AuthoredChronicler(AuthoredMemoryBase):
     def test_quotes_people_and_paths_are_retained_verbatim(self):
         recap = (
-            "I retained the distinction: Yegor said «read the sources»; "
+            "I retained the distinction: Alex said «read the sources»; "
             "Hope disagreed about memory/life/example.md. "
             "I did not treat Hope's words as my own."
         )

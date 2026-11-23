@@ -41,7 +41,7 @@ class AgentResumeRuntimeTests(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-agent-resume-{suffix}",
@@ -157,7 +157,7 @@ class AgentResumeRuntimeTests(unittest.TestCase):
             principal_id="100", is_dm=False, owner=True, known=True,
             addressed=True, address_message_id=77, address_kind="mention",
             title="Mycelium", size=250,
-            reply_targets=((77, "Yegor", "answer here"),),
+            reply_targets=((77, "Alex", "answer here"),),
         )
         context = self._create("authored-topic", channel=channel)
         self._model(
@@ -309,7 +309,7 @@ class AgentResumeRuntimeTests(unittest.TestCase):
             chat_id="-10042", room_id="-10042", principal_id="100",
             is_dm=False, owner=True, known=True, addressed=True,
             address_message_id=77, address_kind="mention",
-            reply_targets=((77, "Yegor", "continue"),),
+            reply_targets=((77, "Alex", "continue"),),
         )
         context = self._create("legacy-group-policy", channel=channel)
         draft = "group authored draft"

@@ -130,10 +130,10 @@ class ProcFixture(unittest.TestCase):
         self._w("rootfs/etc/passwd",
                 "root:x:0:0:root:/root:/bin/bash\n"
                 "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
-                "yegor:x:1000:1000:Yegor:/home/yegor:/bin/bash\n"
+                "alex:x:1000:1000:Alex:/home/alex:/bin/bash\n"
                 "svc:x:1001:1001::/home/svc:/usr/sbin/nologin\n")
         self._w("rootfs/etc/group",
-                "root:x:0:\nsudo:x:27:yegor\ndocker:x:998:yegor,svc\nusers:x:100:\n")
+                "root:x:0:\nsudo:x:27:alex\ndocker:x:998:alex,svc\nusers:x:100:\n")
         self._w("rootfs/etc/os-release",
                 'NAME="Ubuntu"\nPRETTY_NAME="Ubuntu 24.04 LTS"\nID=ubuntu\n')
         self._w("rootfs/etc/ssh/sshd_config",
@@ -185,7 +185,7 @@ class TestHostParsers(ProcFixture):
         self.assertEqual(snap["total"], 1)
         row = snap["top_mem"][0]
         self.assertEqual(row["rss"], 250 * 4096)
-        self.assertEqual(row["user"], "yegor")
+        self.assertEqual(row["user"], "alex")
         self.assertEqual(snap["states"]["S"], 1)
 
     def test_kernel_facts(self):
@@ -375,13 +375,13 @@ class TestRootfsParsers(ProcFixture):
     def test_passwd(self):
         users = serverapp.parse_passwd(self.hostfs)
         humans = [u["name"] for u in users if u["human"]]
-        self.assertEqual(humans, ["root", "yegor"])
+        self.assertEqual(humans, ["root", "alex"])
         self.assertEqual(len(users), 4)
 
     def test_groups(self):
         g = serverapp.parse_groups(self.hostfs)
-        self.assertEqual(g["sudo"], ["yegor"])
-        self.assertEqual(g["docker"], ["yegor", "svc"])
+        self.assertEqual(g["sudo"], ["alex"])
+        self.assertEqual(g["docker"], ["alex", "svc"])
         self.assertNotIn("users", g)
 
     def test_sshd_with_dropin_priority(self):

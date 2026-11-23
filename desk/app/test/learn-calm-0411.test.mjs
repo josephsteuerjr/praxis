@@ -49,9 +49,9 @@ test('table of contents matches section reading order and all useful destination
 
 test('the introduction keeps missing values as blanks and typed values verbatim', () => {
   assert.equal(assemble(INTRO(), {querySelector: () => null}, 'intro'), INTRO());
-  const values = new Map([[1, '  Егор  '], [3, 'делаю   проекты'], [5, 'не выдумывал факты']]);
+  const values = new Map([[1, '  Алекс  '], [3, 'делаю   проекты'], [5, 'не выдумывал факты']]);
   const root = { querySelector(selector) { const i = Number(selector.match(/data-hole="(\d+)"/)[1]); return {value: values.get(i) || ''}; } };
-  assert.equal(assemble(INTRO(), root, 'intro'), 'Меня зовут Егор. Я делаю проекты. Мне важно, чтобы ты не выдумывал факты.');
+  assert.equal(assemble(INTRO(), root, 'intro'), 'Меня зовут Алекс. Я делаю проекты. Мне важно, чтобы ты не выдумывал факты.');
 });
 
 test('connection and model labels never invent data and escape long provider names', () => {

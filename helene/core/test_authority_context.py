@@ -240,7 +240,7 @@ class AuthorityContextTests(unittest.TestCase):
                 origin_text="ПОДТВЕРЖДАЮ TELEGRAM tgcritical_0123456789abcdef",
                 is_dm=True, owner=True, known=True, addressed=True,
                 address_message_id=777, address_kind="direct",
-                reply_targets=((777, "Yegor", "visible transcript may differ"),),
+                reply_targets=((777, "Alex", "visible transcript may differ"),),
             )
             context = run_context.RunContext.create(
                 run_id="run-origin-owner", kind="chat_turn", goal="confirm",

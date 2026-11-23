@@ -26,7 +26,7 @@ import test_outbox_deadletter_1708 as _dl
 
 SYNC, TOTAL = "同步", "汇总"  # «同步», «汇总» — пишем кодом, как в test_sanitize_cjk
 # Начало реплики call_58a59cd9 из run-20260926T121355992001Z-8e2350ef (args 1073, леджер 1067).
-REPORT = ("Проверила гипотезу Егора из #109954 прямо по файлам. В soul/ (конституция, визитка, "
+REPORT = ("Проверила гипотезу Алекса из #109954 прямо по файлам. В soul/ (конституция, визитка, "
           f"навыки) ровно два CJK-кластера на все маркдауны: {SYNC} в self.md и {TOTAL} в "
           "journal-live-flow.md. Оба — мои же записки про сам дефект.")
 # Вклейка посреди слова — call_5575e84c из run-20260926T122556688839Z-c6dec1f7.
@@ -70,7 +70,7 @@ class ProofAcceptsWhatTheGuardStripped(_Reply):
         self.assertNotIn("<think>", sent)
         self.assertNotIn(SYNC, sent)
         entry = self._reply_entry(context.run_id, ledger_text=sent)
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_cjk_room_keeps_the_text_and_the_proof_still_passes(self):
         # в CJK-комнате гард не трогает текст — леджер равен аргументам
@@ -80,14 +80,14 @@ class ProofAcceptsWhatTheGuardStripped(_Reply):
         context = self._create_run("cjk-room")
         self._start_reply(context.run_id, raw)
         entry = self._reply_entry(context.run_id, ledger_text=sent)
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_a_genuinely_different_text_is_still_refused(self):
         context = self._create_run("cjk-forged")
         self._start_reply(context.run_id, REPORT)
         entry = self._reply_entry(context.run_id, ledger_text="кто-то подменил текст")
         with self.assertRaises(agent.DurableExecutionError):
-            agent.run_direct_outbox_prepared(entry, target_label="Егор")
+            agent.run_direct_outbox_prepared(entry, target_label="Алекс")
 
 
 class GuardAndProofShareOneStripper(_Reply):
@@ -98,7 +98,7 @@ class GuardAndProofShareOneStripper(_Reply):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
 
     def test_the_guard_goes_through_the_shared_stripper(self):
@@ -116,7 +116,7 @@ class GuardAndProofShareOneStripper(_Reply):
         context = self._create_run("cjk-e2e")
         self._start_reply(context.run_id, GLITCH)
         entry = self._reply_entry(context.run_id, ledger_text=sent)
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
 
 class RefusedProofRetiresTheIntentBeforeTheNetwork(_Reply):
@@ -142,7 +142,7 @@ class RefusedProofRetiresTheIntentBeforeTheNetwork(_Reply):
         with mock.patch.object(runner.owner_delivery.LEDGER, "emit", emit):
             with self.assertRaises(agent.DurableExecutionError) as caught:
                 runner._bind_direct_outbox_proof(entry, runner._durable_outbox_projection(
-                    execution, {"target_label": "Егор", "target_user_id": None,
+                    execution, {"target_label": "Алекс", "target_user_id": None,
                                 "pulse_id": "", "followup_request": ""}))
         row = runner._direct_outbox().get(key, verify_file=False)
         self.assertEqual(row["state"], "dead_letter")
@@ -164,7 +164,7 @@ class RefusedProofRetiresTheIntentBeforeTheNetwork(_Reply):
         )
         execution = {"run_id": context.run_id, "call_id": "call-reply", "tool": "reply"}
         runner._bind_direct_outbox_proof(entry, runner._durable_outbox_projection(
-            execution, {"target_label": "Егор", "target_user_id": None,
+            execution, {"target_label": "Алекс", "target_user_id": None,
                         "pulse_id": "", "followup_request": ""}))
         row = runner._direct_outbox().get(key, verify_file=False)
         self.assertEqual(row["state"], "pending")

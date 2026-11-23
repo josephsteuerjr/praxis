@@ -55,7 +55,7 @@ class _RunScaffold(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-deadletter-{suffix}",
@@ -107,7 +107,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
         context = self._create_run("strip")
         self._start_reply(context.run_id, "corporate». ")
         entry = self._reply_entry(context.run_id, ledger_text="corporate».")
-        proof = agent.run_direct_outbox_prepared(entry, target_label="Егор")
+        proof = agent.run_direct_outbox_prepared(entry, target_label="Алекс")
         self.assertEqual(proof["entry"]["payload"]["text"], "corporate».")
         self.assertTrue(agent.direct_outbox_prepared(entry))
 
@@ -115,7 +115,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
         context = self._create_run("exact")
         self._start_reply(context.run_id, "слово в слово")
         entry = self._reply_entry(context.run_id, ledger_text="слово в слово")
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_a_genuinely_different_text_is_still_refused(self):
         # Ослабление — только до strip: защита привязки леджера к намерению остаётся.
@@ -123,7 +123,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
         self._start_reply(context.run_id, "я хотела сказать это")
         entry = self._reply_entry(context.run_id, ledger_text="кто-то подменил текст")
         with self.assertRaises(agent.DurableExecutionError):
-            agent.run_direct_outbox_prepared(entry, target_label="Егор")
+            agent.run_direct_outbox_prepared(entry, target_label="Алекс")
 
 
 class ConstantErrorsStopPretendingToBeTransient(_RunScaffold):

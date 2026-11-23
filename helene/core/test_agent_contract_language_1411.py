@@ -48,7 +48,7 @@ class ContractLanguages(FrameBase):
                                 'contract.base','contract.living_documents','contract.checkable_in_chat',
                                 'contract.owner_tools','contract.appetite','contract.family_audience',
                                 'contract.unknown_authority','state.owner_place'}}
-                            self.assertTrue(all('Yegor' not in text for text in contracts.values()))
+                            self.assertTrue(all('Alex' not in text for text in contracts.values()))
                             key=(lang,ctx.chat_id,reply_enabled)
                             if key in stable:self.assertEqual(stable[key],contracts)
                             stable[key]=dict(contracts)

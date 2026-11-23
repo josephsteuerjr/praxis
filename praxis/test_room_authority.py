@@ -109,7 +109,7 @@ class TestHonestAuthorship(RoomsHarness):
         for cid in ("-101", "-102"):
             self.assertEqual(rooms.profile_read(cid)["mode_set_by"], "unknown", cid)
             self.assertNotIn("owner", self._raw(cid),
-                             f"{cid}: в файле не должно быть подставленного Егора")
+                             f"{cid}: в файле не должно быть подставленного Алекса")
 
     def test_a_named_author_is_kept_verbatim(self):
         for cid, who in (("-111", "owner"), ("-112", "praxis"), ("-113", "protocol")):
@@ -142,12 +142,12 @@ class TestHonestAuthorship(RoomsHarness):
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: protocol\ndisclosure: standard\n")
         self.assertIn("никто этого не выбирал", line)
-        self.assertNotIn("Егор", line)
+        self.assertNotIn("Алекс", line)
 
     def test_the_room_line_names_yegor_when_it_really_was_him(self):
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: owner\ndisclosure: standard\n")
-        self.assertIn("Егор так решил", line)
+        self.assertIn("Алекс так решил", line)
 
 
 class TestHerModeLever(RoomsHarness):
@@ -165,7 +165,7 @@ class TestHerModeLever(RoomsHarness):
 
     def test_she_may_lift_a_mode_the_owner_set(self):
         """Забор «его режим снимает только он» здесь запрещён — специально."""
-        rooms.set_mode("-202", "frozen", set_by="owner", reason="Егор заморозил")
+        rooms.set_mode("-202", "frozen", set_by="owner", reason="Алекс заморозил")
         ok, _ = rooms.set_own_mode("-202", "normal")
         self.assertTrue(ok, "любой обратимый режим она вправе снять сама")
         self.assertEqual(rooms.effective_mode("-202"), "normal")
@@ -262,7 +262,7 @@ class TestHerDisclosureLever(RoomsHarness):
         opened = rooms.context_from_text(
             "# Комната\n\nmode: normal\ndisclosure: open\ndisclosure_set_by: owner\n")
         self.assertIn("раскрытие open", opened)
-        self.assertIn("Егор так решил", opened, "чей это выбор — тоже её знание")
+        self.assertIn("Алекс так решил", opened, "чей это выбор — тоже её знание")
         self.assertIn("мой рычаг", opened, "она обязана знать, что вправе вернуть standard")
 
         plain = rooms.context_from_text("# Комната\n\nmode: normal\ndisclosure: standard\n")

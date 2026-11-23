@@ -292,10 +292,10 @@ class TestOverwrittenAddressIsRecorded(Base):
 
     def test_losing_egor_authority_is_visible(self):
         self.runner._group_wakes = {}
-        self.runner._install_group_wake("room", self._wake(1, owner=True, speaker="Егор"))
+        self.runner._install_group_wake("room", self._wake(1, owner=True, speaker="Алекс"))
         self.runner._install_group_wake("room", self._wake(2, owner=False, speaker="Коля"))
         self.assertEqual(self._notes()["owner_lost"], 1,
-                         "обращение Егора ушло в проход без его полномочий — это видно")
+                         "обращение Алекса ушло в проход без его полномочий — это видно")
 
     def test_ambient_traffic_notes_nothing(self):
         self.runner._group_wakes = {}

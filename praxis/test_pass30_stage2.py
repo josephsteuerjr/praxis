@@ -171,7 +171,7 @@ class NarrateToolTests(unittest.TestCase):
             out = agent.tool_narrate("окно: собрала, гоняю тесты")
         self.assertIn("SENT", out)
         self.assertEqual(self.sent[0][0], "101")
-        self.assertIn("ЛС Егора", out, "фолбэк в owner-ЛС назван, не молчалив")
+        self.assertIn("ЛС Алекса", out, "фолбэк в owner-ЛС назван, не молчалив")
 
     def test_transport_refusal_not_noted(self):
         """Судья ревью: строка-отказ транспорта — НЕ доставка; леджер не травится."""

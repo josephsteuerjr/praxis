@@ -21,7 +21,7 @@ import computer_steps
 import owner_stop
 from test_tool_language_1511 import structural
 
-RAW='praxis.body.v1 Windows body UI Automation tree PowerShell Yegor Егор 中文 {literal} $&'
+RAW='praxis.body.v1 Windows body UI Automation tree PowerShell Alex Алекс 中文 {literal} $&'
 
 
 class ImageText(str):

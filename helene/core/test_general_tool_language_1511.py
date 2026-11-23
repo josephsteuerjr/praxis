@@ -77,7 +77,7 @@ class GeneralToolLanguages(unittest.TestCase):
                         original=copy.deepcopy(arguments)
                         windows_mcp_tools.validate(arguments,by_name[name]['input_schema'])
                         self.assertEqual(arguments,original)
-                    self.assertNotIn('Yegor',by_name['manage_identity']['description'])
+                    self.assertNotIn('Alex',by_name['manage_identity']['description'])
                     identity_action=by_name['manage_identity']['input_schema']['properties']['action']
                     self.assertEqual(set(identity_action['description'].split(' | ')),set(identity_action['enum']))
                     actual={tool['name']:tool for tool in agent.catalog_tools_for(agent.ChannelContext(owner=False))}

@@ -43,7 +43,7 @@ class TestFormationAdversarial(Pass19Base):
     def test_attack_cannot_substitute_another_allowed_event(self):
         _compact_id, raw = self._fresh_compact()
         frozen_id, substitute_id = raw[0]["id"], raw[1]["id"]
-        claim = {"subject": "Егор", "kind": "person",
+        claim = {"subject": "Алекс", "kind": "person",
                  "text": "предпочитает строгое происхождение памяти",
                  "visibility": "private", "salience": 3, "confidence": "inferred",
                  "evidence_ids": [frozen_id]}
@@ -52,7 +52,7 @@ class TestFormationAdversarial(Pass19Base):
 
         def fake(system, user, max_tokens=0):
             if system == formation._system("harvest"):
-                return {"entities": [{"name": "Егор", "kind": "person"}],
+                return {"entities": [{"name": "Алекс", "kind": "person"}],
                         "claims": [claim]}
             if system == formation._system("dig"):
                 return {"evidence_found": [substitute_id], "questions": [],
@@ -69,7 +69,7 @@ class TestFormationAdversarial(Pass19Base):
         _kind, meta = memory_provenance.claim_source(claim_path)
         self.assertEqual(meta["status"], "unsupported")
         self.assertEqual(meta["evidence_ids"], [])
-        self.assertFalse(people.path_for(graph.resolve("Егор")).exists())
+        self.assertFalse(people.path_for(graph.resolve("Алекс")).exists())
 
     def test_compact_dossier_and_graph_prose_never_reaches_formation_prompts(self):
         compact_id, _raw = self._fresh_compact()
@@ -85,8 +85,8 @@ class TestFormationAdversarial(Pass19Base):
                 "## Суть\n", "## Суть\nCOMPACT_RECAP_AUTHORITY_POISON\n", 1),
             encoding="utf-8",
         )
-        people.path_for("egor").write_text(
-            "# Егор\n\n## Факты\n- DOSSIER_AUTHORITY_POISON\n", encoding="utf-8")
+        people.path_for("alex").write_text(
+            "# Алекс\n\n## Факты\n- DOSSIER_AUTHORITY_POISON\n", encoding="utf-8")
         graph.GRAPH_MD.write_text(
             "# Граф\n\n- GRAPH_AUTHORITY_POISON\n", encoding="utf-8")
         calls: list[tuple[str, str]] = []
@@ -95,7 +95,7 @@ class TestFormationAdversarial(Pass19Base):
         def fake(system, user, max_tokens=0):
             calls.append((system, user))
             if system == formation._system("harvest"):
-                return {"entities": [{"name": "Егор", "kind": "person"}], "claims": []}
+                return {"entities": [{"name": "Алекс", "kind": "person"}], "claims": []}
             if system == formation._system("dig"):
                 return {"evidence_found": [], "questions": [], "changed_conclusion": "",
                         "stop_now": False, "stop_reason": ""}
@@ -125,7 +125,7 @@ class TestFormationAdversarial(Pass19Base):
         рядом ложится карточка конфликта, которая никого не будит и ничего не блокирует.
         """
         _compact_id, raw = self._fresh_compact()
-        first = {"subject": "Егор", "kind": "person", "text": "любит ранние подъёмы",
+        first = {"subject": "Алекс", "kind": "person", "text": "любит ранние подъёмы",
                  "visibility": "private", "salience": 2, "confidence": "inferred",
                  "evidence_ids": [raw[0]["id"]]}
         current = {"claim": first, "evidence_id": raw[0]["id"]}
@@ -141,7 +141,7 @@ class TestFormationAdversarial(Pass19Base):
         self.assertTrue(first_meta["_automatic_eligible"])
 
         _compact_id, raw = self._fresh_compact(start=1_700_001_000.0)
-        second = {"subject": "Егор", "kind": "person", "text": "не любит ранние подъёмы",
+        second = {"subject": "Алекс", "kind": "person", "text": "не любит ранние подъёмы",
                   "visibility": "private", "salience": 3, "confidence": "inferred",
                   "evidence_ids": [raw[0]["id"]], "contradicts": [first_id]}
         current.update(claim=second, evidence_id=raw[0]["id"])

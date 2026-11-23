@@ -65,10 +65,10 @@ def frame(audience: str, **over) -> str:
     """Живой системный кадр этой аудитории (кэш на модуль: сборка не бесплатна)."""
     if over:  # ChannelContext заморожен — правка только через replace
         ctx = dataclasses.replace(AUDIENCES[audience](), **over)
-        return agent.build_system_parts(speaker="Егор", ctx=ctx)[1]
+        return agent.build_system_parts(speaker="Алекс", ctx=ctx)[1]
     if audience not in _FRAMES:
         _FRAMES[audience] = agent.build_system_parts(
-            speaker="Егор", ctx=AUDIENCES[audience]())[1]
+            speaker="Алекс", ctx=AUDIENCES[audience]())[1]
     return _FRAMES[audience]
 
 
@@ -142,9 +142,9 @@ class TheAddressIsReadFromTheLivingFrame(unittest.TestCase):
     def test_address_carries_no_content(self):
         """Адрес не имеет права нести её текст: в ключ уезжает только модель, роль и id."""
         address = llm.cache_address("gpt-5.6-sol",
-                                    frame("owner") + "\nсекретная строка про Егора")
+                                    frame("owner") + "\nсекретная строка про Алекса")
         self.assertNotIn("секрет", address)
-        self.assertNotIn("Yegor", address)
+        self.assertNotIn("Alex", address)
         self.assertTrue(address.startswith("praxis:gpt-5.6-sol:"))
 
 
@@ -185,7 +185,7 @@ class TheStructuredKeyChangesNoAddress(unittest.TestCase):
 
     def test_the_socket_works_without_any_prose_at_all(self):
         """Кадр без единого английского маркера, но с объявленным ключом, всё ещё адресуем."""
-        russian = ("Я в личном канале с Егором. Комната: room_id=-100500; людей: 2.\n"
+        russian = ("Я в личном канале с Алексом. Комната: room_id=-100500; людей: 2.\n"
                    "audience_key=owner\n")
         address = llm.cache_address("gpt-5.6-sol", russian)
         self.assertEqual(tag_of(address), "owner")

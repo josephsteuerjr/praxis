@@ -60,7 +60,7 @@ def _build_kwargs(**over):
                              # тесты обязаны уметь задать их, иначе зоны не проверить.
                              recap=over.pop("recap", None),
                              places_now=over.pop("places_now", ""))
-    kwargs = dict(ctx=_ctx(), history=_history(), speaker="Егор",
+    kwargs = dict(ctx=_ctx(), history=_history(), speaker="Алекс",
                   user_msg="как ты?", tools=[{"name": "reply", "description": "Сказать."}],
                   now=NOW, plan=plan)
     kwargs.update(over)
@@ -80,12 +80,12 @@ class ShadowCase(unittest.TestCase):
                                                encoding="utf-8")
         (base / "soul" / "VOICE.md").write_text("# Голос\nЖиво.\n", encoding="utf-8")
         (base / "memory" / "people").mkdir(parents=True)
-        (base / "memory" / "people" / "yegor.md").write_text("владелец",
+        (base / "memory" / "people" / "alex.md").write_text("владелец",
                                                              encoding="utf-8")
         # Канон карты памяти: в owner-потоке эпоха везёт ЕГО ТЕЛО (её №8), не
         # сгенерированный список.
         (base / "memory" / "INDEX.md").write_text(
-            "# INDEX — карта памяти\n- люди: yegor\n", encoding="utf-8")
+            "# INDEX — карта памяти\n- люди: alex\n", encoding="utf-8")
         self._old_base = frame_shadow.BASE
         frame_shadow.BASE = base
         self.base = base
@@ -110,7 +110,7 @@ class ShadowCase(unittest.TestCase):
         i = text.find(frame_shadow._SEP_T)
         return text[i + len(frame_shadow._SEP_T):] if i >= 0 else ""
 
-    def _shadow(self, i=0, *, ctx=None, history=None, tools=None, speaker="Егор",
+    def _shadow(self, i=0, *, ctx=None, history=None, tools=None, speaker="Алекс",
                 user_msg=None, env=None):
         """Один захват тени. Шесть классов ниже писали этот вызов почти одинаково —
         различаются только умолчания, поэтому шов один, а обёртки тонкие."""
@@ -169,7 +169,7 @@ class TheCaptureIsGated(ShadowCase):
     def test_lever_off_means_nothing_happens(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "off"}):
             self.assertIsNone(frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор",
+                ctx=_ctx(), history=_history(), speaker="Алекс",
                 user_msg="х", tools=[], now=NOW))
         self.assertFalse(self._stream_dir().exists())
 
@@ -186,7 +186,7 @@ class TheCaptureIsGated(ShadowCase):
                 ctx=_ctx(chat_id=-100200, dm=False), history=_history(),
                 speaker="х", user_msg="х", tools=[], now=NOW))
             self.assertIsNotNone(frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор",
+                ctx=_ctx(), history=_history(), speaker="Алекс",
                 user_msg="х", tools=[], now=NOW))
 
 
@@ -208,7 +208,7 @@ class TheShadowLivesOnDisk(ShadowCase):
         self.assertIsNone(first["e_drift"], "первая заморозка — какой drift?")
         # Источник E изменился (карта памяти) — замороженная эпоха обязана не шелохнуться.
         (self.base / "memory" / "INDEX.md").write_text(
-            "# INDEX — карта памяти\n- люди: yegor · arete\n", encoding="utf-8")
+            "# INDEX — карта памяти\n- люди: alex · arete\n", encoding="utf-8")
         second = self._capture(1)
         self.assertEqual(first["sizes"]["e"], second["sizes"]["e"],
                          "эпоха поехала за источником — заморозка не работает")
@@ -232,7 +232,7 @@ class TheShadowLivesOnDisk(ShadowCase):
     def test_coverage_counts_against_the_live_roster(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=[
                     {"name": "persona.soul", "included": True, "chars": 10},
@@ -254,7 +254,7 @@ class TheShadowLivesOnDisk(ShadowCase):
         умирает» принимается вслепую по одному размеру."""
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=[
                     {"name": "evidence.tier", "included": True, "chars": 15957,
@@ -738,10 +738,10 @@ class TheFoldHoldsByIdentity(ShadowCase):
         plan = frame_shadow.Plan(epoch_n=2, e_text="Э", fold_count=100,
                                  fold_line=saved["fold_line"])
         first = frame_shadow.build(
-            ctx=_ctx(), history=long, speaker="Егор", user_msg="как ты?",
+            ctx=_ctx(), history=long, speaker="Алекс", user_msg="как ты?",
             tools=[], now=NOW, plan=plan)
         second = frame_shadow.build(
-            ctx=_ctx(), history=long, speaker="Егор", user_msg="как ты?",
+            ctx=_ctx(), history=long, speaker="Алекс", user_msg="как ты?",
             tools=[], now=NOW, plan=plan)
         self.assertEqual(first.text, second.text)
 
@@ -1109,7 +1109,7 @@ class TheEpochIsScopedToItsAudience(ShadowCase):
         super().setUp()
         rooms = self.base / "memory" / "rooms"
         rooms.mkdir(parents=True)
-        (rooms / "101.md").write_text("# Личка Егора\n\nтело\n", encoding="utf-8")
+        (rooms / "101.md").write_text("# Личка Алекса\n\nтело\n", encoding="utf-8")
         (rooms / "202.md").write_text("# Личка гостя\n\nтело\n", encoding="utf-8")
         (rooms / "-100500.md").write_text("# Общая группа\nmode: normal\n\nтело\n",
                                           encoding="utf-8")
@@ -1151,7 +1151,7 @@ class TheEpochIsScopedToItsAudience(ShadowCase):
         rows = self._book_rows(e_text)
         self.assertEqual(len(rows), 1, f"чужая личка несёт чужие места: {rows}")
         self.assertIn("личка 202", rows[0])
-        for foreign in ("-100500", "Общая группа", "Личка Егора"):
+        for foreign in ("-100500", "Общая группа", "Личка Алекса"):
             self.assertNotIn(foreign, e_text, f"в чужую личку уехало «{foreign}»")
 
     def test_a_hidden_room_leaves_no_byte_in_a_strangers_stream(self):
@@ -1180,7 +1180,7 @@ class TheEpochIsScopedToItsAudience(ShadowCase):
         e_text = self._frozen("dm-202")["e_text"]
         self.assertIn("люди: гость · остальные имена не приводятся", e_text)
         self.assertNotIn("третий-человек", e_text)
-        self.assertNotIn("yegor", e_text)
+        self.assertNotIn("alex", e_text)
         self.assertNotIn("список полный", e_text)
         self.assertIn("не приводятся вне owner-потока — ни списком, ни числом", e_text)
         # Навыки — мои способности, а не чужие данные: остаются в обеих аудиториях.
@@ -1504,7 +1504,7 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
             e_text=json.loads((self._stream_dir() / "epoch.json").read_text(
                 encoding="utf-8"))["e_text"])
         direct = frame_shadow.build(
-            ctx=_ctx(), history=_history(), speaker="Егор", user_msg="вход 0",
+            ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="вход 0",
             tools=[{"name": "reply", "description": "Сказать."}], now=NOW, plan=plan)
         self.assertEqual(on_disk, direct.text.encode("utf-8"),
                          "два входа в один сборщик разошлись — значит сборок две")
@@ -1515,11 +1515,11 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             plan = frame_shadow.prepare(ctx=_ctx(), history=_history(),
                                         tools=[], now=NOW)
-        first = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Егор",
+        first = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                    user_msg="х", tools=[], now=NOW, plan=plan)
         (self.base / "memory" / "people" / "arete.md").write_text("гость",
                                                                   encoding="utf-8")
-        second = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Егор",
+        second = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                     user_msg="х", tools=[], now=NOW, plan=plan)
         self.assertEqual(first.text.encode("utf-8"), second.text.encode("utf-8"))
         self.assertEqual(first.e, plan.e_text, "E в кадр едет только из Plan")
@@ -1616,9 +1616,9 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             plan = frame_shadow.prepare(ctx=_ctx(), history=_history(),
                                         tools=tools, now=NOW)
-        shadow = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Егор",
+        shadow = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                     user_msg="как ты?", tools=tools, now=NOW, plan=plan)
-        live = agent.frame_for(ctx=_ctx(), history=_history(), speaker="Егор",
+        live = agent.frame_for(ctx=_ctx(), history=_history(), speaker="Алекс",
                                user_msg="как ты?", tools=tools, now=NOW)
         self.assertEqual(live.encode("utf-8"), shadow.text.encode("utf-8"))
         self.assertEqual(frame_shadow.GOLDEN, "live==shadow",
@@ -1640,7 +1640,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
             {"name": "contract.base", "included": True, "chars": 30,
              "text": "основание контракта хода"},
             {"name": "state.owner_place", "included": True, "chars": 20,
-             "variant": "owner_dm", "text": "owner_place: личка Егора"},
+             "variant": "owner_dm", "text": "owner_place: личка Алекса"},
             {"name": "evidence.tier", "included": True, "chars": 40,
              "label": "Mutable operational continuity",
              "text": "uptime: 5 суток · счётчики хода"},
@@ -1725,7 +1725,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
         self._shadow(0)
         e_text = str(self._frozen().get("e_text"))
         self.assertIn("не прочитался", e_text)
-        self.assertNotIn("yegor", e_text.split("поднято в эпоху")[0],
+        self.assertNotIn("alex", e_text.split("поднято в эпоху")[0],
                          "синтетический список подменил канон — её №8 нарушено")
 
     # ---- №8: желания в эпохе, граница по содержательному изменению
@@ -1736,7 +1736,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
 
     def test_desires_ride_in_the_owner_epoch_from_the_ledger(self):
         self._ledger().notice("довести тень до шва",
-                              source="разговор с Егором 21.08",
+                              source="разговор с Алексом 21.08",
                               why_it_matters="кадр = контур преемственности",
                               next_move="реализовать девять решений")
         self._shadow(0)
@@ -1748,7 +1748,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
 
     def test_desires_do_not_leak_into_a_strangers_epoch(self):
         self._ledger().notice("тайное намерение",
-                              source="разговор с Егором",
+                              source="разговор с Алексом",
                               why_it_matters="внутреннее")
         self._shadow(0, ctx=_ctx(505, dm=True, owner_audience=False))
         stream = self.base / "memory" / ".state" / "shadow" / "dm-505"
@@ -1758,7 +1758,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
 
     def test_a_meaningful_desire_change_turns_the_epoch(self):
         ledger = self._ledger()
-        ledger.notice("первое", source="разговор с Егором", why_it_matters="в")
+        ledger.notice("первое", source="разговор с Алексом", why_it_matters="в")
         first = self._shadow(0)
         # Служебный шум: пересборка проекции не трогает канон — границы нет.
         ledger.rebuild_projection()
@@ -1767,7 +1767,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
                          "служебный шум перевернул эпоху — её №8 нарушено")
         self.assertIsNone(second["boundary"])
         # Содержательное изменение: новое намерение — граница.
-        ledger.notice("второе", source="разговор с Егором", why_it_matters="в")
+        ledger.notice("второе", source="разговор с Алексом", why_it_matters="в")
         third = self._shadow(2)
         self.assertEqual(third["epoch"], first["epoch"] + 1)
         self.assertIn("желаний", str(third["boundary"]["reason"]))
@@ -1794,7 +1794,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
     def test_sections_without_texts_stay_an_honest_debt(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=self._sections(with_machine=False))
         # Опись без текстов — прежний режим: секции остаются todo, никакого аванса.
@@ -1806,7 +1806,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
     def test_carried_texts_land_in_t_and_cover_their_sections(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW, live_sections=self._sections())
         shadow = (self._stream_dir() / metrics["file"]).read_text(encoding="utf-8")
         tail = shadow.split("═══ ХВОСТ ═══", 1)[1]
@@ -1832,7 +1832,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
     def test_generic_extra_system_stays_whole_in_the_current_tail(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW, live_sections=self._sections())
         blocks = self._frozen()["blocks"]
         self.assertNotIn("voice_frame", blocks)
@@ -1846,13 +1846,13 @@ class TheNineDecisionsAreHerWord(ShadowCase):
     def test_the_recap_snapshots_at_the_boundary_and_holds_still(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             first = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=self._sections(with_recap=True))
             second = frame_shadow.capture(
                 ctx=_ctx(), history=_history() + [
                     {"role": "user", "content": "ещё"}],
-                speaker="Егор", user_msg="ещё",
+                speaker="Алекс", user_msg="ещё",
                 tools=[], now=NOW + timedelta(minutes=1),
                 live_sections=self._sections(with_recap=True))
         for metrics in (first, second):
@@ -1876,7 +1876,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
     def test_header_and_legend_are_buried_not_todo(self):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=[
                     {"name": "evidence.header", "included": True, "chars": 191},
@@ -1895,7 +1895,7 @@ class TheNineDecisionsAreHerWord(ShadowCase):
         меряет отчёт пар."""
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
-                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                ctx=_ctx(), history=_history(), speaker="Алекс", user_msg="х",
                 tools=[], now=NOW,
                 live_sections=[
                     {"name": "evidence.tier", "included": True, "chars": 17583,
@@ -2368,7 +2368,7 @@ class TheExtraSystemIsCurrent(ShadowCase):
         with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
             metrics = frame_shadow.capture(
                 ctx=_ctx(), history=_history() if history is None else history,
-                speaker="Егор", user_msg="текущая просьба", tools=[],
+                speaker="Алекс", user_msg="текущая просьба", tools=[],
                 now=NOW + timedelta(minutes=step), live_sections=sections)
         text = (self._stream_dir() / metrics["file"]).read_text(encoding="utf-8")
         return metrics, text
@@ -2433,7 +2433,7 @@ class TheExtraSystemIsCurrent(ShadowCase):
         payload = {"voice_frame": "DECLARED_STABLE_VOICE", "machine": [], "recap": ""}
         plan = frame_shadow.prepare(ctx=_ctx(), history=_history(), tools=[],
                                     now=NOW, payload=payload)
-        frame = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Егор",
+        frame = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Алекс",
                                    user_msg="х", tools=[], now=NOW, plan=plan,
                                    payload=payload)
         self.assertIn("DECLARED_STABLE_VOICE", frame.e)

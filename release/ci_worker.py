@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,12 +16,17 @@ def main():
     destination.mkdir(parents=True, exist_ok=True)
     src = Path(__file__).resolve().parent
     candidate = json.loads((src/"candidate.json").read_bytes())
-    with (src/"source.zip").open("rb") as stream:
-        if hashlib.file_digest(stream,"sha256").hexdigest() != candidate["sha256"]:
-            raise ValueError("Input source archive hash mismatch")
     with tempfile.TemporaryDirectory() as temp:
         work = Path(temp)
-        with zipfile.ZipFile(src/"source.zip") as z:
+        archive = work / "source.zip"
+        with archive.open("xb") as out:
+            for part in sorted((src/"source-parts").iterdir()):
+                with part.open("rb") as stream:
+                    shutil.copyfileobj(stream,out)
+        with archive.open("rb") as stream:
+            if hashlib.file_digest(stream,"sha256").hexdigest() != candidate["sha256"]:
+                raise ValueError("Input source archive hash mismatch")
+        with zipfile.ZipFile(archive) as z:
             z.extractall(work/"input")
         original, = (work/"input").iterdir()
         run = lambda *cmd: subprocess.run(list(map(str,cmd)),check=True)
@@ -29,6 +35,9 @@ def main():
         record = json.loads((destination/(target+".json")).read_bytes())
         if record["source_commit"] != candidate["commit"]:
             raise ValueError("Build came from another source")
+        with next(destination.glob("Helene-*-source.zip")).open("rb") as stream:
+            if hashlib.file_digest(stream,"sha256").hexdigest() != candidate["sha256"]:
+                raise ValueError("Rebuilt source archive bytes differ across hosts")
         with zipfile.ZipFile(destination/record["asset"]) as z:
             meta = json.loads(z.read("Helene/RELEASE-ORIGIN.json"))
             guide = z.read("Helene/START-HERE.md").decode()

@@ -23,17 +23,17 @@ class GraphEdges(unittest.TestCase):
 
     def test_person_link_written_and_parsed(self):
         _mk_person("vika", "Вика")
-        out = graph.add_edge("vika", "egor", "коллега по фирме")
+        out = graph.add_edge("vika", "alex", "коллега по фирме")
         self.assertIn("Связала", out)
-        self.assertIn(("egor", "коллега по фирме"), people.links("vika"))
+        self.assertIn(("alex", "коллега по фирме"), people.links("vika"))
         es = graph.edges()
         self.assertEqual(len(es), 1)
-        self.assertEqual({es[0]["a"], es[0]["b"]}, {"vika", "egor"})
+        self.assertEqual({es[0]["a"], es[0]["b"]}, {"vika", "alex"})
 
     def test_dedup_same_pair_and_label(self):
         _mk_person("vika", "Вика")
-        graph.add_edge("vika", "egor", "коллега")
-        out = graph.add_edge("egor", "Вика", "коллега")  # та же пара, другой порядок, имя вместо слага
+        graph.add_edge("vika", "alex", "коллега")
+        out = graph.add_edge("alex", "Вика", "коллега")  # та же пара, другой порядок, имя вместо слага
         self.assertIn("уже есть", out)
         self.assertEqual(len(graph.edges()), 1)
 
@@ -63,21 +63,21 @@ class GraphEdges(unittest.TestCase):
 class GraphTraverse(unittest.TestCase):
     def setUp(self):
         _clean()
-        _mk_person("egor", "Егор")
+        _mk_person("alex", "Алекс")
         _mk_person("vika", "Вика")
         _mk_person("misha", "Миша")
-        graph.add_edge("egor", "vika", "коллега")
+        graph.add_edge("alex", "vika", "коллега")
         graph.add_edge("vika", "misha", "сокурсник")
-        graph.add_edge("egor", "тема-праксис", "строит")
+        graph.add_edge("alex", "тема-праксис", "строит")
 
     def test_neighbors_depth1(self):
-        t = graph.neighbors_text("egor", 1)
+        t = graph.neighbors_text("alex", 1)
         self.assertIn("Вика", t)
         self.assertIn("коллега", t)
         self.assertNotIn("Миша", t)  # 2-й шаг при depth=1 не виден
 
     def test_neighbors_depth2_shows_chain(self):
-        t = graph.neighbors_text("egor", 2)
+        t = graph.neighbors_text("alex", 2)
         self.assertIn("Миша", t)
         self.assertIn("сокурсник", t)
         self.assertIn("Вика", t)     # цепочка проходит через Вику
@@ -85,19 +85,19 @@ class GraphTraverse(unittest.TestCase):
     def test_path_found_and_readable(self):
         t = graph.path_text("misha", "тема-праксис")
         self.assertIn("Миша", t)     # миша — вика — владелец — тема-праксис
-        self.assertIn("Егор", t)
+        self.assertIn("Алекс", t)
         self.assertIn("тема-праксис", t)
 
     def test_path_absent_is_honest(self):
         _mk_person("stranger", "Чужой")
-        self.assertIn("не вижу", graph.path_text("stranger", "egor"))
+        self.assertIn("не вижу", graph.path_text("stranger", "alex"))
 
     def test_no_links_yet(self):
         _mk_person("empty", "Пустой")
         self.assertIn("нет записанных связей", graph.neighbors_text("empty"))
 
     def test_related_lines_dedup_and_cap(self):
-        lines = graph.related_lines(["egor", "vika"], cap=10)
+        lines = graph.related_lines(["alex", "vika"], cap=10)
         joined = "\n".join(lines)
         self.assertIn("—(коллега)—", joined)
         self.assertEqual(len(lines), len(set(lines)))       # без дублей
@@ -105,8 +105,8 @@ class GraphTraverse(unittest.TestCase):
 
     def test_max_nodes_cap(self):
         for i in range(graph.MAX_NODES_OUT + 3):
-            graph.add_edge("egor", f"узел-{i}", "тест")
-        t = graph.neighbors_text("egor", 1)
+            graph.add_edge("alex", f"узел-{i}", "тест")
+        t = graph.neighbors_text("alex", 1)
         self.assertIn("не разворачиваю", t)
 
 
@@ -115,35 +115,35 @@ class Pass86Aliases(unittest.TestCase):
 
     def setUp(self):
         _clean()
-        _mk_person("yegor-kosyrev", "Yegor Kosyrev")
+        _mk_person("alex-miller", "Alex Miller")
 
     def test_alias_roundtrip_survives_rewrite(self):
-        self.assertTrue(people.add_alias("yegor-kosyrev", "Егор"))
-        self.assertFalse(people.add_alias("yegor-kosyrev", "егор"), "дедуп по casefold")
-        self.assertIn("Егор", people.aliases("yegor-kosyrev"))
-        text = people.read_text("yegor-kosyrev")
-        self.assertIn("Алиасы: Егор", text, "строка алиасов в досье")
+        self.assertTrue(people.add_alias("alex-miller", "Алекс"))
+        self.assertFalse(people.add_alias("alex-miller", "алекс"), "дедуп по casefold")
+        self.assertIn("Алекс", people.aliases("alex-miller"))
+        text = people.read_text("alex-miller")
+        self.assertIn("Алиасы: Алекс", text, "строка алиасов в досье")
         # перезапись файла (append_fact -> render) не теряет алиасы
-        people.append_fact("yegor-kosyrev", "Yegor Kosyrev", "строит Praxis")
-        self.assertIn("Егор", people.aliases("yegor-kosyrev"))
+        people.append_fact("alex-miller", "Alex Miller", "строит Praxis")
+        self.assertIn("Алекс", people.aliases("alex-miller"))
 
     def test_resolve_by_alias(self):
-        people.add_alias("yegor-kosyrev", "Егор")
-        self.assertEqual(graph.resolve("Егор"), "yegor-kosyrev")
-        self.assertEqual(graph.resolve("егор"), "yegor-kosyrev")
+        people.add_alias("alex-miller", "Алекс")
+        self.assertEqual(graph.resolve("Алекс"), "alex-miller")
+        self.assertEqual(graph.resolve("алекс"), "alex-miller")
         self.assertEqual(graph.resolve("Незнакомец"), "незнакомец")
 
     def test_edge_via_alias_lands_on_canonical(self):
-        people.add_alias("yegor-kosyrev", "Егор")
-        graph.add_edge("Егор", "тема-праксис", "строит")
-        self.assertTrue(any(d == "тема-праксис" for d, _ in people.links("yegor-kosyrev")))
+        people.add_alias("alex-miller", "Алекс")
+        graph.add_edge("Алекс", "тема-праксис", "строит")
+        self.assertTrue(any(d == "тема-праксис" for d, _ in people.links("alex-miller")))
 
     def test_agent_tool_add_alias(self):
         import agent
-        out = agent.tool_add_alias("Егор", "yegor-kosyrev")
+        out = agent.tool_add_alias("Алекс", "alex-miller")
         self.assertIn("Связала", out)
-        self.assertEqual(graph.resolve("Егор"), "yegor-kosyrev")
-        self.assertIn("и так", agent.tool_add_alias("Егор", "yegor-kosyrev"))
+        self.assertEqual(graph.resolve("Алекс"), "alex-miller")
+        self.assertIn("и так", agent.tool_add_alias("Алекс", "alex-miller"))
         self.assertIn("Не вижу", agent.tool_add_alias("Кто-то", "нет-такого-досье"))
 
 
@@ -153,9 +153,9 @@ class Pass86EdgeHygiene(unittest.TestCase):
         _mk_person("vika", "Вика")
 
     def test_close_label_no_dup_date_touched(self):
-        graph.add_edge("vika", "egor", "коллега")
+        graph.add_edge("vika", "alex", "коллега")
         # подпись близкая («коллеги») — дубль не плодится, дата обновляется
-        out = graph.add_edge("vika", "egor", "коллеги")
+        out = graph.add_edge("vika", "alex", "коллеги")
         self.assertIn("уже есть", out)
         self.assertIn("обновила дату", out)
         self.assertEqual(len(graph.edges()), 1)
@@ -166,15 +166,15 @@ class Pass86EdgeHygiene(unittest.TestCase):
         self.assertIn("(сон)", e["label"])
 
     def test_forget_connection_both_stores(self):
-        graph.add_edge("vika", "egor", "коллега")           # в файл Вики
+        graph.add_edge("vika", "alex", "коллега")           # в файл Вики
         graph.add_edge("тема-права", "суд-по-ип", "спор")   # в graph.md
-        out = graph.forget_connection("Вика", "egor")
+        out = graph.forget_connection("Вика", "alex")
         self.assertIn("Забыла", out)
-        self.assertEqual([e for e in graph.edges() if {"vika", "egor"} == {e["a"], e["b"]}], [])
+        self.assertEqual([e for e in graph.edges() if {"vika", "alex"} == {e["a"], e["b"]}], [])
         out = graph.forget_connection("тема-права", "суд-по-ип")
         self.assertIn("Забыла", out)
         self.assertEqual(graph.edges(), [])
-        self.assertIn("и так нет", graph.forget_connection("vika", "egor"))
+        self.assertIn("и так нет", graph.forget_connection("vika", "alex"))
 
 
 class Pass86MemGraphPanel(unittest.TestCase):
@@ -213,22 +213,22 @@ class Pass86SleepAliasSuggestion(unittest.TestCase):
     def test_similar_name_suggests_not_merges(self):
         import agent
         import consolidate
-        _mk_person("yegor-kosyrev", "Yegor Kosyrev")
-        consolidate._apply_person("Yegor Kosyrew", {"facts": [{"fact": "тест"}]})
+        _mk_person("alex-miller", "Alex Miller")
+        consolidate._apply_person("Alex Miler", {"facts": [{"fact": "тест"}]})
         # новое досье создано (молча НЕ слито)…
-        self.assertTrue(people.path_for("yegor-kosyrew").exists())
+        self.assertTrue(people.path_for("alex-miler").exists())
         # …а в дневнике — предложение алиаса
         jr = "".join(p.read_text(encoding="utf-8") for p in agent.JOURNAL_DIR.glob("*.md"))
-        self.assertIn("похоже на досье yegor-kosyrev", jr)
+        self.assertIn("похоже на досье alex-miller", jr)
         self.assertIn("add_alias", jr)
 
     def test_alias_merges_without_suggestion(self):
         import consolidate
-        _mk_person("yegor-kosyrev", "Yegor Kosyrev")
-        people.add_alias("yegor-kosyrev", "Егор")
-        consolidate._apply_person("Егор", {"facts": [{"fact": "любит горы"}]})
-        self.assertFalse(people.path_for("егор").exists(), "алиас не должен плодить досье")
-        self.assertIn("любит горы", people.read_text("yegor-kosyrev"))
+        _mk_person("alex-miller", "Alex Miller")
+        people.add_alias("alex-miller", "Алекс")
+        consolidate._apply_person("Алекс", {"facts": [{"fact": "любит горы"}]})
+        self.assertFalse(people.path_for("алекс").exists(), "алиас не должен плодить досье")
+        self.assertIn("любит горы", people.read_text("alex-miller"))
 
 
 if __name__ == "__main__":

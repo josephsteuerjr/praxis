@@ -83,20 +83,20 @@ class ProofAcceptsWhatTheGuardSent(_dl._RunScaffold):
         context = self._create_run("direct")
         self._start_reply(context.run_id, "текст " + CITE + " конец ")
         entry = self._reply_entry(context.run_id, ledger_text="текст  конец ")
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_trailing_space_case_from_17_08_still_passes(self):
         context = self._create_run("strip")
         self._start_reply(context.run_id, "corporate». ")
         entry = self._reply_entry(context.run_id, ledger_text="corporate».")
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_a_genuinely_different_text_is_still_refused(self):
         context = self._create_run("forged")
         self._start_reply(context.run_id, "я хотела сказать это " + CITE)
         entry = self._reply_entry(context.run_id, ledger_text="кто-то подменил текст")
         with self.assertRaises(agent.DurableExecutionError):
-            agent.run_direct_outbox_prepared(entry, target_label="Егор")
+            agent.run_direct_outbox_prepared(entry, target_label="Алекс")
 
 
 if __name__ == "__main__":

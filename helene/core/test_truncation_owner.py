@@ -44,8 +44,8 @@ class TurnsBase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def _turn(self, out="её ответ", **fields):
-        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Егор",
-                        gist_in="Егор: привет")
+        t = turns.begin(kind="chat", chat_id="777", scope="owner", who="Алекс",
+                        gist_in="Алекс: привет")
         t["out"] = out
         t.update(fields)
         turns.record(t)

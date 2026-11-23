@@ -919,7 +919,7 @@ def describe() -> str:
         for e in shifts:
             ts = str(e.get("ts") or "")[:16].replace("T", " ")
             lines.append(f"  · {ts} [{e.get('kind')}] {str(e.get('text') or '')[:120]}")
-    lines.append("Ревизия применяется сразу (версия+diff+причина, откат мой и Егора); "
+    lines.append("Ревизия применяется сразу (версия+diff+причина, откат мой и владельца); "
                  "ночью пересматриваю характер по прожитому. Действия revise/rollback/load "
                  "делаю из owner-скоупа — в чужой комнате откажу (моя дисциплина).")
     return "\n".join(lines)

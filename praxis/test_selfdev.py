@@ -203,7 +203,7 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_reject_writes_journal_signal(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-        res = selfdev.reject(pid, "не время", by="egor")
+        res = selfdev.reject(pid, "не время", by="alex")
         self.assertTrue(res["ok"])
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "rejected")

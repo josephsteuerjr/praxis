@@ -94,9 +94,9 @@ class Parser(unittest.TestCase):
             "поддержка атласаппорт", ["Atlas"]))
 
     def test_banner_names_who_and_gist(self):
-        banner = addressing.priority_banner("Егор", "перезапусти прод")
+        banner = addressing.priority_banner("Алекс", "перезапусти прод")
         self.assertIn("[ПРИОРИТЕТ — срочное действие]", banner)
-        self.assertIn("Егор", banner)
+        self.assertIn("Алекс", banner)
         self.assertIn("перезапусти прод", banner)
 
 
@@ -177,7 +177,7 @@ class FocusWindow(unittest.TestCase):
                 if transport._wake_priority.pop("chat7", False):
                     g = str(transport._wake_priority_gist.pop("chat7", "") or "")
                     if g:
-                        priority_note = addressing.priority_banner("Егор", g)
+                        priority_note = addressing.priority_banner("Алекс", g)
             self.assertIn("[ПРИОРИТЕТ", priority_note)
             self.assertIn("перезапусти прод", priority_note)
             # флаг снят — повторный ход обычный

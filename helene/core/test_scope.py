@@ -73,7 +73,7 @@ class TestChannelContext(unittest.TestCase):
         self.assertFalse(cc.owner, "destination must not forge human-owner actor authority")
         self.assertTrue(cc.praxis_self)
         self.assertIn('с владельцем', agent._presence_frame(cc))
-        _, dynamic = agent.build_system_parts(speaker="Егор", ctx=cc)
+        _, dynamic = agent.build_system_parts(speaker="Алекс", ctx=cc)
         self.assertIn(agent.frame_language.text("owned.agent.267672350827").strip(), dynamic)
 
     def test_scope_override_alone_cannot_forge_owner_audience(self):
@@ -97,7 +97,7 @@ class TestChannelContext(unittest.TestCase):
                     chat_id="-100", principal_id="100", is_dm=False,
                     owner=True, known=True,
                 )
-                _, dynamic = agent.build_system_parts(speaker="Егор", ctx=cc)
+                _, dynamic = agent.build_system_parts(speaker="Алекс", ctx=cc)
             finally:
                 agent.build_state_block = old_state
                 agent.HOME_MD = old_home
@@ -132,20 +132,20 @@ class TestRecallScopeFilter(unittest.TestCase):
         self.assertTrue(memory_index._scope_allows("2026-06-29", "- [private] секрет", "owner"))
 
     def test_group_drops_private(self):
-        self.assertFalse(memory_index._scope_allows("yegor-kosyrev", "- [private] секрет", "group"))
+        self.assertFalse(memory_index._scope_allows("alex-miller", "- [private] секрет", "group"))
 
     def test_group_drops_journal_day_files(self):
         self.assertFalse(memory_index._scope_allows("2026-06-29", "- наблюдение", "group"))
 
     def test_group_drops_index_and_reflections(self):
-        self.assertFalse(memory_index._scope_allows("INDEX", "- [yegor]", "group"))
+        self.assertFalse(memory_index._scope_allows("INDEX", "- [alex]", "group"))
         self.assertFalse(memory_index._scope_allows("reflections", "вывод во сне", "group"))
 
     def test_group_drops_other_room_context(self):
         self.assertFalse(memory_index._scope_allows("-1009990000002", "контекст чужой комнаты", "group"))
 
     def test_group_keeps_public_people_and_skills(self):
-        self.assertTrue(memory_index._scope_allows("yegor-kosyrev", "- [public] любит grep", "group"))
+        self.assertTrue(memory_index._scope_allows("alex-miller", "- [public] любит grep", "group"))
         self.assertTrue(memory_index._scope_allows("holding_ground", "держу достоинство", "group"))
 
 

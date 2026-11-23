@@ -209,12 +209,12 @@ class TestFormationMarker(unittest.TestCase):
         import formation
         import people
 
-        candidate = {"subject": "Егор", "kind": "person",
+        candidate = {"subject": "Алекс", "kind": "person",
                      "text": "любит строгое происхождение памяти",
                      "visibility": "private", "salience": 2,
                      "confidence": "observed"}
         formation._apply_supported(candidate, "clm-0123456789abcdef")
-        text = people.read_text("егор")
+        text = people.read_text("алекс")
         self.assertIn("[source:clm-0123456789abcdef|observed]", text)
 
     def test_apply_supported_inferred_marker(self):

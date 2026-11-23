@@ -29,7 +29,7 @@ import boot  # noqa: E402
 import self_model  # noqa: E402
 import kit_proposals  # noqa: E402
 
-CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Егор"}}
+CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Алекс"}}
 
 
 class SeedSelf(unittest.TestCase):

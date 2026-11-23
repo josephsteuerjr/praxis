@@ -174,7 +174,7 @@ class AuthorityTravelsInTheSituationLine(unittest.TestCase):
 
     def test_unknown_owner_and_family_get_their_authority_facts(self):
         self.assertIn("не в известном наборе", self._line("unknown", owner=False))
-        self.assertIn("впустить в «свои» может только Егор", self._line("unknown", owner=False))
+        self.assertIn("впустить в «свои» может только Алекс", self._line("unknown", owner=False))
         self.assertIn("полномочия владельца", self._line("owner", owner=True))
         self.assertIn("FAMILY", self._line("family", owner=False))
         self.assertIn("знакомый", self._line("known", owner=False))

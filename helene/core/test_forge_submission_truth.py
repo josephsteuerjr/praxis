@@ -53,19 +53,19 @@ class SubmittedLearnsItsFate(unittest.TestCase):
     def test_merged_proposal_closes_the_task(self):
         self._submitted()
         with mock.patch.object(forge.selfdev, "get", return_value={
-                "id": "de64316c", "status": "merged", "decided_by": "egor"}):
+                "id": "de64316c", "status": "merged", "decided_by": "alex"}):
             self.assertEqual(forge.reconcile_submitted_tasks(), 1)
         task = self._read()
         self.assertEqual(task["status"], "done")
         self.assertEqual(task["submission_status"], "merged")
         self.assertTrue(task["finished"], "закрытая задача обязана иметь время конца")
         self.assertIn("de64316c", task["submission_result"])
-        self.assertIn("egor", task["submission_result"])
+        self.assertIn("alex", task["submission_result"])
 
     def test_rejected_proposal_closes_the_task_and_says_the_work_did_not_land(self):
         self._submitted()
         with mock.patch.object(forge.selfdev, "get", return_value={
-                "id": "de64316c", "status": "rejected", "decided_by": "egor",
+                "id": "de64316c", "status": "rejected", "decided_by": "alex",
                 "reason": "ломает контракт рельсов"}):
             self.assertEqual(forge.reconcile_submitted_tasks(), 1)
         task = self._read()
@@ -106,7 +106,7 @@ class SubmittedLearnsItsFate(unittest.TestCase):
         self._submitted()
         self.assertIn("coding: задач 1", forge.state_line())
         with mock.patch.object(forge.selfdev, "get", return_value={
-                "id": "de64316c", "status": "merged", "decided_by": "egor"}):
+                "id": "de64316c", "status": "merged", "decided_by": "alex"}):
             forge.reconcile_submitted_tasks()
         self.assertNotIn("coding: задач 1", forge.state_line())
 
@@ -134,7 +134,7 @@ class LostSaysWhatWasAlreadyDone(unittest.TestCase):
         age = forge.TASK_ABANDONED_SEC + 3600
         born = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=age)).isoformat()
         (d / "task.json").write_text(json.dumps(
-            {"id": task_id, "goal": "разбанить по прямой просьбе Егора", "root": str(root),
+            {"id": task_id, "goal": "разбанить по прямой просьбе Алекса", "root": str(root),
              "status": "active", "created": born, "updated": born}, ensure_ascii=False),
             encoding="utf-8")
         if events:

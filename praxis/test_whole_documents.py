@@ -47,9 +47,9 @@ class TheUnitBecomesADocument(unittest.TestCase):
         (self.memory / "people").mkdir(parents=True)
         (self.memory / "runs" / "2026-08" / "run-x").mkdir(parents=True)
         self.skills.mkdir(parents=True)
-        (self.memory / "people" / "egor.md").write_text(
-            "- первый факт про Егора\n\n- второй факт про Егора\n\n"
-            "третий абзац тоже про Егора\n", encoding="utf-8")
+        (self.memory / "people" / "alex.md").write_text(
+            "- первый факт про Алекса\n\n- второй факт про Алекса\n\n"
+            "третий абзац тоже про Алекса\n", encoding="utf-8")
         (self.memory / "runs" / "2026-08" / "run-x" / "context.md").write_text(
             "единорогмаркер транспортный снимок прогона\n", encoding="utf-8")
         (self.memory / "runs" / "2026-08" / "run-x" / "RECAP.md").write_text(
@@ -78,17 +78,17 @@ class TheUnitBecomesADocument(unittest.TestCase):
 
     def test_one_document_one_record(self) -> None:
         """Три абзаца одного досье были тремя кусками — становятся одной записью."""
-        old = self._ids("Егор", whole=False)
-        new = self._ids("Егор", whole=True)
+        old = self._ids("Алекс", whole=False)
+        new = self._ids("Алекс", whole=True)
         self.assertEqual(len(old), 3, f"фикстура перестала резаться: {old}")
-        self.assertEqual(new, ["memory/people/egor.md#doc"])
+        self.assertEqual(new, ["memory/people/alex.md#doc"])
 
     def test_the_whole_text_arrives_not_a_fragment(self) -> None:
         """Смысл всей правки: к ней приезжает документ, а не пятнадцать слов."""
         with mock.patch.dict(os.environ, {"PRAXIS_MEMORY_WHOLE_DOCS": "1"}):
             memory_fts.clear_path_cache()
             memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
-            hits = memory_fts.search("Егор", base=self.base, memory_dir=self.memory,
+            hits = memory_fts.search("Алекс", base=self.base, memory_dir=self.memory,
                                      skills_dir=self.skills, purpose="explicit")
         self.assertEqual(len(hits), 1)
         text = hits[0]["text"]

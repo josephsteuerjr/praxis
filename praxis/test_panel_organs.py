@@ -25,7 +25,7 @@ class PanelOrgansBase(unittest.TestCase):
         (soul / "self.md").write_text(
             "# Self\n\n- _2026-07-10_ Наблюдение: живу. Вывод: работаю.\n\n"
             "## Кто я сейчас — 2026-07-10\nЯ — Praxis: практика, действие, проверка. "
-            "Меня строит Егор, и моя ценность — самостоятельность и честность.\n",
+            "Меня строит Алекс, и моя ценность — самостоятельность и честность.\n",
             encoding="utf-8")
         self._orig = []
 
@@ -91,7 +91,7 @@ class OrganEndpointsTests(PanelOrgansBase):
         res = panel.perception_set("cooldown_dm", "33")
         self.assertTrue(res["ok"], res)
         self.assertEqual(perception.value("cooldown_dm"), 33.0)
-        self.assertEqual(perception.source_of("cooldown_dm"), "egor")
+        self.assertEqual(perception.source_of("cooldown_dm"), "owner")
         res = panel.perception_set("cooldown_dm", None, reset=True)
         self.assertTrue(res["ok"], res)
         self.assertFalse(panel.perception_set("нет_такого", "1")["ok"])

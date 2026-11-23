@@ -107,7 +107,7 @@ class TestOutboundSpeechBoundary(unittest.TestCase):
     def test_private_dm_does_not_cut_authored_speaker_or_mode_lines(self):
         ctx = agent.ChannelContext(chat_id="known", is_dm=True, owner=False, known=True)
         draft = "Мой текст.\nЕгор: это цитата\nРЕЖИМ: тише"
-        convo = "Егор: исходное сообщение"
+        convo = "Алекс: исходное сообщение"
 
         self.assertEqual(agent.guard_outbound_reply(draft, convo, ctx=ctx), draft)
 

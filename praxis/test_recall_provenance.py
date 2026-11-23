@@ -58,9 +58,9 @@ class TestRecallOrigin(Base):
 
     def test_non_room_sources_are_unchanged(self):
         label = agent._recall_origin(
-            self._row("memory/life/events/2026-07-25.jsonl", source="Егор"),
+            self._row("memory/life/events/2026-07-25.jsonl", source="Алекс"),
             "memory/life/events/2026-07-25.jsonl")
-        self.assertEqual(label, "Егор")
+        self.assertEqual(label, "Алекс")
 
 
 class TestRoomTurnsAreFindableButNotSilent(Base):

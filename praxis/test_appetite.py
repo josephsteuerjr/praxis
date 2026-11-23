@@ -76,11 +76,11 @@ class TestOwnerWord(Base):
         appetite.set_owner_request("pause_background", "", source="panel")
         hold = appetite.background_hold()
         self.assertIsNotNone(hold)
-        self.assertIn("Егора", hold)              # помечено как ЕГО слово, класс 2
+        self.assertIn("Алекса", hold)              # помечено как ЕГО слово, класс 2
         self.assertIsNotNone(appetite.unacked_request())
         self.assertEqual(appetite.sleep_depth(), "skip")
         md = appetite.CONTRACT_MD.read_text(encoding="utf-8")
-        self.assertIn("просьба Егора", md)
+        self.assertIn("просьба владельца", md)
 
     def test_text_request_does_not_change_mode(self):
         appetite.set_owner_request("text", "давай поэкономнее на этой неделе", source="panel")
@@ -132,7 +132,7 @@ class TestHerHand(Base):
     def test_free_interpret_lifts_everything(self):
         appetite.set_owner_request("pause_background", "", source="panel")
         appetite.interpret("background_paused", "стоп фон")
-        appetite.interpret("free", "Егор сказал не экономить")
+        appetite.interpret("free", "Алекс сказал не экономить")
         self.assertIsNone(appetite.background_hold())
         self.assertEqual(appetite.sleep_depth(), "full")
         plan = (appetite.state().get("interpretation") or {}).get("plan") or {}

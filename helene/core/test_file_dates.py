@@ -78,7 +78,7 @@ class TheListingsCarryIt(unittest.TestCase):
 
     def test_inbox_list_prints_it_too(self):
         """Именно inbox — туда падают файлы, которые ей только что прислали."""
-        inbox = self.home / "workspace" / "inbox" / "private" / "Yegor"
+        inbox = self.home / "workspace" / "inbox" / "private" / "Alex"
         inbox.mkdir(parents=True)
         (inbox / "20260813_screen.png").write_bytes(b"\x89PNG" + b"0" * 16)
         with (
@@ -86,7 +86,7 @@ class TheListingsCarryIt(unittest.TestCase):
             patch.object(workshop, "INBOX", self.home / "workspace" / "inbox"),
             patch.object(workshop, "_resolve_inbox", return_value=inbox),
         ):
-            listing = workshop.inbox_list("private/Yegor")
+            listing = workshop.inbox_list("private/Alex")
         self.assertIn("20260813_screen.png", listing)
         self.assertIn("сегодня", listing)
 

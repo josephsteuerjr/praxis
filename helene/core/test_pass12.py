@@ -211,7 +211,7 @@ class TestAbsenceTrigger(AbsenceBase):
 
 class TestAbsenceNarrowVoice(Base):
     def test_absence_frame_only_states_identity_authority_and_evidence(self):
-        self.assertIn("You are Praxis, not Yegor", agent._ABSENCE_FRAME)
+        self.assertIn("You are Praxis, not the owner", agent._ABSENCE_FRAME)
         self.assertIn("no authority", agent._ABSENCE_FRAME)
         self.assertIn("your decisions", agent._ABSENCE_FRAME)
         for coercive in ("full warmth", "otherwise just talk", "say you'll let him know",
@@ -227,8 +227,8 @@ class TestAbsenceNarrowVoice(Base):
 
             class R:
                 stop_reason = "end_turn"
-                blocks = [{"type": "text", "text": "Привет, я Praxis — Егор офлайн, передам ему."}]
-                text = "Привет, я Praxis — Егор офлайн, передам ему."
+                blocks = [{"type": "text", "text": "Привет, я Praxis — Алекс офлайн, передам ему."}]
+                text = "Привет, я Praxis — Алекс офлайн, передам ему."
             return R()
 
         self._orig.append((llm, "chat", llm.chat))

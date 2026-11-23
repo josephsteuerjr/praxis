@@ -65,9 +65,9 @@ class MemoryFtsTests(unittest.TestCase):
         )
 
     def test_indexes_markdown_and_jsonl_with_visibility_and_provenance(self):
-        person = self.memory / "people" / "egor.md"
+        person = self.memory / "people" / "alex.md"
         person.write_text(
-            "# Egor\n\n"
+            "# Alex\n\n"
             "- [public] \u0441\u0435\u0432\u0435\u0440\u043d\u043e\u0435 \u0441\u0438\u044f\u043d\u0438\u0435\n"
             "- [private] \u0444\u0438\u043e\u043b\u0435\u0442\u043e\u0432\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c\n",
             encoding="utf-8",
@@ -105,7 +105,7 @@ class MemoryFtsTests(unittest.TestCase):
         self.assertEqual(ensured["corrupt_lines"], 1)
 
         public = self.search("\u0441\u0438\u044f\u043d\u0438\u0435", scope="group")
-        self.assertTrue(any(row["path"].endswith("people/egor.md") for row in public))
+        self.assertTrue(any(row["path"].endswith("people/alex.md") for row in public))
         self.assertFalse(self.search("\u0444\u0438\u043e\u043b\u0435\u0442\u043e\u0432\u044b\u0439", scope="group"))
         self.assertTrue(self.search("\u0444\u0438\u043e\u043b\u0435\u0442\u043e\u0432\u044b\u0439", scope="owner"))
 
@@ -383,11 +383,11 @@ class MemoryFtsTests(unittest.TestCase):
             "schema": "praxis.computer.inventory.v1", "device_id": "windows-pc",
             "captured_at": "2026-07-13T12:00:00Z", "observed_at": "2026-07-13T12:00:01Z",
             "payload": {
-                "hostname": "LOVE", "user": "yegor",
+                "hostname": "LOVE", "user": "alex",
                 "os": {"caption": "Windows 11 Pro", "build": "26200"},
                 "apps": [{"name": "CurrentAppNarwhal", "publisher": "Praxis"}],
                 "tools": [{"name": "cargo", "path": r"C:\\Rust\\cargo.exe"}],
-                "project_roots": [r"C:\\Users\\yegor\\Downloads\\Praxis"],
+                "project_roots": [r"C:\\Users\\alex\\Downloads\\Praxis"],
             },
         }
         # Legacy filenames came from the Windows clock and may be skewed far
@@ -494,14 +494,14 @@ class MemoryFtsTests(unittest.TestCase):
         self.assertTrue(self.search("journal-like ibex"))
 
     def test_upsert_tracks_edits_and_deletion_without_touching_source(self):
-        person = self.memory / "people" / "egor.md"
-        person.write_text("# Egor\n\n- [public] copper albatross\n", encoding="utf-8")
+        person = self.memory / "people" / "alex.md"
+        person.write_text("# Alex\n\n- [public] copper albatross\n", encoding="utf-8")
         original = person.read_bytes()
         memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
         self.assertTrue(self.search("albatross"))
         self.assertEqual(person.read_bytes(), original)
 
-        person.write_text("# Egor\n\n- [public] silver cuttlefish\n", encoding="utf-8")
+        person.write_text("# Alex\n\n- [public] silver cuttlefish\n", encoding="utf-8")
         memory_fts.upsert(
             person, base=self.base, memory_dir=self.memory, skills_dir=self.skills
         )
@@ -572,7 +572,7 @@ class MemoryFtsTests(unittest.TestCase):
         self.assertEqual(result[0]["provenance"], ["computer:receipt:9"])
 
     def test_explicit_ensure_reconciles_incrementally_without_full_reparse(self):
-        person = self.memory / "people" / "egor.md"
+        person = self.memory / "people" / "alex.md"
         person.write_text("- любит скорость\n", encoding="utf-8")
         run_events = self.memory / "runs" / "2026-07" / "run-1" / "events.jsonl"
         run_events.parent.mkdir(parents=True)
@@ -635,7 +635,7 @@ class MemoryFtsTests(unittest.TestCase):
                         "ts": "2026-07-02T10:00:00Z", "text": "quiet morning walk"})
             + "\n", encoding="utf-8",
         )
-        bystander = self.memory / "people" / "egor.md"
+        bystander = self.memory / "people" / "alex.md"
         bystander.write_text("- untouched bystander\n", encoding="utf-8")
         # The initial corpus build belongs to maintenance, not this explicit query.
         memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)

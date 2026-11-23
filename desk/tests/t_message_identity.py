@@ -27,7 +27,7 @@ class MessageIdentity(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(note.is_file())
                     self.assertIn("Повтор", note.read_text(encoding="utf-8"))
                     stream = room or "window"
-                    desk = Desk(root, stream, "Егор", "Чат")
+                    desk = Desk(root, stream, "Алекс", "Чат")
                     # A transcribed or enriched text may differ from what the UI sent.
                     desk.archive("Повтор\n[вложения] готовый файл", outgoing=False, source_id=sid)
                     row = readers.chat_tail(stream)[-1]
@@ -38,7 +38,7 @@ class MessageIdentity(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_archive_does_not_invent_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            Desk(root, "window", "Егор", "Чат").archive("Старое", outgoing=False)
+            Desk(root, "window", "Алекс", "Чат").archive("Старое", outgoing=False)
             row = json.loads((root / "memory/groups/window.jsonl").read_text(encoding="utf-8"))
             self.assertNotIn("source_id", row)
 

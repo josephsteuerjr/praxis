@@ -103,7 +103,7 @@ class Create(unittest.TestCase):
         lay_out(self.root, {"helene.json": {
             "mode": "local", "python": "runtime/python.exe", "app": "app/deskapp.py",
             "runner": "app/localharness/runner.py", "code": "tree", "tree": "data",
-            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Егор", "room": "Hélène"},
+            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Алекс", "room": "Hélène"},
             "model": {"framework": "openai", "key": "sk-live", "model": "gpt-5"},
             "telegram": {"bot_token": "111:AAA", "owner_id": 42},
             "sandbox": {"enabled": True, "mounts": [{"name": "docs", "path": "C:/docs"}]},
@@ -141,7 +141,7 @@ class Create(unittest.TestCase):
         self.assertEqual(cfg["sandbox"]["mounts"][0]["name"], "docs")
         self.assertEqual(cfg["telegram"]["bot_token"], "")        # ⚠ бот у каждого свой
         self.assertEqual(cfg["telegram"]["owner_id"], 42)         # …а владелец тот же
-        self.assertEqual(cfg["owner"]["name"], "Егор")
+        self.assertEqual(cfg["owner"]["name"], "Алекс")
         self.assertEqual(cfg["owner"]["room"], "Мира")           # комната — его имя, не чужое
         self.assertNotIn("setup_complete", cfg)
         self.assertNotIn("update", cfg)                           # обновление — про установку
@@ -183,7 +183,7 @@ class CreateSoul(unittest.TestCase):
         lay_out(self.root, {"helene.json": {
             "mode": "local", "python": "runtime/python.exe", "app": "app/deskapp.py",
             "runner": "app/localharness/runner.py", "code": "tree", "tree": "data",
-            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Егор", "room": "Hélène"},
+            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Алекс", "room": "Hélène"},
             "model": {"framework": "openai", "key": "sk-live", "model": "gpt-5"},
             "telegram": {"bot_token": "111:AAA", "owner_id": 42},
             "setup_complete": True,

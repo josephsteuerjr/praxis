@@ -14,7 +14,7 @@ import frame_language as lang
 import memory_provenance as provenance
 from test_memory_compact_paging_2310 import META,unpack
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class MemoryResults(unittest.TestCase):
     def setUp(self):

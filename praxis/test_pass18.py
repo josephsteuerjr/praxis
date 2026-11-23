@@ -80,7 +80,7 @@ class TestTool(AppetiteBase):
         ]
         llm.use_test_client(ScriptedClient(steps))
         try:
-            reply = agent.respond("умерь аппетиты", [], "Егор",
+            reply = agent.respond("умерь аппетиты", [], "Алекс",
                                   force_voice=True, is_owner=True, chat_id="7777")
         finally:
             llm.clear_test_clients()

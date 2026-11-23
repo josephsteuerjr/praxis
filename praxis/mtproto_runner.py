@@ -5721,7 +5721,7 @@ async def _run_pass(chat_id: str) -> None:
             reply_targets=reply_targets,  # 15: карта адресных ответов на момент триггера
             envelope=_envelope,           # пункт 4: теневой замер, никем не читается
             telegram_root_group=bool(not is_dm and route.topic_id is None and
-                                     route.str(peer_id) == configured_root_chat_id() and
+                                     str(route.peer_id) == configured_root_chat_id() and
                                      chat_id == route.peer_id and
                                      meta.get('room_nature') is False),
         )

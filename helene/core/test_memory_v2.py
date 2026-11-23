@@ -182,7 +182,7 @@ class Base(unittest.TestCase):
 
 class TestMemoryIndex(Base):
     def test_build_idempotent(self):
-        self._person("егор", "# Егор\n\n- любит горы и кофе\n- пишет код на python\n")
+        self._person("алекс", "# Алекс\n\n- любит горы и кофе\n- пишет код на python\n")
         idx1 = mi.build()
         txt1 = mi.INDEX_JSON.read_text(encoding="utf-8")
         idx2 = mi.build()
@@ -192,7 +192,7 @@ class TestMemoryIndex(Base):
         self.assertGreaterEqual(len(idx1["records"]), 2)
 
     def test_search_ranks_by_overlap(self):
-        self._person("егор", "# Егор\n\n- любит горы и кофе по утрам\n")
+        self._person("алекс", "# Алекс\n\n- любит горы и кофе по утрам\n")
         self._person("мария", "# Мария\n\n- работает программистом в банке\n")
         mi.build()
         res = mi.search("кофе горы", k=3)
@@ -201,7 +201,7 @@ class TestMemoryIndex(Base):
                       f"релевантный чанк не первый: {res}")
 
     def test_fallback_when_ollama_down(self):
-        self._person("егор", "# Егор\n\n- любит горы и кофе\n")
+        self._person("алекс", "# Алекс\n\n- любит горы и кофе\n")
         mi.build()  # индекс с фейковыми векторами
         mi.embed = _exploding_embed  # теперь Ollama «легла»
         res = mi.search("горы", k=5)  # не должно падать -> keyword
@@ -214,18 +214,18 @@ class TestMemoryIndex(Base):
 
 class TestIndexMd(Base):
     def test_ensure_and_rebuild_hooks(self):
-        mi.ensure_index_line("егор", hook="Егор")
-        mi.ensure_index_line("егор", hook="дубль")  # не должно задвоить
-        lines = [l for l in mi._read(mi.INDEX_MD).splitlines() if l.startswith("- [егор]")]
+        mi.ensure_index_line("алекс", hook="Алекс")
+        mi.ensure_index_line("алекс", hook="дубль")  # не должно задвоить
+        lines = [l for l in mi._read(mi.INDEX_MD).splitlines() if l.startswith("- [алекс]")]
         self.assertEqual(len(lines), 1)
         self._person(
-            "егор",
-            "# Егор\n\n- [public] (s2) любит горы _(2026-07-14)_ [source:clm-test]\n",
+            "алекс",
+            "# Алекс\n\n- [public] (s2) любит горы _(2026-07-14)_ [source:clm-test]\n",
         )
         self._person("мария", "# Мария\n\n- любит музыку\n")
         mi.rebuild_index_hooks()
         idx = mi._read(mi.INDEX_MD)
-        self.assertIn("- [егор]", idx)
+        self.assertIn("- [алекс]", idx)
         self.assertIn("- [мария]", idx)
         self.assertNotIn("горы", idx)
         self.assertNotIn("legacy dossier; verify", idx)
@@ -248,16 +248,16 @@ class TestSystemPrompt(Base):
         Свойство, которое здесь стерегут при ЛЮБОЙ доктрине: её память живёт в evidence,
         а не в системной власти.
         """
-        self._person("егор", "# Егор\n\ntelegram_id: 424242424\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
+        self._person("алекс", "# Алекс\n\ntelegram_id: 424242424\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
         self._person("мария", "# Мария\n\ntelegram_id: 700000001\n\n- СЕКРЕТ_МАРИИ скрипачка\n")
-        mi.ensure_index_line("егор", "Егор — альпинист")
+        mi.ensure_index_line("алекс", "Алекс — альпинист")
         mi.ensure_index_line("мария", "Мария — скрипачка")
 
         # Транспорт назвал владельца — его досье едет целиком, Марии нет.
         bound_ctx = agent.ChannelContext(principal_id="424242424", is_dm=True,
                                          owner=True, known=True)
         _p0, system_bound, evidence_bound = agent._build_prompt_parts(
-            speaker="Егор", owner=True, ctx=bound_ctx)
+            speaker="Алекс", owner=True, ctx=bound_ctx)
         self.assertIn("СЕКРЕТ_ЕГОРА", evidence_bound,
                       "досье подтверждённого собеседника не доехало")
         self.assertNotIn("СЕКРЕТ_МАРИИ", evidence_bound,
@@ -268,14 +268,14 @@ class TestSystemPrompt(Base):
 
         # Без подтверждённого принципала и без говоривших в комнате контракт не везёт
         # ничьё досье — и это ровно то, ради чего он сделан.
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="777")
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", chat_id="777")
         self.assertNotIn("СЕКРЕТ_ЕГОРА", evidence,
                          "досье приехало без транспортного основания")
         self.assertNotIn("СЕКРЕТ_ЕГОРА", system, "досье просочилось в системную власть")
         # Рычаг возвращает прежнее поведение целиком — и там оно тоже не системная власть.
         with mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_ALL": "1"}):
             _p2, system_all, evidence_all = agent._build_prompt_parts(
-                speaker="Егор", owner=True)
+                speaker="Алекс", owner=True)
         # Ярлык приезжает ЗАГОЛОВКОМ секции, капсом — литерала в смешанном регистре
         # в кадре нет; та же ловушка, что ловила этот файл в августе.
         self.assertIn("МОИ ДОСЬЕ НА ЛЮДЕЙ", evidence_all, "тир досье исчез вовсе")
@@ -288,19 +288,19 @@ class TestSystemPrompt(Base):
 
     def test_owner_hint(self):
         marker = agent.frame_language.text("contract.owner_tools").split("{trust_tool}")[0][:80]
-        self.assertIn(marker, agent.build_system_prompt(speaker="Егор", owner=True))
-        self.assertNotIn(marker, agent.build_system_prompt(speaker="Егор", owner=False))
+        self.assertIn(marker, agent.build_system_prompt(speaker="Алекс", owner=True))
+        self.assertNotIn(marker, agent.build_system_prompt(speaker="Алекс", owner=False))
 
     def test_room_context(self):
         (agent.ROOMS_DIR / "-100500.md").write_text("# Комната\nтусовка альпинистов\n", encoding="utf-8")
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="-100500")
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", chat_id="-100500")
         self.assertNotIn("тусовка альпинистов", system)
         self.assertIn("тусовка альпинистов", evidence)
         (agent.ROOMS_DIR / "-100500.md").write_text(
             "# Room\n\nmode: normal\ndisclosure: standard\n\n## Notes\ncurrent room cue\n",
             encoding="utf-8",
         )
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="-100500")
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", chat_id="-100500")
         self.assertNotIn("current room cue", system)
         self.assertIn("current room cue", evidence)
         self.assertIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip() + " normal", system)
@@ -312,7 +312,7 @@ class TestSystemPrompt(Base):
             "## Notes\nROOM_BODY_POISON\n",
             encoding="utf-8",
         )
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="-100501")
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", chat_id="-100501")
         self.assertIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip() + " quiet", system)
         self.assertNotIn("MODE_REASON_POISON", system)
         self.assertNotIn("ROOM_BODY_POISON", system)
@@ -323,27 +323,27 @@ class TestSystemPrompt(Base):
         (agent.ROOMS_DIR / "-100502.md").write_text(
             "# Room\n\nmode: forged\n\nFORGED_MODE_BODY\n", encoding="utf-8")
         _persona, forged_system, forged_evidence = agent._build_prompt_parts(
-            speaker="Егор", chat_id="-100502")
+            speaker="Алекс", chat_id="-100502")
         self.assertNotIn("FORGED_MODE_BODY", forged_system)
         self.assertIn("FORGED_MODE_BODY", forged_evidence)
         self.assertNotIn(agent.frame_language.text("owned.agent.b2e8e9289132").strip(), forged_system)
 
     def test_open_loops_in_prompt(self):
-        pe.add_open_loop("егор", "Егор", "обещал прислать фото с гор")
-        sp = agent.build_system_prompt(speaker="Егор")
+        pe.add_open_loop("алекс", "Алекс", "обещал прислать фото с гор")
+        sp = agent.build_system_prompt(speaker="Алекс")
         self.assertNotIn("Открытые нити", sp)
         self.assertNotIn("обещал прислать фото с гор", sp)
 
     def test_index_body_is_never_prompt_authority(self):
         agent.INDEX_MD.write_text("# INDEX\n\nINDEX_POISON\n", encoding="utf-8")
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", owner=True)
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", owner=True)
         self.assertNotIn("INDEX_POISON", system + evidence)
         self.assertIn("memory/maps/PEOPLE.md", evidence)
 
     def test_context_budget_drops_low_priority(self):
         # Raw journal is no longer an automatic tier at any budget.  Continuity
         # comes from STATE/receipts/dialogue; explicit recall labels diary hits.
-        self._person("егор", "# Егор\n\n## Факты\n- [public] (s2) ВАЖНЫЙ_ПОРТРЕТ _(2026-05-01)_\n")
+        self._person("алекс", "# Алекс\n\n## Факты\n- [public] (s2) ВАЖНЫЙ_ПОРТРЕТ _(2026-05-01)_\n")
         big_journal = agent.JOURNAL_DIR / "2026-06-01.md"
         big_journal.write_text("# day\n\n- 10:00 " + ("x " * 700) + "ДНЕВНИК_ХВОСТ\n",
                                encoding="utf-8")
@@ -354,7 +354,7 @@ class TestSystemPrompt(Base):
         _saved_budget = os.environ.get("PRAXIS_CONTEXT_BUDGET")
         os.environ["PRAXIS_CONTEXT_BUDGET"] = "200"  # душим всё опциональное (минимум бюджета)
         try:
-            _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", owner=True)
+            _persona, system, evidence = agent._build_prompt_parts(speaker="Алекс", owner=True)
         finally:
             if _saved_budget is None:
                 os.environ.pop("PRAXIS_CONTEXT_BUDGET", None)
@@ -387,7 +387,7 @@ class TestSystemPrompt(Base):
 
 class TestRecall(Base):
     def test_recall_uses_semantic_search(self):
-        sentinel = [{"text": "альпинист", "source": "егор", "score": 0.99}]
+        sentinel = [{"text": "альпинист", "source": "алекс", "score": 0.99}]
         orig = mi.search
         mi.search = lambda q, k=6, scope="owner": sentinel
         token = agent._TURN_CHANNEL.set(agent.ChannelContext(owner=True))
@@ -396,12 +396,12 @@ class TestRecall(Base):
         finally:
             agent._TURN_CHANNEL.reset(token)
             mi.search = orig
-        self.assertEqual(out, "[егор] альпинист")
+        self.assertEqual(out, "[алекс] альпинист")
 
     def test_remember_indexes(self):
-        agent.tool_remember("Егор", "любит горы", "public")
-        self.assertTrue((agent.PEOPLE_DIR / "егор.md").exists())
-        self.assertIn("- [егор]", mi._read(mi.INDEX_MD))  # ensure_index_line сработал
+        agent.tool_remember("Алекс", "любит горы", "public")
+        self.assertTrue((agent.PEOPLE_DIR / "алекс.md").exists())
+        self.assertIn("- [алекс]", mi._read(mi.INDEX_MD))  # ensure_index_line сработал
 
     def test_remember_in_durable_tool_call_records_run_provenance(self):
         context = run_context.RunContext.create(
@@ -416,11 +416,11 @@ class TestRecall(Base):
         execution_token = agent._TOOL_EXECUTION.set(execution)
         try:
             with run_context.bind_run(context):
-                agent.tool_remember("Егор", "проверяемый факт", "private")
+                agent.tool_remember("Алекс", "проверяемый факт", "private")
         finally:
             agent._TOOL_EXECUTION.reset(execution_token)
 
-        text = (agent.PEOPLE_DIR / "егор.md").read_text(encoding="utf-8")
+        text = (agent.PEOPLE_DIR / "алекс.md").read_text(encoding="utf-8")
         self.assertIn("[source:run:run-memory-source:call:tool-memory-1]", text)
 
     def test_open_loop_not_duplicated_into_facts(self):
@@ -435,7 +435,7 @@ class TestOwnerGating(Base):
         fc = FakeClient()
         llm.use_test_client(fc)
         try:
-            agent.respond("привет", [], "Егор", force_voice=True, is_owner=is_owner)
+            agent.respond("привет", [], "Алекс", force_voice=True, is_owner=is_owner)
         finally:
             llm.clear_test_clients()
         return [t["name"] for t in fc.last.get("tools", [])]
@@ -507,17 +507,17 @@ class TestShell(Base):
 
 
 class TestConsolidate(Base):
-    def _patch_llm(self, updates, portrait=None, insight="Я заметила, что Егор растёт."):
+    def _patch_llm(self, updates, portrait=None, insight="Я заметила, что Алекс растёт."):
         co._extract = lambda txt: updates
         co._portrait = lambda slug, text: portrait or {}
         co._reflect = lambda txt: insight
         co._distill_self = lambda txt: ""  # без записи в self.md в этих тестах
 
     def test_journal_is_preserved_without_people_or_reflection_promotion(self):
-        self._person("егор", "# Егор\n\n## Факты\n- [public] (s2) любит чай _(2026-05-01)_\n")
-        self._journal("2026-06-01", "# 2026-06-01\n\n- 10:00 (s2) Егор перешёл на кофе, ищет работу\n")
+        self._person("алекс", "# Алекс\n\n## Факты\n- [public] (s2) любит чай _(2026-05-01)_\n")
+        self._journal("2026-06-01", "# 2026-06-01\n\n- 10:00 (s2) Алекс перешёл на кофе, ищет работу\n")
         self._patch_llm(
-            {"Егор": {
+            {"Алекс": {
                 "facts": [{"fact": "перешёл на кофе", "visibility": "public", "salience": 3}],
                 "supersedes": ["чай"],
                 "open_loops": ["спросить, как с поиском работы"],
@@ -528,7 +528,7 @@ class TestConsolidate(Base):
         journal_before = mi._read(agent.JOURNAL_DIR / "2026-06-01.md")
         reflections_before = mi._read(agent.REFLECTIONS)
         out = co.run()
-        body = mi._read(agent.PEOPLE_DIR / "егор.md")
+        body = mi._read(agent.PEOPLE_DIR / "алекс.md")
         self.assertIn("любит чай", body)
         self.assertNotIn("перешёл на кофе", body)
         self.assertNotIn("поиском работы", body)
@@ -542,7 +542,7 @@ class TestConsolidate(Base):
         body_before = body
         out2 = co.run()
         self.assertIn("Нечего", out2)
-        body_after = mi._read(agent.PEOPLE_DIR / "егор.md")
+        body_after = mi._read(agent.PEOPLE_DIR / "алекс.md")
         self.assertEqual(body_before, body_after, "повторный consolidate изменил файл")
 
     def test_journal_cannot_close_open_loop(self):

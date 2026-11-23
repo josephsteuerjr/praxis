@@ -136,12 +136,12 @@ class ObserveFileTests(unittest.TestCase):
                 mock.patch("body_client.desktop_screen_capture") as capture, \
                 mock.patch("workshop.send_file") as send:
             result = agent.tool_computer(
-                "observe", path=r"C:\\Users\\yegor\\frame.jpg",
+                "observe", path=r"C:\\Users\\alex\\frame.jpg",
             )
         capture.assert_not_called()
         send.assert_not_called()
         export.assert_called_once_with(
-            "fs.export", {"path": r"C:\\Users\\yegor\\frame.jpg"},
+            "fs.export", {"path": r"C:\\Users\\alex\\frame.jpg"},
             execution="interactive", timeout=600,
         )
         return result

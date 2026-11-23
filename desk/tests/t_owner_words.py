@@ -8,11 +8,7 @@
      история без имени, пример алиаса, тождество для самого владельца;
   2. `owner_words.install` на поддельном модуле — схемы, словари, шаблоны, обёртки
      `frame_trace.mark` (только авторские отрезки) и `_presence_frame`, повтор безвреден;
-  3. ИНВЕНТАРЬ ЖИВОГО ДЕРЕВА (`helene/core/agent.py`, `tool_text_en.py` издания): каждая
-     строка с именем владельца обязана быть либо накрыта установкой (константа схемы,
-     словарь, шаблон, авторская метка кадра, обёрнутая функция), либо стоять в ЯВНОМ
-     списке остатка `KNOWN_REMAINING`. Новая строка с именем в новом месте — красный стенд
-     по имени функции: молча она в кадр не уедет.
+  3. текущее ядро и английская проекция должны обращаться к владельцу без личного имени.
 """
 from __future__ import annotations
 
@@ -34,7 +30,6 @@ def _tree_agent() -> Path:
     """`agent.py` дерева, которое РЕАЛЬНО едет в поставку: HELENE_TREE_SRC, дерево сборки
     (HELENE_BODY_DIR/tree), иначе слой репозитория. Ревью 25.09 (A9 F1): стенд сверял слой
     чекаута, а в Mac-архив 0.8.6 уехало дерево Windows-архива с прежней фразой."""
-    import os  # noqa: PLC0415
     for var, sub in (("HELENE_TREE_SRC", ""), ("HELENE_BODY_DIR", "tree")):
         raw = os.environ.get(var)
         if raw:
@@ -47,57 +42,11 @@ def _tree_agent() -> Path:
 TREE_AGENT = _tree_agent()
 NAME = re.compile(r"Yegor|Егор|Egor")
 
-#: Функции дерева, где имя владельца ОСТАЁТСЯ (тексты внутри рук, механизмы, которых в
-#: издании нет). Список явный: убрал имя из функции — убери её отсюда, добавил в новую —
-#: реши, накрывать или сюда.
-KNOWN_REMAINING = frozenset({"my_sends_today_digest", "task_window", "_repl"})
-#: Единственный литерал в сборке промпта вне меток: заголовок домашнего слоя памяти.
-KNOWN_REMAINING_LITERALS = ("Дом (общий слой: Егор и родные)",)
-
-
-def inventory(path: Path) -> list[dict]:
-    """Все строковые литералы с именем: строка, докстринг ли, функция, метка кадра, цель присваивания."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            child._parent = node  # noqa: SLF001
-    rows = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str) and NAME.search(node.value)):
-            continue
-        fn = mark = assign = None
-        docstring = False
-        prev, cur = node, getattr(node, "_parent", None)
-        while cur is not None:
-            if isinstance(cur, ast.Expr) and prev is node:
-                docstring = True
-            if isinstance(cur, ast.FunctionDef) and fn is None:
-                fn = cur.name
-            if (isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute)
-                    and cur.func.attr == "mark" and cur.args
-                    and isinstance(cur.args[0], ast.Constant) and mark is None):
-                mark = cur.args[0].value
-            if isinstance(cur, (ast.Assign, ast.AnnAssign)) and assign is None:
-                target = cur.targets[0] if isinstance(cur, ast.Assign) else cur.target
-                assign = getattr(target, "id", None) or ast.unparse(target)
-            prev, cur = cur, getattr(cur, "_parent", None)
-        rows.append({"line": node.lineno, "doc": docstring, "fn": fn, "mark": mark,
-                     "assign": assign, "text": node.value})
-    return rows
-
-
-def english_source() -> Path | None:
-    roots = []
-    for var, sub in (("HELENE_TREE_SRC", ""), ("HELENE_BODY_DIR", "tree")):
-        raw = os.environ.get(var)
-        if raw:
-            roots.append(Path(raw) / sub if sub else Path(raw))
-    roots.append(ROOT.parent / "live-fix")
-    for root in roots:
-        candidate = root / "tool_text_en.py"
-        if candidate.is_file():
-            return candidate
-    return None
+def inventory(path: Path) -> list[int]:
+    """Source lines whose authored text contains an original owner name."""
+    tree = ast.parse(path.read_bytes(), filename=str(path))
+    return [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Constant)
+            and isinstance(node.value, str) and NAME.search(node.value)]
 
 
 class Rules(unittest.TestCase):
@@ -261,84 +210,14 @@ class Install(unittest.TestCase):
 
 
 class LiveTree(unittest.TestCase):
-    """Инвентарь живого дерева: каждая строка с именем — накрыта или названа."""
+    def test_current_prompts_are_neutral(self):
+        self.assertTrue(TREE_AGENT.is_file())
+        self.assertEqual(inventory(TREE_AGENT), [])
 
-    def setUp(self):
-        self.assertTrue(TREE_AGENT.is_file(), f"дерева нет там, где его ждут: {TREE_AGENT}")
-        self.rows = inventory(TREE_AGENT)
-        self.assertTrue(self.rows, "в дереве не нашлось ни одной строки с именем владельца — инвентарь отстал")
-
-    @staticmethod
-    def _covered(row: dict) -> bool:
-        assign = row["assign"] or ""
-        if row["fn"] is None:
-            return (assign in owner_words.TOOL_LISTS or assign.endswith("_TOOL")
-                    or assign == "HAND_PURPOSE" or assign in owner_words.WINDOW_TEMPLATES
-                    or assign in owner_words.CONTRACT_CONSTANTS)
-        if row["mark"] and owner_words.mark_is_owner_text(row["mark"]):
-            return True
-        if assign == "owner_place":          # уезжает меткой state.owner_place
-            return True
-        return row["fn"] in owner_words.WRAPPED_FUNCTIONS
-
-    def test_every_name_in_the_tree_is_covered_or_named(self):
-        loose = []
-        for row in self.rows:
-            if row["doc"] or self._covered(row):
-                continue
-            if row["fn"] in KNOWN_REMAINING:
-                continue
-            if row["fn"] == "_build_prompt_parts" and any(
-                    row["text"].startswith(lit) for lit in KNOWN_REMAINING_LITERALS):
-                continue
-            snippet = re.sub(r"\s+", " ", row["text"])
-            m = NAME.search(snippet)
-            start = max(0, m.start() - 40)
-            loose.append(f"строка {row['line']}, {row['fn'] or '<модуль>'}"
-                         f"{' [' + row['mark'] + ']' if row['mark'] else ''}: …{snippet[start:start + 90]}")
-        self.assertEqual(loose, [], "имя владельца в дереве там, где издание его не переводит и не назвало:\n  "
-                         + "\n  ".join(loose))
-
-    def test_the_remaining_list_is_not_stale(self):
-        """Функция из списка остатка обязана всё ещё содержать имя — иначе список врёт."""
-        present = {row["fn"] for row in self.rows if row["fn"] and not row["doc"]}
-        stale = sorted(KNOWN_REMAINING - present)
-        self.assertEqual(stale, [], f"в этих функциях имени больше нет — вычеркнуть из KNOWN_REMAINING: {stale}")
-        literals = [row["text"] for row in self.rows if row["fn"] == "_build_prompt_parts" and not row["mark"]]
-        for lit in KNOWN_REMAINING_LITERALS:
-            self.assertTrue(any(t.startswith(lit) for t in literals), f"литерала больше нет: {lit!r}")
-
-    def test_history_pairs_and_marks_are_alive(self):
-        src = TREE_AGENT.read_text(encoding="utf-8")
-        if re.search(r"(?m)^FRAME_TEXT_BOUNDARIES_API\s*=\s*1\s*$",src):
-            self.skipTest("Localized frame boundaries replace legacy name-rewrite pairs; native boundary tests cover this API")
-        for old, _ in owner_words.HISTORY_TEXT:
-            self.assertIn(old, src, f"пара истории мёртвая — в дереве нет: {old!r}")
-        for name in ("contract.base", "contract.appetite", "contract.owner_tools",
-                     "contract.unknown_authority", "state.owner_place"):
-            self.assertIn(f'"{name}"', src, f"метки {name} в дереве больше нет")
-        for fname in owner_words.WRAPPED_FUNCTIONS:
-            self.assertIn(f"def {fname}(", src, fname)
-        for attr in owner_words.WINDOW_TEMPLATES:
-            self.assertRegex(src, rf"(?m)^{re.escape(attr)} = ", attr)
-
-    def test_the_covered_texts_speak_the_owner_afterwards(self):
-        """Прогон правил по накрытым литералам дерева: имени не остаётся."""
-        w = owner_words.OwnerWords("Sergei")
-        for row in self.rows:
-            if row["doc"] or not self._covered(row) or "yegor-kosyrev" in row["text"]:
-                continue
-            said = w.say(row["text"])
-            self.assertNotRegex(said, NAME, f"строка {row['line']}: {said[:120]!r}")
-
-    def test_english_projection_names_are_covered(self):
-        src = english_source()
-        if src is None:
-            self.skipTest("tool_text_en.py издания не найден (HELENE_TREE_SRC, HELENE_BODY_DIR/tree, "
-                          "../live-fix) — английская проекция против живого текста НЕ сверена")
-        loose = [f"строка {row['line']} ({row['assign']})" for row in inventory(src)
-                 if not row["doc"] and row["assign"] not in ("POINTER_PURPOSE", "EN")]
-        self.assertEqual(loose, [], "имя владельца в tool_text_en вне POINTER_PURPOSE/EN:\n  " + "\n  ".join(loose))
+    def test_current_tool_projection_is_neutral(self):
+        projection = TREE_AGENT.with_name("tool_text_en.py")
+        self.assertTrue(projection.is_file())
+        self.assertEqual(inventory(projection), [])
 
 
 if __name__ == "__main__":

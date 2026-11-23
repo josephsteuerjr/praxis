@@ -139,14 +139,14 @@ class NamesakesAreRefusedNotGuessed(unittest.TestCase):
 
     def test_one_exact_among_partials_stays_unambiguous(self):
         book = [
-            {"id": "1", "display_name": "Егор", "lexical": 140, "score": 200},
+            {"id": "1", "display_name": "Алекс", "lexical": 140, "score": 200},
             {"id": "2", "display_name": "Егоров", "lexical": 90, "score": 100},
         ]
-        self.assertIsNone(runner._ambiguous_book("Егор", book))
+        self.assertIsNone(runner._ambiguous_book("Алекс", book))
 
     def test_single_candidate_and_legacy_rows_without_tier(self):
-        self.assertIsNone(runner._ambiguous_book("Егор", [{"id": "1", "lexical": 140}]))
-        self.assertIsNone(runner._ambiguous_book("Егор", [{"id": "1"}, {"id": "2"}]))
+        self.assertIsNone(runner._ambiguous_book("Алекс", [{"id": "1", "lexical": 140}]))
+        self.assertIsNone(runner._ambiguous_book("Алекс", [{"id": "1"}, {"id": "2"}]))
 
     def test_candidates_carry_their_lexical_tier(self):
         import telegram_contacts as tc
@@ -172,7 +172,7 @@ class FrozenChatGetsNoOutgoing(unittest.TestCase):
 
     def test_open_peer_passes(self):
         with patch.object(rooms, "is_frozen", return_value=False):
-            self.assertIsNone(runner._frozen_refusal("424242424", "Егор"))
+            self.assertIsNone(runner._frozen_refusal("424242424", "Алекс"))
 
     def test_a_broken_freeze_check_does_not_block(self):
         with patch.object(rooms, "is_frozen", side_effect=OSError("disk")):
@@ -230,11 +230,11 @@ class NamesakesAreCountedAcrossTheWholeBook(unittest.TestCase):
 
     def test_exact_on_top_of_partials_stays_unambiguous(self):
         book = [
-            {"id": "1", "display_name": "Егор", "lexical": 140, "score": 200},
+            {"id": "1", "display_name": "Алекс", "lexical": 140, "score": 200},
             {"id": "2", "display_name": "Егоров", "lexical": 90, "score": 100},
             {"id": "3", "display_name": "Егорка", "lexical": 105, "score": 120},
         ]
-        self.assertIsNone(runner._ambiguous_book("Егор", book))
+        self.assertIsNone(runner._ambiguous_book("Алекс", book))
 
 
 if __name__ == "__main__":

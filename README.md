@@ -25,6 +25,14 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.9.0
+
+Open `START-HERE.md` in a desktop or server package to find its editable code map,
+source commit and matching source archive. The source archive includes the release
+kit for Windows, macOS (Apple silicon and Intel), Debian/Ubuntu, Fedora and the
+ARM64 server. The kit restores an exact working copy, builds the selected target
+and stages an update channel. Its `ci` command starts all six GitHub jobs together.
+
 ## Included in 2.8.14 Beta
 
 The chat window stops springing: status lines, agent replies and a growing

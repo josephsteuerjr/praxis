@@ -65,7 +65,7 @@ class HotRecordsKeepAuthorship(unittest.TestCase):
         self.assertEqual(rows[0]["source_id"], "41:edit:now:abc")
 
     def test_direction_is_read_not_guessed(self):
-        self._hot(line="Егор: привет", actor="Егор", direction="in", ts=1.0)
+        self._hot(line="Алекс: привет", actor="Алекс", direction="in", ts=1.0)
         self._hot(line="Praxis: привет", actor="Praxis", direction="out", ts=2.0)
         rows = memory_life.hot_records("42")
         self.assertEqual([r["direction"] for r in rows], ["in", "out"])
@@ -73,13 +73,13 @@ class HotRecordsKeepAuthorship(unittest.TestCase):
     def test_legacy_rows_without_fields_still_resolve(self):
         """Записи, заведённые до появления полей, не должны выпадать из разговора."""
         self._hot(line="Praxis: старая строка", ts=1.0)
-        self._hot(line="Егор: и его", ts=2.0)
+        self._hot(line="Алекс: и его", ts=2.0)
         rows = memory_life.hot_records("42")
         self.assertEqual([r["direction"] for r in rows], ["out", "in"])
 
     def test_blank_lines_are_not_turns(self):
-        self._hot(line="   ", actor="Егор", direction="in", ts=1.0)
-        self._hot(line="Егор: есть", actor="Егор", direction="in", ts=2.0)
+        self._hot(line="   ", actor="Алекс", direction="in", ts=1.0)
+        self._hot(line="Алекс: есть", actor="Алекс", direction="in", ts=2.0)
         self.assertEqual(len(memory_life.hot_records("42")), 1)
 
 
@@ -106,9 +106,9 @@ class DialogueSplitsAtHerLastReply(unittest.TestCase):
                           "ts": float(len(self.rows) + 1), "source_id": None})
 
     def test_her_words_arrive_as_her_own_without_a_name_prefix(self):
-        self._in("Егор", "привет")
+        self._in("Алекс", "привет")
         self._out("привет, я тут")
-        self._in("Егор", "что с почтой")
+        self._in("Алекс", "что с почтой")
         history, current = runner._dm_dialogue("42")
         self.assertEqual([m["role"] for m in history], ["user", "assistant"])
         self.assertEqual(history[1]["content"], "привет, я тут",
@@ -120,22 +120,22 @@ class DialogueSplitsAtHerLastReply(unittest.TestCase):
         «вы сейчас чините ровно то, от чего владельцу стало не по себе». Роль `user` СТАЛА
         собеседником, а текст в ней остался подписан его именем: кадр читался как
         «мне докладывают слова владельца», а не «владелец говорит мне»."""
-        self._in("Yegor Kosyrev (@example_profile)", "мы работаем над этим")
+        self._in("Alex Miller (@example_profile)", "мы работаем над этим")
         self._out("вижу")
-        self._in("Yegor Kosyrev (@example_profile)", "последние коммиты ценные")
+        self._in("Alex Miller (@example_profile)", "последние коммиты ценные")
         history, current = runner._dm_dialogue("42")
         self.assertEqual(current, "последние коммиты ценные",
                          "его собственная реплика снова подписана его именем")
         self.assertEqual(history[0]["content"], "мы работаем над этим")
         joined = "\n".join(m["content"] for m in history) + current
-        self.assertNotIn("Yegor Kosyrev", joined,
+        self.assertNotIn("Alex Miller", joined,
                          "имя собеседника осталось внутри его же слов — третье лицо вернётся")
 
     def test_consecutive_lines_of_one_side_merge_into_one_turn(self):
-        self._in("Егор", "первое")
-        self._in("Егор", "второе")
+        self._in("Алекс", "первое")
+        self._in("Алекс", "второе")
         self._out("отвечаю")
-        self._in("Егор", "третье")
+        self._in("Алекс", "третье")
         history, _current = runner._dm_dialogue("42")
         self.assertEqual([m["role"] for m in history], ["user", "assistant"])
         self.assertIn("первое", history[0]["content"])
@@ -143,11 +143,11 @@ class DialogueSplitsAtHerLastReply(unittest.TestCase):
 
     def test_the_whole_conversation_survives_the_split(self):
         """Ни одна реплика не имеет права пропасть при разведении ролей."""
-        self._in("Егор", "раз")
+        self._in("Алекс", "раз")
         self._out("два")
-        self._in("Егор", "три")
+        self._in("Алекс", "три")
         self._out("четыре")
-        self._in("Егор", "пять")
+        self._in("Алекс", "пять")
         history, current = runner._dm_dialogue("42")
         seen = "\n".join([m["content"] for m in history] + [current])
         for word in ("раз", "два", "три", "четыре", "пять"):
@@ -155,20 +155,20 @@ class DialogueSplitsAtHerLastReply(unittest.TestCase):
 
     def test_she_has_not_spoken_here_yet(self):
         """Без её реплики истории нет — и ход идёт ровно как раньше."""
-        self._in("Егор", "первый раз пишу")
+        self._in("Алекс", "первый раз пишу")
         self.assertEqual(runner._dm_dialogue("42"), ([], ""))
 
     def test_nothing_new_to_answer(self):
         """Последней говорила она сама: пустое user-сообщение хуже старого пути."""
-        self._in("Егор", "привет")
+        self._in("Алекс", "привет")
         self._out("привет")
         self.assertEqual(runner._dm_dialogue("42"), ([], ""))
 
     def test_the_lever_returns_the_old_path(self):
         os.environ["PRAXIS_DIALOGUE_ROLES"] = "0"
-        self._in("Егор", "привет")
+        self._in("Алекс", "привет")
         self._out("привет")
-        self._in("Егор", "ещё")
+        self._in("Алекс", "ещё")
         self.assertEqual(runner._dm_dialogue("42"), ([], ""))
 
     def test_a_broken_source_does_not_break_the_turn(self):
@@ -185,14 +185,14 @@ class TheModelSeesRolesAndTheReceiptsSeeEverything(unittest.TestCase):
     def test_media_prompt_splits_receipt_text_from_model_text(self):
         ctx = agent.ChannelContext(chat_id="42", is_dm=True, owner=True)
         receipt, for_model = agent._media_prompt(
-            "Егор: раз\nPraxis: два\nЕгор: три", (), ctx, model_text="Егор: три")
+            "Алекс: раз\nPraxis: два\nЕгор: три", (), ctx, model_text="Алекс: три")
         self.assertIn("Praxis: два", receipt, "расписка обязана помнить весь разговор")
-        self.assertEqual(for_model, "Егор: три",
+        self.assertEqual(for_model, "Алекс: три",
                          "модели уехал весь разговор второй раз — это дубль")
 
     def test_without_roles_both_texts_stay_identical(self):
         ctx = agent.ChannelContext(chat_id="42", is_dm=True, owner=True)
-        receipt, for_model = agent._media_prompt("Егор: раз\nЕгор: два", (), ctx)
+        receipt, for_model = agent._media_prompt("Алекс: раз\nЕгор: два", (), ctx)
         self.assertEqual(receipt, for_model)
 
     def test_voice_gets_assistant_turns_and_only_the_new_message(self):
@@ -207,11 +207,11 @@ class TheModelSeesRolesAndTheReceiptsSeeEverything(unittest.TestCase):
         self.addCleanup(lambda: setattr(agent, "_terminal_tool_loop", orig))
 
         history = [
-            {"role": "user", "content": "Егор: привет"},
+            {"role": "user", "content": "Алекс: привет"},
             {"role": "assistant", "content": "привет, я тут"},
         ]
         ctx = agent.ChannelContext(chat_id="42", principal_id="42", is_dm=True, owner=True)
-        agent._voice_impl("Егор: что с почтой", history, "Егор", ctx=ctx)
+        agent._voice_impl("Алекс: что с почтой", history, "Алекс", ctx=ctx)
 
         msgs = seen["messages"]
         self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user"])
@@ -219,7 +219,7 @@ class TheModelSeesRolesAndTheReceiptsSeeEverything(unittest.TestCase):
         tail = msgs[-1]["content"]
         text = tail if isinstance(tail, str) else "".join(
             str(b.get("text", "")) for b in tail if isinstance(b, dict))
-        self.assertIn("Егор: что с почтой", text)
+        self.assertIn("Алекс: что с почтой", text)
         # Тег реплики ПОДПИСАН (author/tg/message из транспортных полей). Здесь предмет
         # другой: что реплика вообще открывается своим тегом, а не тонет в конверте.
         self.assertIn("<current_user_message", text)

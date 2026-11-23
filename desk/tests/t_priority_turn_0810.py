@@ -29,7 +29,7 @@ class Priority(unittest.TestCase):
         self.bot._wake_priority_rows = {'7':[
             {'id':'7:1','sender':'Маша','sender_id':'1','gist':'проверь доставку'},
             {'id':'7:2','sender':'Маша','sender_id':'1','gist':'проверь QR'},
-            {'id':'7:3','sender':'Егор','sender_id':'2','gist':'другой запрос'},
+            {'id':'7:3','sender':'Алекс','sender_id':'2','gist':'другой запрос'},
         ]}
         self.bot._wake_senders = {'7':('Петя','3')}
         self.bot._pending = collections.deque(['ordinary','7'])
@@ -37,11 +37,11 @@ class Priority(unittest.TestCase):
         self.bot.owner_id = '2'
         self.bot.sent_now = []
         self.bot.rooms = types.SimpleNamespace(meta=lambda chat:{'is_dm':False},
-            lines=lambda *args:['Маша: ! проверь доставку','Егор: ! проверь QR','Петя: обычный текст'])
+            lines=lambda *args:['Маша: ! проверь доставку','Алекс: ! проверь QR','Петя: обычный текст'])
         self.bot.is_allowed = lambda sender: True
         for ident, sender, name, text in [('1', '1', 'Маша', 'проверь доставку'),
                                           ('2', '1', 'Маша', 'проверь QR'),
-                                          ('3', '2', 'Егор', 'другой запрос')]:
+                                          ('3', '2', 'Алекс', 'другой запрос')]:
             publish = self.bot.inputs.capture({'source_message_id': ident, 'sender_name': name},
                 room='7', sender_id=sender, owner_id='2', is_dm=False, title='Test', input_text=text)
             publish()
@@ -58,7 +58,7 @@ class Priority(unittest.TestCase):
             with self.assertRaises(Captured): runner.handle_bot('7')
         self.assertIn('Маша',self.seen[0])
         self.assertIn('проверь доставку',self.seen[0])
-        self.assertNotIn('Егор',self.seen[0], 'a pending sender cannot borrow another principal\'s authority')
+        self.assertNotIn('Алекс',self.seen[0], 'a pending sender cannot borrow another principal\'s authority')
         self.assertIn('проверь QR',self.seen[0])
         self.assertNotIn('Петя',self.seen[0])
         # A turn that was never accepted must leave both requests pending.

@@ -1457,12 +1457,12 @@ def proposal_view(pid: str) -> dict | None:
 
 def proposal_apply(pid: str) -> dict:
     import selfdev
-    return selfdev.apply(str(pid), by="the owner")
+    return selfdev.apply(str(pid), by="owner")
 
 
 def proposal_reject(pid: str, reason: str = "") -> dict:
     import selfdev
-    return selfdev.reject(str(pid), reason, by="the owner")
+    return selfdev.reject(str(pid), reason, by="owner")
 
 
 # --------------------------------------------------------------------------- #
@@ -1835,7 +1835,7 @@ def identity_state() -> dict:
 def identity_rollback(name: str, version: int) -> dict:
     """Откат владельца постфактум: текущий текст сам архивируется, история цела."""
     import identity
-    res = identity.rollback(name, int(version), by="the owner", reason="откат владельца с пульта")
+    res = identity.rollback(name, int(version), by="owner", reason="откат владельца с пульта")
     if res.get("ok"):
         _journal_panel(f"откат души: {name} к v{version} (стал v{res['version']})")
     return res
@@ -1851,9 +1851,9 @@ def perception_set(knob: str, value=None, reset: bool = False) -> dict:
     """Правка владельца: источник честно «the owner» — она видит и в таблице, и в журнале."""
     import perception
     if reset:
-        res = perception.reset_knob(knob, by="the owner")
+        res = perception.reset_knob(knob, by="owner")
     else:
-        res = perception.set_knob(knob, value, by="the owner", reason="пульт")
+        res = perception.set_knob(knob, value, by="owner", reason="пульт")
     if res.get("ok"):
         _journal_panel(f"рычаг восприятия {knob}: {res.get('old')} → {res.get('new')}"
                        + (" (сброс)" if reset else ""))

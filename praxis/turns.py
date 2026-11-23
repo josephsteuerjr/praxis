@@ -1027,7 +1027,7 @@ def describe(n: int = 6, scope: str = "owner", chat_id=None) -> str:
         return ("Пока ни одного записанного хода"
                 + ("" if scope == "owner" else " в этом канале") + ".")
     head = ("Мои последние прожитые ходы (лог кодом, не по памяти; новые снизу"
-            + ("" if scope == "owner" else "; вне лички Егора виден только этот канал") + "):")
+            + ("" if scope == "owner" else "; вне лички владельца виден только этот канал") + "):")
     return head + "\n" + "\n".join("- " + format_line(t) for t in rows)
 
 

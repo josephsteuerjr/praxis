@@ -142,7 +142,7 @@ class DataRelocation(unittest.TestCase):
 class WindowsUnicode(unittest.TestCase):
     def test_native_powershell_roundtrips_unicode_output_and_error(self):
         from localharness.python_windows import powershell
-        value='C:\\Егор — рабочий стол\\Данные 代理'
+        value='C:\\Алекс — рабочий стол\\Данные 代理'
         self.assertEqual(powershell('Write-Output $env:HELENE_UNICODE_TEST',dict(os.environ,HELENE_UNICODE_TEST=value)),value)
         self.assertEqual(powershell("Write-Output 'Вера — папка данных'"),'Вера — папка данных')
         with self.assertRaises(RuntimeError) as error:powershell("throw 'Нет доступа: Данные Веры'")

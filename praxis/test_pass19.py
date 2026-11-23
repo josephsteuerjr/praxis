@@ -102,7 +102,7 @@ class Pass19Base(unittest.TestCase):
         for i in range(n):
             if i and i in gap_after:
                 ts += 120
-            actor = "Praxis" if i % 2 else "Егор"
+            actor = "Praxis" if i % 2 else "Алекс"
             direction = "out" if actor == "Praxis" else "in"
             source_id = base_idx + i
             out.append(life.record_message(
@@ -114,9 +114,9 @@ class Pass19Base(unittest.TestCase):
 
 class TestEventSpine(Pass19Base):
     def test_dedupe_and_rebuild_without_state(self):
-        one = life.record_message("7", "Егор: привет", actor="Егор", direction="in",
+        one = life.record_message("7", "Алекс: привет", actor="Алекс", direction="in",
                                   source_id=10, dedupe_key="telegram:7:10:in")
-        two = life.record_message("7", "Егор: привет", actor="Егор", direction="in",
+        two = life.record_message("7", "Алекс: привет", actor="Алекс", direction="in",
                                   source_id=10, dedupe_key="telegram:7:10:in")
         self.assertEqual(one["id"], two["id"])
         self.assertEqual(len(life.iter_events(chat_id="7", kinds={"conversation_message"})), 1)
@@ -183,8 +183,8 @@ class TestEventSpine(Pass19Base):
         self.assertEqual([row["source_id"] for row in rebuilt["hot"]], ["41:delete"])
 
     def test_legacy_bootstrap_is_idempotent_and_honest(self):
-        out = life.bootstrap_legacy("7", ["Егор: один", "Praxis: два"], summary="Старая сводка")
-        again = life.bootstrap_legacy("7", ["Егор: один", "Praxis: два"], summary="Старая сводка")
+        out = life.bootstrap_legacy("7", ["Алекс: один", "Praxis: два"], summary="Старая сводка")
+        again = life.bootstrap_legacy("7", ["Алекс: один", "Praxis: два"], summary="Старая сводка")
         self.assertEqual(out["events"], 2)
         self.assertTrue(out["legacy_compact"])
         self.assertTrue(again["already"])
@@ -448,14 +448,14 @@ class TestFormation(Pass19Base):
     def test_multi_pass_claim_patch_and_saturation(self):
         compact_id, raw = self._fresh_compact()
         evidence_id = raw[0]["id"]
-        claim = {"subject": "Егор", "kind": "person", "text": "любит высоту и сложные маршруты",
+        claim = {"subject": "Алекс", "kind": "person", "text": "любит высоту и сложные маршруты",
                  "visibility": "private", "salience": 3, "confidence": "observed",
                  "evidence_ids": [evidence_id]}
         self._orig.append((formation, "_ask", formation._ask))
 
         def fake(system, user, max_tokens=0):
             if "harvest phase" in system:
-                return {"entities": [{"name": "Егор", "kind": "person", "salience": 3}],
+                return {"entities": [{"name": "Алекс", "kind": "person", "salience": 3}],
                         "claims": [claim], "open_threads": [], "contradictions": []}
             if "DIG phase" in system:
                 return {"evidence_found": [evidence_id], "claims": [claim], "relations": [],
@@ -474,7 +474,7 @@ class TestFormation(Pass19Base):
         self.assertTrue(out["ok"])
         self.assertEqual(out["run"]["passes"], 2)
         self.assertEqual(out["run"]["stop_reason"], "saturation")
-        person = people.read_text(graph.resolve("Егор"))
+        person = people.read_text(graph.resolve("Алекс"))
         self.assertIn("любит высоту", person)
         self.assertIn("[source:clm-", person)
         claims = list(life.CLAIMS_DIR.glob("*.md"))
@@ -512,10 +512,10 @@ class TestFormation(Pass19Base):
     def test_dig_cannot_introduce_claim_or_relation(self):
         compact_id, raw = self._fresh_compact()
         evidence_id = raw[0]["id"]
-        relation = {"a": "Егор", "b": "Маша", "how": "доверяет",
+        relation = {"a": "Алекс", "b": "Маша", "how": "доверяет",
                     "evidence_ids": [evidence_id]}
-        candidate = {"subject": "Егор", "kind": "relation",
-                     "text": "Егор — доверяет — Маша", "other": "Маша",
+        candidate = {"subject": "Алекс", "kind": "relation",
+                     "text": "Алекс — доверяет — Маша", "other": "Маша",
                      "relation": "доверяет", "visibility": "private", "salience": 2,
                      "confidence": "inferred", "evidence_ids": [evidence_id]}
         key = formation._clean_claim(candidate, {evidence_id})["key"]
@@ -523,7 +523,7 @@ class TestFormation(Pass19Base):
 
         def fake(system, user, max_tokens=0):
             if "harvest phase" in system:
-                return {"entities": [{"name": "Егор", "kind": "person"}], "claims": []}
+                return {"entities": [{"name": "Алекс", "kind": "person"}], "claims": []}
             if "DIG phase" in system:
                 return {"evidence_found": [evidence_id], "claims": [candidate],
                         "relations": [relation],
@@ -542,8 +542,8 @@ class TestFormation(Pass19Base):
     def test_supported_private_relation_stays_owner_only_claim(self):
         compact_id, raw = self._fresh_compact()
         evidence_id = raw[0]["id"]
-        candidate = {"subject": "Егор", "kind": "relation",
-                     "text": "Егор — доверяет — Маша", "other": "Маша",
+        candidate = {"subject": "Алекс", "kind": "relation",
+                     "text": "Алекс — доверяет — Маша", "other": "Маша",
                      "relation": "доверяет", "visibility": "private", "salience": 3,
                      "confidence": "inferred", "evidence_ids": [evidence_id]}
         key = formation._clean_claim(candidate, {evidence_id})["key"]
@@ -551,7 +551,7 @@ class TestFormation(Pass19Base):
 
         def fake(system, user, max_tokens=0):
             if "harvest phase" in system:
-                return {"entities": [{"name": "Егор", "kind": "person"}],
+                return {"entities": [{"name": "Алекс", "kind": "person"}],
                         "claims": [candidate]}
             if "DIG phase" in system:
                 return {"evidence_found": [evidence_id], "claims": [candidate],
@@ -591,9 +591,9 @@ class TestHybridRecallAndPanel(Pass19Base):
         не-фоновый источник кандидатов), а не правка этого файла.
         """
         # A compact is canonical Markdown and cites its primary event.
-        event = life.record_message("7", "Егор: занимаюсь альпинизмом", actor="Егор", direction="in")
+        event = life.record_message("7", "Алекс: занимаюсь альпинизмом", actor="Алекс", direction="in")
         meta = life._write_compact(
-            "7", {"summary": "Егор занимается альпинизмом.", "open_threads": [], "claims": [], "episodes": []},
+            "7", {"summary": "Алекс занимается альпинизмом.", "open_threads": [], "claims": [], "episodes": []},
             tier=1, depth=1, source_events=[event["id"]], source_compacts=[], event_count=1,
             continued=False)
         # The foreground explicit path must not discover/rebuild the corpus.

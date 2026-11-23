@@ -41,7 +41,7 @@ def _room_tape():
     return [
         {"role": "user", "content": [{"type": "text", "text": "эпоха комнаты, много букв"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "моя прошлая реплика"}]},
-        {"role": "user", "content": [{"type": "text", "text": "Егор: глянь"}, _PIXEL]},
+        {"role": "user", "content": [{"type": "text", "text": "Алекс: глянь"}, _PIXEL]},
     ]
 
 
@@ -316,7 +316,7 @@ class VisionPrepassCacheAndEffort(Base):
 
         def tape(block: dict):
             return [{"role": "user", "content": [
-                {"type": "text", "text": "Егор: глянь"}, block]}]
+                {"type": "text", "text": "Алекс: глянь"}, block]}]
 
         # один файл — одно описание за TTL (кэш и в path-форме работает)
         same = _Transport()
@@ -443,9 +443,9 @@ class VisionPrepassGnomeBlockers(Base):
         t = _Transport()
         # обе картинки: файл второй отсутствует
         tape = [{"role": "user", "content": [
-            {"type": "text", "text": "Егор: глянь"}, pic(True)]}]
+            {"type": "text", "text": "Алекс: глянь"}, pic(True)]}]
         tape_gone = [{"role": "user", "content": [
-            {"type": "text", "text": "Егор: глянь"}, pic(False)]}]
+            {"type": "text", "text": "Алекс: глянь"}, pic(False)]}]
         self._run(t, messages=tape)        # живая картинка — описана, кэш написан
         self._run(t, messages=tape_gone)   # мёртвая — сентинел, не описание
         import json as _json

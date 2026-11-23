@@ -419,8 +419,8 @@ class TestPass6Logic(unittest.TestCase):
         state_dir = panel.BASE / "memory" / ".state"
         people_dir.mkdir(parents=True)
         state_dir.mkdir(parents=True)
-        (people_dir / "egor.md").write_text(
-            "# Егор\n\n## Открытые нити\n- [ ] спросить о переезде _(2026-07-16)_\n"
+        (people_dir / "alex.md").write_text(
+            "# Алекс\n\n## Открытые нити\n- [ ] спросить о переезде _(2026-07-16)_\n"
             "- [~] вернуться к идее _(2026-07-16)_ _(до 2026-07-23)_\n",
             encoding="utf-8",
         )
@@ -434,7 +434,7 @@ class TestPass6Logic(unittest.TestCase):
         )
         ledger = _followups.FollowUpLedger(state_dir / "telegram_followups.json")
         ledger.create(
-            target_ref="@egor", target_label="Егор", target_peer_id="1",
+            target_ref="@alex", target_label="Алекс", target_peer_id="1",
             target_user_id="1", sent_message_id=7, request_text="ответь",
         )
         (state_dir / "perception_skips.jsonl").write_text(
@@ -468,7 +468,7 @@ class TestPass6Logic(unittest.TestCase):
         self.assertEqual(set(o["counts"]), {"desires", "tasks", "loops", "followups", "skips", "recent_turns"})
         self.assertEqual({x["state"] for x in o["loops"]}, {"open", "parked"})
         self.assertEqual(o["tasks"][0]["id"], "task-1")
-        self.assertEqual(o["followups"][0]["target_label"], "Егор")
+        self.assertEqual(o["followups"][0]["target_label"], "Алекс")
         self.assertEqual(followup_before, followup_after, "overview GET source must not mutate follow-ups")
         self.assertEqual(o["skips"], [
             {"ts": 2, "class": "не_увидела", "stage": "allowlist", "repeat_count": 5},

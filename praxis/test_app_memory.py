@@ -53,7 +53,7 @@ class TestMapReadCutsOnCharacterBoundary(unittest.TestCase):
 
     def test_short_map_is_whole_and_not_marked_truncated(self):
         """Карта короче потолка отдаётся целиком и без флага обрезки."""
-        raw = "# PEOPLE\n\n- [егор](../people/егор.md) Егор\n".encode("utf-8")
+        raw = "# PEOPLE\n\n- [алекс](../people/алекс.md) Алекс\n".encode("utf-8")
         content, truncated = praxis_app._bounded_map_text(raw, limit=4096)
         self.assertFalse(truncated)
         self.assertEqual(content, raw.decode("utf-8"))

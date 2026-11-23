@@ -75,7 +75,7 @@ class RestartReplayEffectIdempotence(unittest.TestCase):
             origin_message_id=777, origin_text="перезапусти себя",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=777, address_kind="direct",
-            reply_targets=((777, "Yegor", "перезапусти себя"),),
+            reply_targets=((777, "Alex", "перезапусти себя"),),
         )
         context = run_context.RunContext.create(
             run_id=run_id, kind="chat_turn", goal="restart",
@@ -86,7 +86,7 @@ class RestartReplayEffectIdempotence(unittest.TestCase):
             context,
             agent._run_context_markdown(
                 ctx=channel, kind=context.kind, goal=context.goal,
-                conversation="Yegor: перезапусти себя", history=[], extra="",
+                conversation="Alex: перезапусти себя", history=[], extra="",
             ),
         )
 

@@ -59,7 +59,7 @@ class StateLanguage(unittest.TestCase):
                 rendered=built.state_line()
                 self.assertIn('PLAN_QUOTA',rendered);self.assertIn('manage_appetite',rendered)
                 self.assertIn('considerate',built.short_line())
-                self.assertNotIn('Егор',rendered)
+                self.assertNotIn('Алекс',rendered)
                 self.assertIn('2',built.usage_delta({'tokens_today':0,'calls_today':0,'estimated_cost_today':0}))
                 observed['tokens_today']=0
                 unknown=built.usage_delta({'tokens_today':0,'calls_today':0,'estimated_cost_today':0})

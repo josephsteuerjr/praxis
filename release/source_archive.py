@@ -60,7 +60,8 @@ def archive(root, destination, version):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as tmp:
         staged = Path(tmp) / "source.zip"
-        with zipfile.ZipFile(staged, "x", zipfile.ZIP_DEFLATED) as z, subprocess.Popen(
+        # Stored Git blobs make the same source ZIP byte-identical across zlib implementations.
+        with zipfile.ZipFile(staged, "x", zipfile.ZIP_STORED) as z, subprocess.Popen(
                 ["git", "-C", str(root), "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as batch:
             for name, (mode, oid) in members.items():
                 batch.stdin.write((oid + "\n").encode())
@@ -75,7 +76,7 @@ def archive(root, destination, version):
                 info = zipfile.ZipInfo(prefix + name)
                 info.create_system = 3
                 info.external_attr = int(mode, 8) << 16
-                info.compress_type = zipfile.ZIP_DEFLATED
+                info.compress_type = zipfile.ZIP_STORED
                 z.writestr(info, data)
             batch.stdin.close()
             if batch.wait():
@@ -83,7 +84,7 @@ def archive(root, destination, version):
             info = zipfile.ZipInfo(prefix + "RELEASE-ORIGIN.json")
             info.create_system = 3
             info.external_attr = 0o100644 << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
             z.writestr(info, json.dumps(origin, sort_keys=True))
         with zipfile.ZipFile(staged) as z:
             if z.testzip() or len(z.namelist()) != len(members) + 1:

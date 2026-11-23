@@ -243,10 +243,10 @@ class AddressedReplies(unittest.IsolatedAsyncioTestCase):
         perception = runner.perception
         with patch.object(perception, "STATE_PATH", self.root / "perception.json"), \
                 patch.object(perception, "_journal"), patch.object(perception, "_spine"):
-            perception.set_knob("cooldown_group", 360, by="egor")
-            perception.set_knob("cooldown_addressed", 360, by="egor")
+            perception.set_knob("cooldown_group", 360, by="alex")
+            perception.set_knob("cooldown_addressed", 360, by="alex")
             self.assertEqual(runner._cooldown(False, addressed=True), 360)
-            perception.set_knob("cooldown_addressed", 0, by="egor")
+            perception.set_knob("cooldown_addressed", 0, by="alex")
             self.assertEqual(runner._cooldown(False, addressed=True), 0)
             self.assertEqual(runner._cooldown(False, "quiet", addressed=True), 0)
             self.assertEqual(runner._cooldown(False, addressed=False), 360)

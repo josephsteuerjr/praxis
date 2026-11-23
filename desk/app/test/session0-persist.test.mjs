@@ -50,7 +50,7 @@ function stand({ fileConfig, saveReply, saveThrows } = {}) {
   return { shell, saves, calls };
 }
 
-const FILE = { model: { key: "sk-живой" }, service: { firewall: true }, owner: { name: "Егор" } };
+const FILE = { model: { key: "sk-живой" }, service: { firewall: true }, owner: { name: "Алекс" } };
 
 // --------------------------------------------------------------------------
 // 1. Согласие: один ключ дописан, всё соседнее не тронуто, отпечаток ПАРОЙ.

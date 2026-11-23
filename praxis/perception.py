@@ -408,9 +408,9 @@ def skips_today() -> dict:
 #  наружу: тул, STATE, пульт
 # --------------------------------------------------------------------------- #
 def describe() -> str:
-    lines = ["Мои рычаги восприятия (env — дефолт Егора, моё значение поверх, живо без рестарта):"]
+    lines = ["Мои рычаги восприятия (env — дефолт владельца, моё значение поверх, живо без рестарта):"]
     for row in effective():
-        src = {"default": "дефолт", "env": "env Егора"}.get(row["source"], row["source"])
+        src = {"default": "дефолт", "env": "env владельца"}.get(row["source"], row["source"])
         b = f" [{row['bounds'][0]}..{row['bounds'][1]}]" if "bounds" in row else ""
         why = f" — {row['reason']}" if row.get("reason") else ""
         lines.append(f"- {row['knob']} = {row['value']} ({src}){b}: {row['desc']}{why}")
@@ -423,7 +423,7 @@ def describe() -> str:
         lines.append(f"Фон групп сегодня (среда, не пропуск): {total} сообщений в {len(amb)} чатах.")
     lines.append("Каждый пропуск имеет класс причины: не_увидела / не_сочла_важным / отложила / "
                  "запретил_егор. Менять рычаги — set из owner-скоупа; это мои рычаги, "
-                 "Егор ставит свои через пульт (источник виден).")
+                 "владелец ставит свои через пульт (источник виден).")
     return "\n".join(lines)
 
 
