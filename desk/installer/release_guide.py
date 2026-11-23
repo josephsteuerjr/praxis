@@ -32,8 +32,19 @@ def documents(source, version, target, start):
                f"скачайте **{archive}**. После распаковки откройте **START-HERE.md** "
                "рядом с папкой release. Происхождение карты записано в "
                "[RELEASE-ORIGIN.json](RELEASE-ORIGIN.json).\n")
-    return {"START-HERE.md": (start.rstrip() + section).encode(),
-            "RELEASE-ORIGIN.json": (json.dumps(metadata, indent=2) + "\n").encode()}
+    files = {"START-HERE.md": (start.rstrip() + section + "\n[Команды сборки](release/README.md)\n").encode(),
+             "RELEASE-ORIGIN.json": (json.dumps(metadata, indent=2) + "\n").encode()}
+    for name in ("kit.py", "build.py", "source_archive.py", "privacy.py", "README.md", "inputs.json"):
+        files["release/" + name] = (source / "release" / name).read_bytes()
+    return files
+
+
+def write_stage(source, stage, version, platform, target):
+    start = desktop_start(source, platform, target)
+    for name, data in documents(source, version, target, start).items():
+        path = Path(stage) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
 
 
 def desktop_start(source, platform, target):

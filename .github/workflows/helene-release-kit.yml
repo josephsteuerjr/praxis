@@ -11,7 +11,7 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ${{ fromJSON('{"windows-x86_64":"windows-2025","macos-arm64":"macos-15","macos-x86_64":"macos-26-intel","debian-x86_64":"ubuntu-24.04","fedora-x86_64":"ubuntu-24.04","server-linux-arm64":"ubuntu-24.04-arm"}')[inputs.target] }}
+    runs-on: ${{ fromJSON('{"windows-x86_64":"windows-2025","macos-arm64":"macos-15","macos-x86_64":"macos-26-intel","debian-x86_64":"ubuntu-24.04","fedora-x86_64":"ubuntu-24.04","server-linux-arm64":"ubuntu-24.04"}')[inputs.target] }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

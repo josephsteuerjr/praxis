@@ -83,7 +83,7 @@ class TraceProvesAvailabilityNotInfluence(unittest.TestCase):
 
     def test_records_which_lesson_was_in_frame(self):
         n = lessons.record_availability("run-x", ["receipt-before-done", "sleep"],
-                                        chat_id="809306689", query="сделала ли я")
+                                        chat_id="424242424", query="сделала ли я")
         self.assertEqual(n, 2)
         rows = lessons.availability("receipt-before-done")
         self.assertEqual(len(rows), 1)

@@ -621,7 +621,7 @@ class BotTransport:
         self._thread = None
         self._start_lock = threading.Lock()
         self._wake_senders: dict[str, tuple[str, str]] = {}
-        # 07.10 (Джарвис): приоритетная реплика чата — следующий ход этого чата
+        # 07.10 (агент): приоритетная реплика чата — следующий ход этого чата
         # открывается баннером «ПРИОРИТЕТ». Ключ чата: пока ход не начался;
         # handle_bot снимает флаг себе в locals ДО чтения очереди сообщений.
         self._wake_priority: dict[str, bool] = {}
@@ -711,8 +711,8 @@ class BotTransport:
                      for name in set(names) if name)
         if strict:
             return True
-        # 07.10 (Джарвис): имя «не в чистом виде» — рычаг PRAXIS_WAKE_ON_NAME.
-        # loose: «Джарвиса»/«джарвисом» будят (строгий матчинг их пропускал —
+        # 07.10 (агент): имя «не в чистом виде» — рычаг PRAXIS_WAKE_ON_NAME.
+        # loose: «агента»/«агентом» будят (строгий матчинг их пропускал —
         # в общем чате агент молчал, пока владелец не реплайнул). off = прежнее.
         if addressing.wake_on_name() == "loose":
             return addressing.name_matches_loose(text, [n for n in names if n])

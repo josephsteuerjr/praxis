@@ -235,13 +235,13 @@ class TestSystemPrompt(Base):
         Свойство, которое здесь стерегут при ЛЮБОЙ доктрине: её память живёт в evidence,
         а не в системной власти.
         """
-        self._person("егор", "# Егор\n\ntelegram_id: 809306689\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
+        self._person("егор", "# Егор\n\ntelegram_id: 424242424\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
         self._person("мария", "# Мария\n\ntelegram_id: 700000001\n\n- СЕКРЕТ_МАРИИ скрипачка\n")
         mi.ensure_index_line("егор", "Егор — альпинист")
         mi.ensure_index_line("мария", "Мария — скрипачка")
 
         # Транспорт назвал Егора — его досье едет целиком, Марии нет.
-        bound_ctx = agent.ChannelContext(principal_id="809306689", is_dm=True,
+        bound_ctx = agent.ChannelContext(principal_id="424242424", is_dm=True,
                                          owner=True, known=True)
         _p0, system_bound, evidence_bound = agent._build_prompt_parts(
             speaker="Егор", owner=True, ctx=bound_ctx)

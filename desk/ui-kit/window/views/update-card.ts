@@ -5,7 +5,7 @@ import { t as uiText, locale } from "../../../lang/lang";
 // шаг шёл кругом через человека. Теперь рядом с контейнером живёт исполнитель
 // (`server/updater`), а здесь — одна кнопка.
 //
-// «Всё максимально просто» (Егор, 27.09): владелец — не обязательно айтишник. Поэтому:
+// «Всё максимально просто» (владелец, 27.09): владелец — не обязательно айтишник. Поэтому:
 //   * «Обновить до X» — одно нажатие: оно и есть «да» (план уходит с согласием окна,
 //     исполнитель сверяет выпуск и начинает сам). Второй кнопки нет;
 //   * агент просит обновиться сам — «Обновить» / «Не сейчас» на его просьбу;
@@ -303,7 +303,7 @@ export function updateCardHTML(
   const up = u?.updater;
   if (!up || !up.present) {
     if (!opts.inContainer) return "";
-    // 11.11 (Yegor): no manual script. The desktop application installs the updater over SSH.
+    // 11.11 (the owner): no manual script. The desktop application installs the updater over SSH.
     return section(uiText("ui.ui.kit.window.views.update.card.e712fccae0"));
   }
   const r = u?.receipt || null;

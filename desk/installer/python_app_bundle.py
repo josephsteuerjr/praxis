@@ -139,6 +139,8 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
         'platform':'windows','version_source':'python-app.json'},indent=2),encoding='utf-8')
     from localharness.authored_baseline import seal as seal_authored_baseline
     seal_authored_baseline(output)
+    from release_guide import write_stage
+    write_stage(DESK.parent, output, version, "windows", "windows-x86_64")
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')
            if p.is_file() and p.relative_to(output).parts[0] not in ('data','agents','backups','tree','components')
            and p.relative_to(output).as_posix() not in ('helene.json','python-package-files.json','owner-stop.json','python-migration.json')}

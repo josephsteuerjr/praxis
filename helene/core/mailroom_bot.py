@@ -1816,7 +1816,7 @@ async def _poll(bot: Bot) -> None:
                         f"📬 Новое письмо `{e['hash']}`\nОт: {e['from']}\nТема: {e['subject']}\n\n{body}",
                     )
                 except Exception:
-                    # напр. «chat not found» — Егор ещё не нажал Start у бота. Письмо уже в ящике,
+                    # напр. «chat not found» — владелец ещё не нажал Start у бота. Письмо уже в ящике,
                     # не роняем уведомления по остальным письмам пачки.
                     log.warning("уведомление по %s не ушло (нажал ли Егор Start у бота?)", e.get("hash"))
             if added:

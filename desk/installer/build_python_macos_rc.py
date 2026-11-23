@@ -98,6 +98,8 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
         'native_reused':native,'native_built':native_built,'core_origins':origins,'native_qualification':'see separate CI receipts',
         'physical_acceptance':'TCC/microphone/owner Mac pending'},indent=2),encoding='utf-8')
     normalize_output_modes(program)
+    from release_guide import write_stage
+    write_stage(Path(__file__).resolve().parents[2], program, VERSION, "macos", "macos-arm64")
     files={p.relative_to(program).as_posix():digest(p) for p in program.rglob('*') if p.is_file()
         and p.relative_to(program).parts[0] not in ('tree','components','data','downloads') and p.name not in ('helene.json','python-package-files.json')}
     (program/'python-package-files.json').write_text(json.dumps({'format':'helene-python-program-files.v1','version':VERSION,'files':files},indent=2),encoding='utf-8')

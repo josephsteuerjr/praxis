@@ -85,7 +85,7 @@ def finish(new, note, *, remove_old, progress):
         validate_retirement(old,new,note)
     progress('retiring_old')
     errors = []
-    # 11.11 (Yegor): what Windows protects from a non-administrator is a visible
+    # 11.11 (the owner): what Windows protects from a non-administrator is a visible
     # leftover, not a failure — it neither asks for elevation nor blocks the rest.
     leftovers = list(note.get('cleanup_leftovers') or [])
     transfer=note.get('data_relocation')

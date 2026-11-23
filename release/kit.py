@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from urllib.parse import urlsplit
 import zipfile
 
 from build import build, digest, FRONTS
@@ -111,7 +112,10 @@ def stage_build(root, out, target, cache, lock):
     with tempfile.TemporaryDirectory(prefix="helene-build-", dir=out) as tmp:
         work = Path(tmp)
         with zipfile.ZipFile(source_zip) as z:
-            z.extractall(work)
+            for info in z.infolist():
+                path_name(info.filename)
+                file = Path(z.extract(info, work))
+                file.chmod((info.external_attr >> 16) & 0o777 or 0o644)
         source = work / f"Helene-{v}-source"
         # The packaging libraries read code only from this freshly exported tree.
         sys.path[:0] = [str(source / "desk"), str(source / "desk/installer")]
@@ -130,7 +134,7 @@ def stage_build(root, out, target, cache, lock):
         print(result, row["sha256"])
 
 
-def publish(root, out, targets, dest, repo):
+def publish(root, out, targets, dest, repo, channel):
     v = version(root)
     source, commit = output_source(root, out)
     files = [source]
@@ -141,8 +145,18 @@ def publish(root, out, targets, dest, repo):
                 or digest(file) != row["sha256"] or file.stat().st_size != row["size"]):
             raise ValueError("Invalid build receipt: " + target)
         files.append(file)
+    targets_unique = {file.name for file in files}
+    if len(targets_unique) != len(files):
+        raise ValueError("Select each target once")
     sums = "".join(digest(f) + "  " + f.name + "\n" for f in files)
     name = "v" + v
+    parsed = urlsplit(channel)
+    if (not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1"))):
+        raise ValueError("Use a public HTTPS channel or local HTTP loopback URL")
+    feed = {"tag_name": name, "draft": False, "prerelease": False, "body": "Hélène " + v,
+            "assets": [{"name": f.name, "size": f.stat().st_size, "digest": "sha256:" + digest(f),
+                        "browser_download_url": channel.rstrip("/") + "/" + name + "/" + f.name} for f in files]}
     dest.mkdir(parents=True, exist_ok=True)
     final = dest / name
     if not final.exists():
@@ -152,17 +166,38 @@ def publish(root, out, targets, dest, repo):
             for f in files:
                 shutil.copyfile(f, staged / f.name)
             (staged / "SHA256SUMS").write_text(sums, encoding="ascii", newline="\n")
+            (staged / "release.json").write_text(json.dumps(feed, indent=2), encoding="utf8")
             staged.rename(final)
-    if (final / "SHA256SUMS").read_text() != sums or any(digest(final / f.name) != digest(f) for f in files):
+    if (set(p.name for p in final.iterdir()) != targets_unique | {"SHA256SUMS", "release.json"}
+            or (final / "SHA256SUMS").read_text() != sums or json.loads((final / "release.json").read_bytes()) != feed
+            or any(digest(final / f.name) != digest(f) for f in files)):
         raise ValueError("Staged release differs. Select a new destination.")
     if repo:
         # An existing tag must already point to the reviewed candidate.
         tag_commit = subprocess.check_output(["gh", "api", f"repos/{repo}/commits/{name}", "--jq", ".sha"], text=True).strip()
         if tag_commit != commit:
             raise ValueError("Create the reviewed tag at the exact source commit first")
-        subprocess.run(["gh", "release", "create", name, "--repo", repo, "--verify-tag", "--draft",
-                        "--title", "Hélène " + v, "--notes", "Hélène " + v,
-                        *[str(final / f.name) for f in files], str(final / "SHA256SUMS")], check=True)
+        view = ["gh", "release", "view", name, "--repo", repo, "--json", "isDraft,assets"]
+        current = subprocess.run(view, capture_output=True)
+        if current.returncode:
+            subprocess.run(["gh", "release", "create", name, "--repo", repo, "--verify-tag", "--draft",
+                            "--title", "Hélène " + v, "--notes", "Hélène " + v], check=True)
+        def remaining():
+            remote = json.loads(subprocess.check_output(view))
+            if not remote["isDraft"]:
+                raise ValueError("Only a draft can receive assets from this command")
+            local = {f.name: final / f.name for f in files}
+            local["SHA256SUMS"] = final / "SHA256SUMS"
+            for asset in remote["assets"]:
+                path = local.pop(asset["name"], None)
+                if path is None or asset.get("digest") != "sha256:" + digest(path):
+                    raise ValueError("Review unexpected or mismatched draft asset: " + asset["name"])
+            return list(local.values())
+        missing = remaining()
+        if missing:
+            subprocess.run(["gh", "release", "upload", name, "--repo", repo, *map(str, missing)], check=True)
+        if remaining():
+            raise ValueError("Draft incomplete. Rerun the same publish command.")
     print(final)
 
 
@@ -183,6 +218,7 @@ def main():
         if command == "publish":
             cmd.add_argument("--target", action="append", choices=inputs["targets"], required=True)
             cmd.add_argument("--to", type=Path, required=True)
+            cmd.add_argument("--channel-url", default="http://127.0.0.1:8765")
             cmd.add_argument("--github-draft", metavar="OWNER/REPO")
     args = p.parse_args()
     if args.cmd == "restore":
@@ -199,7 +235,7 @@ def main():
         elif args.cmd == "build":
             stage_build(ROOT, out, args.target, args.cache.resolve(), inputs)
         else:
-            publish(ROOT, out, args.target, args.to.resolve(), args.github_draft)
+            publish(ROOT, out, args.target, args.to.resolve(), args.github_draft, args.channel_url)
 
 
 if __name__ == "__main__":

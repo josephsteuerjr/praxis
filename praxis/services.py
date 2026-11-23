@@ -63,7 +63,7 @@ SERVICES: dict[str, Service] = {
     "relay": Service("relay", "foreign", "relay", None, "запасной мозг (чужой процесс)"),
 }
 
-# Чьи логи ей можно читать: свои сервисы + запасной мозг. Чужие проекты Егора
+# Чьи логи ей можно читать: свои сервисы + запасной мозг. Чужие проекты владельца
 # (dasha, vroom, hardbot…) в этот список НЕ входят — их логи не её дело.
 LOG_ALLOWED = ("praxis", "praxis-mailbot", "praxis-serverapp", "relay")
 

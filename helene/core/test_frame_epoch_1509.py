@@ -75,7 +75,7 @@ class EpochStore(unittest.TestCase):
             self.assertTrue(frame_epoch.applies(room_ctx(owner=False, known=False)))
             # личка и свой ход — никогда
             self.assertFalse(frame_epoch.applies(agent.ChannelContext(
-                chat_id="809306689", room_id="809306689", is_dm=True, owner=True)))
+                chat_id="424242424", room_id="424242424", is_dm=True, owner=True)))
             self.assertFalse(frame_epoch.applies(own_ctx()))
         with mock.patch.dict(os.environ, {"PRAXIS_FRAME_EPOCH": "1", "PRAXIS_FRAME_EPOCH_ROOMS": "*"}):
             self.assertTrue(frame_epoch.applies(room_ctx(owner=False)))
@@ -467,8 +467,8 @@ class EpochDossiers(unittest.TestCase):
         # строка в теле, вейл-строки «снято N» нет.
         with mock.patch.dict(os.environ, LEVER):
             _p, _d, dm = frame_for(agent.ChannelContext(
-                chat_id="809306689", room_id="809306689", is_dm=True, owner=True,
-                principal_id="809306689", _scope_override="owner"))
+                chat_id="424242424", room_id="424242424", is_dm=True, owner=True,
+                principal_id="424242424", _scope_override="owner"))
             frame_epoch.taken()
         self.assertIn("развёлся", dm, "в личке владельца приватные строки едут телом досье")
         self.assertNotIn("приватных записей снято", dm)

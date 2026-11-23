@@ -41,8 +41,8 @@ def room_ctx(*, owner: bool, known: bool = True, family: bool = False,
 
 
 def dm_ctx(*, owner: bool) -> agent.ChannelContext:
-    return agent.ChannelContext(chat_id="809306689", room_id="809306689", is_dm=True,
-                                owner=owner, known=True, principal_id="809306689")
+    return agent.ChannelContext(chat_id="424242424", room_id="424242424", is_dm=True,
+                                owner=owner, known=True, principal_id="424242424")
 
 
 def frame_for(ctx: agent.ChannelContext) -> tuple[str, str, str]:

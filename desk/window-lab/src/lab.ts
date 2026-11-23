@@ -1,6 +1,6 @@
 // Лаборатория окна Hélène, 28.09: один и тот же прототип ленты в четырёх движках —
 // Tauri/WebView2 и Electron на Windows, WebKitGTK и Electron на Linux (WSLg).
-// Егор выбирает движок глазами, стенд «Прогон» даёт цифры кадров для сравнения.
+// владелец выбирает движок глазами, стенд «Прогон» даёт цифры кадров для сравнения.
 import { FEELS, Scroller, type FeelName, type Overscroll } from "../../ui-kit/feed/scroller";
 import { Zoom } from "../../ui-kit/feed/zoom";
 import { KeyedList } from "../../ui-kit/feed/keyed";
@@ -228,7 +228,7 @@ const SEG: Record<string, (v: string) => void> = {
   text: (v) => document.documentElement.style.setProperty("--text", `"${v}", "Segoe UI", system-ui, sans-serif`),
 };
 const DEF: Record<string, string> = { over: "rubber", feel: "syrup", theme: "system", hand: "Zen Kurenaido", text: "Golos Text" };
-// Прежние выборы лаборатории (до слова Егора 28.09 «резинка нравится») — не держим.
+// Прежние выборы лаборатории (до слова владельца 28.09 «резинка нравится») — не держим.
 if (store("lab.v") !== "2") { for (const k of ["over", "feel", "hand", "text"]) { try { localStorage.removeItem("lab." + k); } catch { /* */ } } store("lab.v", "2"); }
 for (const seg of document.querySelectorAll<HTMLElement>("[data-seg]")) {
   const name = seg.dataset.seg!;
@@ -364,7 +364,7 @@ async function selftest() {
   // 4) пальцы замерли на полторы секунды — оттяжка держится, не сбрасывается
   await wait(1500);
   out.pullAfterHold1500 = raw();
-  // 5) подняли — возврат сразу и быстро (Егор 28.09: «очень долго отпускается»):
+  // 5) подняли — возврат сразу и быстро (владелец 28.09: «очень долго отпускается»):
   // видимый перетяг только убывает, с первого кадра, без перелёта; почти весь путь — за полсекунды.
   const shown = () => scroller.debug().shown;
   lift();

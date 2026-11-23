@@ -87,9 +87,7 @@ release gate until the engine changes are ported. Immutable desktop
 tags and shipped per-platform inventories retain the authority for each
 released composition.
 
-Praxis's own server application (the MiniApp/PWA and the `praxis-desk`
-backend) lives in [`remote/praxis-desk/`](remote/praxis-desk) as the exact
-deployed source; see its README.
+This branch contains the desktop and server edition of Hélène. Its remote interface source is in desk/remote/.
 
 The records below describe historical 2.2.9 deliveries. Their immutable tags,
 digests and older voice references are provenance, not the current desktop source

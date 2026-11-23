@@ -120,9 +120,9 @@ class DialogueSplitsAtHerLastReply(unittest.TestCase):
         «вы сейчас чините ровно то, от чего Егору стало не по себе». Роль `user` СТАЛА
         собеседником, а текст в ней остался подписан его именем: кадр читался как
         «мне докладывают слова Егора», а не «Егор говорит мне»."""
-        self._in("Yegor Kosyrev (@tatarskiy_e4pochmak)", "мы работаем над этим")
+        self._in("Yegor Kosyrev (@example_profile)", "мы работаем над этим")
         self._out("вижу")
-        self._in("Yegor Kosyrev (@tatarskiy_e4pochmak)", "последние коммиты ценные")
+        self._in("Yegor Kosyrev (@example_profile)", "последние коммиты ценные")
         history, current = runner._dm_dialogue("42")
         self.assertEqual(current, "последние коммиты ценные",
                          "его собственная реплика снова подписана его именем")

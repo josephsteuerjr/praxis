@@ -14,4 +14,4 @@ Natural expression is on by default. Turning it off removes the resident guide f
 
 ## Origin
 
-Ouroboros prepared the original material on 14 November 2026, following research on 13 November. Claude integrated it as a separate resident skill for Praxis. The Hélène edition adapts the examples for all agents and provides separate language versions. The skill leaves VOICE intact.
+Ouroboros wrote the original guide. The exercises use fictional examples. The source notes describe the research and its limits.

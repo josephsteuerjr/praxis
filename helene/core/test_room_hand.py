@@ -20,7 +20,7 @@ import agent
 
 #: Форма живого реестра прода (`memory/.state/buf_meta.json`), сокращённая.
 META = {
-    "809306689": {"name": "Yegor Kosyrev (@tatarskiy_e4pochmak)",
+    "424242424": {"name": "Yegor Kosyrev (@example_profile)",
                   "last_ts": 300.0, "is_dm": True},
     "-1001240718803__topic__96256": {"name": "AbstractDL Chat · topic #96256",
                                      "last_ts": 200.0},
@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         patcher = mock.patch.object(agent, "_rooms_meta", lambda: dict(META))
         patcher.start()
         self.addCleanup(patcher.stop)
-        env = mock.patch.dict(os.environ, {"PRAXIS_OWNER_ID": "809306689"}, clear=False)
+        env = mock.patch.dict(os.environ, {"PRAXIS_OWNER_ID": "424242424"}, clear=False)
         env.start()
         self.addCleanup(env.stop)
 
@@ -69,7 +69,7 @@ class RoomsResolveWithoutGuessing(Base):
         """В реестре место подписано display-именем Telegram, а она ищет «Егора»."""
         for word in ("Егор", "егор", "  ЕГОР  "):
             key, _ = agent.resolve_room(word)
-            self.assertEqual(key, "809306689", f"«{word}» не нашёл личку владельца")
+            self.assertEqual(key, "424242424", f"«{word}» не нашёл личку владельца")
 
     def test_several_matches_answer_with_addresses_not_with_a_guess(self):
         key, instead = agent.resolve_room("AbstractDL")
@@ -108,7 +108,7 @@ class OnlyTheOwnerChannelMayNameAnotherRoom(Base):
             out = agent.tool_recent_turns(room="Егор")
         described.assert_not_called()
         read.assert_not_called()
-        self.assertNotIn("809306689", out, "адрес чужой комнаты утёк в отказ")
+        self.assertNotIn("424242424", out, "адрес чужой комнаты утёк в отказ")
         self.assertIn("не раскрывается", out)
 
 
@@ -165,7 +165,7 @@ class PlaceIsNotPrivacy(unittest.TestCase):
     """Два разных вопроса, которые звались одним именем `chat_id`."""
 
     RING = [
-        {"chat_id": "809306689", "ts": 1.0, "kind": "chat"},
+        {"chat_id": "424242424", "ts": 1.0, "kind": "chat"},
         {"chat_id": "-1004301095307__topic__726", "ts": 2.0, "kind": "chat"},
         {"chat_id": None, "ts": 3.0, "kind": "task_window"},
     ]
@@ -175,7 +175,7 @@ class PlaceIsNotPrivacy(unittest.TestCase):
 
     def test_in_room_keeps_only_that_place(self):
         with self._ring():
-            rows = agent.turns.in_room(n=10, chat_id="809306689")
+            rows = agent.turns.in_room(n=10, chat_id="424242424")
         self.assertEqual([r["ts"] for r in rows], [1.0])
 
     def test_the_privacy_tier_still_shows_everything_to_the_owner(self):
@@ -185,17 +185,17 @@ class PlaceIsNotPrivacy(unittest.TestCase):
         и тогда надо пересматривать обе функции разом, а не радоваться.
         """
         with self._ring():
-            rows = agent.turns.recent(n=10, scope="owner", chat_id="809306689")
+            rows = agent.turns.recent(n=10, scope="owner", chat_id="424242424")
         self.assertEqual(len(rows), 3)
 
     def test_a_window_without_a_place_belongs_to_no_room(self):
         """Её собственные окна не приписываются ничьей комнате."""
-        self.assertFalse(agent.turns.same_place({"chat_id": None}, "809306689"))
+        self.assertFalse(agent.turns.same_place({"chat_id": None}, "424242424"))
 
     def test_describe_room_says_so_when_the_place_is_silent(self):
         with mock.patch.object(agent.turns, "_load_ring", lambda: []):
             self.assertIn("Ни одного записанного хода",
-                          agent.turns.describe_room(n=5, chat_id="809306689"))
+                          agent.turns.describe_room(n=5, chat_id="424242424"))
 
 
 class TheToolDeclaresItsNewAddress(unittest.TestCase):

@@ -506,7 +506,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
                 f"\"{pid}\", …) с тем же ревью — гейт прогонится заново.")
 
     if should_automerge(zone):
-        # 26.09 immunity contract (по слову Егора): красные тесты — блок, не предупреждение.
+        # 26.09 immunity contract (по слову владельца): красные тесты — блок, не предупреждение.
         # Sovereign contract сохраняется: моё завершённое review — решение о мёрже, но
         # решение не может игнорировать красный гейт. ``override_reason`` — осознанный
         # именованный обход блока (provenance), а не молчаливая выдача красного в master.

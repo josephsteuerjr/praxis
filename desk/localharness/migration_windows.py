@@ -858,7 +858,7 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
                     path.unlink();removed+=1;removed_bytes+=expected['size']
                     publish(files=removed,total_files=len(files),bytes=removed_bytes);continue
                 except PermissionError:pass
-            # 11.11 (Yegor): cleaning up the previous installation never asks for
+            # 11.11 (the owner): cleaning up the previous installation never asks for
             # administrator rights. A file Windows protects stays where it is and is
             # named in the result; the old programme is already stopped and unhooked.
             remaining[name]=expected

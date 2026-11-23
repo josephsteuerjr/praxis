@@ -11,7 +11,7 @@
 @font-face { font-family: "Shantell Sans"; font-weight: 300 800; font-display: block; src: url("./fonts/ShantellSans-cyrillic.woff2") format("woff2"); unicode-range: U+0400-045F; }
 @font-face { font-family: "Shantell Sans"; font-weight: 300 800; font-display: block; src: url("./fonts/ShantellSans-latin.woff2") format("woff2"); unicode-range: U+0000-00FF; }
 
-/* Токены. Всё, что владелец может поменять (кастомизация, слово Егора 28.09: «добавить
+/* Токены. Всё, что владелец может поменять (кастомизация, слово владельца 28.09: «добавить
    всё-всё-всё»), приходит переменными --u-* со style корня; зависимое от темы — парой
    -l/-d, иначе строчный стиль корня перебил бы тёмный блок. */
 :root {
@@ -34,7 +34,7 @@
   --mono: "PT Mono", Consolas, monospace;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --zoom: 1;
-  /* вид — по умолчанию то, что Егор одобрил 28.09 */
+  /* вид — по умолчанию то, что владелец одобрил 28.09 */
   --feed-base: var(--u-feed-base, 16px);
   --lh: var(--u-lh, 1.6);
   --col: var(--u-col, 52em);
@@ -131,7 +131,7 @@ button { font: inherit; color: inherit; }
   line-height: 1;
   letter-spacing: 0.03em;
   color: var(--ink);
-  /* Чёткость имени (Егор: «котик чёткий, а надпись имени — нет»): крупно, без мыла. */
+  /* Чёткость имени (владелец: «котик чёткий, а надпись имени — нет»): крупно, без мыла. */
   text-rendering: geometricPrecision;
   -webkit-text-stroke: 0.45px currentColor;
 }

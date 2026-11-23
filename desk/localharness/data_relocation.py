@@ -244,7 +244,7 @@ def retire_sources(transfer,*,startup_proof):
             if _signature(path)!=sig:raise RuntimeError('Original data changed before retirement')
             try:path.unlink()
             except PermissionError:remaining[name]=sig
-        # 11.11 (Yegor): no administrator prompt for cleanup. The verified copy already
+        # 11.11 (the owner): no administrator prompt for cleanup. The verified copy already
         # serves the new programme; files Windows protects stay and are reported below.
         for name in sorted(row['directories'],key=lambda name:len(Path(name).parts),reverse=True):
             try:(source/name).rmdir()

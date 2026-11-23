@@ -2,7 +2,7 @@ services:
   praxis:
     build: .
     container_name: praxis
-    # No cgroup memory ceiling: Yegor explicitly chose host-wide headroom over a
+    # No cgroup memory ceiling: the owner explicitly chose host-wide headroom over a
     # per-container cap on 20.08.2026. The trajectory collector remains useful
     # for RSS/swap/PSI/kernel behaviour, but memory.max events no longer measure
     # pressure against a Praxis-specific boundary.

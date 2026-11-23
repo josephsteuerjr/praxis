@@ -461,7 +461,7 @@ def finish(old,new,note,*,stopped=lambda:False):
     note['login_migration']=commit(new)
     # rmtree never follows directory symlinks/junctions. Only the resolved,
     # independent programme chosen in the update request can be removed.
-    # 11.11 (Yegor): what the user's own rights cannot remove stays and is named;
+    # 11.11 (the owner): what the user's own rights cannot remove stays and is named;
     # no administrator prompt, and the rest of the old folder is still removed.
     protected=[]
     def readonly(function,path,error):

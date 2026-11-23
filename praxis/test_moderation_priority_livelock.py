@@ -53,7 +53,7 @@ class AnEmptyQueueLowersThePriority(unittest.TestCase):
     def test_a_raised_flag_survives_a_non_empty_queue(self):
         """Обратная сторона: пока событие ждёт, приоритет обязан стоять."""
         mtproto_runner._MODERATION_PRIORITY_PENDING = False
-        self._run_tick([{"id": "e1"}], passing={"809306689"})
+        self._run_tick([{"id": "e1"}], passing={"424242424"})
         self.assertTrue(mtproto_runner._MODERATION_PRIORITY_PENDING,
                         "непустая очередь перестала требовать следующий ход")
 
@@ -75,7 +75,7 @@ class AnEmptyQueueLowersThePriority(unittest.TestCase):
         mtproto_runner._MODERATION_PRIORITY_PENDING = True
         busy = mock.Mock()
         busy.done.return_value = False
-        self._run_tick([], passing={"-1001240718803"}, debounce={"809306689": busy})
+        self._run_tick([], passing={"-1001240718803"}, debounce={"424242424": busy})
         self.assertFalse(mtproto_runner._MODERATION_PRIORITY_PENDING,
                          "занятость чатов снова удержала флаг — это и есть петля")
 
@@ -131,7 +131,7 @@ class AnEmptyQueueLowersThePriority(unittest.TestCase):
         mtproto_runner._MODERATION_PRIORITY_PENDING = True
         for _ in range(mtproto_runner._MODERATION_FAILURE_TICKS - 1):
             self._run_broken_tick()
-        self._run_tick([{"id": "e1"}], passing={"809306689"})  # очередь читается
+        self._run_tick([{"id": "e1"}], passing={"424242424"})  # очередь читается
         for _ in range(mtproto_runner._MODERATION_FAILURE_TICKS - 1):
             self._run_broken_tick()
         self.assertTrue(mtproto_runner._MODERATION_PRIORITY_PENDING,

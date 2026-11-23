@@ -172,7 +172,7 @@ class FrozenChatGetsNoOutgoing(unittest.TestCase):
 
     def test_open_peer_passes(self):
         with patch.object(rooms, "is_frozen", return_value=False):
-            self.assertIsNone(runner._frozen_refusal("809306689", "Егор"))
+            self.assertIsNone(runner._frozen_refusal("424242424", "Егор"))
 
     def test_a_broken_freeze_check_does_not_block(self):
         with patch.object(rooms, "is_frozen", side_effect=OSError("disk")):

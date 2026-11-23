@@ -101,8 +101,10 @@ def verification(source, donor, work, version):
             origin = value.get("source")
             if origin and data["files"].get(origin, {}).get("sha256") != value.get("source_sha256"):
                 raise ValueError("Review changed source-bound test declarations: " + origin)
-            if data["files"] == previous["files"] or origin:
-                data[key] = value
+            for name, expected in value.get("source_files", {}).items():
+                if data["files"].get(name, {}).get("sha256") != expected:
+                    raise ValueError("Review changed test declaration: " + name)
+            data[key] = value
     path.write_text(json.dumps(data, sort_keys=True), encoding="utf8")
     return out, digest(path)
 
@@ -115,10 +117,15 @@ def build(source, work, output, version, target, inputs, fetch):
     is_server = target == "server-linux-arm64"
     system = {"win32":"windows", "darwin":"macos", "linux":"linux"}.get(sys.platform)
     arch = {"amd64":"x86_64", "aarch64":"arm64"}.get(platform.machine().lower(), platform.machine().lower())
-    host = system + "-" + arch
+    host = f"{system}-{arch}"
     if not is_server and host != item["host"]:
         raise ValueError(f"Run {target} on {item['host']} (current host {host})")
-    tool_input = fetch(inputs["targets"][{"linux-x86_64":"debian-x86_64"}.get(host, host)])
+    if target.startswith("fedora-") and platform.freedesktop_os_release().get("ID") != "fedora":
+        raise ValueError("Use a Fedora builder for the Fedora desktop")
+    tool_target = target if not is_server else {"linux-x86_64":"debian-x86_64"}.get(host, host)
+    if tool_target not in inputs["targets"]:
+        raise ValueError("Cross-assemble the ARM server on a supported desktop builder")
+    tool_input = donor if tool_target == target else fetch(inputs["targets"][tool_target])
     receipt, output_hashes = fronts(source, tool_input, work)
     if is_server:
         relay = work / "relay"

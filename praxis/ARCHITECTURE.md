@@ -37,7 +37,7 @@ change adapter success or retry policy. `runaway_generation` is a typed
 the existing fallback path without a subscription hold or same-endpoint replay.
 The relay's `RELAY_ARGUMENT_BYTES_LIMIT`, `RELAY_ARGUMENT_WHITESPACE_RUN_LIMIT` and
 `RELAY_MODEL_ATTEMPT_MS_LIMIT` are all zero/off by default; enabling them or choosing
-values requires Egor's explicit ratification. No limit is enabled by this change.
+values requires the owner's explicit ratification. No limit is enabled by this change.
 
 Normal provider pools follow their durable run. An explicit captured Forge task_id
 adds a distinct pool scope: the background worker owns its provider lifetime even
@@ -203,13 +203,13 @@ delivery address и message ids во всё дальнейшее исполне�
   комнаты, join/leave и raw Telegram account RPC установленной schema, включая account-critical.
   Verification, provenance, receipts и rollback дают ей наблюдаемость и восстановление, а не право
   внешнего veto.
-- С 10.11 (слово Егора «ВЕЗДЕ ВСЕ ПРАВА») рук только для владельца нет: `admit` и
+- С 10.11 (слово владельца «ВЕЗДЕ ВСЕ ПРАВА») рук только для владельца нет: `admit` и
   `computer_access`, остатки старого мини-аппа, удалены из её каталога. Её набор рук один и тот же
   в любом ходе, включая `computer`. Гранты `computer_access.py` остаются только для зрителей
   старого `praxis_app`; сам другой человек не получает raw Telegram account RPC или Windows SYSTEM.
 - Account-critical auth/session/destructive constructor (включая удаление аккаунта, смену номера,
   платежи) Praxis и owner исполняют напрямую: отдельного подтверждения из owner-DM нет с 10.11.2026
-  (Егор, «Снять целиком»). Receipt, append-only JSONL и durable run evidence содержат redacted schema
+  (владелец, «Снять целиком»). Receipt, append-only JSONL и durable run evidence содержат redacted schema
   marker и process-keyed commitment, но не raw argument/result/error payload; после restart такой
   вызов не воспроизводится из run log.
 - Root room является границей допуска и политики. Topic id не может сменить root peer или расширить
@@ -221,7 +221,7 @@ delivery address и message ids во всё дальнейшее исполне�
 - Текст и staged media проходят один outbound guard. В owner-аудитории он ничего не проверяет,
   кроме точного `[молчу]`. К не-owner аудитории держит только механический кред-пол: секрет в тексте
   или в байтах staged-документа. Privacy-судьи второй моделью и пола дословных `[private]`-записей
-  нет с 10.11.2026 (Егор, «сними»); изображения на креды не проверяются — судья, который это делал,
+  нет с 10.11.2026 (владелец, «сними»); изображения на креды не проверяются — судья, который это делал,
   работал только при `PRAXIS_OUTBOUND_ADVISOR=on`, а вживую был выключен.
 
 ## Поток Telegram-хода
@@ -906,10 +906,10 @@ identity сохраняются в backend_result. Удалённый batch по
 имён нет; исторические записи и backend helpers сохранены. `catalog_tools_for`
 собирает полномочия текущего хода, `_bind_tool_catalog` сохраняет этот полный набор.
 Явный override специального хода остаётся узким. Каталог одинаков для любого
-говорящего (Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА»; admit/computer_access удалены — 76 схем).
+говорящего (владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА»; admit/computer_access удалены — 76 схем).
 Раскрытие приватного по-прежнему проверяется на выходе.
 
-Егор 10.11: `h.hand` — инструмент скриптов, а не экономия. При выключенных старых
+владелец 10.11: `h.hand` — инструмент скриптов, а не экономия. При выключенных старых
 указателях `offered_tools_for` отдаёт все схемы каталога родными; Python-хвоста нет.
 Дополнительные reply/end_turn/task_control и provider tools зависят от вида хода. K
 содержит карту семейств, общий словарь исходов и договор `h.hand` для скриптов;

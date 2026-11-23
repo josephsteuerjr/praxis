@@ -10,6 +10,8 @@ import tempfile
 import zipfile
 import zlib
 
+from privacy import check as check_release_member
+
 
 def git(root, *args, data=None):
     return subprocess.run(["git", "-C", str(root), *args], input=data,
@@ -19,7 +21,8 @@ def git(root, *args, data=None):
 def path_name(name):
     p = PurePosixPath(name)
     if (not p.parts or p.is_absolute() or p.as_posix() != name or "\\" in name
-            or ":" in name or any(part.lower() in (".git", "..") for part in p.parts)
+            or ":" in name or any(part.endswith((" ", ".")) or part.lower() in (".git", "..", "git~1")
+                                    or part.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]} for part in p.parts)
             or any(ord(c) < 32 for c in name)):
         raise ValueError("Unsafe release member: " + repr(name))
     return name
@@ -68,6 +71,7 @@ def archive(root, destination, version):
                 data = batch.stdout.read(int(header[2]))
                 if batch.stdout.read(1) != b"\n" or blob_id(data) != oid:
                     raise ValueError("Git blob mismatch: " + name)
+                check_release_member(name, data)
                 info = zipfile.ZipInfo(prefix + name)
                 info.create_system = 3
                 info.external_attr = int(mode, 8) << 16

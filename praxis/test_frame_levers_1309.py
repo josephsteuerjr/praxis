@@ -31,7 +31,7 @@ class TapeLevers(unittest.TestCase):
         with mock.patch.object(memory_life, "TAPE_CHARS", 5500), \
                 mock.patch.object(memory_life, "GROUP_TAPE_CHARS", 0):
             self.assertEqual(memory_life.tape_chars_for("-100999999999999999"), 0)
-            self.assertEqual(memory_life.tape_chars_for("809306689"), 5500)
+            self.assertEqual(memory_life.tape_chars_for("424242424"), 5500)
             self.assertEqual(memory_life.tape_chars_for("-100123__topic__7"), 0)
         self.assertTrue(memory_life.is_group_place("-4301095307"))
         self.assertFalse(memory_life.is_group_place("412244782"))
@@ -75,7 +75,7 @@ class TapeLevers(unittest.TestCase):
                 mock.patch.object(memory_life, "GROUP_TAPE_CHARS", 0), \
                 mock.patch.object(memory_life, "TAPE_CHARS", 5500):
             group = "-100999999999999999"
-            dm = "809306689"
+            dm = "424242424"
             for place, expected_tape in ((group, 0), (dm, 5500)):
                 with self.subTest(place=place):
                     out = memory_life.compact_if_due(place)

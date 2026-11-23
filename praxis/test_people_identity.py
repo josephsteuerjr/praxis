@@ -1,7 +1,7 @@
 """Один человек — одно досье: ключ имени против расщепления памяти о людях.
 
 01.08.2026 на живом дереве лежало ПЯТЬ файлов на одного Егора («егор», «егор-косырев»,
-«егор-косырев-tatarskiy_e4pochmak», «yegor-kosyrev», «yegor-kosyrev-tatarskiy_e4pochmak»)
+«егор-косырев-example_profile», «yegor-kosyrev», «yegor-kosyrev-example_profile»)
 и три на Арета. Плодил их не сбой, а механизм: имя файла делалось из того ярлыка, под
 которым человек пришёл в конкретный ход, — её слова, display-имени Telegram или подписи
 квитанции с хэндлом.
@@ -39,9 +39,9 @@ class IdentityKey(unittest.TestCase):
                          people.identity_key("Yegor Kosyrev"))
 
     def test_handle_tail_is_a_caption_not_a_name(self):
-        self.assertEqual(people.identity_key("Yegor Kosyrev (@tatarskiy_e4pochmak)"),
+        self.assertEqual(people.identity_key("Yegor Kosyrev (@example_profile)"),
                          people.identity_key("Yegor Kosyrev"))
-        self.assertEqual(people.identity_key("Егор Косырев (@tatarskiy_e4pochmak)"),
+        self.assertEqual(people.identity_key("Егор Косырев (@example_profile)"),
                          people.identity_key("Yegor Kosyrev"))
 
     def test_diacritics_fold(self):
@@ -95,8 +95,8 @@ class ResolveDoesNotSplit(unittest.TestCase):
         self.assertEqual(graph.resolve("Егор Косырев"), "yegor-kosyrev")
 
     def test_receipt_label_with_handle(self):
-        self.assertEqual(graph.resolve("Yegor Kosyrev (@tatarskiy_e4pochmak)"), "yegor-kosyrev")
-        self.assertEqual(graph.resolve("Егор Косырев (@tatarskiy_e4pochmak)"), "yegor-kosyrev")
+        self.assertEqual(graph.resolve("Yegor Kosyrev (@example_profile)"), "yegor-kosyrev")
+        self.assertEqual(graph.resolve("Егор Косырев (@example_profile)"), "yegor-kosyrev")
 
     def test_different_spelling_still_gets_its_own_node(self):
         self.assertEqual(graph.resolve("Yegor Kosyrew"), "yegor-kosyrew")
@@ -120,8 +120,8 @@ class RememberLandsOnOneCard(unittest.TestCase):
         self.assertIn("любит горы", people.read_text("yegor-kosyrev"))
 
     def test_receipt_label_does_not_spawn_a_third(self):
-        agent.tool_remember("Yegor Kosyrev (@tatarskiy_e4pochmak)", "строит Praxis")
-        self.assertFalse(people.path_for("yegor-kosyrev-tatarskiy_e4pochmak").exists())
+        agent.tool_remember("Yegor Kosyrev (@example_profile)", "строит Praxis")
+        self.assertFalse(people.path_for("yegor-kosyrev-example_profile").exists())
         self.assertIn("строит Praxis", people.read_text("yegor-kosyrev"))
 
     def test_open_loop_lands_on_the_same_card(self):
@@ -183,10 +183,10 @@ class AddressBookSpeaksHerLanguage(unittest.TestCase):
         self._rows = telegram_contacts._load()
         self._backup = {k: dict(v) for k, v in self._rows.items()}
         self._rows.clear()
-        self._rows["809306689"] = {
-            "id": "809306689", "display_name": "Yegor Kosyrev",
-            "username": "tatarskiy_e4pochmak",
-            "aliases": ["Kosyrev", "Yegor", "Yegor Kosyrev", "tatarskiy_e4pochmak"],
+        self._rows["424242424"] = {
+            "id": "424242424", "display_name": "Yegor Kosyrev",
+            "username": "example_profile",
+            "aliases": ["Kosyrev", "Yegor", "Yegor Kosyrev", "example_profile"],
             "contact": True, "dialog": True, "interactions": 1192, "last_seen": 0,
         }
 
@@ -196,11 +196,11 @@ class AddressBookSpeaksHerLanguage(unittest.TestCase):
 
     def test_russian_first_name_finds_the_latin_row(self):
         found = telegram_contacts.candidates("Егор")
-        self.assertEqual([r["id"] for r in found], ["809306689"])
+        self.assertEqual([r["id"] for r in found], ["424242424"])
 
     def test_exact_latin_still_wins_its_own_tier(self):
         found = telegram_contacts.candidates("Yegor Kosyrev")
-        self.assertEqual([r["id"] for r in found], ["809306689"])
+        self.assertEqual([r["id"] for r in found], ["424242424"])
 
     def test_stranger_is_still_not_found(self):
         self.assertEqual(telegram_contacts.candidates("Совершенно Посторонний"), [])

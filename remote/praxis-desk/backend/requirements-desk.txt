@@ -1,2 +1,0 @@
-# Зависимости пакета desk — объявлены в deskpkg.py (вид: server).
-aiohttp

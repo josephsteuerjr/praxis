@@ -1,6 +1,0 @@
-**/node_modules/
-**/dist/
-**/__pycache__/
-backend/mobile/
-backend/miniapp/
-test-dist/

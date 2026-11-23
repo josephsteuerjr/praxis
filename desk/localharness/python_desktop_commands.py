@@ -255,7 +255,7 @@ def invoke(owner, command, args):
             finally:owner.transfer_lock.release()
         raise ValueError('Unknown transfer action')
     if command=='server_install':
-        # 11.11 (Yegor): install a new server agent and update an installed one from the
+        # 11.11 (the owner): install a new server agent and update an installed one from the
         # window; no manual scripts. A new agent becomes its own remote profile; the local
         # agent and its memory are not touched.
         from . import server_install, server_transfer

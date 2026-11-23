@@ -57,7 +57,7 @@ class TapeLevers(unittest.TestCase):
     def test_a_group_has_its_own_lever_and_it_is_off_by_default(self):
         self.assertEqual(ml.GROUP_TAPE_CHARS, 0)
         self.assertEqual(ml.tape_chars_for("-100999999999999999"), 0)
-        self.assertEqual(ml.tape_chars_for("809306689"), 5500)
+        self.assertEqual(ml.tape_chars_for("424242424"), 5500)
         self.assertEqual(ml.tape_chars_for("-100123__topic__7"), 0,
                          "тема форума — то же место группы, а не личка")
 

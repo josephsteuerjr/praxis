@@ -1847,7 +1847,7 @@ def describe_for_mac(agent_mod, texts=None, platform: str = "macOS") -> int:
 # Живой случай 20.09 (Mac, 0.8.1): на просьбу подвинуть мышь агент ответил «на маке
 # не реализовано», не позвав тул. Схему `computer` describe_for_mac уже переводил,
 # но модель читает не схему: с указателями рук (PRAXIS_TOOLS_POINTERS=on, издание
-# 0.7.1) она видит строку «Yegor's Windows computer: files, PowerShell, …»
+# 0.7.1) она видит строку «the owner's Windows computer: files, PowerShell, …»
 # (`tool_text_en.POINTER_PURPOSE`, по-русски — `agent.HAND_PURPOSE`), а в блоке
 # владельца кадра — «The Windows PC is your DIRECT body … run/poll/stop PowerShell».
 # Оба текста — правда для сервера Праксис и для Windows-издания, и ложь на Mac.

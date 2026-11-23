@@ -612,7 +612,7 @@ backups/
 #: папку бэкапов владельца в `retained-assets/<id>/backups` и переводит туда
 #: `backup.dir`, то есть еженедельный zip на 5 ГБ ложился в рабочее дерево личного
 #: git. `add -A` перед каждой командой агента упирался в 30-секундный потолок
-#: (252 раза с 08.11 у Джарвиса, ход ждал до 4,5 минут), а репозиторий вырос до 11 ГБ.
+#: (252 раза с 08.11 у агента, ход ждал до 4,5 минут), а репозиторий вырос до 11 ГБ.
 _IGNORE_MUST = ("memory/", "relay/", "telegram/", "body/", "models/", ".desktop-owner.lock",
                 ".python-desktop-status", ".python-desktop-status.*.tmp",
                 "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
@@ -1902,7 +1902,7 @@ def _brain_config(cfg: dict) -> dict:
         if not legacy["base_url"] and not legacy["api_key"]:
             legacy.update(base_url=spec["base_url"], api_key=spec["api_key"])
 
-    # 2111: искусственных потолков не ставим (инцидент Джарвиса 21.11 —
+    # 2111: искусственных потолков не ставим (инцидент агента 21.11 —
     # переключение модели в окне возвращало 8192, и reasoning-модель сжигала
     # его до первого символа). Дефолты выровнены с DEFAULT_MAX_TOKENS ядра.
     for role, block, default_tokens in (("voice", voice, 32768),

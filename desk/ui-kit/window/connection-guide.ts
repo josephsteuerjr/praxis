@@ -325,7 +325,7 @@ function drawNewServer(host:HTMLElement) {
   }).catch(error=>receipt(out,humanError(error).text,true));
 }
 
-// 12.11 (Yegor): «память, код, проекты — всё». The return brings the agent's CURRENT server
+// 12.11 (the owner): «память, код, проекты — всё». The return brings the agent's CURRENT server
 // life home: review first (the server keeps running), then fence/stop, fresh archive, resumable
 // download, a new home beside the retained local copy, and one live copy. Resume stays separate.
 type ReturnRoot={kind:string;path:string;files:number;bytes:number;git:Array<{path:string;kind:string}>;
@@ -447,7 +447,7 @@ function drawReturn(host:HTMLElement) {
   }).catch(error=>receipt(out,humanError(error).text,true));
 }
 
-// 11.11 (Yegor): install a new server agent and update an installed one from the window;
+// 11.11 (the owner): install a new server agent and update an installed one from the window;
 // no manual scripts. Same SSH discipline as the transfer: the host key is shown and confirmed
 // before any password is sent; passwords and keys are cleared from the form after use.
 type ServerProbe={ok:boolean;message:string;trust_needed?:boolean;fingerprint?:string;existing?:boolean;arch?:string;docker?:boolean};

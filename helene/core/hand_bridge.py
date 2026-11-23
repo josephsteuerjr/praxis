@@ -213,7 +213,7 @@ class Bridge:
                 response['image_count']=len(images)
             except BaseException as exc:
                 # The intent stays durable and is never replayed. Name the cause: a bare
-                # InDoubt hid a refused authority check for days (Jarvis, 15-16.11).
+                # InDoubt hid a refused authority check for days (the agent, 15-16.11).
                 logging.getLogger('praxis.hand_bridge').warning(
                     'nested %s %s ended without a receipt', name, request_id, exc_info=True)
                 response=dict(uncertain,cause=type(exc).__name__,

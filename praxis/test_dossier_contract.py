@@ -29,7 +29,7 @@ class TheDossierContract(unittest.TestCase):
         self.groups = self.base / "memory" / "groups"
         self.people.mkdir(parents=True)
         self.groups.mkdir(parents=True)
-        self._write("егор", "Егор Косырев", "809306689", "- он мой автор\n")
+        self._write("егор", "Егор Косырев", "424242424", "- он мой автор\n")
         self._write("арет", "Арете", "700000201", "- бот-собеседник\n")
         self._write("дмитрий", "Дмитрий", "700000202", "- знакомый по комнате\n")
         self._write("никто", "Совершенно Посторонний", "5550001", "- не при делах\n")
@@ -79,7 +79,7 @@ class TheDossierContract(unittest.TestCase):
 
     # ── 1 ────────────────────────────────────────────────────────────────────────────
     def test_current_interlocutor_arrives_whole_by_telegram_id(self) -> None:
-        block = self._block(self._ctx(principal_id="809306689", chat_id="809306689",
+        block = self._block(self._ctx(principal_id="424242424", chat_id="424242424",
                                       is_dm=True, owner=True))
         self.assertIn("он мой автор", block, "досье собеседника не приехало целиком")
         self.assertNotIn("не при делах", block, "приехало чужое досье")
@@ -88,8 +88,8 @@ class TheDossierContract(unittest.TestCase):
     def test_presence_comes_from_transport_not_from_a_name(self) -> None:
         """Её тонкость: цитата «Арет сказал» не делает Арета присутствующим."""
         self._room("-100777", [(700000202, "Дмитрий", "привет"),
-                               (809306689, "Егор", "Арете вчера писал интересное")])
-        block = self._block(self._ctx(principal_id="809306689", chat_id="-100777",
+                               (424242424, "Егор", "Арете вчера писал интересное")])
+        block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertIn("знакомый по комнате", block, "говоривший в комнате не приехал")
         self.assertNotIn("бот-собеседник", block,
@@ -97,8 +97,8 @@ class TheDossierContract(unittest.TestCase):
 
     # ── 3 ────────────────────────────────────────────────────────────────────────────
     def test_mentioned_gets_a_pointer_not_a_body(self) -> None:
-        self._room("-100777", [(809306689, "Егор", "что там Арете говорил")])
-        block = self._block(self._ctx(principal_id="809306689", chat_id="-100777",
+        self._room("-100777", [(424242424, "Егор", "что там Арете говорил")])
+        block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertIn("УПОМЯНУТЫ В ОКНЕ", block, "указателя нет вовсе")
         self.assertIn("memory/people/арет.md", block, "путь к карточке не назван")
@@ -108,19 +108,19 @@ class TheDossierContract(unittest.TestCase):
     def test_ambiguous_name_yields_nothing(self) -> None:
         """Два досье на одно написание не дают ни указателя, ни тела."""
         self._write("дмитрий-второй", "Дмитрий", "9990001", "- полный тёзка\n")
-        self._room("-100777", [(809306689, "Егор", "Дмитрий обещал зайти")])
-        block = self._block(self._ctx(principal_id="809306689", chat_id="-100777",
+        self._room("-100777", [(424242424, "Егор", "Дмитрий обещал зайти")])
+        block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertNotIn("memory/people/дмитрий-второй.md", block)
         self.assertNotIn("полный тёзка", block)
 
     # ── 5 ────────────────────────────────────────────────────────────────────────────
     def test_the_pointer_dies_when_the_mention_leaves_the_window(self) -> None:
-        old = [(809306689, "Егор", "Арете писал")]
-        filler = [(809306689, "Егор", "рабочая строка %d" % i)
+        old = [(424242424, "Егор", "Арете писал")]
+        filler = [(424242424, "Егор", "рабочая строка %d" % i)
                   for i in range(agent.MENTION_WINDOW_MESSAGES + 5)]
         self._room("-100777", old + filler)
-        block = self._block(self._ctx(principal_id="809306689", chat_id="-100777",
+        block = self._block(self._ctx(principal_id="424242424", chat_id="-100777",
                                       room_id="-100777", is_dm=False, owner=True))
         self.assertNotIn("memory/people/арет.md", block,
                          "упоминание вышло из окна, а указатель остался грузом")
@@ -136,7 +136,7 @@ class TheDossierContract(unittest.TestCase):
     def test_nothing_is_deleted_and_the_lever_restores_everything(self) -> None:
         with mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_ALL": "1"}):
             self.assertFalse(agent.dossier_contract_enabled())
-            block = self._block(self._ctx(principal_id="809306689", chat_id="809306689",
+            block = self._block(self._ctx(principal_id="424242424", chat_id="424242424",
                                           is_dm=True, owner=True))
         for probe in ("он мой автор", "бот-собеседник", "знакомый по комнате", "не при делах"):
             self.assertIn(probe, block, "рычаг не вернул прежнее поведение")

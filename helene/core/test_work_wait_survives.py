@@ -343,7 +343,7 @@ class HerWaitIsNotAGrave(WorkWaitBase):
         self.manager.append_event(
             context.run_id, "status_changed", from_status="paused", to_status="paused",
             reason="owner asked to stop", details=dict(stamp),
-            control_action="pause", requested_by="telegram:809306689",
+            control_action="pause", requested_by="telegram:424242424",
         )
         self.assertEqual(self._plan(context).kind, "blocked")
 

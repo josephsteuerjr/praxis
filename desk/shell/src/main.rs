@@ -6498,7 +6498,7 @@ fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>)
     }
     let Ok(exe) = std::env::current_exe() else { return };
     // 1.2.3: прямо через COM (common/shortcut_win.rs). Скрипт PowerShell собирал C#
-    // через Add-Type, и 27.09 у Егора компилятор из окна не запустился (1314) — ярлыка
+    // через Add-Type, и 27.09 у владельца компилятор из окна не запустился (1314) — ярлыка
     // не было ни от установщика, ни отсюда.
     let lnk = programs.join(format!("{name}.lnk"));
     match create_shortcut(&lnk, &exe, Some(identifier), name, icon) {
@@ -7272,7 +7272,7 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     HIDDEN_BY_OWNER.store(true, std::sync::atomic::Ordering::Relaxed);
-                    // Молча (1.2.3): уведомление «окно закрыто, агент работает» Егору
+                    // Молча (1.2.3): уведомление «окно закрыто, агент работает» владельцу
                     // мешало — закрыть в трей должно выглядеть как закрыть в
                     // трей. У «для всех» отметка «уже показывали» в Program Files ещё и
                     // не писалась у обычной учётки — уведомление выскакивало на КАЖДОЕ

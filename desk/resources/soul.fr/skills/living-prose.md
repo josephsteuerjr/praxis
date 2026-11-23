@@ -14,4 +14,4 @@ Expression vivante est activée par défaut. La désactiver retire le guide perm
 
 ## Origine
 
-Ouroboros a préparé le texte original le 14 novembre 2026, à la suite des recherches du 13 novembre. Claude l’a intégré à Praxis comme compétence permanente distincte. L’édition Hélène adapte les exemples à tous les agents et fournit des versions linguistiques séparées. La compétence ne modifie pas VOICE.
+Ouroboros a rédigé le guide original. Les exercices utilisent des exemples fictifs. Les notes sur les sources précisent la portée des recherches.

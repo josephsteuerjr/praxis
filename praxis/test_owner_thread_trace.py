@@ -46,12 +46,12 @@ class OwnerTraceTests(unittest.TestCase):
     def test_owner_dm_leaves_a_trace_she_can_read(self):
         """Без этой записи внутри пульса у неё нет ни одного способа узнать,
         что она уже писала Егору."""
-        self._create("809306689", self.now - 60, "Доброе утро, солнце.")
+        self._create("424242424", self.now - 60, "Доброе утро, солнце.")
         text = fu.LEDGER.context()
-        self.assertIn("809306689", text, "следа по личке владельца снова нет")
+        self.assertIn("424242424", text, "следа по личке владельца снова нет")
 
     def test_the_trace_does_not_become_a_report_to_him(self):
-        item = self._create("809306689", self.now - 60, "Доброе утро, солнце.",
+        item = self._create("424242424", self.now - 60, "Доброе утро, солнце.",
                             request="", notify=False)
         self.assertFalse(item.get("notify_owner"),
                          "след превратился в отчёт — ровно то, что чинили 27.07")
@@ -59,9 +59,9 @@ class OwnerTraceTests(unittest.TestCase):
     def test_the_feed_shows_the_freshest_not_the_stalest(self):
         for i in range(18):
             self._create(f"-100{i:04d}", self.now - (60 - i) * 3600, f"чужая нить {i}")
-        newest = self._create("809306689", self.now - 60, "Доброе утро, солнце.")
+        newest = self._create("424242424", self.now - 60, "Доброе утро, солнце.")
         text = fu.LEDGER.context(limit=12)
-        self.assertIn("809306689", text,
+        self.assertIn("424242424", text,
                       "свежую нить вытеснил backlog — она снова не увидит себя")
         self.assertIsNotNone(newest)
 

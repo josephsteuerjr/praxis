@@ -1,5 +1,7 @@
 # Hélène
 
+[Source map](desk/resources/HELENE-MAP.md) · [Build a release](release/README.md)
+
 **Download, extract, open.** Python and the ready runtime are bundled; you do not
 need Git, a compiler or a separate Python installation to start.
 

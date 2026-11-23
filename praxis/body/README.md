@@ -68,7 +68,7 @@ cargo run -p praxis-body -- identity
 cargo run -p praxis-body -- capabilities --device-id windows-pc
 ```
 
-`interactive` and `system` are wire-level choices. On Yegor's UAC-disabled workstation the actual
+`interactive` and `system` are wire-level choices. On the owner's UAC-disabled workstation the actual
 interactive token reports high integrity. `PraxisSystemRouter` runs as LocalSystem from boot, owns
 the only outbound WSS connection and invokes the same body capability code under SYSTEM. After user
 logon, the tray starts `praxis-body serve-interactive` without a console window; the service forwards

@@ -562,8 +562,8 @@ fn delete(args: DeleteArgs) -> Result<Value> {
                 "failed": [],
                 "failed_truncated": false,
                 "elapsed_ms": budget.elapsed_ms(),
-                // Живой случай: две операции 13–14 июля били по `C:\Users\Egor` и
-                // `C:\Users\Егор`, а на диске только `yegor`. Тихое «ок» на такую
+                // Живой случай: две операции 13–14 июля били по `C:\Users\the owner` и
+                // `C:\Users\владелец`, а на диске только `the owner`. Тихое «ок» на такую
                 // опечатку — это ложь, из которой не выбраться.
                 "summary": format!("nothing deleted: {} does not exist", args.path.display()),
                 "ignored_args": ignored_args(&args.extra),
@@ -1393,8 +1393,8 @@ mod tests {
         value[key].as_str().unwrap_or_default().to_string()
     }
 
-    /// Живой случай 13–14 июля: две операции били по `C:\Users\Egor` и `C:\Users\Егор`,
-    /// а на диске только `yegor`. Тихое «удалила» на такой промах — ложь, из которой
+    /// Живой случай 13–14 июля: две операции били по `C:\Users\the owner` и `C:\Users\владелец`,
+    /// а на диске только `the owner`. Тихое «удалила» на такой промах — ложь, из которой
     /// не выбраться: она считает файл снесённым и идёт дальше.
     #[test]
     fn deleting_a_missing_path_says_it_was_missing_and_not_that_it_removed_something() {

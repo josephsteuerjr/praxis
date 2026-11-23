@@ -1,6 +1,6 @@
 // Electron-оболочка лаборатории: тот же dist, что у Tauri и WebKitGTK.
 // --auto: прогнать стенд, напечатать BENCH и память процессов, выйти.
-// PREFS (выбор Егора в тонкой настройке) → ../prefs.json; WHEEL (журнал жестов) → ../wheel.log.
+// PREFS (выбор владельца в тонкой настройке) → ../prefs.json; WHEEL (журнал жестов) → ../wheel.log.
 const { app, BrowserWindow, Menu } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");

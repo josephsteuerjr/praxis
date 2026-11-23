@@ -118,17 +118,11 @@ workspace/shadow_pairs_audit.py
 !/NOTICE
 !/README.md
 !/RELAY-SOURCE.json
-!/arete-contract/
 !/desk/
 !/helene/
 !/praxis/
 !/remote/
-!/swarm-base/
-!/workspace/
 
-# The public workspace contains research sources, not a live agent workspace.
-/workspace/*
-!/workspace/research/
 
 # Portable release sources and version entry point
 !/START-HERE.md
