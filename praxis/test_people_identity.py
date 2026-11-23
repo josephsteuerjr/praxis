@@ -45,7 +45,7 @@ class IdentityKey(unittest.TestCase):
                          people.identity_key("Alex Miller"))
 
     def test_diacritics_fold(self):
-        self.assertEqual(people.identity_key("Arête"), people.identity_key("Морган"))
+        self.assertEqual(people.identity_key("Mórgan"), people.identity_key("Морган"))
 
     def test_transliteration_variants_fold(self):
         self.assertEqual(people.identity_key("Хабиб"), people.identity_key("Khabib"))
@@ -57,7 +57,7 @@ class IdentityKey(unittest.TestCase):
         """Стойка «молча не сливаю»: Example и Exampel — не одно написание."""
         self.assertNotEqual(people.identity_key("Alex Miller"),
                             people.identity_key("Alex Miles"))
-        self.assertNotEqual(people.identity_key("Морган"), people.identity_key("Морган"))
+        self.assertNotEqual(people.identity_key("Моргана"), people.identity_key("Морган"))
         self.assertNotEqual(people.identity_key("Анна"), people.identity_key("Ана"))
 
     def test_empty_is_empty(self):
