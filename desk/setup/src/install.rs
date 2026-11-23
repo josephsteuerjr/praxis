@@ -6127,8 +6127,8 @@ mod tests {
     #[cfg(windows)]
     fn image_exe_survives_arguments_and_spaces() {
         assert_eq!(
-            image_exe(r"C:\Users\yegor\AppData\Local\Programs\Vera\vera-svc.exe run --config \\?\C:\x\vera.json"),
-            r"C:\Users\yegor\AppData\Local\Programs\Vera\vera-svc.exe"
+            image_exe(r"C:\Users\Example\AppData\Local\Programs\Vera\vera-svc.exe run --config \\?\C:\x\vera.json"),
+            r"C:\Users\Example\AppData\Local\Programs\Vera\vera-svc.exe"
         );
         assert_eq!(
             image_exe("\"C:\\Program Files\\Hélène\\helene-svc.exe\" run"),
@@ -6153,7 +6153,7 @@ mod tests {
 
         // Та же служба, но папка установки — её собственная: это «наша», её
         // снимает сам установщик, второй раз спрашивать согласие незачем.
-        let home = PathBuf::from(r"C:\Users\yegor\AppData\Local\Programs\Vera");
+        let home = PathBuf::from(r"C:\Users\Example\AppData\Local\Programs\Vera");
         assert!(parse_services(one, Some(&home))[0].ours);
 
         let two = r#"[{"Name":"Vera","State":"Running","StartMode":"Auto","StartName":"LocalSystem","PathName":"C:\\a\\vera-svc.exe"},

@@ -429,6 +429,12 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
             for name in INSTRUCTION_FILES:p.put(PREFIX+name,Entry(instructions().encode('utf-8')))
         if platform=='macos':
             _macos_bootstrap(p, source, version)
+        if (source / "release/README.md").is_file():
+            from release_guide import desktop_start, documents
+            target = p.value("python-app.json")["target"]
+            start = desktop_start(source, platform, target)
+            for name, data in documents(source, version, target, start).items():
+                p.put(PREFIX + name, Entry(data))
         optional = _metadata(p, source, core, origins, version, platform, expected_sha256,
                              front, verification_sha256, legacy_admission)
         if (identities(compose_core(source)[0]) != core_source_identity

@@ -157,7 +157,7 @@ def copy_records(source, target, replacements, removed,*,windows_visibility=Fals
             if windows_visibility and info.filename.startswith(PREFIX):
                 name=info.filename[len(PREFIX):].rstrip('/')
                 if name and '/' not in name:
-                    info.external_attr=(info.external_attr&~2) if name.lower()=='helene.exe' else (info.external_attr|2)
+                    info.external_attr=(info.external_attr&~2) if name.lower() in ('helene.exe','start-here.md') else (info.external_attr|2)
             return info
         if windows_visibility:
             final_names=(set(reader.namelist())-set(removed))|set(replacements)

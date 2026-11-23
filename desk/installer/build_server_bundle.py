@@ -52,6 +52,11 @@ def build(source,output,*,version,arch,relay):
     write('helene.json',(source/'desk/server/helene.server.json').read_bytes())
     for name in ('data','components','component-store','component-state'):(output/name).mkdir(exist_ok=True)
     target='linux-'+arch
+    if (source / "release/README.md").is_file():
+        from release_guide import documents
+        start = "# Hélène Server\n\nИнструкция для установки и обновления — [руководство сервера](server/README-СЕРВЕР.md)."
+        for name, data in documents(source, version, target, start).items():
+            write(name, data)
     unavailable={name:'Local optional speech payload has not been qualified for this server target' for name in ('whisper','xtts')}
     record('app/component-downloads.json',dict(format='helene-component-downloads.v1',target=target,extensions={name:[] for name in unavailable},artifacts={},unavailable=unavailable))
     record('python-app.json',dict(format='helene-python-app.v1',version=version,target=target,server=True,window=None))

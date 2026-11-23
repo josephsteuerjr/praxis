@@ -1,0 +1,48 @@
+{
+  "version": "2.8.14",
+  "source_commit": "389a1726a3a5559a56bc3c1282c2e2d3e28fc326",
+  "targets": {
+    "windows-x86_64": {
+      "asset": "Helene-2.8.14.zip",
+      "size": 531778626,
+      "sha256": "ce8d3ea54e2d235109248d516cdba54a705b45c96e4b55fb92e19617546aaa28",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14.zip",
+      "host": "windows-x86_64"
+    },
+    "debian-x86_64": {
+      "asset": "Helene-2.8.14-linux-x86_64.zip",
+      "size": 858631038,
+      "sha256": "c355dda9db4ebcfcf4cda50392fdbef3cba7537d3b02bc2cf2953475b08b0bba",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14-linux-x86_64.zip",
+      "host": "linux-x86_64"
+    },
+    "fedora-x86_64": {
+      "asset": "Helene-2.8.14-fedora-x86_64.zip",
+      "size": 858631057,
+      "sha256": "6a605285a74fa79c1f413a2a7f503a475c81de6f5b865a3d6d2c2f63e7c5da71",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14-fedora-x86_64.zip",
+      "host": "linux-x86_64"
+    },
+    "macos-arm64": {
+      "asset": "Helene-2.8.14-macos-arm64.zip",
+      "size": 277258385,
+      "sha256": "a068e05545205cda3673956060ce4acfb257361a7ed0b53933052810477c4dc4",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14-macos-arm64.zip",
+      "host": "macos-arm64"
+    },
+    "macos-x86_64": {
+      "asset": "Helene-2.8.14-macos-x86_64.zip",
+      "size": 272585406,
+      "sha256": "bbe976134fec97392308ba900a536843533db9dcc10f70cb804a7ae0a1028c06",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14-macos-x86_64.zip",
+      "host": "macos-x86_64"
+    },
+    "server-linux-arm64": {
+      "asset": "Helene-2.8.14-server-linux-arm64.zip",
+      "size": 18852402,
+      "sha256": "c05aa7931fb93a6267a605465a4c550aa50a8b937a9923c403ff37689ba03007",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.8.14/Helene-2.8.14-server-linux-arm64.zip",
+      "host": "server-linux-arm64"
+    }
+  }
+}

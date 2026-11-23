@@ -1,6 +1,6 @@
 """Application-owned loopback SSH forwards, with bounded workers and reconnect.
 
-Port/trust/custody principles from Jarvis's tray-bridge donor: never adopt an
+The bridge must never adopt an
 occupied port, never relax a host pin, and only close connections owned here.
 Paramiko runs inside the existing application so password/encrypted-key profiles
 work on every desktop without a second tray or console process.

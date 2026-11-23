@@ -1,0 +1,41 @@
+name: Build Hélène platform candidate
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target to build on its native runner
+        type: choice
+        options: [windows-x86_64, macos-arm64, macos-x86_64, debian-x86_64, fedora-x86_64, server-linux-arm64]
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ${{ fromJSON('{"windows-x86_64":"windows-2025","macos-arm64":"macos-15","macos-x86_64":"macos-26-intel","debian-x86_64":"ubuntu-24.04","fedora-x86_64":"ubuntu-24.04","server-linux-arm64":"ubuntu-24.04-arm"}')[inputs.target] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build on Windows or macOS
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: python release/kit.py build --target "$TARGET" --cache ../downloads --out ../out
+      - name: Build on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          mkdir -p ../out ../downloads
+          case "$TARGET" in
+            fedora-*) image=fedora:43; install='dnf install -y git python3 which tar gzip' ;;
+            *) image=debian:bookworm; install='apt-get update && apt-get install -y git python3 ca-certificates' ;;
+          esac
+          docker run --rm -v "$PWD:/source:ro" -v "$(realpath ../out):/out" -v "$(realpath ../downloads):/downloads" -w /source -e TARGET "$image" sh -ec "$install && git config --global --add safe.directory /source && python3 release/kit.py build --target \"\$TARGET\" --cache /downloads --out /out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helene-${{ inputs.target }}
+          path: ../out/

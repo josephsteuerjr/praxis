@@ -129,3 +129,10 @@ workspace/shadow_pairs_audit.py
 # The public workspace contains research sources, not a live agent workspace.
 /workspace/*
 !/workspace/research/
+
+# Portable release sources and version entry point
+!/START-HERE.md
+!/release/
+!/release/*.py
+!/release/*.md
+!/release/*.json

@@ -47,7 +47,7 @@ def tidy_program(program):
                   'code-transition.json','code-transition-plan.json','old-program-retirement.json',
                   'source-materials.json','source-materials-retired.json','.webview','.migration-webview'))
     changed=[]
-    for name in sorted(names-{'helene.exe','Helene.exe','data','memory','agents','profile','backups'}):
+    for name in sorted(names-{'helene.exe','Helene.exe','START-HERE.md','data','memory','agents','profile','backups'}):
         path=program/name
         if path.exists():
             _plain(path);hidden(path);changed.append(name)

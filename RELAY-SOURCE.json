@@ -22,7 +22,7 @@
       0
     ]
   },
-  "compatibility": "Preserves exact deployed provider/cache observation overlay; optional numeric relay_generation metadata; no Helene/Jarvis relay update.",
+  "compatibility": "Preserves exact deployed provider/cache observation overlay; optional numeric relay_generation metadata; no desktop relay update.",
   "previous": {
     "repo": "https://github.com/josephsteuerjr/praxis-relay",
     "source": "/opt/relay/releases/cb6b639ab6c423f3dd260d7d857d93ed7fbc79a5",

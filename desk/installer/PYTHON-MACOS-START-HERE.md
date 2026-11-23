@@ -1,4 +1,4 @@
-# Hélène 2.3.0 for Apple silicon
+# Hélène for Apple silicon
 
 Unpack the complete archive into a permanent writable folder and open
 **Helene.app** inside it. Python, the interface and the agent code are included.
