@@ -9,7 +9,7 @@
 
 Вторая половина рецепта, которую я пропустил и о которой память предупреждала прямым
 текстом: «Отдельно искать НОВОЕ личное: `@handle`, id 9–10 цифр, `-100…`, e-mail, пары
-"Имя Фамилия", IPv4 — и сравнивать с уже опубликованным, иначе тонешь в шуме. Егор решил:
+"Имя Фамилия", IPv4 — и сравнивать с уже опубликованным, иначе тонешь в шуме. владелец решил:
 своё (имя, `@example_profile`, id) оставляем, чужое убираем».
 
 Сверка по секретам (`secret_scan.py`) этого класса не ловит: id человека не лежит в
@@ -38,9 +38,6 @@ for _stream in (sys.stdout, sys.stderr):
 
 REPO = pathlib.Path(sys.argv[1])
 BEFORE = sys.argv[2]                      # ревизия зеркала ДО синка
-
-# Operator identifiers are scanned like other identifiers.
-HIS_OWN = set()
 
 PATTERNS = {
     "telegram id (9–10 цифр)": re.compile(r"(?<![\d.\-])(\d{9,10})(?![\d.])"),
@@ -164,7 +161,7 @@ def found(pool: dict[str, str]) -> dict[str, dict[str, set[str]]]:
             if kind == "telegram id (9–10 цифр)": text = without_inventory_digests(rel, text)
             for match in rx.finditer(text):
                 value = match.group(1) if match.groups() else match.group(0)
-                if value in HIS_OWN or value in NOISE:
+                if value in NOISE:
                     continue
                 hits.setdefault(kind, {}).setdefault(value, set()).add(rel)
     return hits

@@ -8,7 +8,8 @@ from localharness import owner_words
 import agent
 import frame_language
 
-RAW='Alex — Алекс — C:/Users/Alex/Работа/{literal} $&'
+LEGACY = min(owner_words.OWNER_ALIASES)
+RAW=f'{LEGACY} — Алекс — C:/Users/Alex/Работа/{{literal}} $&'
 
 
 class LocalizedFrameBoundaries(unittest.TestCase):

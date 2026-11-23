@@ -1,13 +1,13 @@
 """Install a new server agent or update an installed one from the window (11.11.2026).
 
-Yegor: the server version is installed and updated directly from the application, without the
+the owner: the server version is installed and updated directly from the application, without the
 person running separate scripts. Both paths reuse the reviewed transfer machinery: the host key
 is confirmed before any password is sent, the programme kit is uploaded and its hash checked, and
 `server/install.sh` does the work on the server (a fresh installation, or an update through the
 installation's own updater with its backups and automatic rollback).
 
 A new agent is found by the window the same way as after a transfer: through the menu button of
-the agent's Telegram bot (Yegor chose this, 11.11). Credentials arrive over stdin, are used for
+the agent's Telegram bot (the owner chose this, 11.11). Credentials arrive over stdin, are used for
 the SSH session only and never enter receipts, logs or the agent's context.
 """
 from __future__ import annotations

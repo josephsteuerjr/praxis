@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
             setattr(mod, k, v)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _room(self, peer="-1001240718803"):
+    def _room(self, peer="-100999999999999999"):
         """Комната как в жизни: три цепочки, у каждой корень + первый ответ без
         topic_id (Telegram его на первый ответ не ставит) и продолжения под корнем."""
         n = 0
@@ -102,7 +102,7 @@ class TestItFiresOnlyOnDirectEvidence(Base):
     def test_real_forum_stays_split(self):
         """Комната Грибницы — настоящий форум. Схлопнуть её значило бы чинить одно,
         ломая другое."""
-        peer = self._room(peer="-1004301095307")
+        peer = self._room(peer="-100888888888888888")
         tr.observe(peer, kind="topic_opener_seen", message_id=5)
         self.assertEqual(tr.status_at(peer, 100)[0], tr.TRUE)
         whole = tr.status_at(peer, 100)[0] == tr.FALSE
@@ -168,7 +168,7 @@ class TestTheHandDoesWhatThePromptPromises(Base):
         self.assertNotIn("зачин 300", out)
 
     def test_a_real_forum_hand_stays_in_the_topic(self):
-        peer = self._room(peer="-1004301095307")
+        peer = self._room(peer="-100888888888888888")
         tr.observe(peer, kind="topic_opener_seen", message_id=5)
         out = self._tool(peer, 100, action="context", limit=200)
         self.assertIn("зачин 100", out)

@@ -24,7 +24,7 @@ _METADATA = '_keat_occurrence'
 _WAKE_SOURCE = '_keat_wake_source'
 _BOUND = ContextVar('keat_live_bound', default=None)
 _ACTIVATION_REASON = ContextVar('keat_live_activation_reason', default='capture_unavailable')
-ABSTRACTDL_ROOT_CHAT_ID = '-1001240718803'
+from room_identity import root_chat_id as configured_root_chat_id
 
 
 def activation_reason():
@@ -76,8 +76,9 @@ def _policy(ctx, mode=None):
                  'ordinary DM authority must be exact and nontransferable')
     elif mode == 'group':
         # One proved ordinary root group, deliberately not a generic group/topic mode.
-        _require(stream == ABSTRACTDL_ROOT_CHAT_ID and
-                 row['capture']['audience'] == ['group:' + ABSTRACTDL_ROOT_CHAT_ID] and
+        root = configured_root_chat_id()
+        _require(root is not None and stream == root and
+                 row['capture']['audience'] == ['group:' + root] and
                  row['capture']['transfer'] == 'none' and
                  row['capture']['presence_hidden'] is False,
                  'ordinary root-group authority must be exact')
@@ -102,8 +103,8 @@ def _group_context(ctx):
     origin = str(getattr(ctx, 'origin_message_id', ''))
     _require(getattr(ctx, 'is_dm', None) is False and
              getattr(ctx, 'telegram_root_group', None) is True and
-             str(getattr(ctx, 'chat_id', None)) == ABSTRACTDL_ROOT_CHAT_ID and
-             root == ABSTRACTDL_ROOT_CHAT_ID and
+             str(getattr(ctx, 'chat_id', None)) == configured_root_chat_id() and
+             root == configured_root_chat_id() and
              principal.isascii() and principal.isdecimal() and int(principal) > 0 and
              origin.isascii() and origin.isdecimal() and int(origin) > 0 and
              not getattr(ctx, 'praxis_self', False),
@@ -691,7 +692,7 @@ def capture_ingress(chat_id, *, is_dm, payload, source_id, direction,
             root = str(root_chat_id)
             principal = str(principal_id)
             _require(is_dm is False and ordinary_root is True and
-                     str(chat_id) == root == ABSTRACTDL_ROOT_CHAT_ID and
+                     str(chat_id) == root == configured_root_chat_id() and
                      principal.isascii() and principal.isdecimal() and int(principal) > 0,
                      'unsupported root-group ingress')
             payload = dict(payload, telegram_root_chat_id=root,
@@ -756,7 +757,8 @@ def adopt_projection(ctx, history, user_msg, sidecar):
                 _require(payload['role'] == role and type(payload['content']) is str,
                          'unsupported native role')
                 if row['mode'] == 'group':
-                    _require(payload.get('telegram_root_chat_id') == ABSTRACTDL_ROOT_CHAT_ID and
+                    root = configured_root_chat_id()
+                    _require(root is not None and payload.get('telegram_root_chat_id') == root and
                              payload.get('telegram_ordinary_root') is True,
                              'missing immutable root-group evidence')
                     native_principal = str(payload.get('telegram_principal_id', ''))
@@ -812,14 +814,14 @@ def invalidate_native(chat_id, message_id):
     if not any(
             (row.get('mode') in ('owner', 'dm') or
              (row.get('mode') == 'group' and
-              row.get('stream') == ABSTRACTDL_ROOT_CHAT_ID)) and
+              str(row.get('stream')) == configured_root_chat_id())) and
             row.get('stream') == str(chat_id)
             for row in policy_raw.get('enrollments', [])):
         return
     policy, row = _native_policy(chat_id)
     ledger = CaptureLedger(Path(policy['root']) / 'capture' / _digest(policy['namespace']), policy['namespace'])
     if message_id is None:
-        _require(str(chat_id) == ABSTRACTDL_ROOT_CHAT_ID and row.get('mode') == 'group',
+        _require(str(chat_id) == configured_root_chat_id() and row.get('mode') == 'group',
                  'ambiguous invalidation only supported for exact root group')
         prefix = 'telegram:' + str(chat_id) + ':message:'
     else:

@@ -265,7 +265,7 @@ async def api_compose(request: web.Request):
 
 
 async def api_approve(request: web.Request):
-    """Approve Егора → mailroom SMTP-шлёт черновик (token-free). Это и есть гейт отправки."""
+    """Approve владельца → mailroom SMTP-шлёт черновик (token-free). Это и есть гейт отправки."""
     if not _owner(request):
         return _deny()
     h = request.match_info["hash"]
@@ -1354,7 +1354,7 @@ async def api_panel_proposal_reject(request: web.Request):
 # --- PASS 8.2: плитка «Мозг» (конфиг llm.json) + рестарт с пульта. Owner-only. ---
 
 async def api_panel_memgraph(request: web.Request):
-    """PASS 8.6: граф памяти — только владельцу (гостю 403; карта — часть памяти Егора)."""
+    """PASS 8.6: граф памяти — только владельцу (гостю 403; карта — часть памяти владельца)."""
     if _role(request) != "owner":
         return _deny()
     return _panel_json(await asyncio.to_thread(panel.memgraph))
@@ -1397,7 +1397,7 @@ async def api_panel_appetite(request: web.Request):
 
 
 async def api_panel_appetite_intent(request: web.Request):
-    """PASS 18.5: слово Егора — кнопки (kind) или свободный текст; толкует Praxis, не код."""
+    """PASS 18.5: слово владельца — кнопки (kind) или свободный текст; толкует Praxis, не код."""
     if _role(request) != "owner":
         return _deny()
     body = await request.json()
@@ -1415,7 +1415,7 @@ async def api_panel_identity(request: web.Request):
 
 
 async def api_panel_identity_rollback(request: web.Request):
-    """PASS 20: откат Егора постфактум (confirm обязателен)."""
+    """PASS 20: откат владельца постфактум (confirm обязателен)."""
     if not _owner(request):
         return _deny()
     body = await request.json()
@@ -1433,7 +1433,7 @@ async def api_panel_perception(request: web.Request):
 
 
 async def api_panel_perception_set(request: web.Request):
-    """PASS 21: правка/сброс рычага Егором (источник честно «egor»; confirm обязателен)."""
+    """PASS 21: правка/сброс рычага владельцем (источник честно «the owner»; confirm обязателен)."""
     if not _owner(request):
         return _deny()
     body = await request.json()
@@ -1664,7 +1664,7 @@ def _proposal_kb(pid: str) -> InlineKeyboardMarkup:
 
 
 async def _watch_proposals(bot: Bot) -> None:
-    """Токен-free вотчер: новые предложения из леджера -> карточка Егору с кнопками.
+    """Токен-free вотчер: новые предложения из леджера -> карточка владельцу с кнопками.
     PASS 9.2: сюда же — red-карточки иммунитета по живым самоправкам (без кнопок:
     откат не автоматический, git всё хранит)."""
     while True:
@@ -1737,7 +1737,7 @@ async def _watch_proposals(bot: Bot) -> None:
 @dp.callback_query(F.data.startswith("prop:"))
 async def on_proposal_button(cq: CallbackQuery) -> None:
     if OWNER_ID and (not cq.from_user or cq.from_user.id != OWNER_ID):
-        await cq.answer("Это кнопки Егора.", show_alert=False)
+        await cq.answer("Это кнопки владельца.", show_alert=False)
         return
     try:
         _, action, pid = (cq.data or "").split(":", 2)
@@ -1799,7 +1799,7 @@ async def _watch_restart_signal(bot: Bot) -> None:
 
 
 async def _poll(bot: Bot) -> None:
-    """Токен-free тик: тянем IMAP, заводим новые письма, пушим Егору. Модель тут НЕ зовётся."""
+    """Токен-free тик: тянем IMAP, заводим новые письма, пушим владельцу. Модель тут НЕ зовётся."""
     while True:
         try:
             msgs = await asyncio.to_thread(mailer.fetch, FETCH_LIMIT, False)
@@ -1814,7 +1814,7 @@ async def _poll(bot: Bot) -> None:
                 except Exception:
                     # напр. «chat not found» — владелец ещё не нажал Start у бота. Письмо уже в ящике,
                     # не роняем уведомления по остальным письмам пачки.
-                    log.warning("уведомление по %s не ушло (нажал ли Егор Start у бота?)", e.get("hash"))
+                    log.warning("уведомление по %s не ушло (нажал ли владелец Start у бота?)", e.get("hash"))
             if added:
                 log.info("poll: новых писем %d", len(added))
         except Exception:

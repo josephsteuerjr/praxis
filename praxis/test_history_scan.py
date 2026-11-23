@@ -56,23 +56,23 @@ class Msg:
 class TestParameterValidation(unittest.TestCase):
     def test_resolved_name_or_username_is_transport_authoritative(self):
         self.assertTrue(history_scan.resolved_peer_matches_target(
-            "AbstractDL Chat", 1240718803))
+            "AbstractDL Chat", 999999999999999))
         self.assertTrue(history_scan.resolved_peer_matches_target(
-            "@abstractdl_chat", 1240718803))
+            "@abstractdl_chat", 999999999999999))
 
     def test_explicit_numeric_peer_forms_remain_fail_closed(self):
         self.assertTrue(history_scan.resolved_peer_matches_target(
-            "-1001240718803", 1240718803))
+            "-100999999999999999", 999999999999999))
         self.assertTrue(history_scan.resolved_peer_matches_target(
-            "1240718803", 1240718803))
+            "999999999999999", 999999999999999))
         self.assertTrue(history_scan.resolved_peer_matches_target("-123", 123))
         self.assertFalse(history_scan.resolved_peer_matches_target(
-            "-1001240718803", 1240718804))
+            "-100999999999999999", 1240718804))
         self.assertFalse(history_scan.resolved_peer_matches_target(
-            "1240718803", 1240718804))
+            "999999999999999", 1240718804))
         self.assertFalse(history_scan.resolved_peer_matches_target("-123", 124))
         self.assertFalse(history_scan.resolved_peer_matches_target("-100", 100))
-        self.assertFalse(history_scan.resolved_peer_matches_target("", 1240718803))
+        self.assertFalse(history_scan.resolved_peer_matches_target("", 999999999999999))
 
     def test_page_size_zero_rejected_before_scan(self):
         async def fp(offset, size):
@@ -527,7 +527,7 @@ class TestRuntimeFreezeCeiling(unittest.TestCase):
     """The runtime, not a caller-supplied sentinel, finds the newest id."""
 
     def _invoke(self, params, client):
-        entity = type("Entity", (), {"id": 1240718803})()
+        entity = type("Entity", (), {"id": 999999999999999})()
 
         class ImmediateResult:
             def __init__(self, coro):
@@ -544,7 +544,7 @@ class TestRuntimeFreezeCeiling(unittest.TestCase):
              mock.patch.object(asyncio, "run_coroutine_threadsafe",
                                side_effect=lambda coro, loop: ImmediateResult(coro)):
             return mtproto_runner._sync_history_scan(
-                "-1001240718803", params, _principal="praxis:self")
+                "-100999999999999999", params, _principal="praxis:self")
 
     def test_latest_freeze_uses_runtime_newest_id_without_offset_overflow(self):
         class Client:

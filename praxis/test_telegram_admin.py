@@ -46,7 +46,7 @@ class TheFenceIsTheSameFenceAsModeration(unittest.TestCase):
             telegram_admin.normalize(-1001111111111, "slow_mode", {"seconds": 30})
 
     def test_a_peer_that_is_not_an_exact_integer_is_refused(self):
-        for bogus in ("-1001240718803", True, 1.0, None):
+        for bogus in ("-100999999999999999", True, 1.0, None):
             with self.assertRaises(TypeError):
                 telegram_admin.normalize(bogus, "slow_mode", {"seconds": 30})
 
@@ -368,7 +368,7 @@ class BanReachesTheWireAsAFullBan(unittest.TestCase):
 
                 with mock.patch.object(mtproto_runner, "client", Client()):
                     wire = asyncio.run(mtproto_runner._admin_apply(
-                        types.SimpleNamespace(id=1240718803), action, {"user_id": 4242}))
+                        types.SimpleNamespace(id=999999999999999), action, {"user_id": 4242}))
                 self.assertIsInstance(requests[0], tl_functions.channels.EditBannedRequest)
                 self.assertEqual(requests[0].participant, 4242)
                 rights = requests[0].banned_rights
@@ -392,7 +392,7 @@ class BanReachesTheWireAsAFullBan(unittest.TestCase):
 
         with mock.patch.object(mtproto_runner, "client", Client()):
             asyncio.run(mtproto_runner._admin_apply(
-                types.SimpleNamespace(id=1240718803), "restrict",
+                types.SimpleNamespace(id=999999999999999), "restrict",
                 {"user_id": 4242, "seconds": 60}))
         self.assertFalse(requests[0].banned_rights.view_messages)
         self.assertTrue(requests[0].banned_rights.send_messages)
@@ -414,7 +414,7 @@ class RestrictReachesTheWireTemporary(unittest.TestCase):
             async def __call__(self, request):
                 captured["request"] = request
 
-        entity = types.SimpleNamespace(id=1240718803)
+        entity = types.SimpleNamespace(id=999999999999999)
         with mock.patch.object(mtproto_runner, "client", Client()):
             wire = asyncio.run(mtproto_runner._admin_apply(
                 entity, "restrict", {"user_id": 4242, "seconds": 30}))
@@ -439,7 +439,7 @@ class RestrictReachesTheWireTemporary(unittest.TestCase):
 
         with mock.patch.object(mtproto_runner, "client", Client()):
             snapshot = asyncio.run(mtproto_runner._admin_state(
-                types.SimpleNamespace(id=1240718803), "restrict",
+                types.SimpleNamespace(id=999999999999999), "restrict",
                 {"user_id": 4242, "seconds": 30}))
         self.assertIn("2026-09-01", str(snapshot.get("until_date")),
                       "срок ограничения не попал в снимок — вечное неотличимо от 30 с")
@@ -453,7 +453,7 @@ class RestrictReachesTheWireTemporary(unittest.TestCase):
 
         with mock.patch.object(mtproto_runner, "client", Client()):
             wire = asyncio.run(mtproto_runner._admin_apply(
-                types.SimpleNamespace(id=1240718803), "unrestrict", {"user_id": 4242}))
+                types.SimpleNamespace(id=999999999999999), "unrestrict", {"user_id": 4242}))
         self.assertEqual(captured["request"].banned_rights.until_date, 0)
         self.assertIsNone(wire)
 

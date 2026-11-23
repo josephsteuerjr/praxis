@@ -6,7 +6,7 @@ import * as panel from '../../../ui-kit/window/panel';
 import {forgePanel} from '../../../ui-kit/window/views/forge-panel';
 import {S} from '../../../ui-kit/window/state';
 
-S.view = 'talk'; S.room = 'window'; S.roomName = 'Джарвис';
+S.view = 'talk'; S.room = 'window'; S.roomName = 'Атлас';
 const calls: string[] = [];
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {

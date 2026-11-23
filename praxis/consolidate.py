@@ -324,7 +324,7 @@ def _consumed_self_observation_ids(
 
 def _suggest_alias_if_similar(name: str, slug: str) -> None:
     """PASS 8.6: новое имя похоже на существующее досье (casefold/стем) — предложить алиас
-    записью в дневник, НЕ сливая молча. Решение — за Егором/ей (тул add_alias)."""
+    записью в дневник, НЕ сливая молча. Решение — за владельцем/ей (тул add_alias)."""
     import difflib
     want = name.strip().casefold()
     best, best_r = None, 0.0
@@ -351,7 +351,7 @@ def _apply_person(name: str, upd: dict) -> bool:
     helper remains for hermetic graph tests and deliberate one-off migrations
     that already supply structured, independently verified input.
 
-    PASS 8.6: слаг ищется тем же resolve, что и граф — «Егор» дописывается в yegor-kosyrev.md
+    PASS 8.6: слаг ищется тем же resolve, что и граф — «владелец» дописывается в sample-owner.md
     по алиасам, а не плодит второе досье."""
     slug = graph.resolve(name)
     fresh = not people.path_for(slug).exists()

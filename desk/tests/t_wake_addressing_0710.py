@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Пробуждение по имени + приоритетная реплика (07.10, Джарвис).
+"""Пробуждение по имени + приоритетная реплика (07.10, Атлас).
 
 Живой инцидент: в общем чате агент-тестер отвечал только владельцу — гейт
-адресации требовал имя ЦЕЛЫМ СЛОВОМ в форме профиля («Jarvis»), люди писали
-«Джарвиса»/«Джарвис, глянь» и не будили; чужие id к тому же резал allow_from.
+адресации требовал имя ЦЕЛЫМ СЛОВОМ в форме профиля («Atlas»), люди писали
+«Атласа»/«Атлас, глянь» и не будили; чужие id к тому же резал allow_from.
 Здесь: парсер (addressing.py), гейт транспорта (botapi.is_named/_addressed),
 фокус-окно (флаг → баннер первой секцией orient хода).
 
@@ -82,16 +82,16 @@ class Parser(unittest.TestCase):
         finally:
             restore()
         self.assertTrue(addressing.name_matches_loose(
-            "Джарвиса спросили про отчёт", ["Jarvis"]))
+            "Атласа спросили про отчёт", ["Atlas"]))
         self.assertTrue(addressing.name_matches_loose(
-            "джарвисом закрыли вопрос", ["Jarvis"]))
+            "атласом закрыли вопрос", ["Atlas"]))
         self.assertTrue(addressing.name_matches_loose(
             "ЕЛЕНЕ передай", ["Hélène"]))
         self.assertFalse(addressing.name_matches_loose(
-            "джарвисами не отделаешься", ["Неттакого"]))
+            "атласами не отделаешься", ["Неттакого"]))
         # имя-префикс не ловит середину чужого слова
         self.assertFalse(addressing.name_matches_loose(
-            "поддержка джарвисаппорт", ["Jarvis"]))
+            "поддержка атласаппорт", ["Atlas"]))
 
     def test_banner_names_who_and_gist(self):
         banner = addressing.priority_banner("Егор", "перезапусти прод")
@@ -107,31 +107,31 @@ class BotGate(unittest.TestCase):
         import botapi
         self.botapi = botapi
         self.transport = botapi.BotTransport.__new__(botapi.BotTransport)
-        self.transport.me = {"id": 42, "first_name": "Jarvis",
-                             "last_name": "", "username": "jarvis_bot"}
-        self.transport._cfg = {"agent": {"name": "Джарвис"}}
-        self.transport.username = "jarvis_bot"
+        self.transport.me = {"id": 42, "first_name": "Atlas",
+                             "last_name": "", "username": "atlas_bot"}
+        self.transport._cfg = {"agent": {"name": "Атлас"}}
+        self.transport.username = "atlas_bot"
 
     def test_strict_whole_word_still_wakes(self):
         restore = _lever("PRAXIS_WAKE_ON_NAME", None)
         try:
-            self.assertTrue(self.transport.is_named("Jarvis, глянь логи"))
-            self.assertTrue(self.transport.is_named("напиши @jarvis_bot"))
+            self.assertTrue(self.transport.is_named("Atlas, глянь логи"))
+            self.assertTrue(self.transport.is_named("напиши @atlas_bot"))
         finally:
             restore()
 
     def test_off_keeps_inflections_silent(self):
         restore = _lever("PRAXIS_WAKE_ON_NAME", None)
         try:
-            self.assertFalse(self.transport.is_named("Джарвиса спросили"))
+            self.assertFalse(self.transport.is_named("Атласа спросили"))
         finally:
             restore()
 
     def test_loose_wakes_inflections_of_profile_and_config_names(self):
         restore = _lever("PRAXIS_WAKE_ON_NAME", "loose")
         try:
-            self.assertTrue(self.transport.is_named("Джарвиса спросили про отчёт"))
-            self.assertTrue(self.transport.is_named("джарвисом решили"))
+            self.assertTrue(self.transport.is_named("Атласа спросили про отчёт"))
+            self.assertTrue(self.transport.is_named("атласом решили"))
         finally:
             restore()
 

@@ -112,7 +112,7 @@ _TRANSLIT_VARIANTS = (("shch", "sch"), ("kh", "h"), ("ts", "c"),
 
 
 def identity_key(name: str) -> str:
-    """Ключ сравнения имён: «Егор», «Yegor», «Yegor Kosyrev (@handle)» → сравнимые строки.
+    """Ключ сравнения имён: «владелец», «the owner», «the owner (@handle)» → сравнимые строки.
 
     Пусто, если сравнивать нечего. Никогда не используется как имя файла.
     """

@@ -20,8 +20,8 @@
     "english": "4cc5f2e8b1a55ef51fcaeb0b6794ad4ad051f1c5b5655ef4bb203fac02018afc"
   },
   "manage_identity": {
-    "raw": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f",
-    "english": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f"
+    "raw": "1ce307689e97ee332ea376dfe634782d9c444c93efa61dea951c3a8c584118a9",
+    "english": "1ce307689e97ee332ea376dfe634782d9c444c93efa61dea951c3a8c584118a9"
   },
   "manage_perception": {
     "raw": "d0aed83bd421927f915716b0ff6fdd5f6f55354c524f89a407803b8e2153e079",
@@ -140,8 +140,8 @@
     "english": "10e030b4dde3b74d500d31874c67d70c0fedc0c3580486a30911b8e60e1d51c0"
   },
   "panic": {
-    "raw": "6e450cf20d1322b10dd1512f4474e9d8b58588d5f9016e0f47702f829448760f",
-    "english": "e16dae7e5dc77d5cce6915ec35761392e400a1863f79f42158b2ed2610cd05bd"
+    "raw": "81b8ae22b58918c161164070d7f6d17e61c7fc65fa9964eef5d7e7c924da0c7a",
+    "english": "a55721048fb64ff1edceeb6415eadffcd49702ac1ea876286f703dc9067b56ce"
   },
   "find_telegram_id": {
     "raw": "68d9542d8b7bc316a257d760fe690f79237228b5e1285a7ea3376ff4a7c6f617",
@@ -160,12 +160,12 @@
     "english": "1e075ce6bd2767b26e3826a78f0efe2e3468fc31680a65e45fbfc532bb51244a"
   },
   "recent_turns": {
-    "raw": "d1efc5a9ae1bdad7d7c04d9661a2260a625f9ca13a8695361008318745796b7c",
-    "english": "1af81763a21cc65528e28446c2e9a1272e3af823624204c1a95448122ece0c83"
+    "raw": "f927dba8138c1abb8ccb091ee7e850b1759047c0a27852fb01f71d6bca8e5803",
+    "english": "9fedfedd563aa8a3feb982eab32c0b96e3130b74edebccc0d0fd97ce93e6ed1a"
   },
   "manage_appetite": {
-    "raw": "a12d787f90ceae62fac9ab43ce3b9d68db36b46a8f8ea28a496b3861a09190f0",
-    "english": "4ad17c05dcd0c46c5d814909868f712a138d8e28fd2f827e9cc26b47c795ef43"
+    "raw": "62668656cd0fdf686d7b929e04c7a7e33ae28330f16bdf7eea8d454f76eba109",
+    "english": "b08bd62992bb5d45267eefb7d8bd95ca5b1bdb4b69775c33c6af1ebba7440c5b"
   },
   "remind_self": {
     "raw": "63ac7fc345558621e6dd56cb00efd7964bf2d394a0f9483a3f287a08b505df39",
@@ -184,8 +184,8 @@
     "english": "9dee812a89113a08e04acfd2c60610f948fd61a203f0893af87255f66f176dc1"
   },
   "narrate": {
-    "raw": "b2ea87c46824d5aa865a147eda4a421cbdd689724cddc7f57f29992c460478c0",
-    "english": "bd5ba334e77e876d24e8c2df1a28dba03ffa01cd64f30f528b84a45fdb08203f"
+    "raw": "bfafce71b342ab7bd5ca6fddddd4779f6315f947159ccb0c283fefdff8d3c067",
+    "english": "b89768b90783ab12f2587793e23e1b288bb5d228e66189e377b80bb264176b3b"
   },
   "telegram_account": {
     "raw": "9613176bbb6fa4897dd9f3c38f527417f41400443597b6f9f5503e51a3e036dd",
@@ -196,8 +196,8 @@
     "english": "6b38192e0b57afe6015958654e1252dfd9d426ee1480c15acde1e7439ec00a3b"
   },
   "home_note": {
-    "raw": "211999fdf0d7e2ab54e826651e0bf4ccbefcc2575745bb1670d15ecd3468af7b",
-    "english": "d26e96b1c78c1b9d8efe66399522acdb4f99886983c507add4e5c42245365ba0"
+    "raw": "7bbab2e4942d2a4ea1d4819e013c80939ef67549d9dbf1c4828b79ab71b747b8",
+    "english": "1eb2f33eae0e126e7392dd91f347a73b8276698270dcad807c650fa2603f8bce"
   },
   "update_profile": {
     "raw": "b957fa4a6c324ccf8329cdd6a2e875ac5b1b45504fd6584af171a7f77afbec50",
@@ -220,12 +220,12 @@
     "english": "70f468b1a22c3d9e4dca5debeeaab450c9f6be9607ab1a8fce0d2c4b864e37f7"
   },
   "server_status": {
-    "raw": "be4bf09b1354aa49f72930522f63852c271e8809c7a53579ebce942bb5813e3a",
-    "english": "111caff5f578deab76e55960c2fa56b9814ab0679158484b32fc5809ab000ba3"
+    "raw": "50cd2a8ee607adecc6d047d274aae1e59137b08dcb15665ece37becf34055843",
+    "english": "7a901e76c7de126c5662fa998516335426074e8a9e8c5e93bd3fe0d2d2f41434"
   },
   "manage_service": {
-    "raw": "62870ffc9c89ba00eb545865a39f1b350e2bd8f93b3d10d3f0557d339b169bd2",
-    "english": "f5d2e9712bb23774655ef0e97deda0d456bf3bd7722ef666c533dc9f65b125f3"
+    "raw": "9d8b794817a299c49d465e74ba1ce56f9f171c156c7f77a82b150b20e84a86b6",
+    "english": "3eaff8ebea28540ecf13f72f9dbab7e1e4d5c8083a883455e0e924f70d8d25da"
   },
   "computer": {
     "raw": "fdf90c7b2ce90428c843e8983b9024e7442cefbd757fa4248863996d69cfdacf",
@@ -312,8 +312,8 @@
     "english": "cd64f45bd4dec0dbafbeb16b52f8d16e0fc5bc5ff162019f198b7b230081f187"
   },
   "send_email": {
-    "raw": "b2fe92b020581927e57bd127a29789f8d0a0ead9f81085fd2f726700b9a8236d",
-    "english": "84acdb0d8a30310cd66ae492ea14d93cac9169a1690cbf9fbbc0d0ea8415bda6"
+    "raw": "cc66d2713d3bb2318608de94ba88f661e12f8c73b51bcb084486105a7b726216",
+    "english": "b4a32aabcc2f4e5bac18de358c5fec36b46cf437f287baaa1d9fa6c037f5fed0"
   },
   "check_email": {
     "raw": "ecfee9cd58eafa5e7b3a496ab99d34ba6d39433b2f7874db2e1a501bfd2a48ea",
@@ -324,8 +324,8 @@
     "english": "46f0080f51ddb9fcedd758c23b95b569f81214aa407924b00d1ac34fffa0fb97"
   },
   "mail_draft_reply": {
-    "raw": "29a293d156a590fef694e91a3b938e09d811dfc1dcc7cc9c41749674d429030b",
-    "english": "5417befe7d19ba7e24d664d7fc67e6daea2a7daa53b6d1dff8bbe00ea0a720c5"
+    "raw": "a45d2b8474fd3c121054263526f3946e40c8efd9fdd4a6664c377519a4cd28cc",
+    "english": "f8fd679516e603b5e76eff760adb66576220b7c39c34afa8368de6bf9aec4de6"
   },
   "task_control": {
     "raw": "783ce62a92c2aa44337ac612625b8cc524708bf6fb3e55b8f27a45d908227f85",

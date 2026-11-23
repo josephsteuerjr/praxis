@@ -1428,7 +1428,7 @@ def _telegram_document(row) -> bool:
 def _telegram_document_note(row, chat_id, scope, spool, owned) -> str:
     """A received Telegram document as the turn sees it: path, size and SHA, or why not.
 
-    16.11 (AbstractDL): Praxis sent Jarvis a ZIP three times. The bytes were in
+    16.11 (AbstractDL): Praxis sent the agent a ZIP three times. The bytes were in
     memory/telegram-media/<hash>.bin, but the frame only said "no visual preview", with no
     path, so he searched the workspace and found an empty folder. Images already went into
     the scoped media spool (workspace/media/inbound/...); a document now goes there too,
@@ -1955,7 +1955,7 @@ _LOW_PRIORITY_LOCK = None
 def _low_priority():
     """На время тяжёлой работы процессора (расшифровка, прогрев модели) — ниже обычного.
 
-    26.09, у мамы Егора: четыре потока whisper на домашней машине забирали процессор
+    26.09, у мамы владельца: четыре потока whisper на домашней машине забирали процессор
     целиком, и окно дёргалось. Ниже обычного — значит окно и всё, что делает человек,
     идут первыми, а расшифровка берёт остаток; на её длине это почти не сказывается.
     Только Windows: на POSIX nice обратно не поднять. Вложенные входы считаются —
@@ -2004,7 +2004,7 @@ def _low_priority():
 def _warm_voice_models(cfg: dict) -> None:
     """Модели голоса — в память со старта, если владелец велел держать слух между голосовыми.
 
-    Иначе первое голосовое дня ждало загрузки полутора гигабайт (у мамы Егора 26.09 —
+    Иначе первое голосовое дня ждало загрузки полутора гигабайт (у мамы владельца 26.09 —
     14 с на семь секунд речи). Ниже обычного приоритета и в своём потоке: старт движка
     и первый ход этого не ждут. Голос ответа (piper) греется там же, если включён, —
     через загрузчик голоса, а не через синтез: пробный файл в media/tts не нужен.
@@ -2915,12 +2915,12 @@ def _forge_events_due() -> None:
 
 
 def _name_the_owner(owner: str) -> None:
-    """Назвать собеседника кадра ИМЕНЕМ ВЛАДЕЛЬЦА, а не «Егор».
+    """Назвать собеседника кадра ИМЕНЕМ ВЛАДЕЛЬЦА, а не «владелец».
 
     ⚠ В самой свежей части кадра — зоне «СЕЙЧАС» user-сообщения, той единственной
     строке, что отвечает на вопрос «кто передо мной», — стоял литерал
-    `frame_layout.py:960: bits.append(own("это Егор"))`. У владельца по имени Иван
-    агент на каждом ходе читал «говорит «Иван» … это Егор»: одна строка называла
+    `frame_layout.py:960: bits.append(own("это владелец"))`. У владельца по имени Иван
+    агент на каждом ходе читал «говорит «Иван» … это владелец»: одна строка называла
     собеседника двумя разными людьми, и ни один из них не был владельцем.
 
     Дерево править нельзя, поэтому подменяем сборщик слота — тем же приёмом, каким

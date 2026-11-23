@@ -49,7 +49,7 @@ class Contract(unittest.TestCase):
             for text in ('Лира, прочти', 'лирея!', '@LYRA_FIXTURE привет', '/go@lyra_fixture'):
                 self.assertTrue(obj._addressed(self.message(text)), text)
             for text in ('лираграф', 'суперЛира', '@lyra_fixture_other', '@Лира',
-                         'x@lyra_fixture', '@other_fixture привет', 'Праксис', 'Джарвис'):
+                         'x@lyra_fixture', '@other_fixture привет', 'Праксис', 'Атлас'):
                 self.assertFalse(obj._addressed(self.message(text)), text)
             self.assertTrue(obj._addressed(self.message(caption='Лира, фото', photo=[{}])))
             self.assertTrue(obj._addressed(self.message(reply_to_message={'from': {'id': 99}})))

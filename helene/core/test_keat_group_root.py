@@ -189,7 +189,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         with patch.dict(os.environ, self.env, clear=False):
             baseline = dict(role='user', content='Member: x', actor='Member')
             for kwargs in (
-                dict(chat_id='1001240718803', root_chat_id='1001240718803', principal_id='2', ordinary_root=True),
+                dict(chat_id='100999999999999999', root_chat_id='100999999999999999', principal_id='2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id=None, ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='-2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='2', ordinary_root=False),

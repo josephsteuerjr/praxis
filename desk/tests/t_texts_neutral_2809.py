@@ -21,10 +21,7 @@ sys.path.insert(0,str(DESK/'localharness'))
 KIT=[RES/'SOUL.md',RES/'self-day-zero.md',RES/'soul/VOICE.md',
      RES/'soul/self.md',*sorted((RES/'soul/skills').rglob('*.md'))]
 SUPPLIED=json.loads((Path(__file__).parent/'fixtures/owner-supplied-skills-1.5.9.json').read_text(encoding='utf8'))
-# Preserve the explicitly approved sanitized predecessor, never restore its old private value.
-SANITIZED_TEMPLATE_HASHES={
-    'abstractdl-mtproto-moderation.md':'0b54434ff6ea97b2bbb87d65ed44a79ad34a08986f18529f2e47aa5f5f35536f',
-}
+RETIRED_COMMUNITY_SKILLS = {'abstractdl-architecture-jargon.md', 'abstractdl-mtproto-moderation.md'}
 
 FOREIGN = re.compile(r"(?i)praxis|праксис|контейнер|container|docker|докер|(?<![\w.])/app\b|"
                      r"сервер(?!ном издании)|\bserver\b")
@@ -50,14 +47,14 @@ class KitIsNeutral(unittest.TestCase):
         digest=lambda text:hashlib.sha256(text.encode('utf8').replace(b'\r\n',b'\n')).hexdigest()
         for name,accepted in SUPPLIED['files'].items():
             with self.subTest(skill=name):
-                expected=SANITIZED_TEMPLATE_HASHES.get(name,accepted)
+                if name in RETIRED_COMMUNITY_SKILLS:
+                    self.assertFalse((RES/'soul/skills'/name).exists())
+                    self.assertNotIn('soul/skills/'+name, history)
+                    continue
                 current=(RES/'soul/skills'/name).read_text(encoding='utf8')
                 candidates=[current,*history.get('soul/skills/'+name,[])]
-                self.assertIn(expected,{digest(text) for text in candidates},
+                self.assertIn(accepted,{digest(text) for text in candidates},
                               'Owner-accepted predecessor lost: '+name)
-                if name in SANITIZED_TEMPLATE_HASHES:
-                    self.assertNotEqual(expected,accepted)
-                    self.assertNotIn(accepted,{digest(text) for text in candidates})
 
     def test_context_references_belong_to_complete_reviewed_multilingual_stock(self):
         spec=importlib.util.spec_from_file_location('neutral_stock_audit',DESK/'installer/stock_languages.py')

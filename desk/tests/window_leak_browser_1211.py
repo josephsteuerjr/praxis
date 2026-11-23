@@ -1,6 +1,6 @@
 """Window memory/CPU stand: a busy agent starts a new run every 2 s; each run's detail is large.
 
-12.11: one renderer grew to 3.8 GB over a day of Jarvis's work and spent ~20 % of a core.
+12.11: one renderer grew to 3.8 GB over a day of Atlas's work and spent ~20 % of a core.
 The production window bundle (MiniApp build) with an isolated fixture; JS heap after a
 forced GC is sampled while runs come and go. Default mode asserts a plateau.
 Modes: (default) heap, `metrics` main-thread costs, `profile` CPU profile, `shot` live dot.

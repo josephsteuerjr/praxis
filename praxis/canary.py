@@ -24,7 +24,7 @@
 
     комната                 ключей   проходов   рабочих часов   в час   пик
     AbstractDL              79       403        83              4.86    21
-    Егор, ЛС                1        183        79              2.32    9
+    владелец, ЛС                1        183        79              2.32    9
     Грибница                19       122        33              3.70    15
 
 79 ключей на одну комнату — это и есть расщепление, ради которого делался пункт 5.
@@ -307,7 +307,7 @@ def report(base=None, *, hours: float = 24.0, older_than_min: float = 30.0) -> s
 
     drops = dropped_addresses(base, hours=hours)
     lines.append(f"2. Вытесненные обращения за {hours:g} ч: {drops['drops']}"
-                 f" (из них с потерей полномочий Егора: {drops['owner_lost']});"
+                 f" (из них с потерей полномочий владельца: {drops['owner_lost']});"
                  f" журнал охватывает {drops['span_hours']} ч")
     for peer, n in list(drops["by_room"].items())[:5]:
         lines.append(f"   · {peer}: {n}")

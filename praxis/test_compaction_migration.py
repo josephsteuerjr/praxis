@@ -96,7 +96,7 @@ class CompactionMigrationTests(unittest.TestCase):
                          ["planned", "applied", "context_shown"])
 
     def test_topic_profiles_use_canonical_routes_and_preserve_content(self):
-        topic = self.profile.with_name("-1004301095307__topic__4654.md")
+        topic = self.profile.with_name("-100888888888888888__topic__4654.md")
         raw = self.profile.read_text()
         topic.write_text(raw)
         invalid = ["-1001__topic__0.md", "-1001__topic__-2.md",

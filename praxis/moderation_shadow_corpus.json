@@ -1,9 +1,9 @@
 {
   "schema": "praxis.moderation.frozen-corpus.v1",
-  "peer_id": -1001240718803,
+  "peer_id": -100999999999999999,
   "frozen_at": "2026-08-26T10:24:28Z",
   "provenance": {
-    "source": "canonical AbstractDL append-only archive",
+    "source": "redacted moderation archive",
     "archive_prefix_lines": 10272,
     "archive_prefix_bytes": 8353800,
     "archive_prefix_sha256": "8b890082dc37461a0fe8c9818a916cb49526c3c73d7c2640ca3502184a464178",

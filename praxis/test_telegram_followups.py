@@ -10,7 +10,7 @@ from unittest import mock
 import telegram_followups as followups
 
 
-ABSTRACT_DL = -1001240718803
+ABSTRACT_DL = -100999999999999999
 OWNER_ID = 555000100
 VIKA_ID = 555000333
 
@@ -46,7 +46,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         """Нить в AbstractDL — та самая комната, где случился инцидент 27.07."""
         arguments = dict(
             target_ref=str(ABSTRACT_DL),
-            target_label="AbstractDL Chat (@abstractdl_chat, id 1240718803)",
+            target_label="AbstractDL Chat (@abstractdl_chat, id 999999999999999)",
             target_peer_id=ABSTRACT_DL, target_user_id=None,
             sent_message_id=sent_message_id, request_text="", sent_at=0,
         )
@@ -405,11 +405,11 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertEqual(matched["id"], thread["id"], "матч обязан состояться")
         self.assertEqual(matched["status"], "answered",
                          "она должна знать, что ответ пришёл")
-        self.assertEqual(matched["notice_skipped"], "ответил сам Егор")
+        self.assertEqual(matched["notice_skipped"], "ответил сам владелец")
         self.assertEqual(matched["notice_skipped_at"], 120)
         self.assertEqual(self.ledger.pending_notifications(), [],
                          "пересылать человеку его собственную реплику нечего")
-        self.assertIn("письма не будет: ответил сам Егор", self.ledger.context())
+        self.assertIn("письма не будет: ответил сам владелец", self.ledger.context())
 
         # Контрольная сторона границы: ответил НЕ Егор — письмо обязано уйти.
         other = self._group_thread(
@@ -518,7 +518,7 @@ class FollowUpLedgerTests(unittest.TestCase):
         orphan = {"id": "answered-no-order", "status": "answered", "notified_at": None}
         owner_answered = {
             "id": "answered-by-owner", "status": "answered", "notified_at": None,
-            "notify_owner": True, "notice_skipped": "ответил сам Егор",
+            "notify_owner": True, "notice_skipped": "ответил сам владелец",
         }
         ordered = {
             "id": "answered-ordered", "status": "answered", "notified_at": None,

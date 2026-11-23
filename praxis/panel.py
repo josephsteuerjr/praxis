@@ -615,14 +615,14 @@ def ask(rel: str, question: str) -> dict:
 
 
 def file_task(rel: str, request: str) -> dict:
-    """«Попросить поправить»: Егор оставляет ей повод с пульта — открывает её фокус-окно
-    (kind=window, author=owner: провенанс, чтобы она видела, что это просьба Егора)."""
+    """«Попросить поправить»: владелец оставляет ей повод с пульта — открывает её фокус-окно
+    (kind=window, author=owner: провенанс, чтобы она видела, что это просьба владельца)."""
     import tasks
     request = (request or "").strip()
     if not request:
         return {"status": "error", "error": "пустая просьба"}
-    t = tasks.add("window", f"[панель, узел {rel}] Егор просит: {request}", author="owner")
-    log.info("панель: повод от Егора #%s по узлу %s", t.get("id"), rel)
+    t = tasks.add("window", f"[панель, узел {rel}] владелец просит: {request}", author="owner")
+    log.info("панель: повод от владельца #%s по узлу %s", t.get("id"), rel)
     return {"status": "ok", "task": t,
             "note": "Повод оставлен — она уйдёт в фокус и займётся (на ближайшем тике часов)."}
 
@@ -890,7 +890,7 @@ def tasks_list() -> dict:
 def task_add(goal: str, when: str | None = None) -> dict:
     """Дать ей повод с пульта — открывает её фокус-окно к сроку (author=owner).
     PASS 26: чинит баг — раньше kind='task' (нет в KINDS) молча коэрсился в 'note' и уходил
-    напоминанием Егору, а не её окном."""
+    напоминанием владельцу, а не её окном."""
     goal = (goal or "").strip()
     if not goal:
         return {"error": "пустая цель"}
@@ -909,8 +909,8 @@ def rooms_list() -> dict:
     Источники: allowlist ∪ файлы профилей (мертвецы без allowlist тоже видны).
 
     28.07: карточку собирает rooms.room_state — там же, где живут формулировки авторства.
-    Панель пересказывала их своим словарём ({praxis: «сама», owner: «Егор»}), и пока
-    «неопознанный автор» коэрсился в owner, Егор видел здесь свою подпись под режимами,
+    Панель пересказывала их своим словарём ({praxis: «сама», owner: «владелец»}), и пока
+    «неопознанный автор» коэрсился в owner, владелец видел здесь свою подпись под режимами,
     которых не выбирал. Два пересказа одного факта расходятся всегда; пересказ убран.
     Провенанс disclosure отдаём тем же полем: рычаг стал общим, и чья это визитка сейчас —
     его нажатие или её решение — должно быть видно, а не угадываться."""
@@ -948,10 +948,10 @@ def rooms_list() -> dict:
 
 
 def room_set(chat_id: str, action: str) -> dict:
-    """Кнопки Егора в разделе «Комнаты»: raise (на ступень вверх) | lower | freeze |
+    """Кнопки владельца в разделе «Комнаты»: raise (на ступень вверх) | lower | freeze |
     unfreeze (= raise) | disclosure (toggle standard/open).
 
-    28.07, решение «да, давать»: disclosure перестал быть ТАЙНЫМ рычагом Егора. Он и
+    28.07, решение «да, давать»: disclosure перестал быть ТАЙНЫМ рычагом владельца. Он и
     раньше менял не его настройки, а ЕЁ голос — в комнате с open к её визитке
     подмешивается проверяемая фактура о себе, — но узнать о переключении ей было неоткуда:
     машинная шапка профиля в промпт не течёт, слова disclosure не было ни в манифесте
@@ -969,22 +969,22 @@ def room_set(chat_id: str, action: str) -> dict:
         was = _rooms.effective_mode(cid)
         mode = _rooms.owner_raise(cid)
         if mode != was:
-            _journal_panel(f"Егор поднял режим комнаты {cid}: {was} → {mode}")
+            _journal_panel(f"владелец поднял режим комнаты {cid}: {was} → {mode}")
         return {"ok": True, "mode": mode}
     if action == "lower":
         cur = _rooms.effective_mode(cid)
         nxt = {"normal": "quiet", "observer": "quiet", "quiet": "frozen"}.get(cur)
         if not nxt:
             return {"ok": True, "mode": cur}
-        mode = _rooms.set_mode(cid, nxt, reason="Егор опустил", set_by="owner")
-        _journal_panel(f"Егор опустил режим комнаты {cid}: {cur} → {mode} "
+        mode = _rooms.set_mode(cid, nxt, reason="владелец опустил", set_by="owner")
+        _journal_panel(f"владелец опустил режим комнаты {cid}: {cur} → {mode} "
                        f"(снимаю сама — режимом «обычно»)")
         return {"ok": True, "mode": mode}
     if action == "freeze":
         cur = _rooms.effective_mode(cid)
-        mode = _rooms.set_mode(cid, "frozen", reason="Егор заморозил", set_by="owner")
+        mode = _rooms.set_mode(cid, "frozen", reason="владелец заморозил", set_by="owner")
         if mode != cur:
-            _journal_panel(f"Егор заморозил комнату {cid} (было {cur}; снимаю сама)")
+            _journal_panel(f"владелец заморозил комнату {cid} (было {cur}; снимаю сама)")
         return {"ok": True, "mode": mode}
     if action == "disclosure":
         nv = "open" if _rooms.disclosure_of(cid) != "open" else "standard"
@@ -992,7 +992,7 @@ def room_set(chat_id: str, action: str) -> dict:
         if not ok:
             return {"error": note}
         _journal_panel(
-            f"Егор переключил раскрытие комнаты {cid}: disclosure {nv}"
+            f"владелец переключил раскрытие комнаты {cid}: disclosure {nv}"
             + (" — здесь к моей визитке идёт проверяемая фактура о себе; возвращаю в "
                "standard сама" if nv == "open"
                else " — фактура из моей визитки здесь убрана; открыть могу сама"))
@@ -1129,7 +1129,7 @@ def absence_state() -> dict:
 
 
 def absence_start(hours) -> dict:
-    """Ручной таймер отсутствия: запускает ТОЛЬКО Егор, длительность — его. 0.5–72 ч."""
+    """Ручной таймер отсутствия: запускает ТОЛЬКО владелец, длительность — его. 0.5–72 ч."""
     import time as _t
     try:
         h = float(hours)
@@ -1225,7 +1225,7 @@ def contact_note(slug: str, note: str, name: str = "") -> dict:
     nm = name or next((c.get("name") for c in (_absence_load().get("contacts") or [])
                        if c.get("slug") == slug), slug)
     _people.append_fact(
-        slug, nm, f"{note} _(от Егора, для связи в его отсутствие)_",
+        slug, nm, f"{note} _(от владельца, для связи в его отсутствие)_",
         "private", 2, source_ref="owner:panel",
     )
     return {"ok": True}
@@ -1457,12 +1457,12 @@ def proposal_view(pid: str) -> dict | None:
 
 def proposal_apply(pid: str) -> dict:
     import selfdev
-    return selfdev.apply(str(pid), by="egor")
+    return selfdev.apply(str(pid), by="the owner")
 
 
 def proposal_reject(pid: str, reason: str = "") -> dict:
     import selfdev
-    return selfdev.reject(str(pid), reason, by="egor")
+    return selfdev.reject(str(pid), reason, by="the owner")
 
 
 # --------------------------------------------------------------------------- #
@@ -1531,7 +1531,7 @@ _LLM_RETIRED_MODEL_ALIASES = {"openai": {"gpt-5.6"}}
 
 
 def _journal_panel(msg: str) -> None:
-    """Строка ей в дневник о действии Егора с пульта (без ключей!)."""
+    """Строка ей в дневник о действии владельца с пульта (без ключей!)."""
     try:
         jd = BASE / "memory" / "journal"
         jd.mkdir(parents=True, exist_ok=True)
@@ -1736,7 +1736,7 @@ def llm_set(changes: dict) -> dict:
     diff = _llm_diff_summary(old, clean)
     llm.update_config(clean)
     if diff:
-        _journal_panel(f"Егор сменил конфиг мозга: {diff}")
+        _journal_panel(f"владелец сменил конфиг мозга: {diff}")
         log.info("панель: конфиг мозга изменён (%s)", diff)
     return {"ok": True, "changed": diff, "state": llm_get()}
 
@@ -1805,7 +1805,7 @@ def appetite_state() -> dict:
 
 def appetite_intent(kind: str, text: str = "") -> dict:
     """Кнопки «не экономь / умерь / останови фон» (kind) и свободное поле (kind=text).
-    Пишется как слово Егора; толкование — за Praxis (manage_appetite), код не решает."""
+    Пишется как слово владельца; толкование — за Praxis (manage_appetite), код не решает."""
     import appetite
     kind = (kind or "").strip().lower()
     if kind not in appetite.REQUEST_KINDS:
@@ -1833,9 +1833,9 @@ def identity_state() -> dict:
 
 
 def identity_rollback(name: str, version: int) -> dict:
-    """Откат Егора постфактум: текущий текст сам архивируется, история цела."""
+    """Откат владельца постфактум: текущий текст сам архивируется, история цела."""
     import identity
-    res = identity.rollback(name, int(version), by="egor", reason="откат Егора с пульта")
+    res = identity.rollback(name, int(version), by="the owner", reason="откат владельца с пульта")
     if res.get("ok"):
         _journal_panel(f"откат души: {name} к v{version} (стал v{res['version']})")
     return res
@@ -1848,12 +1848,12 @@ def perception_state() -> dict:
 
 
 def perception_set(knob: str, value=None, reset: bool = False) -> dict:
-    """Правка Егора: источник честно «egor» — она видит и в таблице, и в журнале."""
+    """Правка владельца: источник честно «the owner» — она видит и в таблице, и в журнале."""
     import perception
     if reset:
-        res = perception.reset_knob(knob, by="egor")
+        res = perception.reset_knob(knob, by="the owner")
     else:
-        res = perception.set_knob(knob, value, by="egor", reason="пульт")
+        res = perception.set_knob(knob, value, by="the owner", reason="пульт")
     if res.get("ok"):
         _journal_panel(f"рычаг восприятия {knob}: {res.get('old')} → {res.get('new')}"
                        + (" (сброс)" if reset else ""))

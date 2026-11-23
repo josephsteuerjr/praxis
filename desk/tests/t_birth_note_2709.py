@@ -25,9 +25,9 @@ PREFIX = "Это твой первый запуск"
 class BirthNoteTest(unittest.TestCase):
     def test_note_leaves_the_model_feed_after_first_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
-            desk = transport.Desk(Path(tmp), "window", "Егор", "Окно", agent_name="Джарвис")
-            desk.archive(f"{PREFIX} на устройстве Love. Ты — Джарвис…", outgoing=False, sender="Hélène")
-            desk.archive("Привет, Егор. Я Джарвис.", outgoing=True)
+            desk = transport.Desk(Path(tmp), "window", "Егор", "Окно", agent_name="Атлас")
+            desk.archive(f"{PREFIX} на устройстве Love. Ты — Атлас…", outgoing=False, sender="Hélène")
+            desk.archive("Привет, Егор. Я Атлас.", outgoing=True)
             desk.archive("привет!", outgoing=False, sender="Егор")
             self.assertTrue(any(PREFIX in line for line in desk.lines()))
 

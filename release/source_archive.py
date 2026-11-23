@@ -81,12 +81,19 @@ def archive(root, destination, version):
             if batch.wait():
                 raise RuntimeError("git cat-file failed")
             info = zipfile.ZipInfo(prefix + "RELEASE-ORIGIN.json")
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, json.dumps(origin, sort_keys=True))
         with zipfile.ZipFile(staged) as z:
             if z.testzip() or len(z.namelist()) != len(members) + 1:
                 raise ValueError("Invalid source archive")
-        os.link(staged, destination)
+        try:
+            os.link(staged, destination)
+        except FileExistsError:
+            with staged.open("rb") as left, destination.open("rb") as right:
+                if hashlib.file_digest(left, "sha256").digest() != hashlib.file_digest(right, "sha256").digest():
+                    raise ValueError("Concurrent source archive belongs to a different commit")
     return commit
 
 

@@ -456,7 +456,7 @@ def _render_computers(memory: Path) -> Path:
 _BELONGINGS: tuple[tuple[str, str, str], ...] = (
     ("soul", "мой хребет", "*.md"),
     ("soul/skills", "мои навыки", "*.md"),
-    ("workspace", "общий стол: документы от Клода и Егора", "*.md"),
+    ("workspace", "общий стол: документы от Клода и владельца", "*.md"),
     ("memory/journal", "журнал", "*"),
     ("memory/groups", "мои группы", "*"),
     ("memory/rooms", "профили комнат", "*"),

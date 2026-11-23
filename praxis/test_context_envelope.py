@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
 class TestMeasurement(Base):
     def test_ambient_group_wake_keeps_the_real_sender(self):
         """Тот самый шов: прод пишет praxis:self, тень обязана помнить человека."""
-        env = ce.measure(chat_id="-1001240718803", room_id="-1001240718803",
+        env = ce.measure(chat_id="-100999999999999999", room_id="-100999999999999999",
                          is_dm=False, owner=False, praxis_self=True,
                          actor_raw=62985, synthesized=True,
                          triggers=(ce.Trigger(principal_id="62985", message_id=93707,

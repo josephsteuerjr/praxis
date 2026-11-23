@@ -116,13 +116,13 @@ class MemoryCatalogueTests(unittest.TestCase):
         self._room("-1003908850919", "# Комната -1003908850919\n\nmode: dead\n"
                                      "mode_reason: Telegram: канал недоступен\n")
         self._room("-1003843005958", "# Комната -1003843005958\n\nmode: dead\n")
-        self._room("-1004301095307", "# Комната -1004301095307\n\nmode: normal\n")
+        self._room("-100888888888888888", "# Комната -100888888888888888\n\nmode: normal\n")
         self._room("-100777", "# Комната -100777\n\nmode: normal\nmembership: left\n"
                               "left_at: 2026-01-01T00:00+00:00\n")
         (memory / "rooms_departed.json").write_text(
             json.dumps(["-1003908850919", "-100500"]), encoding="utf-8")
         (memory / "rooms_allowlist.json").write_text(
-            json.dumps(["-1004301095307", "-100777", "-100999"]), encoding="utf-8")
+            json.dumps(["-100888888888888888", "-100777", "-100999"]), encoding="utf-8")
         with mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_CHATS": ""}):
             memory_catalog.rebuild(memory_dir=memory)
         rendered = (memory / "maps" / "ROOMS.md").read_text(encoding="utf-8")
@@ -143,7 +143,7 @@ class MemoryCatalogueTests(unittest.TestCase):
         self.assertTrue(returned.split(" — ")[1].startswith("active"), returned)
         self.assertIn('старая отметка ухода', returned)
 
-        self.assertTrue(self._room_line(rendered, "-1004301095307").endswith("active; mode=normal"))
+        self.assertTrue(self._room_line(rendered, "-100888888888888888").endswith("active; mode=normal"))
         self.assertIn("-100999", rendered)               # доверенная комната без профиля видна
         self.assertIn("профиля ещё нет", rendered)
         self.assertEqual("", self._room_line(rendered, "-100500"))   # ушла и профиля нет

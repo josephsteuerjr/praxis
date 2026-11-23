@@ -33,7 +33,7 @@ class Stand(unittest.TestCase):
         for item in patches:item.start();self.addCleanup(item.stop)
         Runtime.instances=[];self.rows=[];self.configs={}
         bridge.install()
-        self.agent=types.SimpleNamespace(port=18765,name='Джарвис',config='0',enabled=True,conflict=False,tree=self.folder)
+        self.agent=types.SimpleNamespace(port=18765,name='Атлас',config='0',enabled=True,conflict=False,tree=self.folder)
         self.rows.append(self.agent)
         self.owner=types.SimpleNamespace(root=self.folder,lock=threading.RLock(),current=lambda:self.agent)
         self.busy=socket.socket();self.addCleanup(self.busy.close)
@@ -73,7 +73,7 @@ class Setup(Stand):
         identity=self.add()['bridge']['id']
         self.configs['0']={'network':{'bridge_profile':identity}}
         for action in ('remove','repair-port'):
-            with self.assertRaisesRegex(ValueError,'Джарвис'):bridge.invoke(self.owner,action,{'id':identity})
+            with self.assertRaisesRegex(ValueError,'Атлас'):bridge.invoke(self.owner,action,{'id':identity})
         self.assertEqual(len(bridge.listing()),1)
 
     def test_remove_forgets_only_local_record_and_frees_the_profile(self):
@@ -104,7 +104,7 @@ class RelayOnlyRoute(Stand):
         manager,identity=self.manager(lambda i,p:{'network':{'proxy':{'mode':'direct'}},'relay':{'bridge_profile':i,'proxy':p}})
         self.assertFalse(manager.errors);self.assertEqual(len(Runtime.instances),1)
         self.assertIn('local_proxy_port',Runtime.instances[0].ports)
-        self.assertEqual(bridge.selected_by(identity,self.owner),['Джарвис'])
+        self.assertEqual(bridge.selected_by(identity,self.owner),['Атлас'])
 
     def test_relay_route_that_drifted_from_the_bridge_is_reported(self):
         manager,identity=self.manager(lambda i,p:{'relay':{'bridge_profile':i,'proxy':{**p,'port':'1'}}})

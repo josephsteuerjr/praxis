@@ -21,7 +21,10 @@ LOCK = ROOT / "release/inputs.json"
 
 
 def version(root):
-    return json.loads((root / "desk/app/package.json").read_bytes())["version"]
+    value = json.loads((root / "desk/app/package.json").read_bytes())["version"]
+    if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", value):
+        raise ValueError("The source must declare a three-part release version")
+    return value
 
 
 def prepare(root, new):

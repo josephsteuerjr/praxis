@@ -1610,7 +1610,7 @@ def build_app():
 
     @routes.get("/api/agent/status")
     async def api_agent_status(request: web.Request):
-        """Её глаза. Отдельная дверь: свой субъект (не Егор), свой гейт, свой allowlist."""
+        """Её глаза. Отдельная дверь: свой субъект (не владелец), свой гейт, свой allowlist."""
         deny = agent_guard(request)
         if deny is not None:
             return deny

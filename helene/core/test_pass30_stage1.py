@@ -618,7 +618,7 @@ class SafetyPointTests(unittest.TestCase):
         self.assertIsNone(selfgit.snapshot_paths([], "x"))
 
     def test_huge_and_ignored_files_never_enter_snapshots_or_history(self):
-        """16.11 (Jarvis): a 4.8 GB owner backup in the home was re-hashed by `add -A` before
+        """16.11 (Atlas): a 4.8 GB owner backup in the home was re-hashed by `add -A` before
         every command; an untracked service file kept coming back through `commit -- path`."""
         (self.tmp / ".gitignore").write_text("status.json\nbackups/\n", encoding="utf-8")
         (self.tmp / "status.json").write_text("{}", encoding="utf-8")

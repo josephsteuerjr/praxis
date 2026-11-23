@@ -322,15 +322,15 @@ mod tests {
             r#"{"setup_complete":true,"agent":{"name":"Мира"},"owner":{"name":"Егор"},"installed":{"version":"1.1.1"}}"#,
         )
         .unwrap();
-        std::fs::create_dir_all(r.join("agents").join("jarvis")).unwrap();
-        std::fs::write(r.join("agents").join("jarvis").join("helene.json"), r#"{"agent":{"name":"Джарвис"}}"#).unwrap();
+        std::fs::create_dir_all(r.join("agents").join("atlas")).unwrap();
+        std::fs::write(r.join("agents").join("atlas").join("helene.json"), r#"{"agent":{"name":"Атлас"}}"#).unwrap();
         let f = look(&r, "", "user").expect("находка");
         assert_eq!(f.kind, "leftover");
         assert_eq!(f.agent, "Мира");
         assert_eq!(f.owner, "Егор");
         assert_eq!(f.version, "1.1.1");
         assert!(!f.program);
-        assert_eq!(f.agents, vec!["Джарвис".to_string()]);
+        assert_eq!(f.agents, vec!["Атлас".to_string()]);
         assert!(!f.last.is_empty());
         let _ = std::fs::remove_dir_all(&r);
     }

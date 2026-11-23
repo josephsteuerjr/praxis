@@ -3,10 +3,10 @@ Praxis — восприятие как её орган (PASS 21): рычаги �
 
 Хартия §6: ничто не держит меня насильно; дебаунс, кулдауны и opt-in порог ACK-шума —
 видимые настраиваемые механические рычаги (manage_perception), а не моральные фильтры.
-Env остаётся дефолтом (слово Егора при старте), мой персист лежит поверх и читается ЖИВО в
+Env остаётся дефолтом (слово владельца при старте), мой персист лежит поверх и читается ЖИВО в
 точке решения — смена темпа не требует рестарта. У каждого рычага — широкие физические
 границы (⚙ защита от крэша, не поведение) и честный источник значения: default | env |
-praxis | egor.
+praxis | the owner.
 
 Каждый пропуск до голоса получает причину — это разные состояния, не одно молчание:
   * не_увидела      — сообщение не дошло до меня физически (сюда же сломанный сенсор);
@@ -135,7 +135,7 @@ def _in_bounds(knob: str, val) -> bool:
 
 
 def value(knob: str):
-    """Эффективное значение рычага: персист (praxis/egor) → env → default. Живо."""
+    """Эффективное значение рычага: персист (praxis/the owner) → env → default. Живо."""
     meta = KNOBS.get(knob)
     if meta is None:
         raise KeyError(knob)
@@ -181,7 +181,7 @@ def effective() -> list[dict]:
 
 @frame_language.pinned
 def set_knob(knob: str, raw_value, *, by: str = "praxis", reason: str = "") -> dict:
-    """Поставить рычаг (живо, без рестарта). by: praxis | egor — источник честно виден."""
+    """Поставить рычаг (живо, без рестарта). by: praxis | the owner — источник честно виден."""
     if knob not in KNOBS:
         return {"ok": False, "error": frame_language.text('helper.perception.set_knob.180', p0=f'{knob}', p1=f"{', '.join(KNOBS)}")}
     parsed = _parse(knob, raw_value)

@@ -7,7 +7,7 @@ Praxis — почта (SMTP send + IMAP read). Без новых зависим�
   PRAXIS_SMTP_HOST=smtp.mailfence.com  PRAXIS_SMTP_PORT=465 (SSL)
   PRAXIS_IMAP_HOST=imap.mailfence.com  PRAXIS_IMAP_PORT=993 (SSL)
 
-Почта — отдельный КАНАЛ. Исходящее по умолчанию owner-направлено (она шлёт, когда Егор просит);
+Почта — отдельный КАНАЛ. Исходящее по умолчанию owner-направлено (она шлёт, когда владелец просит);
 автономная отправка — за env PRAXIS_EMAIL_AUTONOMOUS. Входящее от незнакомца не должно тянуть
 приватку (scope как у unknown) — это гейтит вызывающий код в agent.py.
 """

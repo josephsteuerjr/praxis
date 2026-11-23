@@ -1,4 +1,4 @@
-"""Telegram authority for nested hands and resume in the edition (Jarvis, AbstractDL, 15-16.11).
+"""Telegram authority for nested hands and resume in the edition (Atlas, AbstractDL, 15-16.11).
 
 The core re-checks the turn's human authority before every nested h.hand and every resume,
 against PRAXIS_OWNER_ID and social.known_ids. The edition sets neither: its owner is

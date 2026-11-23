@@ -22,7 +22,11 @@ from pathlib import Path
 import threading
 import time
 
-TARGET_PEER_ID = -1001240718803
+from room_identity import root_peer_id
+
+# Compatibility for callers that inspect this module at import time. Guards use the
+# current env so .env loaded after import cannot leave a stale authorization.
+TARGET_PEER_ID = root_peer_id()
 ACTIONS = {"slow_mode", "default_rights", "restrict", "unrestrict",
            "ban_member", "purge_member"}
 
@@ -95,7 +99,7 @@ def normalize(peer_id, action, params: dict) -> tuple[str, dict]:
     would be worse than a refusal she can see and correct.
     """
     peer_id = _exact_int(peer_id, "peer_id")
-    if peer_id != TARGET_PEER_ID:
+    if root_peer_id() is None or peer_id != root_peer_id():
         raise PermissionError("admin actuator is scoped only to AbstractDL")
     if not isinstance(action, str):
         raise TypeError("action must be an exact string")

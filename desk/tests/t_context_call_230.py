@@ -1,7 +1,7 @@
 """Actual composed voice -> model-call -> provider adapter with an offline SDK.
 
 Each turn is a fresh native interpreter over one private synthetic profile. No
-model, Telegram account or installed Jarvis is contacted. The SDK captures final
+model, Telegram account or installed Atlas is contacted. The SDK captures final
 provider messages, not merely helper output; its usage values are synthetic.
 """
 from __future__ import annotations

@@ -239,7 +239,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((self.code/'module.py').read_text(),LOCAL)
 
     def test_no_ordinary_agent_turn_and_no_manual_bypass(self):
-        callback = mock.Mock(side_effect=AssertionError('must not wake ordinary Jarvis'))
+        callback = mock.Mock(side_effect=AssertionError('must not wake ordinary Atlas'))
         pipeline.notify_due(self.tree, callback)
         callback.assert_not_called()
         with self.assertRaisesRegex(ValueError, 'restricted'):

@@ -1232,7 +1232,7 @@ class TheCallTraceJournalIsBounded(unittest.TestCase):
 class NoArtificialTokenCeilings(unittest.TestCase):
     """2111: дефолты не должны душить reasoning-модели до первого символа.
 
-    Инцидент Джарвиса 21.11: glm-5.3 с effort high сжигал потолок 1024 на
+    Инцидент Атласа 21.11: glm-5.3 с effort high сжигал потолок 1024 на
     размышлениях — ход умирал с «0 символов, блоков 0». Владелец: искусственных
     ограничений не ставить, у моделей свои потолки. Дефолт — только для
     конфигов без явного max_tokens; свой потолок живёт в llm.json.

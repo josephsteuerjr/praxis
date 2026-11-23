@@ -44,8 +44,14 @@ def fronts(source, donor, work):
         extract_rows(z, "Helene/verification-tools/", native["files"], tools)
     node = tools / native["tools"]["node"]
     npm = tools / "npm/bin/npm-cli.js"
-    env = dict(os.environ, npm_config_cache=str(tools / native["npm_cache"]),
-               npm_config_offline="true", PATH=str(node.parent) + os.pathsep + os.environ["PATH"])
+    user_config = work / "npm-user.conf"
+    global_config = work / "npm-global.conf"
+    user_config.touch()
+    global_config.touch()
+    env = {k: v for k, v in os.environ.items() if not k.lower().startswith("npm_config_")}
+    env.update(npm_config_cache=str(tools / native["npm_cache"]), npm_config_offline="true",
+               npm_config_userconfig=str(user_config), npm_config_globalconfig=str(global_config),
+               PATH=str(node.parent) + os.pathsep + os.environ["PATH"])
     before = portable_sources.frontend_inputs(source)
     for name in FRONTS:
         directory = source / "desk" / name
@@ -115,6 +121,29 @@ def build(source, work, output, version, target, inputs, fetch):
     item = inputs["targets"][target]
     donor = fetch(item)
     is_server = target == "server-linux-arm64"
+    pin = json.loads((source / "desk/localharness/relay-release.json").read_bytes())
+    with zipfile.ZipFile(donor) as z:
+        meta = json.loads(z.read("Helene/python-app.json"))
+        relay = json.loads(z.read("Helene/relay-product/BUILD-PASSPORT.json"))
+        if meta.get("version") != inputs["version"] or relay["version"] != pin["version"]:
+            raise ValueError("Input version or bundled relay differs from the pinned release")
+        expected = {"debian-x86_64":"linux-x86_64", "fedora-x86_64":"linux-x86_64",
+                    "server-linux-arm64":"linux-arm64"}.get(target, target)
+        if meta.get("target") != expected or bool(meta.get("server")) != is_server:
+            raise ValueError("Wrong input platform for " + target)
+        if (meta.get("distribution") == "fedora") != target.startswith("fedora-"):
+            raise ValueError("Wrong desktop distribution for " + target)
+        if is_server:
+            commit, filename, wanted = relay["source_commit"], "praxis-relay-headless", relay["sha256"]
+        else:
+            if relay["native_platform"] != expected:
+                raise ValueError("Relay architecture differs from target")
+            commit, filename, wanted = relay["base_commit"], relay["binary"]["name"], relay["binary"]["sha256"]
+        if commit != pin["source_commit"] or "/" in path_name(filename):
+            raise ValueError("Qualify an input with the selected relay first")
+        with z.open("Helene/relay-product/" + filename) as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != wanted:
+                raise ValueError("Native relay bytes differ from the build passport")
     system = {"win32":"windows", "darwin":"macos", "linux":"linux"}.get(sys.platform)
     arch = {"amd64":"x86_64", "aarch64":"arm64"}.get(platform.machine().lower(), platform.machine().lower())
     host = f"{system}-{arch}"

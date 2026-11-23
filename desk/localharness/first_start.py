@@ -809,7 +809,7 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
 
 
 def cleanup_leftovers(backend,roots,*,notes=True):
-    """11.11 (Yegor): what Windows protects from a non-administrator is named, not elevated.
+    """11.11 (the owner): what Windows protects from a non-administrator is named, not elevated.
 
     A former folder may remain only because of paths the backend recorded as protected; any
     other remainder is still a failure. Returns messages for the person.

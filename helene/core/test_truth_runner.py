@@ -1104,7 +1104,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
                         call_id="call-order-1"):
         """Прогнать прямую отправку в группу и вернуть проекцию её расписки."""
         captured: dict = {}
-        entity = types.SimpleNamespace(id=1240718803, title="AbstractDL Chat",
+        entity = types.SimpleNamespace(id=999999999999999, title="AbstractDL Chat",
                                        megagroup=True)
         room = int("-100" + str(entity.id))
         runner._buf[str(self.OWNER)] = list(owner_lines)
@@ -1295,7 +1295,7 @@ class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
         return str(emitted.get("title") or "")
 
     def _item(self, **response):
-        return {"id": "tgfu_x", "target_label": "AbstractDL Chat (@abstractdl_chat, id 1240718803)",
+        return {"id": "tgfu_x", "target_label": "AbstractDL Chat (@abstractdl_chat, id 999999999999999)",
                 "target_user_id": None, "sent_message_id": 94243,
                 "response": dict({"peer_id": "-100999999999999999", "message_id": 94244,
                                   "text": "принял"}, **response)}

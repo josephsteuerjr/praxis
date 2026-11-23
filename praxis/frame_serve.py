@@ -14,8 +14,10 @@ from contextvars import ContextVar
 
 import frame_measure
 import frame_shadow
+import frame_language
 import keat_readiness
 import keat_runtime
+from room_identity import root_chat_id
 
 _BOUND = ContextVar('frame_serve_bound', default=None)
 _COVERAGE = ContextVar('frame_serve_coverage', default=None)
@@ -43,11 +45,13 @@ def _ordinary_dm(ctx) -> bool:
 
 def _root_group(ctx) -> bool:
     """Match only the proved flat AbstractDL root-group ingress boundary."""
+    root = root_chat_id()
     return bool(
-        getattr(ctx, 'is_dm', True) is False
+        root is not None
+        and getattr(ctx, 'is_dm', True) is False
         and getattr(ctx, 'telegram_root_group', False) is True
-        and str(getattr(ctx, 'chat_id', None)) == '-1001240718803'
-        and str(getattr(ctx, 'room_chat_id', None)) == '-1001240718803'
+        and str(getattr(ctx, 'chat_id', None)) == root
+        and str(getattr(ctx, 'room_chat_id', None)) == root
     )
 
 
@@ -69,7 +73,7 @@ def enabled(ctx) -> bool:
         root_group = bool(
             os.getenv('PRAXIS_FRAME_V6', '').strip().lower() == 'serve'
             and _root_group(ctx)
-            and keat_runtime.staged('group', '-1001240718803')
+            and keat_runtime.staged('group', root_chat_id())
             and keat_readiness.receipt(dict(os.environ))['serve_ready'])
         if root_group:
             return True
@@ -102,6 +106,7 @@ def bind(*, system, ctx, dynamic):
         _COVERAGE.reset(coverage_token)
 
 
+@frame_language.pinned
 def select(*, system, messages, tools):
     """Return (served system, numeric/enum receipt), failing back to live.
 
@@ -133,19 +138,14 @@ def select(*, system, messages, tools):
         voice = frame_shadow._read(frame_shadow.BASE / 'soul' / 'VOICE.md')
         if not soul.strip() or not voice.strip():
             raise ValueError('missing constitution')
-        expected_k = soul + '\n\n---\n' + voice
+        expected_k = frame_shadow._zone_k(soul=soul, voice=voice)
         coverage = {}
         candidate = frame_measure.assemble(
             ctx=copy.deepcopy(ctx), live_sections=[], messages=[], coverage=coverage,
             tools=copy.deepcopy(tools if tools is not None else []))
-        if not candidate['system'].startswith(expected_k + frame_shadow._SEP_E):
+        if not candidate['system'].startswith(expected_k + frame_shadow.separator('E')):
             raise ValueError('constitution changed during assembly')
-        selected = candidate['system'] + dynamic + (
-            '\n[frame v6 canary: E перечитан перед этим вызовом модели, не '
-            'замороженная эпоха; указания «момент заморозки» в блоках E здесь '
-            'означают момент этой сборки. Живой транспорт T и ролевая лента '
-            'сохранены; это не миграция накопителя.]'
-        )
+        selected = candidate['system'] + dynamic + frame_language.text('frame.live_canary')
         if not isinstance(selected, str) or not selected.strip():
             raise ValueError('empty candidate')
         _COVERAGE.set((selected, coverage))

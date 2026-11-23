@@ -1,6 +1,6 @@
 """Английский текст схем рук — накладкой поверх её собственных литералов (15.09.2026).
 
-ЗАЧЕМ. Слово Егора 15.09: «надо по-английски (официально глм русский не поддерживает) — и
+ЗАЧЕМ. Слово владельца 15.09: «надо по-английски (официально глм русский не поддерживает) — и
 так, чтобы у неё не обрывались ходы… чтобы понимала». Замер того же дня по ЖИВОМУ набору из
 101 руки: 55 описаний содержали кириллицу, 253 параметра из 390 не были описаны ВООБЩЕ, и
 целиком готовыми оказались 7 рук. Живой промах в тот же час: `search_chats` получила
@@ -173,7 +173,7 @@ EN: dict[str, dict] = {
               "(manage_perception(narration_gap_sec)), the switch is PRAXIS_NARRATION. "
               "task_id narrates into the thread that ordered this coding task; without it "
               "into the current thread, and from a window or event (no current thread) "
-              "into Yegor's DM — the receipt says where it went."),
+              "into the owner's DM — the receipt says where it went."),
         "p": {"text": "the process line",
               "task_id": "narrate into the thread that ordered this coding task, optional"},
     },
@@ -396,7 +396,7 @@ EN: dict[str, dict] = {
               "when": "'in 0m' for now (default), 'today 23:00' and so on"},
     },
     "manage_appetite": {
-        "d": ("The appetite agreement with Yegor: thinking costs his money, requests about "
+        "d": ("The appetite agreement with the owner: thinking costs his money, requests about "
               "spending are part of the relationship, and YOU interpret them (the code only "
               "counts). His four formulations: 'do not save / dig as deep as needed' -> "
               "interpret(mode=free); 'moderate your appetites' -> interpret(mode=considerate) "
@@ -411,7 +411,7 @@ EN: dict[str, dict] = {
               "windows": "interpret: whether to open autonomous windows (your plan)",
               "sleep_depth": "interpret: depth of the next sleeps (light = no REM, no rumination)",
               "note": "interpret: what you sacrifice or postpone",
-              "raw_request": "Yegor's words if the request came in chat",
+              "raw_request": "the owner's words if the request came in chat",
               "daily_cost": "pledge: dollars per day",
               "daily_tokens": "pledge: tokens per day",
               "background_calls": "pledge: background calls per day"},
@@ -423,8 +423,8 @@ EN: dict[str, dict] = {
         "d": ("Your latest lived turns as recorded BY CODE, not from memory: what arrived, "
               "which tools you actually called, what went out, what you decided not to send, "
               "and what the exact data-authority check held back. For an honest 'what was I "
-              "just doing'; outside Yegor's DM only the current channel is visible. room "
-              "looks at ONE specific place by name or address ('Yegor', 'mycelium'): it "
+              "just doing'; outside the owner's DM only the current channel is visible. room "
+              "looks at ONE specific place by name or address ('the owner', 'mycelium'): it "
               "returns your turns there AND your own note about that place. This is the eye "
               "BEFORE deciding to write to someone, especially in an hourly wake where you "
               "are in no room at all."),
@@ -469,7 +469,7 @@ EN: dict[str, dict] = {
 
     "panic": {
         "d": ("Emergency stop: stop yourself (you will go down and will not restart until "
-              "Yegor lifts it)."),
+              "the owner lifts it)."),
         "p": {"reason": "why you are pulling the stop"},
     },
     "switch_brain": {

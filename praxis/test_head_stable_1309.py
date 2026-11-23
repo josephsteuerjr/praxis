@@ -29,7 +29,7 @@ import llm  # noqa: E402
 import people  # noqa: E402
 import tool_offerings  # noqa: E402
 
-ROOM_ID = "-1001240718803"
+ROOM_ID = "-100999999999999999"
 LEVER = {"PRAXIS_FRAME_HEAD_STABLE": "1"}
 
 
@@ -256,7 +256,7 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         (self.people / "guest.md").write_text(
             "# Гость\n\ntelegram_id: 42\n\n- любит чай\n- [private] развёлся в марте\n"
             "  и просил не обсуждать\n- пишет по вечерам\n", encoding="utf-8")
-        # 25.09: решение Егора — приватные записи в комнатах ОСТАЮТСЯ в кадре
+        # 25.09: решение владельца — приватные записи в комнатах ОСТАЮТСЯ в кадре
         # (PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=on по умолчанию). Этот класс проверяет
         # прежнее снятие под рычагом «off»; новое поведение — test_room_memory_2509.
         env_off = mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "off"})

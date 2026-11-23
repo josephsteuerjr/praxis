@@ -27,24 +27,10 @@
       "zh": "3f249bd807a3cee55f05070bdf9ef9a070954ea336b298ac489ff06c61d749ab"
     },
     "soul/skills/INDEX.md": {
-      "ru": "41a40704d33c5f9f3ceea4cde7ca7bfc493f947eb65a64b0444d8a8d656f1ffc",
-      "en": "eddb905b4762a46fc1de7a2780d3bc5e0b03f9ad60512acc9569a4eba7812f26",
-      "fr": "1de41b142203711ba8e5433ad1831e46ac8723e01ef70d2230ab9cf76e792aec",
-      "zh": "6ce838390b1fb37498cf96e303df089e5aa5ad269aa60e6a5d63e1a76cf9be20",
-      "identifiers": true
-    },
-    "soul/skills/abstractdl-architecture-jargon.md": {
-      "ru": "ad3332b70c897f2de824f012a12bc5895b764584b8c3fbaf710e8c408074a8ad",
-      "en": "7e9292ab0e54a4305e131befbb375b92031ad29622f4a346ba180660255842a7",
-      "fr": "2d0ae0a0e370959dbefb7303bab01365e1fc6d08ff7c8826e0b4eb818e4b51a7",
-      "zh": "1807eec2192634655bb4c0b86bdd329402eb567031d85ffb309f7a568e3fd07d",
-      "identifiers": true
-    },
-    "soul/skills/abstractdl-mtproto-moderation.md": {
-      "ru": "88dc24685e1033e6d3ccfc7c284f9c56d780bde3ff535d11a563ccd95eb983ff",
-      "en": "57bbb53f63327896c393f8d9ad22c4a2fa282529118f93dd8392e526983c4b9b",
-      "fr": "bc2b09b1a1f92a62c4f5fd9414e0205f8c59c1050e899f3eb95deb224f682ccf",
-      "zh": "ab28bf5bf8ad4adde47dc54e8dd3a0e1b0d9104df6fa7662d4562804a96cac39",
+      "ru": "b2570601bb4539e93060ec44b4e9303959c880703939dcc88782ebf001705fea",
+      "en": "a9b66f0c4d387c0fc5110dabb65d6ce2fb08cbb323d98c2c850ad9aca62a2333",
+      "fr": "cb91ae3f79366777db60af05572a3d1670e0e7438684dae981a196b4052698eb",
+      "zh": "1bd2b325b6e77feb42fa19a8c7d2587785dfcbb797edf0bc2c69371a37f1c6bb",
       "identifiers": true
     },
     "soul/skills/anti-repeat-autonomous-checks.md": {

@@ -33,7 +33,7 @@ class TapeLevers(unittest.TestCase):
             self.assertEqual(memory_life.tape_chars_for("-100999999999999999"), 0)
             self.assertEqual(memory_life.tape_chars_for("424242424"), 5500)
             self.assertEqual(memory_life.tape_chars_for("-100123__topic__7"), 0)
-        self.assertTrue(memory_life.is_group_place("-4301095307"))
+        self.assertTrue(memory_life.is_group_place("-888888888888888"))
         self.assertFalse(memory_life.is_group_place("412244782"))
 
     def test_no_char_pressure_for_a_group_at_zero(self):

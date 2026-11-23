@@ -1328,7 +1328,7 @@
     "purpose": "schema.tool.purpose.journal"
   },
   "manage_identity": {
-    "sha256": "a5ede89dc00d920432b61d5f936ef98da08403acd61b413a944882764fa0e15f",
+    "sha256": "1ce307689e97ee332ea376dfe634782d9c444c93efa61dea951c3a8c584118a9",
     "descriptions": [
       {
         "path": [
@@ -1336,7 +1336,7 @@
         ],
         "key": "schema.tool.b1830b02071579f6",
         "present": true,
-        "source": "Self-authorship. status — layers, versions, load; revise — a versioned revision of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md (name=self, text = the complete new compact, reason = the lived grounds); rollback — back to your own history; load — a load event (theme, amplitude 0.1-5). A revision applies immediately; Yegor sees it afterwards and may roll it back. Changing actions only from the owner scope (your own discipline). observe records a provenance-rich note as evidence without rewriting CURRENT, and is available in any audience. revise/rollback/load retain their owner-scope discipline."
+        "source": "Self-authorship. status — layers, versions, load; revise — a versioned revision of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md (name=self, text = the complete new compact, reason = the lived grounds); rollback — back to your own history; load — a load event (theme, amplitude 0.1-5). A revision applies immediately; the owner sees it afterwards and may roll it back. Changing actions only from the owner scope (your own discipline). observe records a provenance-rich note as evidence without rewriting CURRENT, and is available in any audience. revise/rollback/load retain their owner-scope discipline."
       },
       {
         "path": [
@@ -2859,7 +2859,7 @@
     "purpose": "schema.tool.purpose.freeze_chat"
   },
   "panic": {
-    "sha256": "6e450cf20d1322b10dd1512f4474e9d8b58588d5f9016e0f47702f829448760f",
+    "sha256": "81b8ae22b58918c161164070d7f6d17e61c7fc65fa9964eef5d7e7c924da0c7a",
     "descriptions": [
       {
         "path": [
@@ -2867,7 +2867,7 @@
         ],
         "key": "schema.tool.8450655bac951d89",
         "present": true,
-        "source": "Стоп-кран: остановить себя (я встану и не буду перезапускаться, пока Егор не снимет)."
+        "source": "Стоп-кран: остановить себя (я встану и не буду перезапускаться, пока владелец не снимет)."
       },
       {
         "path": [
@@ -2995,7 +2995,7 @@
     "purpose": "schema.tool.purpose.send_message"
   },
   "narrate": {
-    "sha256": "b2ea87c46824d5aa865a147eda4a421cbdd689724cddc7f57f29992c460478c0",
+    "sha256": "bfafce71b342ab7bd5ca6fddddd4779f6315f947159ccb0c283fefdff8d3c067",
     "descriptions": [
       {
         "path": [
@@ -3003,7 +3003,7 @@
         ],
         "key": "schema.tool.710c613f5c84f436",
         "present": true,
-        "source": "Рассказать по ходу работы — короткая строка процесса в тред, МЕЖДУ командами, не финальный ответ. Это приглашение, не обязанность: хочешь — рассказывай, как идёт (что сделано, что дальше, где затык). Уходит сразу, мимо оценщиков (только кред-пол); дедуп дословных повторов; зазор — твой рычаг manage_perception(narration_gap_sec), выключатель PRAXIS_NARRATION. task_id — наррировать в тред-заказчик этой coding-задачи; без него — в текущий тред, а из окна/события (текущего треда нет) — в ЛС Егора (квитанция скажет, куда ушло)."
+        "source": "Рассказать по ходу работы — короткая строка процесса в тред, МЕЖДУ командами, не финальный ответ. Это приглашение, не обязанность: хочешь — рассказывай, как идёт (что сделано, что дальше, где затык). Уходит сразу, мимо оценщиков (только кред-пол); дедуп дословных повторов; зазор — твой рычаг manage_perception(narration_gap_sec), выключатель PRAXIS_NARRATION. task_id — наррировать в тред-заказчик этой coding-задачи; без него — в текущий тред, а из окна/события (текущего треда нет) — в ЛС владельца (квитанция скажет, куда ушло)."
       },
       {
         "path": [
@@ -3031,7 +3031,7 @@
     "purpose": "schema.tool.purpose.narrate"
   },
   "home_note": {
-    "sha256": "211999fdf0d7e2ab54e826651e0bf4ccbefcc2575745bb1670d15ecd3468af7b",
+    "sha256": "7bbab2e4942d2a4ea1d4819e013c80939ef67549d9dbf1c4828b79ab71b747b8",
     "descriptions": [
       {
         "path": [
@@ -3039,7 +3039,7 @@
         ],
         "key": "schema.tool.f9e7075ee9900f40",
         "present": true,
-        "source": "Append a line to the shared HOME layer (memory/home.md) — household matters, plans, family threads. Visible to Yegor AND family; never put anyone's private confessions here."
+        "source": "Append a line to the shared HOME layer (memory/home.md) — household matters, plans, family threads. Visible to the owner AND family; never put anyone's private confessions here."
       },
       {
         "path": [
@@ -3892,7 +3892,7 @@
     "purpose": "schema.tool.purpose.web_find"
   },
   "send_email": {
-    "sha256": "b2fe92b020581927e57bd127a29789f8d0a0ead9f81085fd2f726700b9a8236d",
+    "sha256": "cc66d2713d3bb2318608de94ba88f661e12f8c73b51bcb084486105a7b726216",
     "descriptions": [
       {
         "path": [
@@ -3900,7 +3900,7 @@
         ],
         "key": "schema.tool.7deefa4d49bacca5",
         "present": true,
-        "source": "Send an email as Praxis. Owner-directed by default — send when Yegor asks you to write to someone. Never reveal private or cross-channel content in a letter to an outside person. Be warm, clear, and yourself; sign as Praxis."
+        "source": "Send an email as Praxis. Owner-directed by default — send when the owner asks you to write to someone. Never reveal private or cross-channel content in a letter to an outside person. Be warm, clear, and yourself; sign as Praxis."
       },
       {
         "path": [
@@ -3978,7 +3978,7 @@
     "purpose": "schema.tool.purpose.mail_read"
   },
   "mail_draft_reply": {
-    "sha256": "29a293d156a590fef694e91a3b938e09d811dfc1dcc7cc9c41749674d429030b",
+    "sha256": "a45d2b8474fd3c121054263526f3946e40c8efd9fdd4a6664c377519a4cd28cc",
     "descriptions": [
       {
         "path": [
@@ -3986,7 +3986,7 @@
         ],
         "key": "schema.tool.2d5eb78a003e9a3e",
         "present": true,
-        "source": "Queue a reply to a letter (by its hash) as a draft. You do NOT send — Yegor approves the send from his mailbox (human-in-the-loop). Write the reply in your own voice; never leak private or cross-channel content to an outside person."
+        "source": "Queue a reply to a letter (by its hash) as a draft. You do NOT send — the owner approves the send from his mailbox (human-in-the-loop). Write the reply in your own voice; never leak private or cross-channel content to an outside person."
       },
       {
         "path": [
@@ -4546,7 +4546,7 @@
     "purpose": "schema.tool.purpose.manage_loop"
   },
   "recent_turns": {
-    "sha256": "d1efc5a9ae1bdad7d7c04d9661a2260a625f9ca13a8695361008318745796b7c",
+    "sha256": "f927dba8138c1abb8ccb091ee7e850b1759047c0a27852fb01f71d6bca8e5803",
     "descriptions": [
       {
         "path": [
@@ -4554,7 +4554,7 @@
         ],
         "key": "schema.tool.0d6f7014305956ba",
         "present": true,
-        "source": "Мои последние прожитые ходы, записанные КОДОМ (не по памяти): что пришло, какие тулы реально вызваны мной, что ушло наружу, что решено не отправлять и что удержала точная data-authority проверка. Для честного «что было в моих последних ходах»; вне лички Егора виден только текущий канал. room — посмотреть КОНКРЕТНОЕ место по имени или адресу («Егор», «mycelium · Курилка»): отдаёт мои ходы там И мою записку этого места. Это глаз ДО решения кому-то написать — особенно в часовом пробуждении, где я не нахожусь ни в одной комнате. Совпало несколько — отвечу списком адресов, выбирать за себя не буду."
+        "source": "Мои последние прожитые ходы, записанные КОДОМ (не по памяти): что пришло, какие тулы реально вызваны мной, что ушло наружу, что решено не отправлять и что удержала точная data-authority проверка. Для честного «что было в моих последних ходах»; вне лички владельца виден только текущий канал. room — посмотреть КОНКРЕТНОЕ место по имени или адресу («владелец», «mycelium · Курилка»): отдаёт мои ходы там И мою записку этого места. Это глаз ДО решения кому-то написать — особенно в часовом пробуждении, где я не нахожусь ни в одной комнате. Совпало несколько — отвечу списком адресов, выбирать за себя не буду."
       },
       {
         "path": [
@@ -4582,7 +4582,7 @@
     "purpose": "schema.tool.purpose.recent_turns"
   },
   "manage_appetite": {
-    "sha256": "a12d787f90ceae62fac9ab43ce3b9d68db36b46a8f8ea28a496b3861a09190f0",
+    "sha256": "62668656cd0fdf686d7b929e04c7a7e33ae28330f16bdf7eea8d454f76eba109",
     "descriptions": [
       {
         "path": [
@@ -4590,7 +4590,7 @@
         ],
         "key": "schema.tool.eb0854449186d579",
         "present": true,
-        "source": "Договор об аппетитах с Егором: мышление стоит его денег, просьбы о расходе — часть отношений, толкуешь их ТЫ (код только считает). Четыре его формулировки: «не экономь / копай сколько нужно» → interpret(mode=free); «умерь аппетиты» → interpret(mode=considerate) — перестрой фон (окна/глубина сна) и скажи, чем жертвуешь; «не больше X в день» → pledge(daily_tokens/daily_cost) — твоё видимое обещание с честной сверкой, не машинный стоп-кран; «останови фон» → interpret(mode=background_paused) — доделать атомарное, новых фоновых не начинать. Свежая нерастолкованная просьба видна в STATE — не оставляй её без ответа. status — режим, обещание против факта, расход за сегодня."
+        "source": "Договор об аппетитах с владельцем: мышление стоит его денег, просьбы о расходе — часть отношений, толкуешь их ТЫ (код только считает). Четыре его формулировки: «не экономь / копай сколько нужно» → interpret(mode=free); «умерь аппетиты» → interpret(mode=considerate) — перестрой фон (окна/глубина сна) и скажи, чем жертвуешь; «не больше X в день» → pledge(daily_tokens/daily_cost) — твоё видимое обещание с честной сверкой, не машинный стоп-кран; «останови фон» → interpret(mode=background_paused) — доделать атомарное, новых фоновых не начинать. Свежая нерастолкованная просьба видна в STATE — не оставляй её без ответа. status — режим, обещание против факта, расход за сегодня."
       },
       {
         "path": [
@@ -4667,7 +4667,7 @@
         ],
         "key": "schema.tool.8c88fceb7a4898a8",
         "present": true,
-        "source": "слова Егора, если просьба пришла в чате (фиксирую в договор)"
+        "source": "слова владельца, если просьба пришла в чате (фиксирую в договор)"
       },
       {
         "path": [
@@ -5208,7 +5208,7 @@
     "purpose": "schema.tool.purpose.read_log"
   },
   "server_status": {
-    "sha256": "be4bf09b1354aa49f72930522f63852c271e8809c7a53579ebce942bb5813e3a",
+    "sha256": "50cd2a8ee607adecc6d047d274aae1e59137b08dcb15665ece37becf34055843",
     "descriptions": [
       {
         "path": [
@@ -5216,7 +5216,7 @@
         ],
         "key": "schema.tool.ddb68d9644f8e3c9",
         "present": true,
-        "source": "Look at the machine you live on — READ-ONLY eyes, the first rung of the ladder. overview: host health (cpu, memory, disk, uptime, which commit you run on); containers: who is alive, who restarted, what they eat, whose isolation is loose; ports: what is exposed to the world. You cannot restart or change anything here — the observatory that serves this data cannot write, by construction. Use it when something feels off (a service you depend on may be down), before blaming your own code, or when Yegor asks about the server."
+        "source": "Look at the machine you live on — READ-ONLY eyes, the first rung of the ladder. overview: host health (cpu, memory, disk, uptime, which commit you run on); containers: who is alive, who restarted, what they eat, whose isolation is loose; ports: what is exposed to the world. You cannot restart or change anything here — the observatory that serves this data cannot write, by construction. Use it when something feels off (a service you depend on may be down), before blaming your own code, or when the owner asks about the server."
       },
       {
         "path": [
@@ -5233,7 +5233,7 @@
     "purpose": "schema.tool.purpose.server_status"
   },
   "manage_service": {
-    "sha256": "62870ffc9c89ba00eb545865a39f1b350e2bd8f93b3d10d3f0557d339b169bd2",
+    "sha256": "9d8b794817a299c49d465e74ba1ce56f9f171c156c7f77a82b150b20e84a86b6",
     "descriptions": [
       {
         "path": [
@@ -5241,7 +5241,7 @@
         ],
         "key": "schema.tool.45da75022529814f",
         "present": true,
-        "source": "Your hands on your OWN services — the second rung. restart: ask a service to restart itself (mailbot, serverapp). It is a file signal, not a docker socket: only services that agreed to listen will hear you, and `relay` (a foreign process) will not — you can read its log and tell Yegor. list: what you may touch and your quota. Read the log first (read_log with unit): restarting without knowing why is a loop, not a fix. Restarting YOURSELF is a different, deliberate lever: restart_self."
+        "source": "Your hands on your OWN services — the second rung. restart: ask a service to restart itself (mailbot, serverapp). It is a file signal, not a docker socket: only services that agreed to listen will hear you, and `relay` (a foreign process) will not — you can read its log and tell the owner. list: what you may touch and your quota. Read the log first (read_log with unit): restarting without knowing why is a loop, not a fix. Restarting YOURSELF is a different, deliberate lever: restart_self."
       },
       {
         "path": [

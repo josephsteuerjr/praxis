@@ -3,14 +3,14 @@ Praxis mailroom — толстый клиент почты: поллинг, хэ
 
 Идея: отделить её «тонкий» дорогой голос от тупой-дешёвой почтовой комнаты. Mailroom
 поллит IMAP (через mailer.fetch), каждому НОВОМУ письму присваивает короткий хэш, хранит
-`memory/mailbox.json`, и шлёт SMTP только по одобрению Егора. Токенов LLM не тратит.
+`memory/mailbox.json`, и шлёт SMTP только по одобрению владельца. Токенов LLM не тратит.
 
 Состояние письма (`status`):
     new       — пришло, ждёт её черновика
-    drafted   — она составила ответ (mail_draft_reply), ждёт approve Егора
-    approved  — Егор одобрил из mini-app/кнопкой → отправитель подхватит и зашлёт
+    drafted   — она составила ответ (mail_draft_reply), ждёт approve владельца
+    approved  — владелец одобрил из mini-app/кнопкой → отправитель подхватит и зашлёт
     sent      — отправлено по SMTP
-    rejected  — Егор отклонил черновик
+    rejected  — владелец отклонил черновик
 
 Её тонкие тулы (в agent.py): `mail_read(hash)` — тело письма по хэшу (только то, что он дал);
 `mail_draft_reply(hash, body)` — ставит черновик (status=drafted). НЕ отправляет — это делает
@@ -139,7 +139,7 @@ def get(h: str) -> dict | None:
 
 
 def set_draft(h: str, body: str) -> bool:
-    """Её черновик ответа: status -> drafted, ждёт approve Егора."""
+    """Её черновик ответа: status -> drafted, ждёт approve владельца."""
     h = (h or "").strip().lower()
     box = _load()
     e = box.get(h)
@@ -165,7 +165,7 @@ def set_status(h: str, status: str) -> bool:
 
 
 def approve(h: str) -> bool:
-    """Approve Егора из mini-app/кнопкой: drafted -> approved (отправитель подхватит)."""
+    """Approve владельца из mini-app/кнопкой: drafted -> approved (отправитель подхватит)."""
     e = get(h)
     if not e or e.get("status") != "drafted" or not (e.get("draft") or "").strip():
         return False

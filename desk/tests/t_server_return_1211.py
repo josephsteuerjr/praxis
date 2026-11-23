@@ -70,7 +70,7 @@ class Scenario:
         # After the move the window watches the server copy (remote mode).
         write(self.config, json.dumps({'mode': 'remote', 'base': 'https://agent.example', 'key': 'window-key',
                                        'server_locator': 'telegram-menu', 'tree': str(self.data), 'code': 'tree',
-                                       'app': 'app/deskapp.py', 'port': 8094, 'agent': {'name': 'Jarvis'},
+                                       'app': 'app/deskapp.py', 'port': 8094, 'agent': {'name': 'Atlas'},
                                        'model': {'model': 'sol'}, 'phone': {'enabled': True}}))
         self.row = {'id': '0' * 24, 'archive': str(self.forward), 'archive_sha': 'ab' * 32, 'phase': 'ready',
                     'destination': ['203.0.113.5', 22, 'root'], 'fingerprint': 'SHA256:pinned',
@@ -120,7 +120,7 @@ class Scenario:
             write(data / 'workspace/side/dirty.txt', 'untracked in worktree\n')
         write(install / 'helene.json', json.dumps({'mode': 'local', 'tree': 'data', 'code': 'tree',
                                                    'app': 'app/deskapp.py', 'port': 8094,
-                                                   'agent': {'name': 'Jarvis'}, 'model': {'model': 'astra-switched'},
+                                                   'agent': {'name': 'Atlas'}, 'model': {'model': 'astra-switched'},
                                                    'sandbox': {'mounts': [str(shared)]}}))
         mark = {'id': self.row['id'], 'archive_sha': self.row['archive_sha']}
         write(install / '.window-transfer.json', json.dumps(mark))
@@ -297,7 +297,7 @@ class LocalActivation(unittest.TestCase):
         write(server / 'data/memory/learned.md', 'learned on the server\n')
         write(server / 'data/workspace/notes/one.md', 'note\n')
         link(server / 'data/workspace/latest', server / 'data/workspace/notes')
-        self.config_on_server = {'agent': {'name': 'Jarvis'}, 'model': {'model': 'astra-switched'}, 'tree': 'data'}
+        self.config_on_server = {'agent': {'name': 'Atlas'}, 'model': {'model': 'astra-switched'}, 'tree': 'data'}
         archive = Path(temp.name) / 'built.zip'
         self.receipt = carry_payload.create(archive, {'data': server / 'data', 'code': server / 'code',
                                                       'app': server / 'app', 'base': server / 'base'},

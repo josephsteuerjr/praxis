@@ -15,6 +15,8 @@ room-profile может явно включить engagement=reflective: тог�
 Перед запуском нужен логин: python mtproto_login.py (см. README).
 """
 from __future__ import annotations
+from room_identity import root_chat_id as configured_root_chat_id
+
 import asyncio, concurrent.futures, contextvars, datetime, functools, hashlib, inspect, json, logging, mimetypes, os, re, tempfile, threading, time, types
 from collections import defaultdict, deque
 from contextvars import ContextVar
@@ -953,13 +955,13 @@ async def _buf_push_admitted(chat_id: str, line: str, *, record_life=True, **kwa
 
 def _group_native_persistence_enabled(chat_id: str) -> bool:
     """Select split native persistence only for the fully ready exact canary pair."""
-    if str(chat_id) != '-1001240718803':
+    if str(chat_id) != configured_root_chat_id():
         return False
     try:
         import keat_readiness
         import keat_runtime
         return bool(
-            keat_runtime.staged('group', '-1001240718803') and
+            keat_runtime.staged('group', configured_root_chat_id()) and
             keat_readiness.receipt()['serve_ready'])
     except Exception:
         return False
@@ -1005,7 +1007,7 @@ def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
                 logical_send=dict(id=batch_id, index=index, count=len(chunks)),
                 root_chat_id=(chat_id if not is_dm else None),
                 principal_id=(_self_id if not is_dm else None),
-                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
+                ordinary_root=(not is_dm and str(chat_id) == configured_root_chat_id()))
 
 
 async def _persist_sent_reply_admitted(chat_id, chunks, message_ids, *, is_dm):
@@ -1026,7 +1028,7 @@ async def _persist_sent_reply_admitted(chat_id, chunks, message_ids, *, is_dm):
                 logical_send=dict(id=batch_id, index=index, count=len(chunks)),
                 root_chat_id=(chat_id if not is_dm else None),
                 principal_id=(_self_id if not is_dm else None),
-                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
+                ordinary_root=(not is_dm and str(chat_id) == configured_root_chat_id()))
             if not ok:
                 log.error("Accepted outbound chunk remains an archive/run residual [%s] #%s",
                           chat_id, mid)
@@ -1487,7 +1489,7 @@ def _dm_allowed(sender_id, *, family: bool) -> bool:
     ⚠ ЗНАКОМЫЕ НЕ ПРОХОДЯТ, и это названо, а не подразумевается: под `whitelist`
     отвечает она владельцу, семье и тем, кто назван по id. Человек из её досье, но
     не из семьи и не из списка, ответа не получит — его сообщение будет записано, а
-    ход не родится. Решение Егора 12.09: рычаг есть, умолчание — open.
+    ход не родится. Решение владельца 12.09: рычаг есть, умолчание — open.
     """
     if _dm_policy() == "open":
         return True
@@ -2207,7 +2209,7 @@ def _note_address_overwritten(chat_id: str, old: GroupWake, new: GroupWake) -> N
     Пробуждение на комнату одно. Пока держится кулдаун, второе обращение перезаписывает
     первое, и проход пойдёт по последнему. Сообщение остаётся в контексте комнаты, но
     перестаёт быть обращением: вместе с ним уходят `speaker`, `kind` и `owner` — то есть
-    обращение Егора, вытесненное чужим, идёт в проход БЕЗ его полномочий.
+    обращение владельца, вытесненное чужим, идёт в проход БЕЗ его полномочий.
 
     Здесь ничего не чинится, только считается. Какой ход правильный, когда двое обратились
     подряд, — вопрос не механический; чинить его вслепую значит выбрать за неё. Сколько это
@@ -2631,13 +2633,13 @@ async def on_edited(event, *, _admission_completion=None) -> None:
         # authority for one occurrence: at the enrolled root it instead means
         # the entire coordinate space must fail closed.
         if type(mid) is not int or mid <= 0:
-            if peer_id == '-1001240718803':
+            if str(peer_id) == configured_root_chat_id():
                 import keat_live
                 await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
             return
         message_id = mid
     except (TypeError, ValueError, OverflowError):
-        if peer_id == '-1001240718803':
+        if str(peer_id) == configured_root_chat_id():
             import keat_live
             await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
         return
@@ -2646,7 +2648,7 @@ async def on_edited(event, *, _admission_completion=None) -> None:
     # immutable native occurrence. In particular, edit_date is not authority to
     # keep old bytes alive: some edit update shapes omit it, and such an update
     # must fail closed for KEAT while retaining the legacy handler's old no-op.
-    if peer_id == '-1001240718803':
+    if str(peer_id) == configured_root_chat_id():
         import keat_live
         await asyncio.to_thread(keat_live.invalidate_native, peer_id, message_id)
 
@@ -3136,7 +3138,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
     ⚑ ЗАЧЕМ ЭТА ФУНКЦИЯ ВООБЩЕ ПОЯВИЛАСЬ.
     `route_for_message` умеет главное с 25.07: `is_forum is False` → обычная супергруппа
     это ОДНА комната, и цепочка ответов не становится ключом хранения. Там же записан
-    живой случай ровно из этой комнаты: «observed 23.07.2026 in -1001240718803: „у меня в
+    живой случай ровно из этой комнаты: «observed 23.07.2026 in -100999999999999999: „у меня в
     топик попал только твой ответ, без сообщения #93708"».
 
     Но знание в эту функцию не доезжало. Раннер копил свидетельства о природе комнаты в
@@ -3147,7 +3149,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
 
     Цена этого разрыва, живьём 16.08: лента комнаты в кадре была ПОЛНОЙ (53 упоминания
     Арета, 47 корневых строк, 182 тредовых), а адрес хода говорил
-    `origin_chat_id: "-1001240718803__topic__98994"` — псевдоветка из одного сообщения.
+    `origin_chat_id: "-100999999999999999__topic__98994"` — псевдоветка из одного сообщения.
     Она ответила про ветку и сказала «контекста до этого сообщения в ветке нет»: для
     ветки это правда, для комнаты — нет.
 
@@ -3948,7 +3950,7 @@ async def on_new(event) -> None:
               name=buffer_name,
               source_id=mid, ts=message_ts,
               capture_live=(not bool(media or ref) and
-                            (is_private or (peer_id == '-1001240718803' and
+                            (is_private or (str(peer_id) == configured_root_chat_id() and
                              chat_id == peer_id and room_nature is False and
                              keat_group_principal is not None))),
               root_chat_id=(peer_id if not is_private else None),
@@ -4706,8 +4708,8 @@ def _outbox_run_call(entry: dict) -> tuple[str, str]:
 def _announce_direct_outbox_dead_letter(entry: dict, error: BaseException | str) -> None:
     """Мёртвая запись очереди обязана родить расписку, а не только строку WARNING.
 
-    ⚠ 17.08, живой инцидент: реплика ей в личку Егора умерла dead_letter'ом через
-    2,5 часа ретраев — ни записки владельцу, ни следа в прогоне. Егор узнал об отказе
+    ⚠ 17.08, живой инцидент: реплика ей в личку владельца умерла dead_letter'ом через
+    2,5 часа ретраев — ни записки владельцу, ни следа в прогоне. владелец узнал об отказе
     по часу тишины, а RECAP прогона продолжал говорить Delivery `sent`. Слово не
     имеет права исчезать беззвучно: текст сохраняется распиской владельцу (тот же
     механизм, что у постоянного отказа Telegram в run_delivery_failed), а прогон
@@ -4817,7 +4819,7 @@ def _run_is_settled(run_id: str) -> bool:
 def _run_cancel_requested(run_id: str) -> bool:
     """Владелец попросил отмену — висящие отправки этого прогона не имеют будущего.
 
-    ⚠ 21.09, живой инцидент из записки «почему архивы уходили» (20.09). В 16:46 Егор
+    ⚠ 21.09, живой инцидент из записки «почему архивы уходили» (20.09). В 16:46 владелец
     нажал «прервать» в Пульте; `request_cancel` честно не терминализовал прогон с
     незакрытым вызовом, а единственный способ узнать исход висящего send-намерения
     машинерия знала один — ИСПОЛНИТЬ его. В 19:24:14 файл дошёл (message_id 4444),
@@ -4920,7 +4922,7 @@ async def _announce_late_acceptance(entry: dict) -> None:
     ⚠ 21.09, из записки «почему архивы уходили» (20.09). Крупные отправки валились по
     потолку ожидания, ход уходил в paused/in_doubt, считая файл НЕ ушедшим, — а повтор
     доводил его до приёмки. Квитанция file_ready улетала в owner_delivery с
-    transports=("pwa",) — то есть Егору в Пульт; ей не возвращалось ничего: тул-результат
+    transports=("pwa",) — то есть владельцу в Пульт; ей не возвращалось ничего: тул-результат
     модели не доезжал (ход мёртв), в журнал и буфер не попадало ни строки. Она честно
     отвечала «ничего не отправляю», пока файлы приезжали. Эта строка — возврат знания
     тому, кто отправлял: файл ушёл, ход считал его упавшим. Только для записей рук
@@ -5719,7 +5721,7 @@ async def _run_pass(chat_id: str) -> None:
             reply_targets=reply_targets,  # 15: карта адресных ответов на момент триггера
             envelope=_envelope,           # пункт 4: теневой замер, никем не читается
             telegram_root_group=bool(not is_dm and route.topic_id is None and
-                                     route.peer_id == '-1001240718803' and
+                                     route.str(peer_id) == configured_root_chat_id() and
                                      chat_id == route.peer_id and
                                      meta.get('room_nature') is False),
         )
@@ -6814,8 +6816,8 @@ async def _resolve_entity(ref):
         # Кандидаты строятся ОДИН раз, числом вперёд и без дублей.
         # Числовая СТРОКА, отданная Telethon как есть, до всякого поиска чата уходит в
         # `utils.parse_phone` — и там она НОМЕР ТЕЛЕФОНА. Проверено на прод-интерпретаторе
-        # 26.07: parse_phone('-100500') -> '100500', parse_phone('-1001240718803') ->
-        # '1001240718803'. Дальше `_get_entity_from_string` делает
+        # 26.07: parse_phone('-100500') -> '100500', parse_phone(configured_root_chat_id()) ->
+        # '100999999999999999'. Дальше `_get_entity_from_string` делает
         # `contacts.GetContactsRequest(0)` — ПОЛНУЮ выгрузку адресной книги, и так на
         # каждый промах. Хуже: `for cand in (ref, ref_s)` при уже-строковом `ref` давал
         # два одинаковых кандидата, то есть две выгрузки за вызов; третий заход
@@ -7031,8 +7033,8 @@ def _telegram_account_gate() -> str | None:
 def _telegram_account_principal(value: object = None) -> str | None:
     """Чья расписка ляжет под операцию на аккаунте.
 
-    ⚠ Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил.
-    Прежде здесь проходили только Егор и её фоновый ход, поэтому стоило человеку
+    ⚠ Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил.
+    Прежде здесь проходили только владелец и её фоновый ход, поэтому стоило человеку
     заговорить — и её собственный аккаунт становился для неё закрыт. Пропуск даёт
     `_telegram_account_gate` (он и есть решение о праве); здесь остаётся честная
     подпись: действие принадлежит ей, а не собеседнику.
@@ -8065,9 +8067,9 @@ def _sync_followups(action: str = "list", followup_id: str = "",
         item = telegram_followups.LEDGER.set_notice(followup_id, on, source="praxis")
         if item is None:
             return f"Не нашла живую нить {followup_id}."
-        return (f"Отчёт Егору по {followup_id} " + (
+        return (f"Отчёт владельцу по {followup_id} " + (
             "включила — когда ответят, ему уйдёт письмо; возрастной срок с нити снят."
-            if on else "выключила — нить остаётся моим следом, Егору не уйдёт."))
+            if on else "выключила — нить остаётся моим следом, владельцу не уйдёт."))
     return "action должен быть list | watch | unwatch | cancel."
 
 
@@ -8208,7 +8210,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
                 # «кому я писала», чтобы строка процесса не вытесняла письмо человеку.
                 purpose=str(entry.get("purpose") or ""),
             )
-            log.info("FOLLOW-UP %s: слежу за нитью %s message_id=%s (отчёт Егору: %s)",
+            log.info("FOLLOW-UP %s: слежу за нитью %s message_id=%s (отчёт владельцу: %s)",
                      item.get("id"), projection.get("target_label") or peer_id, message_id,
                      "заказан им словами" if item.get("notify_owner")
                      else "нет — это мой след")
@@ -8303,7 +8305,7 @@ def _durable_outbox_projection(execution: dict, live: dict) -> dict:
     заходе:
 
       * ``pulse_id`` берётся из ContextVar социального пульса — у resume-исполнителя он пуст;
-      * ``followup_request`` собирается из ЖИВОГО буфера Егора — а буфер за секунды другой;
+      * ``followup_request`` собирается из ЖИВОГО буфера владельца — а буфер за секунды другой;
       * ``target_label`` / ``target_user_id`` — из живого резолва.
 
     Итог 23.07 (`run-…-ac7b7431`): пауза `_DIRECT_OUTBOX_PAUSE` попадает в
@@ -8426,7 +8428,7 @@ def _frozen_refusal(peer_id, who: str) -> str | None:
 
     Заморозка резала только входящие («сообщения оттуда до меня не доходят»), а исходящие
     шли как ни в чём не бывало: 25.09 статусы по LRX уезжали в личку 412244782, которую
-    Егор заморозил. Замороженный чат — это чат, с которым она не разговаривает, в обе
+    владелец заморозил. Замороженный чат — это чат, с которым она не разговаривает, в обе
     стороны; осознанно написать туда можно после `freeze_chat(on=false)`.
     """
     try:
@@ -8645,7 +8647,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
     ходе различимы, а обрыв между отправкой и чекпойнтом переигрывается из расписки, а не
     вторым сообщением человеку. Учёт же разведён внутри одного проектора: ответу не
     полагаются ни леджер контактов, ни социальный пульс, ни след нити с отчётом — они
-    описывают инициативу, а не реплику. Решение Егора 15.08: «ни ограничений, ни пульса».
+    описывают инициативу, а не реплику. Решение владельца 15.08: «ни ограничений, ни пульса».
 
     Гард здесь НЕ зовётся намеренно: его уже позвала рука, вместе с лентой разговора и
     ориентировкой. Кред-пол всё равно стоит — этот путь durable и однажды будет вызван не
@@ -8751,7 +8753,7 @@ def _file_send_budget_sec(entry: dict) -> float:
     меньше времени заливки куска в 150 МБ (замер того дня — приёмка приходила через 4–4,5
     минуты). Значит КАЖДАЯ крупная отправка возвращала ей «Не отправился: TimeoutError»,
     ход вставал в `paused`, а файл всё равно доезжал — позже, повтором, мимо её памяти.
-    Так Егор после своего «хватит» получил все девять частей бэкапа, а она записала себе,
+    Так владелец после своего «хватит» получил все девять частей бэкапа, а она записала себе,
     что отправку прекратила. Бюджет считаем по размеру вложения (наблюдаемые ~600 КБ/с с
     запасом), но не больше потолка руки: дольше него ждать всё равно некому.
     """
@@ -8839,7 +8841,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
                     f"механический кред-пол увидел похожее на секрет ({_floor}). "
                     f"Креды не уходят наружу — это единственный твёрдый предел. "
                     f"Если это ложное срабатывание на инженерном материале — очисти "
-                    f"файл от токен-подобных строк или отправь мне (Егору) в личку.")
+                    f"файл от токен-подобных строк или отправь мне (владельцу) в личку.")
     mime = (media_core.sniff_mime(path)
             or mimetypes.guess_type(str(path))[0]
             or "application/octet-stream")
@@ -9248,7 +9250,7 @@ async def _consolidate_once() -> None:
     ещё так?» про характер — всё это ПЕРЕПИСЫВАЕТ то, из чего она в этот же миг может
     думать. В main() записан инвариант «мозг работает только под этим замком, кроме
     Forge», и здесь его не было: любой живой ход в четыре утра шёл поверх переписываемой
-    памяти — ночной вопрос Егора, намеченное на ночь окно (планировщик окном сна не
+    памяти — ночной вопрос владельца, намеченное на ночь окно (планировщик окном сна не
     ограничен), пробуждение по её будильнику, доставка forge-события, durable-resume.
     Способов было много и до будильника; будильник добавил ещё один.
 
@@ -9347,7 +9349,7 @@ async def _absence_once() -> None:
             await asyncio.to_thread(
                 lambda: perception.note_skip(
                     "one_mind_absence", "мой_ритм",
-                    detail="кому-то стоило ответить в отсутствие Егора, но я занята "
+                    detail="кому-то стоило ответить в отсутствие владельца, но я занята "
                            "живым ходом — вернусь на следующем тике"))
         except Exception:
             log.debug("skip отложенного отсутствия не записался", exc_info=True)
@@ -9420,7 +9422,7 @@ async def _selfdev_reconcile_once() -> None:
 
 async def _immune_once() -> None:
     """PASS 9.2: ревью вдогонку её живых самокоммитов (очередь наполняют call-sites selfgit).
-    Модель зовётся только когда очередь непуста; вердикты — в журнал, red — карточка Егору."""
+    Модель зовётся только когда очередь непуста; вердикты — в журнал, red — карточка владельцу."""
     import immune
     n = await asyncio.to_thread(immune.process_queue)
     if n:
@@ -10902,7 +10904,7 @@ async def _run_moderation_event_pass() -> None:
                 # как хедж, мешающий ей действовать.
                 goal = ("Сработал триггер спама в AbstractDL — ты там модератор, и рука "
                         "меры у тебя есть.\n"
-                        "Умолчание задано Егором 27.08, дословно: «в случае отсутствия "
+                        "Умолчание задано владельцем 27.08, дословно: «в случае отсутствия "
                         "признаков намеренной провокации быстро удалить комментарий и "
                         "забанить участника».\n"
                         "Значит: нет признаков намеренной провокации или осмысленного "

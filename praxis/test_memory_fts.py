@@ -35,7 +35,7 @@ class MemoryFtsTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_runs_are_not_canon_by_default(self):
-        """12.09 (решение Егора): прогоны не индексируются, пока PRAXIS_INDEX_RUNS не поднят.
+        """12.09 (решение владельца): прогоны не индексируются, пока PRAXIS_INDEX_RUNS не поднят.
 
         Положительный контроль: с рычагом тот же источник виден, без него — нет.
         """

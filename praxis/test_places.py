@@ -19,8 +19,8 @@ from pathlib import Path
 import group_context
 import telegram_routes as tr
 
-ROOM = "-1001240718803"      # обычная супергруппа
-FORUM = "-1004301095307"     # настоящий форум
+ROOM = "-100999999999999999"      # обычная супергруппа
+FORUM = "-100888888888888888"     # настоящий форум
 
 
 class Base(unittest.TestCase):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Значки Hélène и реле (выбор Егора 28.09: оба «А») — из render.html в файлы поставки.
+"""Значки Hélène и реле (выбор владельца 28.09: оба «А») — из render.html в файлы поставки.
 
     python window-lab/icons/icons.py
 

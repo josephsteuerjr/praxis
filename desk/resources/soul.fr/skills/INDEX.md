@@ -14,8 +14,6 @@ Le premier jour, first-day et write-your-skills sont utiles.
 
 | Adresse | Objet |
 |---|---|
-| [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) | Exemple de projet : classer le jargon architectural AbstractDL |
-| [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) | Exemple de projet : modération AbstractDL par MTProto |
 | [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) | Éviter les contrôles autonomes répétés sur des indices périmés |
 | [anti-repeat-before-speaking](anti-repeat-before-speaking.md) | Vérifier avant de répéter une réponse |
 | [artifact-revision-diff-check](artifact-revision-diff-check.md) | Comparer les révisions d’un livrable avant remise |

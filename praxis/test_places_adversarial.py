@@ -28,8 +28,8 @@ import group_context
 import memory_life as ml
 import telegram_routes as tr
 
-ROOM = "-1001240718803"
-FORUM = "-1004301095307"
+ROOM = "-100999999999999999"
+FORUM = "-100888888888888888"
 
 
 class Base(unittest.TestCase):
