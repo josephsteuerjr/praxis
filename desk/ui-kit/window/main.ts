@@ -447,6 +447,12 @@ export function start(opts: WindowOptions): void {
     document.documentElement.classList.add("native", "electron");
     for (const b of document.querySelectorAll<HTMLButtonElement>(".win")) {
       const action = b.dataset.win as "minimize" | "maximize" | "close";
+      if (action === "close" && bridge.minimizeOnClose) {
+        b.dataset.i18nAriaLabel = "shell.minimize";
+        b.setAttribute("aria-label", uiText("shell.minimize"));
+        b.title = uiText("shell.minimize");
+        b.dataset.i18nTitle = "shell.minimize";
+      }
       b.addEventListener("click", () => bridge.win(action));
     }
     // The frameless pywebview window has no native resize border on Windows/Linux.

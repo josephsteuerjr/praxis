@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import sys,unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness.linux_desktop import configure
@@ -20,20 +20,17 @@ class Desktop(unittest.TestCase):
   env={};configure(env,virtual=False)
   self.assertNotIn('QT_QPA_PLATFORM',env)
   self.assertNotIn('QTWEBENGINE_CHROMIUM_FLAGS',env)
- def fixture(self,**changes):
-  return SimpleNamespace(host=object(),tray=None,exiting=False,relaunch=False,exit_session=False,session_exit_intent=False,**changes)
- def test_linux_close_without_tray_owns_session_exit(self):
-  app=self.fixture()
-  with patch.object(sys,'platform','linux'):python_app.close_without_tray(app)
-  self.assertTrue(app.exiting and app.exit_session and app.session_exit_intent)
- def test_observer_exit_relaunch_and_other_platform_do_not_acquire_exit(self):
-  for change in ({'exiting':True},{'relaunch':True},{'tray':object()},{'host':None}):
-   app=self.fixture()
-   for key,value in change.items():setattr(app,key,value)
-   with patch.object(sys,'platform','linux'):python_app.close_without_tray(app)
-   self.assertFalse(app.exit_session)
-  app=self.fixture()
-  with patch.object(sys,'platform','darwin'):python_app.close_without_tray(app)
-  self.assertFalse(app.exit_session)
+ def test_linux_window_manager_close_minimizes_and_vetoes_destruction(self):
+  app=SimpleNamespace(window=Mock(),host=object(),exiting=False,relaunch=False)
+  self.assertIs(python_app.linux_window_closing(app),False)
+  app.window.minimize.assert_called_once_with()
+  self.assertFalse(app.exiting)
+
+ def test_exit_relaunch_and_setup_can_close_the_window(self):
+  for change in ({'exiting':True},{'relaunch':True},{'host':None}):
+   with self.subTest(change=change):
+    app=SimpleNamespace(**({'window':Mock(),'host':object(),'exiting':False,'relaunch':False}|change))
+    self.assertIs(python_app.linux_window_closing(app),True)
+    app.window.minimize.assert_not_called()
 
 if __name__=='__main__':unittest.main()

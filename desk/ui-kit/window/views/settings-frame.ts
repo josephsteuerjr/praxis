@@ -825,6 +825,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }),
     logsRow,
   );
+  if (electron?.minimizeOnClose) {
+    const quit = button(uiText("ui.app.src.tray.776fccddab"), "quiet", () => {
+      void shell("python_window", { action: "exit" }).catch(e => toast(humanError(e).text));
+    });
+    quit.dataset.action = "quit-application";
+    about.append(quit);
+  }
   center.append(inGroup(card(uiText("ui.ui.kit.window.views.settings.frame.254f667d9a"), about), GROUP.app));
 
   // --- сохранить

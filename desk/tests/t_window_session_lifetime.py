@@ -9,9 +9,7 @@ import python_app
 
 class WindowSessionLifetime(unittest.TestCase):
     def test_observer_close_detaches_but_explicit_exit_shuts_down(self):
-        # Linux's last view has no background tray: its close is Exit. A real
-        # tray observer still detaches, as do observer-only/relaunch exits.
-        for action, expected, tray in ((None,False,None),({'action':'close'},sys.platform.startswith('linux'),None),({'action':'close'},False,Mock()),({'action':'exit'},True,None),({'action':'exit','observer_only':True},False,None)):
+        for action, expected, tray in ((None,False,None),({'action':'close'},False,None),({'action':'close'},False,Mock()),({'action':'exit'},True,None),({'action':'exit','observer_only':True},False,None)):
             with self.subTest(action=action), tempfile.TemporaryDirectory() as d:
                 root=Path(d);app=python_app.Application(root,root)
                 app.host=Mock();app.tray=tray;app.serve()
