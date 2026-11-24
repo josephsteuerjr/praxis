@@ -4378,7 +4378,7 @@
   "connections.tray_alive": "Tray Bridge 已响应，可以通过 HTTPS。",
   "connections.tray_absent": "但目前 127.0.0.1:8888 上没有任何程序在监听：请启动 Tray Bridge，或在下方设置服务器桥接。",
   "connections.tray_not_proxy": "127.0.0.1:8888 上有程序响应，但 HTTPS 无法通过。请检查 Tray Bridge。",
-  "network.intro": "Telegram 和 ChatGPT 中继各自通过自己的路线访问互联网。先添加代理来源，再选择谁通过它连接。",
+  "network.intro": "分别选择 Telegram、ChatGPT 中继和网页搜索的连接。网页搜索默认直连。",
   "network.sources.title": "① 代理来自哪里",
   "network.sources.external": "代理由 Tray Bridge 或 VPN 等外部程序提供？那就不需要桥接：在下方选择“自定义代理”。",
   "network.routes.title": "② 谁通过它连接",
@@ -4416,5 +4416,7 @@
   "server.return.resume": "启动已返回的智能体",
   "server.return.resumed": "已返回的智能体已启动。",
   "server.return.nested_data": "代码目录 {path} 包含智能体的数据或配置。请选择独立的代码目录。",
-  "server.return.invalid_receipt": "无法确认所选智能体已返回。"
+  "server.return.invalid_receipt": "无法确认所选智能体已返回。",
+  "route.web.title": "网页搜索与阅读",
+  "route.web.application": "使用 Telegram 和迷你应用的连接"
 }

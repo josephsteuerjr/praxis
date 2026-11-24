@@ -636,11 +636,23 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   // them into networkSources); Telegram and the relay each choose a route.
   const networkSettings = el('div');
   const networkSources = el('div', 'network-sources');
+  const webRoute = choice([
+    {value: "direct", title: uiText("route.direct")},
+    {value: "system", title: uiText("route.system")},
+    {value: "application", title: uiText("route.web.application")},
+  ], String(draft.network?.web_route || "direct"), () => {
+    networkSettings.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const webTitle = uiText("route.web.title");
+  webRoute.el.setAttribute("aria-label", webTitle);
+  const webSection = el("section", "network-route");
+  webSection.append(el("h4", "", webTitle), webRoute.el);
+
   networkSettings.append(el('p', 'field-hint', uiText('network.intro')),
     el('h4', 'network-step', uiText('network.sources.title')), networkSources,
     el('p', 'field-hint', uiText('network.sources.external')),
     el('h4', 'network-step', uiText('network.routes.title')),
-    applicationConnection.element, relayConnection.element);
+    applicationConnection.element, relayConnection.element, webSection);
   const loadSources = () => {
     if (!networkSettings.isConnected && sourcesLoaded) {
       document.removeEventListener('helene-bridges-changed', loadSources);
@@ -898,6 +910,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         out.relay = keepBlock(out.relay, { proxy: relayConnection.collect(), executable: relayExecutable.trim() || undefined });
         if (relayConnection.bridge()) out.relay.bridge_profile = relayConnection.bridge();
         else delete out.relay.bridge_profile;
+        if (draft.network?.web_route || webRoute.value() !== "direct")
+          out.network = keepBlock(out.network, { web_route: webRoute.value() });
         const networkError = applicationConnection.error();
         if (networkError) return networkError;
         const networkDraft = applicationConnection.collect();

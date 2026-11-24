@@ -4378,7 +4378,7 @@
   "connections.tray_alive": "Tray Bridge отвечает и пропускает HTTPS.",
   "connections.tray_absent": "Но на 127.0.0.1:8888 сейчас никто не слушает: запусти Tray Bridge или настрой серверный мост ниже.",
   "connections.tray_not_proxy": "На 127.0.0.1:8888 что-то отвечает, но HTTPS через него не прошёл. Проверь Tray Bridge.",
-  "network.intro": "Telegram и реле ChatGPT выходят в интернет каждый своим маршрутом. Сначала заведи источник прокси, потом выбери, кто через него ходит.",
+  "network.intro": "Выбери подключение отдельно для Telegram, реле ChatGPT и веб-поиска. Веб-поиск по умолчанию работает напрямую.",
   "network.sources.title": "① Откуда прокси",
   "network.sources.external": "Прокси даёт внешняя программа — Tray Bridge или VPN? Тогда мост не нужен: ниже выбери «Свой прокси».",
   "network.routes.title": "② Кто через него ходит",
@@ -4416,5 +4416,7 @@
   "server.return.resume": "Запустить вернувшегося агента",
   "server.return.resumed": "Вернувшийся агент запущен.",
   "server.return.nested_data": "В папке кода {path} находятся настройки или данные агента. Выбери отдельную папку кода.",
-  "server.return.invalid_receipt": "Не удалось подтвердить возврат выбранного агента."
+  "server.return.invalid_receipt": "Не удалось подтвердить возврат выбранного агента.",
+  "route.web.title": "Веб-поиск и чтение страниц",
+  "route.web.application": "По маршруту Telegram и Mini App"
 }

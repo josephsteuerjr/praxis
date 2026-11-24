@@ -21895,9 +21895,9 @@
     "zh": "d32ea64d"
   },
   "network.intro": {
-    "en": "059dc785",
-    "fr": "059dc785",
-    "zh": "059dc785"
+    "en": "1366fa67",
+    "fr": "1366fa67",
+    "zh": "1366fa67"
   },
   "network.sources.title": {
     "en": "0d98724e",
@@ -22088,5 +22088,15 @@
     "en": "223fd6ed",
     "fr": "223fd6ed",
     "zh": "223fd6ed"
+  },
+  "route.web.title": {
+    "en": "bb6973fc",
+    "fr": "bb6973fc",
+    "zh": "bb6973fc"
+  },
+  "route.web.application": {
+    "en": "b92b3db2",
+    "fr": "b92b3db2",
+    "zh": "b92b3db2"
   }
 }

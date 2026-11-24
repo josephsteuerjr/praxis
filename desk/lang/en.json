@@ -4378,7 +4378,7 @@
   "connections.tray_alive": "Tray Bridge answers and passes HTTPS.",
   "connections.tray_absent": "But nothing listens on 127.0.0.1:8888 right now: start Tray Bridge or set up the server bridge below.",
   "connections.tray_not_proxy": "Something answers on 127.0.0.1:8888, but HTTPS did not get through it. Check Tray Bridge.",
-  "network.intro": "Telegram and the ChatGPT relay each reach the internet by their own route. First add a proxy source, then choose who goes through it.",
+  "network.intro": "Choose a connection for Telegram, the ChatGPT relay and web search separately. Web search connects directly by default.",
   "network.sources.title": "① Where the proxy comes from",
   "network.sources.external": "Does an external program such as Tray Bridge or a VPN provide the proxy? Then no bridge is needed: choose «Custom proxy» below.",
   "network.routes.title": "② Who goes through it",
@@ -4416,5 +4416,7 @@
   "server.return.resume": "Start the returned agent",
   "server.return.resumed": "The returned agent has started.",
   "server.return.nested_data": "The code folder {path} contains agent data or settings. Choose a separate code folder.",
-  "server.return.invalid_receipt": "Could not verify the return of the selected agent."
+  "server.return.invalid_receipt": "Could not verify the return of the selected agent.",
+  "route.web.title": "Web search and page reading",
+  "route.web.application": "Use the Telegram and Mini App route"
 }
