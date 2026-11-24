@@ -135,6 +135,14 @@ class Create(unittest.TestCase):
         self.assertEqual((made.dir / cfg["app"]).resolve(),
                          (self.root / "app" / "deskapp.py").resolve())
 
+    def test_new_agent_does_not_inherit_another_profiles_return_hold(self):
+        cfg = agents.read_config(self.root / 'helene.json')
+        cfg['return_pending'] = 'original-transfer'
+        agents._write_config(self.root / 'helene.json', cfg)
+        peer = agents.create(self.root, 'Peer')
+        self.assertNotIn('return_pending', agents.read_config(peer.config))
+        self.assertEqual(agents.read_config(self.root / 'helene.json')['return_pending'], 'original-transfer')
+
     def test_brain_is_inherited_and_the_bot_is_not(self):
         cfg = agents.read_config(agents.create(self.root, "Мира").config)
         self.assertEqual(cfg["model"]["key"], "sk-live")          # мозг настроен один раз

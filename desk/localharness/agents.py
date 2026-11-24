@@ -278,7 +278,7 @@ def free_port(taken: set[int], wanted: int) -> int:
 #: монтирования, ручки среды — копируется: владелец уже настроил это один раз.
 _NOT_INHERITED = {
     "agent", "tree", "port", "telegram", "enabled", "setup_complete",
-    "service", "update", "phone", "computer", "relay", "owner", "notifications",
+    "service", "update", "phone", "computer", "relay", "owner", "notifications", "return_pending",
 }
 
 

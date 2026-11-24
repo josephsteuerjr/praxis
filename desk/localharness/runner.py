@@ -26,7 +26,6 @@
 Дерево данных — из PRAXIS_DESK_TREE (кладёт оболочка) или из `tree` конфига.
 """
 from __future__ import annotations
-from localharness import machine_words
 
 import argparse
 import contextlib
@@ -41,9 +40,10 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from localharness import product_notices
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Desktop and server supervisors launch this file directly, from the profile directory.
+_harness_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_harness_dir), str(_harness_dir.parent)]
+from localharness import machine_words, product_notices
 import body
 import boot
 import botapi

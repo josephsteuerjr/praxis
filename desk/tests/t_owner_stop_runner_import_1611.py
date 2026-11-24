@@ -1,6 +1,7 @@
 """The runner's bare owner_stop import must retain the packaged Windows latch."""
 from pathlib import Path
 import importlib.util
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -14,6 +15,13 @@ from localharness import first_start,owner_stop
 
 
 class RunnerOwnerStopImport(unittest.TestCase):
+    def test_script_entry_resolves_its_package_without_an_ambient_pythonpath(self):
+        with tempfile.TemporaryDirectory() as profile:
+            result = subprocess.run([sys.executable, '-I', '-B', str(DESK/'localharness/runner.py'), '--help'],
+                                    cwd=profile, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        self.assertIn(b'--config', result.stdout)
+
     def check_latch(self,module):
         with tempfile.TemporaryDirectory() as directory:
             data=Path(directory)/'Helene/data'
