@@ -11,10 +11,12 @@ import contextvars
 import datetime as dt
 import json
 import os
+import re
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -24,6 +26,18 @@ _ACTIVE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "praxis_social_pulse", default=None
 )
 _LOCK = threading.RLock()
+_PULSE_ID = re.compile(r"pulse_[0-9a-f]{12}")
+_WINDOW_ID = re.compile(r"run-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{8}")
+
+
+@dataclass(frozen=True, slots=True)
+class HourlyWindow:
+    pulse_id: str
+    run_id: str
+
+    def __post_init__(self):
+        if not (_PULSE_ID.fullmatch(self.pulse_id) and _WINDOW_ID.fullmatch(self.run_id)):
+            raise ValueError("invalid hourly window identity")
 
 
 def _empty() -> dict:
@@ -36,11 +50,17 @@ def _empty() -> dict:
     }
 
 
-def _load(path: Path = STATE_PATH) -> dict:
+def _load(path: Path = STATE_PATH, *, claim: bool = False) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
         return _empty()
+    except Exception:
+        if claim:
+            raise
+        return _empty()
+    if claim:
+        _validate_claim_times(data)
     if not isinstance(data, dict):
         return _empty()
     data["version"] = 1
@@ -59,6 +79,34 @@ def _load(path: Path = STATE_PATH) -> dict:
     else:
         data["mailbox_seen"] = [str(value) for value in data["mailbox_seen"] if value]
     return data
+
+
+def _claim_time(value: object, *, allow_zero: bool = False) -> float:
+    if type(value) not in (int, float) or not (0 <= value < float("inf")):
+        raise ValueError("invalid pulse claim timestamp")
+    if value == 0 and not allow_zero:
+        raise ValueError("missing pulse claim timestamp")
+    try:
+        _local_datetime(value)
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("pulse claim timestamp out of range") from None
+    return float(value)
+
+
+def _validate_claim_times(data: object) -> None:
+    # The clock/claim writer may not normalize or trim broken history on write.
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError("invalid pulse claim ledger")
+    _claim_time(data.get("last_started_at"), allow_zero=True)
+    rows = data.get("runs")
+    if not isinstance(rows, list):
+        raise ValueError("invalid pulse claim rows")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("invalid pulse claim row")
+        _claim_time(row.get("started_at"))
+        if "finished_at" in row:
+            _claim_time(row["finished_at"])
 
 
 def _save(data: dict, path: Path = STATE_PATH) -> None:
@@ -136,11 +184,12 @@ def runs(*, path: Path | None = None) -> list[dict]:
     return [r for r in rows if isinstance(r, dict)]
 
 
-def begin(*, now: float | None = None, path: Path = STATE_PATH) -> str | None:
+def begin(*, now: float | None = None, path: Path | None = None) -> str | None:
     """Atomically claim a due pulse.  Returns its id, or None if not due."""
-    at = float(now if now is not None else time.time())
+    path = STATE_PATH if path is None else path
+    at = _claim_time(now if now is not None else time.time())
     with _LOCK:
-        state = _load(path)
+        state = _load(path, claim=True)
         interval = interval_hours()
         last = float(state.get("last_started_at") or 0.0)
         if interval <= 0 or (last and at - last < interval * 3600):
@@ -160,9 +209,41 @@ def begin(*, now: float | None = None, path: Path = STATE_PATH) -> str | None:
         return pulse_id
 
 
+def _claim_index(rows: list[dict], pulse_id: str) -> int:
+    matches = [i for i, row in enumerate(rows) if row.get("id") == pulse_id]
+    if len(matches) != 1 or rows[matches[0]].get("status") != "running":
+        raise ValueError("hourly window has no unique running pulse claim")
+    return matches[0]
+
+
+def bind_window(window: HourlyWindow, *, path: Path | None = None) -> None:
+    """Persist the exact association before the run/model may be dispatched."""
+    path = STATE_PATH if path is None else path
+    with _LOCK:
+        state = _load(path, claim=True)
+        rows = state["runs"]
+        row = rows[_claim_index(rows, window.pulse_id)]
+        if "window_run_id" in row or any(r.get("window_run_id") == window.run_id for r in rows):
+            raise ValueError("hourly run or pulse already assigned")
+        row["window_run_id"] = window.run_id
+        _save(state, path)
+
+
+def prior_window(window: HourlyWindow, *, path: Path | None = None) -> dict:
+    """Read just the previous independent claim, never a guess from a run's goal."""
+    path = STATE_PATH if path is None else path
+    with _LOCK:
+        rows = _load(path, claim=True)["runs"]
+        index = _claim_index(rows, window.pulse_id)
+        if rows[index].get("window_run_id") != window.run_id:
+            raise ValueError("hourly window does not match its durable pulse claim")
+        return next((r for r in reversed(rows[:index]) if r.get("status") != "deferred"), {})
+
+
 def observability(pulse_id: str, *, now: float | None = None,
-                  path: Path = STATE_PATH) -> str:
+                  path: Path | None = None) -> str:
     """Describe this pulse from its own durable receipts, not legacy heartbeat state."""
+    path = STATE_PATH if path is None else path
     at = float(now if now is not None else time.time())
     local_now = _local_datetime(at)
     with _LOCK:
@@ -215,15 +296,17 @@ def observability(pulse_id: str, *, now: float | None = None,
 
 
 def finish(pulse_id: str, *, ok: bool, detail: str = "", now: float | None = None,
-           mailbox_hashes: list[str] | None = None, path: Path = STATE_PATH) -> None:
-    at = float(now if now is not None else time.time())
+           mailbox_hashes: list[str] | None = None, path: Path | None = None) -> None:
+    path = STATE_PATH if path is None else path
+    at = _claim_time(now if now is not None else time.time())
     with _LOCK:
-        state = _load(path)
-        for run in reversed(state["runs"]):
-            if run.get("id") == pulse_id:
-                run.update(status="done" if ok else "failed", finished_at=at,
-                           detail=str(detail or "")[:500])
-                break
+        state = _load(path, claim=True)
+        try:
+            run = state["runs"][_claim_index(state["runs"], pulse_id)]
+        except ValueError:
+            return
+        run.update(status="done" if ok else "failed", finished_at=at,
+                   detail=str(detail or "")[:500])
         if ok and mailbox_hashes:
             state["mailbox_seen"] = list(dict.fromkeys([
                 *state.get("mailbox_seen", []),
@@ -233,11 +316,12 @@ def finish(pulse_id: str, *, ok: bool, detail: str = "", now: float | None = Non
 
 
 def defer(pulse_id: str, *, detail: str = "", now: float | None = None,
-          path: Path = STATE_PATH) -> None:
+          path: Path | None = None) -> None:
     """Record a pulse that could not start without calling it a failed window."""
-    at = float(now if now is not None else time.time())
+    path = STATE_PATH if path is None else path
+    at = _claim_time(now if now is not None else time.time())
     with _LOCK:
-        state = _load(path)
+        state = _load(path, claim=True)
         for run in reversed(state["runs"]):
             if run.get("id") == pulse_id:
                 run.update(status="deferred", finished_at=at,
@@ -258,10 +342,10 @@ def defer(pulse_id: str, *, detail: str = "", now: float | None = None,
         _save(state, path)
 
 
-def mailbox_seen(*, path: Path = STATE_PATH) -> set[str]:
+def mailbox_seen(*, path: Path | None = None) -> set[str]:
     """Mail items already exposed to a successfully completed autonomous pulse."""
     with _LOCK:
-        return set(_load(path).get("mailbox_seen") or [])
+        return set(_load(STATE_PATH if path is None else path).get("mailbox_seen") or [])
 
 
 @contextmanager

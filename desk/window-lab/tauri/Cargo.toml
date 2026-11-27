@@ -13,7 +13,7 @@ tauri = { version = "2", features = [] }
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
-# Лёгкая сборка: машине Егора и так тесно по памяти, LTO тут ни к чему.
+# Лёгкая сборка: машине владельца и так тесно по памяти, LTO тут ни к чему.
 [profile.release]
 opt-level = 2
 lto = false

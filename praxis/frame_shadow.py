@@ -79,6 +79,7 @@ import desires as desires_ledger
 import frame_trace
 import memory_provenance
 import resident_skills
+import self_wake_library
 import run_context
 import self_model
 import tool_offerings
@@ -543,6 +544,7 @@ def _zone_k() -> str:
     resident, _rows = resident_skills.render(BASE / "soul" / "skills")
     if resident:
         parts.append("\n\n---\n" + resident)
+    parts.append(self_wake_library.render(BASE, BASE / "soul" / "skills"))
     return "".join(parts)
 
 
@@ -2062,7 +2064,7 @@ def _coverage(live_sections, carried=frozenset(), recap_in_a: bool = False) -> d
             continue
         name = str(row.get("name") or "")
         label = str(row.get("label") or "")
-        if name in {"persona.soul", "persona.voice", "persona.resident_skills",
+        if name in {"persona.soul", "persona.voice", "persona.resident_skills", "persona.self_library",
                     "persona.self_current",
                     "situation.channel", "situation.open", "situation.close"}:
             covered += 1

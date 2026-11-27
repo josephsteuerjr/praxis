@@ -47,11 +47,12 @@ def _raise(value):
     if terminal is not None:
         cls = llm._RELAY_TERMINAL_CLASSES.get(terminal.get('code'), llm.RelayTerminalError)
         raise cls(message, **terminal)
-    if name == 'TornStreamError':
+    if name in ('TornStreamError', 'SpeedStreamRejected'):
         partial = value.get('partial')
-        raise llm.TornStreamError(message, partial=llm.LLMResponse(**partial) if partial else None)
+        raise getattr(llm, name)(message, partial=llm.LLMResponse(**partial) if partial else None)
     if name == 'RunawayGenerationError':raise llm.RunawayGenerationError(message, metrics=value.get('metrics'))
-    if name in ('EmptyResponseError', 'BrokenChannelError'):
+    if name in ('EmptyResponseError', 'BrokenChannelError',
+               'SpeedRequestRejected', 'SpeedRouteUnavailable'):
         raise getattr(llm, name)(message)
     known = {'ValueError': ValueError, 'TypeError': TypeError, 'RuntimeError': RuntimeError,
              'TimeoutError': TimeoutError, 'OSError': OSError}

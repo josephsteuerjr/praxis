@@ -62,7 +62,7 @@ class Continuity:
         Before 2.8.3 only the owner's private chat had an edition check here, so the owner
         writing in a group fell through to the core and was refused as "no longer the
         configured owner". Every nested h.hand from such a turn failed before it started,
-        and the script saw InDoubt (Jarvis in AbstractDL, 15-16.11). A paused group turn of
+        and the script saw InDoubt (the agent in AbstractDL, 15-16.11). A paused group turn of
         the owner could not resume for the same reason.
 
         Returns True when the edition decided; False leaves the core's own rules.

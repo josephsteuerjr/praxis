@@ -35,7 +35,7 @@ class AgentComputerAccessTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_her_body_hands_do_not_shrink_when_someone_else_speaks(self):
-        """Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил,
+        """Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил,
         включая его машину. «Она и сама уже сейчас откажет, если там бред.»
 
         Раньше здесь ожидалось «Нет выданного» и отказ на `execution=system`: чужая
@@ -58,7 +58,7 @@ class AgentComputerAccessTests(unittest.TestCase):
             agent._TURN_CHANNEL.reset(token)
 
     def test_the_old_grant_hand_is_gone(self):
-        # Егор 10.11: computer_access — остаток старого мини-аппа; управление ноутом у неё везде.
+        # владелец 10.11: computer_access — остаток старого мини-аппа; управление ноутом у неё везде.
         import agent
         self.assertNotIn("computer_access", agent.TOOL_IMPL)
         self.assertNotIn("computer_access", {t["name"] for t in agent.OWNER_TOOLS})
@@ -236,7 +236,7 @@ class AgentComputerAccessTests(unittest.TestCase):
             agent._TURN_CHANNEL.reset(token)
 
     def test_a_narrow_grant_does_not_narrow_HER(self):
-        """Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил. Гранты computer_access остаются раздачей ЕГО доверия людям, но её собственные руки они не ограничивают.
+        """Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни заговорил. Гранты computer_access остаются раздачей ЕГО доверия людям, но её собственные руки они не ограничивают.
 
         Грант «только computer.read», выданный человеку, ограничивал ЕЁ саму, когда
         этот человек к ней обращался: `windows` отвечал «нужен computer.apps».
@@ -384,7 +384,7 @@ class AgentComputerAccessTests(unittest.TestCase):
         trusted = agent.ChannelContext(chat_id="202", principal_id="202", is_dm=True, known=True)
         with mock.patch("llm.chat", side_effect=fake_chat):
             agent._voice("hi", [], "A", ctx=trusted, max_iters=1)
-        # Решение Егора 26.07: тело предлагается ей в любом ходе — оно её, а не гостя.
+        # Решение владельца 26.07: тело предлагается ей в любом ходе — оно её, а не гостя.
         self.assertIn("computer", seen[-1])
         computer_access.change("grant", "202", name="A", scopes=["computer.files"], actor="101")
         with mock.patch("llm.chat", side_effect=fake_chat):

@@ -1,6 +1,6 @@
 """Cleanup of a previous installation never asks for administrator rights (11.11.2026).
 
-Yegor: «очистка предыдущей установки приложения не должна запрашивать административные права.
+owner: «очистка предыдущей установки приложения не должна запрашивать административные права.
 Если старые файлы защищены, новая установка продолжается, остатки явно видны пользователю.»
 
 Custody is not cleanup: stopping the old programme and detaching what could start it again as a

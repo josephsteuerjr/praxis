@@ -65,7 +65,14 @@ def bind_program(root):
             name = config.relative_to(root).as_posix()
             prior = (previous.get('profiles') or {}).get(name)
             if not tree.is_dir():
-                raise ValueError('Configured data folder is unavailable; reconnect it explicitly: ' + str(tree))
+                # A newly registered secondary may have no home until its first runner starts.
+                # A consumed birth receipt or a previously bound profile must never recreate lost data.
+                birth = read(config.parent / 'kit-birth.json')
+                if (prior or config.parent.parent != root / 'agents' or tree != config.parent / 'data'
+                        or birth.get('schema') != 1 or birth.get('source') != 'agents.create'
+                        or birth.get('state') != 'prepared' or birth.get('tree') != str(tree)):
+                    raise ValueError('Configured data folder is unavailable; reconnect it explicitly: ' + str(tree))
+                tree.mkdir(exist_ok=True)
             identity_file = tree / 'memory/.control/profile-identity.json'
             identity = read(identity_file)
             if prior and identity.get('id') != prior.get('id'):

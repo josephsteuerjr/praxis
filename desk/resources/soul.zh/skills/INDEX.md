@@ -11,8 +11,6 @@
 
 | 技能地址 | 用途 |
 |---|---|
-| [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) | 项目示例：识别 AbstractDL 架构术语 |
-| [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) | 项目示例：通过 MTProto 管理 AbstractDL |
 | [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) | 不因过期提示重复自主检查 |
 | [anti-repeat-before-speaking](anti-repeat-before-speaking.md) | 回复前检查，避免重复旧话 |
 | [artifact-revision-diff-check](artifact-revision-diff-check.md) | 交付前比较产物修订 |

@@ -12,7 +12,8 @@
 `memory/desires` (там `next_move`, `evidence_refs`, `run_ids` и причинная цепочка с
 15.07.2026). Здесь — только то, чего в каноне нет и быть не должно: сколько раз движок
 поднимал эту работу вхолостую, до какого срока её не будить, не просила ли она не брать
-её сама. Канон пишет ОНА; сюда пишет автомат.
+её сама. Канон пишет ОНА; сюда пишет автомат. Явная привязка `focus_note_id` хранит
+только адрес выбранной авторской заметки, не новую копию её слов.
 
 ИСТОРИЯ ОШИБКИ, чтобы не повторить.  11.08 я записал, что «сшивки N активаций в одну
 работу не существует нигде», и 12.08 построил её заново — при живом леджере желаний,
@@ -72,14 +73,14 @@ def _now() -> str:
         f"{_dt.datetime.now(_dt.timezone.utc).microsecond // 1000:03d}Z"
 
 
-def _root() -> Path:
-    return BASE / "memory" / "work"
+def _root(*, base: str | Path | None = None) -> Path:
+    return (BASE if base is None else Path(base)) / "memory" / "work"
 
 
-def _dir(task_id: str) -> Path:
-    if not _ID.fullmatch(str(task_id or "")):
+def _dir(task_id: str, *, base: str | Path | None = None) -> Path:
+    if not isinstance(task_id, str) or not _ID.fullmatch(task_id):
         raise ValueError("task id must be a short filesystem-safe slug")
-    return _root() / "tasks" / task_id
+    return _root(base=base) / "tasks" / task_id
 
 
 # ── сериализация карточки ────────────────────────────────────────────────────────────
@@ -117,9 +118,9 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _append(task_id: str, kind: str, **fields) -> dict:
+def _append(task_id: str, kind: str, *, base: str | Path | None = None, **fields) -> dict:
     row = {"schema": EVENT_SCHEMA, "kind": kind, "at": _now(), **fields}
-    path = _dir(task_id) / "events.jsonl"
+    path = _dir(task_id, base=base) / "events.jsonl"
     with path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     return row
@@ -175,13 +176,59 @@ class _Lock:
 
 # ── чтение ───────────────────────────────────────────────────────────────────────────
 
-def card(task_id: str) -> dict | None:
-    path = _dir(task_id) / "TASK.md"
+def card(task_id: str, *, base: str | Path | None = None,
+         include_body: bool = True) -> dict | None:
+    path = _dir(task_id, base=base) / "TASK.md"
     if not path.is_file():
         return None
-    data, body = _parse(path.read_text(encoding="utf-8", errors="replace"))
-    data["body"] = body
-    return data
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            if include_body:
+                data, body = _parse(handle.read())
+                return {**data, "body": body}
+            if handle.readline() != "---\n":
+                return None
+            lines = ["---\n"]
+            for line in handle:
+                lines.append(line)
+                if line in ("---\n", "---"):
+                    return _parse("".join(lines))[0]
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def is_open_card(row: dict | None, task_id: str) -> bool:
+    """Require exact card identity, not just a readable TASK.md at the path."""
+    return bool(row and row.get("schema") == SCHEMA and row.get("id") == task_id
+                and row.get("status") in STATUSES and row["status"] not in TERMINAL)
+
+
+def _set_focus_note(task_id: str, note_id: str, *, base: str | Path | None = None) -> dict:
+    """Persist only the validated note ID. The owner of note admission is work_focus."""
+    task_dir = _dir(task_id, base=base)
+    if not (task_dir / "TASK.md").is_file():
+        raise ValueError("work card is unavailable or closed")
+    with _Lock(task_dir):
+        row = card(task_id, base=base)
+        if not is_open_card(row, task_id):
+            raise ValueError("work card is unavailable or closed")
+        revision = row.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise ValueError("work card revision is invalid")
+        changed = row.get("focus_note_id", "") != note_id
+        if changed:
+            body = row.pop("body", "")
+            if note_id:
+                row["focus_note_id"] = note_id
+            else:
+                row.pop("focus_note_id", None)
+            revision += 1
+            row.update(revision=revision, updated_at=_now())
+            _append(task_id, "intent", base=base, focus_note_id=note_id, revision=revision)
+            _atomic_write(task_dir / "TASK.md", _dump(row, body))
+            _append(task_id, "committed", base=base, revision=revision)
+    return {"work_id": task_id, "note_id": note_id, "revision": revision, "changed": changed}
 
 
 def task_ids() -> list[str]:

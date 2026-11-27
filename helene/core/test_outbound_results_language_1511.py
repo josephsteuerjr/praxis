@@ -13,8 +13,8 @@ import frame_language as frame
 import run_manager
 import telegram_outbox
 
-RAW='Windows Егор 中文 {literal} $&'
-TEXT='Windows Егор {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
+TEXT='Windows Алекс {literal} $&'
 
 class OutboundResults(unittest.TestCase):
     def setUp(self):

@@ -93,8 +93,8 @@ class ChildState:
 
 class Coordinator:
     """Pure child-exit decision over complete, host-observed snapshots."""
-    def __init__(self, roles: dict[str, str]):
-        if not roles or any(not isinstance(key, str) or not key or role not in
+    def __init__(self, roles: dict[str, str], *, allow_empty=False):
+        if (not roles and not allow_empty) or any(not isinstance(key, str) or not key or role not in
                             ("channel", "runner", "relay", "xtts") for key, role in roles.items()):
             raise ValueError("invalid child inventory")
         self.children = {key: ChildState(role) for key, role in roles.items()}
@@ -365,15 +365,22 @@ def _plans(config: Path, *, session_host: bool,
     """
     base = config.parent
     window_root=base if desktop_roster else None
-    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root,environ=environ,runtime_program=runtime_program)}
+    main = _config(config)
+    plans = {}
+    if not desktop_roster or (main.get('mode', 'local') == 'local' and not main.get('return_pending')):
+        plans[BASE_ID] = _specs(config, session_host=session_host, window_root=window_root,
+                                environ=environ, runtime_program=runtime_program)
     if not (session_host or desktop_roster):
         return plans
-    occupied = {plans[BASE_ID][0].resolve(strict=True)}
+    occupied = {tree.resolve(strict=True) for tree, _ in plans.values()}
+    if BASE_ID not in plans:
+        # The local copy of a moved or paused profile still belongs to that profile.
+        occupied.add((base / (main.get("tree") or "data")).resolve())
     for agent in raisable(base):
         if agent.base:
             continue
         cfg = read_config(agent.config)
-        if cfg.get("mode", "local") != "local":
+        if cfg.get("mode", "local") != "local" or cfg.get("return_pending"):
             continue  # Python controller owns its remote publisher, not a local brain.
         try:
             if any(cfg.get(section) is not None and not isinstance(cfg[section], dict)
@@ -531,22 +538,28 @@ def run(config: Path, *, stop=None, session_host: bool = False,
     # are not configuration edits and must not retire a healthy agent generation.
     ambient = dict(os.environ if environ is None else environ)
     desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
-    tree, specs = desired[BASE_ID]
+    if desktop_roster:
+        from localharness.program_state import directory
+        # An installation outlives changes of the main profile's mode and data path.
+        owner_tree = directory(config.parent, 'desktop-supervisor')
+        specs = {}
+    else:
+        owner_tree, specs = desired[BASE_ID]
     wake = stop if stop is not None else Event()
     def stopped():
         return wake.is_set() or owner_stop.stopped()
-    with _tree_hold(tree) as mark_clean:
+    with _tree_hold(owner_tree) as mark_clean:
         if stopped():
             mark_clean()  # no child was created under this hold
             raise RuntimeError("owner stop is active")
-        policy = Coordinator({key: spec.role for key, spec in specs.items()})
+        policy = Coordinator({key: spec.role for key, spec in specs.items()}, allow_empty=desktop_roster)
         active: dict[str, JobChild] = {}
         unconfirmed = []  # failed admissions may already own a live guardian
         auth_seen: dict[str, tuple[int, int, bytes] | None] = {}
         # Keep every agent's OS lease until its last Job has been measured empty.
         # A returned lock handle alone cannot certify an old generation gone.
-        holds = {BASE_ID: (None, mark_clean)}
-        installed = {BASE_ID: (tree, specs)}
+        holds = {} if desktop_roster else {BASE_ID: (None, mark_clean)}
+        installed = {} if desktop_roster else {BASE_ID: (owner_tree, specs)}
         started = time.monotonic()
         last_refresh = 0.0
         seq = 0
@@ -613,9 +626,9 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                                 policy.children[key] = ChildState(new_specs[key].role)
                         installed[agent_id] = desired[agent_id]
                     for agent_id in list(installed):
-                        if agent_id != BASE_ID and installed[agent_id] != desired.get(agent_id):
+                        if (desktop_roster or agent_id != BASE_ID) and installed[agent_id] != desired.get(agent_id):
                             retire(agent_id)
-                    if installed[BASE_ID] != desired[BASE_ID]:
+                    if not desktop_roster and installed[BASE_ID] != desired[BASE_ID]:
                         if installed[BASE_ID][0].resolve(strict=True) != desired[BASE_ID][0].resolve(strict=True):
                             raise RuntimeError("base data tree moved; stop and restart the Python owner to rebind")
                         for key in list(policy.children):
@@ -732,7 +745,8 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     # a file export only when its content changes.
                     if status_observer is None or status_content != exported_status or export_problem:
                         try:
-                            _desktop_status(tree, status_nonce, receipt_seq, pending_ack, installed, active)
+                            status_tree = installed[BASE_ID][0] if BASE_ID in installed else owner_tree
+                            _desktop_status(status_tree, status_nonce, receipt_seq, pending_ack, installed, active)
                         except OSError as exc:
                             problem = type(exc).__name__ + ': ' + str(exc)
                             observation['status_export_error'] = problem
@@ -757,6 +771,8 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                             for i, child in enumerate(unconfirmed)})
             stop_children(pending)
             if not uncertain:
+                if desktop_roster:
+                    mark_clean()
                 for agent_id, (ctx, clean) in list(holds.items()):
                     clean()
                     if ctx is not None:

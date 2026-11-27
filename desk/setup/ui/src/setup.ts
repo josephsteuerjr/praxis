@@ -236,12 +236,12 @@ export async function loadDefaults(): Promise<Defaults> {
     const q = new URLSearchParams(location.search);
     const found: Found[] = q.has("found")
       ? [
-          { kind: "leftover", dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene", agent: "Мира", owner: "Егор", version: "1.1.1", scope: "user", program: false, complete: true, decisions: true, data_mb: 71, last: "2026-09-27", agents: [] },
-          { kind: "backup", dir: "C:\\Users\\…\\AppData\\Local\\Helene-backup-20260926", agent: "Мира", owner: "Егор", version: "1.0.3", scope: "", program: false, complete: true, decisions: true, data_mb: 72, last: "2026-09-26", agents: ["Джарвис"] },
+          { kind: "leftover", dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene", agent: "Мира", owner: "владелец", version: "1.1.1", scope: "user", program: false, complete: true, decisions: true, data_mb: 71, last: "2026-09-27", agents: [] },
+          { kind: "backup", dir: "C:\\Users\\…\\AppData\\Local\\Helene-backup-20260926", agent: "Мира", owner: "владелец", version: "1.0.3", scope: "", program: false, complete: true, decisions: true, data_mb: 72, last: "2026-09-26", agents: ["Атлас"] },
         ]
       : [];
     // `?installed` — глазами сцену «уже установлена» (обновление поверх, 28.09).
-    const installed = q.has("installed") ? { dir: "C:\\Program Files\\Helene", version: "1.2.3", agent: "Джарвис" } : null;
+    const installed = q.has("installed") ? { dir: "C:\\Program Files\\Helene", version: "1.2.3", agent: "Атлас" } : null;
     return {
       dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
       payload: null,

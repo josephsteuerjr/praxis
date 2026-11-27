@@ -10,7 +10,7 @@
 
   helene_<версия>_amd64.deb         Debian, Ubuntu, Astra
   helene-<версия>-1.x86_64.rpm      Fedora/RHEL, РЕД ОС, ROSA, ALT (ALT — apt-rpm, проверить
-                                    отдельно; слово Егора 28.09: «и rpm сделать»)
+                                    отдельно; слово владельца 28.09: «и rpm сделать»)
   *.sha256
 
 Оба пакета — из ОДНОГО конфига nfpm (`nfpm.yaml` рядом): программа в /opt/helene, шаблон

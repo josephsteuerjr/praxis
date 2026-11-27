@@ -14,8 +14,6 @@ On the first day, first-day and write-your-skills are useful.
 
 | Skill address | Purpose |
 |---|---|
-| [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) | Project example: classify AbstractDL architecture jargon |
-| [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) | Project example: AbstractDL moderation through MTProto |
 | [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) | Avoid repeating autonomous checks from obsolete hints |
 | [anti-repeat-before-speaking](anti-repeat-before-speaking.md) | Check before repeating an earlier reply |
 | [artifact-revision-diff-check](artifact-revision-diff-check.md) | Compare artifact revisions before delivery |

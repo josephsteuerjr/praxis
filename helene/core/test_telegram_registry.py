@@ -359,9 +359,9 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
 
     async def test_account_critical_runs_directly_for_sovereigns_only(self):
-        # Егор 10.11 («Снять целиком»): отдельного подтверждения из лички владельца нет —
+        # владелец 10.11 («Снять целиком»): отдельного подтверждения из лички владельца нет —
         # ни для logout/2FA, ни для удаления аккаунта, смены номера или платежей. Вызов
-        # исполняют она и Егор напрямую; чужому человеку raw MTProto по-прежнему закрыт.
+        # исполняют она и владелец напрямую; чужому человеку raw MTProto по-прежнему закрыт.
         calls = []
 
         async def caller(request):

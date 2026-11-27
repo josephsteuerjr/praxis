@@ -154,7 +154,7 @@ class TestRunAndQuota(Base):
 class TestDeliveryAndMap(Base):
     def test_send_file_via_mocked_bridge(self):
         sent = {}
-        agent._TELETHON["send_file"] = lambda p, c="": sent.update(path=p, caption=c) or "Отправила Егору в личку: r.txt"
+        agent._TELETHON["send_file"] = lambda p, c="": sent.update(path=p, caption=c) or "Отправила Алексу в личку: r.txt"
         try:
             (self.tmp / "workspace" / "r.txt").write_text("результат", encoding="utf-8")
             out = workshop.send_file("workspace/r.txt", "готово")
@@ -247,14 +247,14 @@ class TestCodingWindow(unittest.TestCase):
         agent._voice = fake_voice
         llm.use_test_client(object())
         try:
-            agent.task_window("код: скрипт для Егора")
+            agent.task_window("код: скрипт для Алекса")
         finally:
             agent._voice = orig
             llm.clear_test_clients()
         self.assertIn("CODING window", calls["extra"])
         self.assertIn("send_file", calls["extra"])
         self.assertIsNone(calls["iters"], "PASS 24: coding-run завершается состоянием дела, не счётчиком")
-        self.assertIn("скрипт для Егора", calls["seed"])
+        self.assertIn("скрипт для Алекса", calls["seed"])
         self.assertNotIn("код:", calls["seed"].splitlines()[0].lower(), "префикс срезан из брифа")
 
     def test_plain_window_keeps_old_frame(self):

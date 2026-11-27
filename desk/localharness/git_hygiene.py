@@ -1,6 +1,6 @@
 """Keep the agent's personal Git small and quick (2.8.4).
 
-16.11.2026, Jarvis: the move to a new programme folder put the owner's backup folder inside
+16.11.2026, the agent: the move to a new programme folder put the owner's backup folder inside
 the agent's data, and weekly 5 GB backups went into the personal repository. Its .git grew
 to 21 GB (one 4.8 GB blob Git for Windows could not even read back), every self-commit ran a
 foreground repack that never finished inside its 30-second limit, and the safety snapshot

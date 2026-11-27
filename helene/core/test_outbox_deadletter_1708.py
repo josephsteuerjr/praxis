@@ -4,7 +4,7 @@
 предсетевая сверка proof сравнивала леджер с СЫРЫМИ аргументами → детерминированный
 отказ; рука сказала «очередь дошлёт сама, вручную не повторяй», а воркер очереди
 требовал тот самый proof, чьё создание падало константой, — 12 ретраев за 2,5 часа
-и молчаливый dead_letter. Егор ждал ответ час; RECAP прогона говорил Delivery `sent`.
+и молчаливый dead_letter. владелец ждал ответ час; RECAP прогона говорил Delivery `sent`.
 
 Полный разбор: `_state/ИНЦИДЕНТ-DEADLETTER-17.08.md`. Здесь — четыре границы починки:
 сверка той же нормализацией; ошибка-константа не ретраится; dead_letter объявляет
@@ -55,7 +55,7 @@ class _RunScaffold(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-deadletter-{suffix}",
@@ -103,11 +103,11 @@ class ProofComparesLikeWithLike(_RunScaffold):
 
     def test_trailing_space_in_model_args_no_longer_kills_the_delivery(self):
         # 17.08: аргументы кончались пробелом (806 зн.), леджер нёс strip (805 зн.) —
-        # и этого хватило, чтобы реплика в личку Егора не ушла никогда.
+        # и этого хватило, чтобы реплика в личку владельца не ушла никогда.
         context = self._create_run("strip")
         self._start_reply(context.run_id, "corporate». ")
         entry = self._reply_entry(context.run_id, ledger_text="corporate».")
-        proof = agent.run_direct_outbox_prepared(entry, target_label="Егор")
+        proof = agent.run_direct_outbox_prepared(entry, target_label="Алекс")
         self.assertEqual(proof["entry"]["payload"]["text"], "corporate».")
         self.assertTrue(agent.direct_outbox_prepared(entry))
 
@@ -115,7 +115,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
         context = self._create_run("exact")
         self._start_reply(context.run_id, "слово в слово")
         entry = self._reply_entry(context.run_id, ledger_text="слово в слово")
-        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Егор"))
+        self.assertTrue(agent.run_direct_outbox_prepared(entry, target_label="Алекс"))
 
     def test_a_genuinely_different_text_is_still_refused(self):
         # Ослабление — только до strip: защита привязки леджера к намерению остаётся.
@@ -123,7 +123,7 @@ class ProofComparesLikeWithLike(_RunScaffold):
         self._start_reply(context.run_id, "я хотела сказать это")
         entry = self._reply_entry(context.run_id, ledger_text="кто-то подменил текст")
         with self.assertRaises(agent.DurableExecutionError):
-            agent.run_direct_outbox_prepared(entry, target_label="Егор")
+            agent.run_direct_outbox_prepared(entry, target_label="Алекс")
 
 
 class ConstantErrorsStopPretendingToBeTransient(_RunScaffold):

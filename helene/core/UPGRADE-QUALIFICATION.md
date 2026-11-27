@@ -1197,7 +1197,7 @@ EXCLUDED = {'.git', '.ouroboros', '__pycache__', '.pytest_cache', '.venv', 'venv
             'node_modules', 'target', '.cache', '_state'}
 PRIVATE = {'.env', 'helene.json', 'auth.json', 'credentials.json', 'local-build.json'}
 TREES = ('praxis', 'helene/core', 'desk')
-CONTEXT_TREES = ('remote', 'arete-contract', 'swarm-base', '.github')
+CONTEXT_TREES = ('.github',)
 CONTEXT_FILES = ('LICENSE', 'NOTICE', 'README.md', 'CORE-SOURCE.json', 'HELENE-SOURCE.json',
                  'RELAY-SOURCE.json', 'SOURCE-SNAPSHOTS.md', 'helene/EDITION.md', 'helene/PLATFORM-SOURCE.json')
 RUNNERS = ('source_verification_runner.py',)

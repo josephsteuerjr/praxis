@@ -24,7 +24,7 @@ class AuxiliaryCalls(unittest.TestCase):
             for language in frame_language.LANGUAGES:
                 with frame_language.use(language):
                     self.assertIn(frame_language.text('identity.layer.self'),identity.describe())
-                    self.assertNotIn('Егора',identity.describe())
+                    self.assertNotIn('Алекса',identity.describe())
                     error=identity.revise(RAW,'',reason='')['error']
                     self.assertIn(RAW,error)
                     if language!='ru':self.assertNotRegex(error.replace(RAW,''),'[А-Яа-яЁё]')

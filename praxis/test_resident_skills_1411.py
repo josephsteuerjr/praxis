@@ -28,6 +28,7 @@ import frame_trace
 import llm
 import resident_skills
 import self_model
+import self_wake_library
 
 REPO = Path(__file__).resolve().parent
 
@@ -104,13 +105,13 @@ class PersonaPlace(Home):
         self.assertEqual(row["reason"], "empty")
         # Папка навыка без resident.md (её конвенция, как praxis-translation-check/) —
         # тоже не постоянная часть.
-        self.skill("translation", materials=("check.py",))
+        self.skill("translation", materials=("check.py",), skill_file=False)
         after, _ = self.persona_rows()
         self.assertEqual(after, before)
         current = self_model.current_prompt(self.base)
         self.assertIn("RESIDENT_CURRENT_SENTINEL", current)
         expected = ("# Soul\n\ntruth\n" + "\n\n---\n# Voice\n\nVOICE_SENTINEL\n"
-                    + "\n\n---\n" + current)
+                    + self_wake_library.render(self.base, self.skills) + "\n\n---\n" + current)
         self.assertEqual(before, expected)
 
     def test_resident_part_stands_between_voice_and_current_once(self):
@@ -122,11 +123,12 @@ class PersonaPlace(Home):
         self.assertLess(persona.index("RESIDENT_SENTINEL"),
                         persona.index("RESIDENT_CURRENT_SENTINEL"))
         self.assertIn("\n\n---\n## Живая речь\n\nRESIDENT_SENTINEL\n"
-                      "[из: soul/skills/living-prose/resident.md · навык целиком и материалы: "
-                      "soul/skills/living-prose.md, по потребности]\n\n---\n", persona)
+                      "[из: soul/skills/living-prose/resident.md · навык в кадре: "
+                      "soul/skills/living-prose.md]\n\n---\n", persona)
         names = [r["name"] for r in rows]
         self.assertEqual(names, ["persona.soul", "persona.voice", "persona.resident_skills",
-                                 "persona.self_current"])
+                                 "persona.self_library", "persona.self_current"])
+        self.assertTrue(next(r for r in rows if r["name"] == "persona.self_library")["included"])
         row = next(r for r in rows if r["name"] == "persona.resident_skills")
         self.assertTrue(row["included"])
 
@@ -139,10 +141,11 @@ class PersonaPlace(Home):
 
     def test_shadow_constitution_sees_the_same_part(self):
         k0 = frame_shadow._zone_k()
-        self.assertEqual(k0, "# Soul\n\ntruth\n\n\n---\n# Voice\n\nVOICE_SENTINEL\n")
+        prefix = "# Soul\n\ntruth\n\n\n---\n# Voice\n\nVOICE_SENTINEL\n"
+        self.assertEqual(k0, prefix + self_wake_library.render(self.base, self.skills))
         self.skill("living-prose", "RESIDENT_SENTINEL")
         k1 = frame_shadow._zone_k()
-        self.assertTrue(k1.startswith(k0 + "\n\n---\nRESIDENT_SENTINEL\n[из: "))
+        self.assertTrue(k1.startswith(prefix + "\n\n---\nRESIDENT_SENTINEL\n[из: "))
         coverage = frame_shadow._coverage([{"name": "persona.resident_skills",
                                             "included": True, "chars": 10}])
         self.assertEqual((coverage["covered"], coverage["todo"], coverage["unknown"]), (1, 0, 0))
@@ -179,7 +182,7 @@ class Rendering(Home):
 
     def test_env_cap(self):
         self.assertEqual(resident_skills.max_chars(), resident_skills.DEFAULT_MAX_CHARS)
-        for raw, expected in (("0", 0), ("1200", 1200), ("мусор", 6000), ("-5", 6000)):
+        for raw, expected in (("0", 0), ("1200", 1200), ("мусор", 0), ("-5", 0)):
             with mock.patch.dict(os.environ, {resident_skills.ENV_MAX: raw}):
                 self.assertEqual(resident_skills.max_chars(), expected, raw)
 
@@ -278,16 +281,12 @@ SHIPPED = REPO / "soul" / "skills" / "living-prose"
 class ShippedLivingProse(unittest.TestCase):
     LINK = re.compile(r"\]\(([^)#]+)\)")
 
-    def test_fits_default_cap_with_room_for_her_own(self):
-        # The resident text is hers to edit (self-edit bfe9028a added a paragraph, 3173
-        # chars). No size pin on her own words below the cap: the renderer itself names
-        # what does not fit. Pinned: in frame, whole, under the default cap.
-        text, rows = resident_skills.render(REPO / "soul" / "skills",
-                                            limit=resident_skills.DEFAULT_MAX_CHARS)
+    def test_shipped_resident_is_present_in_full_by_default(self):
+        text, rows = resident_skills.render(REPO / "soul" / "skills")
         row = next(r for r in rows if r["slug"] == "living-prose")
         self.assertTrue(row["in_frame"])
         self.assertTrue(row["skill_file"])
-        self.assertLess(row["chars"], resident_skills.DEFAULT_MAX_CHARS)
+        self.assertIn(row["text"], text)
 
     def test_links_resolve_inside_the_skill(self):
         files = [REPO / "soul" / "skills" / "living-prose.md", *sorted(SHIPPED.glob("*.md"))]

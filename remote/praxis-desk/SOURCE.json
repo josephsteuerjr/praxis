@@ -1,12 +1,12 @@
 {
   "format": "praxis-desk-source.v1",
-  "captured_at": "2026-11-20T09:46:49.279879+00:00",
-  "source_repository": "local mirror branch of the November 2026 owner-Telegram work (not published history)",
+  "captured_at": "2026-11-27T21:24:15.871453+00:00",
+  "source_repository": "read-only snapshot of the deployed server app (/opt/praxisdesk): backend files over the mirror of the November 2026 owner-Telegram work (not published history); MiniApp and PWA unchanged since the 20 November capture",
   "source_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66",
   "deployed": {
     "path": "/opt/praxisdesk",
     "container": "praxis-desk",
-    "backend_files_checked": 21,
+    "backend_files_checked": 22,
     "backend_normalized_equal": true,
     "frontend_files_checked": 46,
     "frontend_sha256": {
@@ -60,7 +60,7 @@
     "old_frontend_assets_retained": true,
     "recipe_sha256": {
       "Dockerfile": "b5850d5c2c7d1728177053e3fc58ad7e6d42fd493e690f4284f1db4dc08693b6",
-      "docker-compose.yml": "a9f37505cc0cb40079bbff308816de550d3cbddb3d3f71d7cc5491514a64031d"
+      "docker-compose.yml": "131e5c1888af6bb1087472bb5ba9e4e7d26037f2e515439fad28f202b7808d55"
     }
   },
   "privacy": {
@@ -70,20 +70,21 @@
     ".gitignore": "53ae52e4c5d14baa0094c548600a087832a2ef2ef4426a64c14245ed2055bdbc",
     "README.md": "50431e306785255e1e515940c08a4efb841f0cf01eb4ca13fe6f29f10683c106",
     "VALIDATION.md": "b766eb92fed41f89b80dc18b2e73a5685c2ea83933a2691f04f6d05bf0ed9288",
-    "backend/deskapp.py": "c8d3605ea9aedcf3af456006f506c02ededcfac33c7481f3b3fcd7824687d339",
-    "backend/deskctl.py": "028310fb9088abab5636a29f883b4dbc4eaacbd31c9872088b5d6961bd2c0adb",
+    "backend/deskapp.py": "759f57fdb21008cbfa68ba0e1e79011bc9e73a1b5f1d530b9311ce14aeae76f5",
+    "backend/deskctl.py": "b3965ddf10eac9fd46b4a230f418449d960d00922f8151b56781b3bb440075f4",
     "backend/deskd/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "backend/deskd/agentcfg.py": "6e735f3f470c69e8514483d7f5611e24aaf5a77184bf5f5a99a07587c7894708",
     "backend/deskd/control.py": "e1bdb80b4649b91ccf8e1d7320feefac98279227afcc82666f08b3de4bfaf1cf",
     "backend/deskd/forge_control.py": "5bcfc6bf969e1bcc0d1f0147670f72152ee8095cf6735a593e4e2b72deda5c62",
-    "backend/deskd/forge_reader.py": "38d2696c59de23f07ff019bcfb82ebea6489e4bdc5737921dabbcfd33d3ca40b",
+    "backend/deskd/forge_reader.py": "370742dd5c58546a40f9122052f59f2f3a69facdc5a0b6360093fc2e35cff539",
     "backend/deskd/forge_recovery.py": "f4550e7b4adbcd69e545411bf41ecd0b0ca4a9562c77549d94f80f2622c2b638",
-    "backend/deskd/forge_snapshot.py": "afca8986fe273c840be3cade4c25f2eedf6020336e616fcc35005247542824f6",
+    "backend/deskd/forge_snapshot.py": "66ba313a34954b7db3e6c2a5b317cbae7a47c45caf603a8126ae0868d72edd29",
     "backend/deskd/frame_cuts.py": "f72bbacb9e49e2afa99eeb8b9df12cd0bb0a3b37185649a3061d76a812974365",
     "backend/deskd/inbox_seal.py": "073332567a39d6f9d001c34fd61e00087d07fd205062dfc539f331a06b74218c",
     "backend/deskd/phone_activity.py": "ac6a2c6deeb251dc2863e1f063d8de6769e64c9cca83786bb63cc1bfd0c2b1ca",
     "backend/deskd/praxis_control.py": "2393c83ca41a97fb2231359bf7c15d530c11958bb6296c18648b1589d176cf68",
-    "backend/deskd/praxis_phone.py": "1d02c07c0b569a19e8d9f1cca31b457366fe9baeb066c2b5d0f037969c0d28c5",
+    "backend/deskd/praxis_phone.py": "e8fdd0daed038016ad7bd0e64efb1213abfe9c31003f337d8fca4fe7e8ccd339",
+    "backend/deskd/praxis_window.py": "d166200bf79fa0b1bdf3e3ee8b45845578a1f984e39de2871a926459332d139d",
     "backend/deskd/readers.py": "bed04a5db7bf9d8a8569d02095321b324e5668e12f486ae2958fbf07112a8f67",
     "backend/deskd/rooms.py": "32cca28be685209882b3d7587bcd68180a24a521b5a92d5e9694a26b0d489160",
     "backend/deskd/spend.py": "7c73adcfbe7eedae8f9f7c014ba0167ff90b1baf0ad64508599a2574750193e3",
@@ -254,11 +255,11 @@
     "test-fixtures/code_query_lens.json": "e9a11b3e92df6847803b2ad69d08dea9d7700c3f650d1a4b681c09e02b50eaf6"
   },
   "validation": {
-    "backend_files_equal_live": 21,
+    "backend_files_equal_live": 22,
     "deployed_frontend_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66",
     "runtime_restart_by_sync": false
   },
-  "verified_at": "2026-11-20T09:46:49.279879+00:00",
+  "verified_at": "2026-11-27T21:24:15.871453+00:00",
   "private_history_published": false,
   "previous_source_commit": "4f74f5c604d95ae054f704a03c6b89a46b2d52cd",
   "mirror_differences": {
@@ -271,5 +272,10 @@
   "verification_2026_11_20": {
     "backend_files_equal_after_line_ending_normalization": 21,
     "deployed_frontend_commit": "4f2ddd50df869c0c6b668b00736f49909b68dd66"
+  },
+  "verification_2026_11_28": {
+    "backend_files_equal_after_line_ending_normalization": 22,
+    "deployed_frontend_files_equal_2026_11_20_capture": 46,
+    "recipe_equal_after_line_ending_normalization": true
   }
 }

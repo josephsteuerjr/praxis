@@ -14,8 +14,6 @@
 
 | Адрес навыка | Назначение |
 |---|---|
-| [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) | Классификатор архитектурного жаргона AbstractDL |
-| [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) | Живые MTProto-руки модерации AbstractDL |
 | [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) | Не повторять автономную проверку по старой подсказке |
 | [anti-repeat-before-speaking](anti-repeat-before-speaking.md) | Не повторять себя вслепую |
 | [artifact-revision-diff-check](artifact-revision-diff-check.md) | Сверка перед выдачей составленного артефакта |

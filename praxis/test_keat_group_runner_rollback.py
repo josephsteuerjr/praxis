@@ -157,8 +157,8 @@ class RunnerRollback(unittest.IsolatedAsyncioTestCase):
             patch.object(agent, "_terminal_tool_loop", side_effect=terminal),
             patch.object(agent.frame_shadow, "enabled", return_value=False),
             patch.object(agent.frame_shadow, "_read", return_value="K"),
-            patch.object(agent.frame_measure, "assemble", return_value={
-                "system": "K\n\n---\nK" + agent.frame_shadow._SEP_E + " economical"}),
+            patch.object(agent.frame_measure, "assemble", side_effect=lambda **_: {
+                "system": agent.frame_shadow._zone_k() + agent.frame_shadow._SEP_E + " economical"}),
             patch.object(agent.run_context, "current_run", return_value=SimpleNamespace(run_id="r")),
             patch.object(agent, "_runs", return_value=store),
             patch.object(agent, "_run_status_gate"),

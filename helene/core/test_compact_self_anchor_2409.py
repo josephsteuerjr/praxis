@@ -73,14 +73,14 @@ class ForeignSelfIsCaughtTests(unittest.TestCase):
                          "torvn77")
         self.assertEqual(ml._foreign_self("Я — Sol, мозг и голос Praxis; Terra — оценщик.", set()),
                          "Sol")
-        self.assertEqual(ml._foreign_self("Я — Арете (голос Praxis), работаю с Клодеттой.", set()),
-                         "Арете")
+        self.assertEqual(ml._foreign_self("Я — Морган (голос Praxis), работаю с Клодеттой.", set()),
+                         "Морган")
 
     def test_quotes_are_not_the_narrator(self):
         self.assertIsNone(ml._foreign_self("Hope представилась: «Я — Hope, she/her».", self.authors))
 
     def test_leaves_honest_first_person_alone(self):
-        for text in (GOOD, "Я — Praxis, живу у Егора.", "я — не оракул сроков",
+        for text in (GOOD, "Я — Praxis, живу у Алекса.", "я — не оракул сроков",
                      "Я — ИИ, и это не секрет", "Моё финальное сообщение (Praxis) — перевод"):
             self.assertIsNone(ml._foreign_self(text, self.authors), text)
 

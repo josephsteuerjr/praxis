@@ -58,6 +58,9 @@ class RunContext:
     status: str = "pending"
     created_at: str = ""
     forge_task_id: str = ""
+    hourly_pulse_id: str = ""
+    work_id: str = ""
+    work_alarm_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.run_id or any(ch in self.run_id for ch in ("/", "\\", "\0")):
@@ -89,6 +92,9 @@ class RunContext:
         model_profile: str = "",
         forge_task_id: str = "",
         run_id: str = "",
+        hourly_pulse_id: str = "",
+        work_id: str = "",
+        work_alarm_id: str = "",
     ) -> "RunContext":
         return cls(
             run_id=run_id or new_run_id(),
@@ -103,6 +109,9 @@ class RunContext:
             status="pending",
             created_at=_utc_now(),
             forge_task_id=str(forge_task_id or "").strip(),
+            hourly_pulse_id=hourly_pulse_id,
+            work_id=work_id,
+            work_alarm_id=work_alarm_id,
         )
 
     def with_status(self, status: str) -> "RunContext":
@@ -125,6 +134,9 @@ class RunContext:
             "status": self.status,
             "created_at": self.created_at,
             "forge_task_id": self.forge_task_id,
+            **({"hourly_pulse_id": self.hourly_pulse_id} if self.hourly_pulse_id else {}),
+            **({"work_id": self.work_id} if self.work_id else {}),
+            **({"work_alarm_id": self.work_alarm_id} if self.work_alarm_id else {}),
         }
 
     @classmethod
@@ -145,6 +157,9 @@ class RunContext:
             status=str(data.get("status") or "pending"),
             created_at=str(data.get("created_at") or ""),
             forge_task_id=str(data.get("forge_task_id") or ""),
+            hourly_pulse_id=str(data.get("hourly_pulse_id") or ""),
+            work_id=str(data.get("work_id") or ""),
+            work_alarm_id=str(data.get("work_alarm_id") or ""),
         )
 
 

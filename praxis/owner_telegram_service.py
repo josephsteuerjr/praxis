@@ -21,6 +21,7 @@ from core import secrets
 import owner_telegram_rpc as rpc
 from owner_telegram_wakes import WakeStore, SIGNALS
 import telegram_outbox
+import focus_interrupt
 import telegram_registry
 from telegram_topics import parse_selector
 
@@ -75,6 +76,9 @@ class OwnerTelegram:
             sovereign_principals=("praxis:self",),
         )
         self.delivery = asyncio.Lock()
+        self.focus_peer = None
+        self.focus_token = None
+        self.focus_bell = None
         self.notification_cache = {}
         self.state = "starting"
         self.ready_since = time.time()
@@ -348,6 +352,33 @@ class OwnerTelegram:
                 return (mute.timestamp() if hasattr(mute, "timestamp") else mute) <= time.time()
         return True
 
+    def focus_watch(self, chat, token=None, close=False):
+        """One short-lived bell for the current coding window. No Telegram history reads."""
+        if type(chat) is not int or chat <= 0 or chat == self.account or chat != focus_interrupt.connected_peer():
+            raise ValueError("invalid focus peer")
+        if token is None:
+            self.focus_peer = chat
+            self.focus_since = time.time()
+            self.focus_token = uuid.uuid4().hex
+            self.focus_bell = None
+            return {"token": self.focus_token}
+        if token != self.focus_token or chat != self.focus_peer:
+            return {"expired": True}
+        if close:
+            self.focus_peer = self.focus_token = self.focus_bell = None
+            return {}
+        return {"signal": self.focus_bell}
+
+    async def focus_arrival(self, event):
+        if (self.state != "ready" or self.focus_peer is None or event.chat_id != self.focus_peer
+                or int(event.date.timestamp()) < int(self.focus_since)
+                or not event.is_private or not event.out
+                or not focus_interrupt.original(event.message, self.account)):
+            return
+        async with self.delivery:
+            if event.chat_id == self.focus_peer and not self.wakes.was_sent(event.chat_id, event.id):
+                self.focus_bell = focus_interrupt.fingerprint(event.message)
+
     async def notification_changed(self, update) -> None:
         if isinstance(update, types.UpdateNotifySettings):
             self.notification_cache.clear()
@@ -406,6 +437,8 @@ class OwnerTelegram:
                 return await self.send(execution, **arguments)
             if method == "yegor_media":
                 result = await self.media_operation(execution, **arguments)
+            elif method == "focus_watch":
+                result = self.focus_watch(**arguments)
             elif method == "yegor_read":
                 result = await self.read(**arguments)
             elif method == "yegor_search":
@@ -520,6 +553,7 @@ def main() -> None:
         service = OwnerTelegram(client, account, state,
                                 Path(os.getenv("PRAXIS_OWNER_TELEGRAM_MEDIA") or MEDIA))
         client.add_event_handler(service.arrival, events.NewMessage(incoming=True))
+        client.add_event_handler(service.focus_arrival, events.NewMessage(outgoing=True))
         client.add_event_handler(service.notification_changed, events.Raw(types.UpdateNotifySettings))
         await serve(service, Path(os.getenv("PRAXIS_OWNER_TELEGRAM_SOCKET") or rpc.DEFAULT_SOCKET))
 

@@ -122,7 +122,7 @@ export class KeysScene extends FormScene {
     const chatgpt = el("div", "pane");
     const relayRow = el("div", "actions");
     const relayOut = el("span", "receipt");
-    // Ссылка входа (1.2.3): помощник реле может не открыть браузер (27.09 у Егора так и
+    // Ссылка входа (1.2.3): помощник реле может не открыть браузер (27.09 у владельца так и
     // было) — тогда страницу открывает сам мастер или человек вставляет ссылку сам.
     let linkUrl = "";
     const linkRow = el("div", "actions");

@@ -6,7 +6,7 @@ import hashlib
 import logging
 import os
 import queue
-from pathlib import Path
+from .windows_paths import Path, walk
 import shutil
 import stat
 import threading
@@ -131,7 +131,7 @@ def _copy(source,target,stopped,progress=None):
     info=source.lstat()
     if stat.S_ISLNK(info.st_mode) or getattr(info,'st_file_attributes',0)&0x400:
         raise ValueError('Linked battery input root: '+str(source))
-    for directory,dirs,names in os.walk(source):
+    for directory,dirs,names in walk(source):
         _check(stopped);here=Path(directory)
         for name in [*dirs,*names]:
             entry=here/name;info=entry.lstat()
@@ -150,7 +150,7 @@ def _copy(source,target,stopped,progress=None):
 
 def inventory(battery,root,stopped,expected=None):
     rows={};root=Path(root)
-    for directory,dirs,names in os.walk(root):
+    for directory,dirs,names in walk(root):
         _check(stopped);here=Path(directory)
         dirs[:]=sorted(name for name in dirs if name not in battery.bundle.EXCLUDED)
         for name in [*dirs,*sorted(names)]:
@@ -329,7 +329,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
         for key in needed:
             source=Path(executor[key]) if executor.get(key) else None
             if source and source.is_dir():
-                for directory,dirs,names in os.walk(source):
+                for directory,dirs,names in walk(source):
                     _check(stopped)
                     for name in names:cache_bytes+=(Path(directory)/name).lstat().st_size
     python_bytes=sum((Path(layout['root'])/name).stat().st_size for name in layout['files']) if layout else 0

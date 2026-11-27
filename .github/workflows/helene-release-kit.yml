@@ -1,0 +1,58 @@
+name: Hélène platform builders
+run-name: Hélène ${{ inputs.target }} · ${{ github.ref_name }}
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Platform selection
+        type: choice
+        default: all
+        options: [all, windows-x86_64, macos-arm64, macos-x86_64, debian-x86_64, fedora-x86_64, server-linux-arm64]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.target == 'all' && '["windows-x86_64","macos-arm64","macos-x86_64","debian-x86_64","fedora-x86_64","server-linux-arm64"]' || format('["{0}"]', inputs.target)) }}
+    name: ${{ matrix.target }}
+    runs-on: ${{ fromJSON('{"windows-x86_64":"windows-2025","macos-arm64":"macos-15","macos-x86_64":"macos-26-intel","debian-x86_64":"ubuntu-24.04","fedora-x86_64":"ubuntu-24.04","server-linux-arm64":"ubuntu-24.04"}')[matrix.target] }}
+    timeout-minutes: 75
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare a case-sensitive macOS build volume
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -size 20g -type SPARSE -fs 'Case-sensitive APFS' -volname HeleneBuild "$RUNNER_TEMP/case.sparseimage"
+          mkdir -p "$RUNNER_TEMP/helene-case"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/case.sparseimage"
+          echo "TMPDIR=$RUNNER_TEMP/helene-case" >> "$GITHUB_ENV"
+      - name: Native desktop package and interpreter
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python ci_worker.py "$TARGET" delivery
+      - name: Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p delivery
+          case "$TARGET" in
+            fedora-*) image=fedora:44; install='dnf install -y git python3 which tar gzip' ;;
+            *) image=debian:bookworm; install='apt-get update && apt-get install -y git python3 ca-certificates' ;;
+          esac
+          docker run --rm -v "$PWD:/job:ro" -v "$PWD/delivery:/out" -e TARGET -w /job "$image" sh -ec "$install && python3 ci_worker.py \"\$TARGET\" /out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helene-${{ matrix.target }}
+          path: delivery/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

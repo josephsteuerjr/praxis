@@ -88,7 +88,7 @@ class KnobTests(Pass21Base):
         self.assertFalse(perception.set_knob("несуществующий", "1")["ok"])
 
     def test_retired_quiet_hours_are_not_a_hidden_gate(self):
-        result = perception.set_knob("quiet_hours", "22-6", by="egor")
+        result = perception.set_knob("quiet_hours", "22-6", by="alex")
         self.assertFalse(result["ok"])
         self.assertNotIn("quiet_hours", perception.KNOBS)
 
@@ -391,7 +391,7 @@ class WiringTests(Pass21Base):
         self.assertIn("owner-скоуп", out)
         self.patch(agent, _CURRENT_SCOPE="owner")
         out = agent.tool_manage_perception("set", knob="cooldown_dm", value="20",
-                                           reason="быстрее с Егором")
+                                           reason="быстрее с Алексом")
         self.assertIn('без рестарта', out)
         self.assertIn("рычаг", agent.tool_manage_perception("list").lower())
         self.assertIn("пропуск", agent.tool_manage_perception("skips").lower())

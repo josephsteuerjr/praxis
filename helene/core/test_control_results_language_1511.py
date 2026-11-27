@@ -8,7 +8,7 @@ from unittest.mock import Mock,patch
 import agent
 import frame_language as lang
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class ControlResults(unittest.TestCase):
     def own(self,text,language):

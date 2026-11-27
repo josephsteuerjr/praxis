@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
+from .windows_paths import Path, wide
 import shutil
 import stat
 
@@ -36,7 +36,7 @@ def _change_time(path):
     kernel.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
     kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    handle = kernel.CreateFileW(str(path), 0x80, 7, None, 3, 0x02000000, None)
+    handle = kernel.CreateFileW(wide(path), 0x80, 7, None, 3, 0x02000000, None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:

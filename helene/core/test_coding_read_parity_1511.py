@@ -11,7 +11,7 @@ import agent
 import forge
 import frame_language
 
-RAW='Yegor Егор 日本語 {literal} $&\nnext line'
+RAW='Alex Алекс 日本語 {literal} $&\nnext line'
 
 
 class ExactArchivedReads(unittest.TestCase):

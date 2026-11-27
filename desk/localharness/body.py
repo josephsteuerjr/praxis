@@ -1452,7 +1452,7 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
     Рука дерева знает второй маршрут тела — «system» через трубу `PraxisBodySystem`:
     так было у Праксис, где рядом жила отдельная служба тела с правами СИСТЕМЫ. В Hélène
     её нет, права системы — у брокера службы (`broker_request op=exec`, «да» владельца в
-    окне). 27.09 агент Егора позвал `execution=system`, получил «open local router
+    окне). 27.09 агент владельца позвал `execution=system`, получил «open local router
     \\\\.\\pipe\\PraxisBodySystem» и доложил, что права системы недоступны, — хотя они
     включены. Теперь тот же вызов идёт туда, где права есть, и агенту не нужно знать про
     два пути.
@@ -1847,7 +1847,7 @@ def describe_for_mac(agent_mod, texts=None, platform: str = "macOS") -> int:
 # Живой случай 20.09 (Mac, 0.8.1): на просьбу подвинуть мышь агент ответил «на маке
 # не реализовано», не позвав тул. Схему `computer` describe_for_mac уже переводил,
 # но модель читает не схему: с указателями рук (PRAXIS_TOOLS_POINTERS=on, издание
-# 0.7.1) она видит строку «Yegor's Windows computer: files, PowerShell, …»
+# 0.7.1) она видит строку «the owner's Windows computer: files, PowerShell, …»
 # (`tool_text_en.POINTER_PURPOSE`, по-русски — `agent.HAND_PURPOSE`), а в блоке
 # владельца кадра — «The Windows PC is your DIRECT body … run/poll/stop PowerShell».
 # Оба текста — правда для сервера Праксис и для Windows-издания, и ложь на Mac.

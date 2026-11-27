@@ -48,6 +48,14 @@ BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 TASKS = BASE / "memory" / "tasks.json"
 KINDS = ("window", "wake", "email", "message", "note")
 AUTHORS = ("praxis", "owner", "app")
+# Old readers only admit `pending`; they must never upgrade a scoped return to a generic wake.
+_FOCUS_PENDING = "focus_pending"
+
+
+def _is_open(row: dict) -> bool:
+    if row.get("work_id"):
+        return row.get("status") == _FOCUS_PENDING
+    return row.get("status") == "pending"
 
 
 def message_reassessment_prompt(task: dict) -> str:
@@ -120,11 +128,36 @@ def when_trouble(t: dict) -> str | None:
     return f"срок «{w}» я прочитать не могу — намерение не сработает, назначь заново"
 
 
-def _load() -> list:
+def _serialized_writer(fn):
+    """Runner and panel processes transact on the same schedule document."""
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        TASKS.parent.mkdir(parents=True, exist_ok=True)
+        with TASKS.with_suffix(".lock").open("a+b") as fh:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def _load(*, strict: bool = False) -> list:
     try:
         d = json.loads(TASKS.read_text(encoding="utf-8"))
-        return d if isinstance(d, list) else []
-    except Exception:
+        if not isinstance(d, list) or any(not isinstance(row, dict) for row in d):
+            raise ValueError("Invalid task schedule document")
+        return d
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        if strict:
+            raise
         return []
 
 
@@ -199,9 +232,11 @@ def _next_recur_inner(recur: str, now: _dt.datetime) -> str | None:
     return None
 
 
+@_serialized_writer
 def add(kind: str, goal: str, when: str | None = None, target: str | None = None,
         target_id=None, risky: bool = False, author: str = "praxis",
-        after_run: str | None = None, swapped_from: str | None = None) -> dict:
+        after_run: str | None = None, swapped_from: str | None = None,
+        work_id: str = "", after_forge: tuple[str, str] | None = None) -> dict:
     """PASS 9.4: target_id — id, отрезолвленный при постановке (планировщик шлёт по нему,
     без повторного поиска); risky — адресат незнаком (нет в known_ids/people).
     PASS 26: author — кто наметил намерение (praxis|owner|app), провенанс с рождения.
@@ -219,6 +254,15 @@ def add(kind: str, goal: str, when: str | None = None, target: str | None = None
         "created": _now().isoformat(timespec="minutes"),
         "author": author if author in AUTHORS else "praxis",
     }
+    if work_id:
+        if kind not in {"window", "wake"} or author != "praxis" or recur:
+            raise ValueError("work_id requires a one-shot self window or wake")
+        task["work_id"] = work_id
+        task["status"] = _FOCUS_PENDING
+    if after_forge:
+        if not work_id or after_run:
+            raise ValueError("after_forge requires a named work return and no after_run")
+        task["after_forge"] = list(after_forge)
     if target_id is not None:
         task["target_id"] = target_id
     if risky:
@@ -241,35 +285,61 @@ def add(kind: str, goal: str, when: str | None = None, target: str | None = None
                 task["_keat_wake_source"] = source
         except Exception:
             pass
-    items = _load()
+    items = _load(strict=True)
+    if work_id and any(row.get("work_id") == work_id and _is_open(row)
+                       for row in items):
+        raise ValueError("a return for this work is already pending; use its alarm or cancel it")
     items.append(task)
     _save(items)
     return task
 
 
 def list_open() -> list:
-    return [t for t in _load() if t.get("status") == "pending"]
+    return [t for t in _load() if _is_open(t)]
 
 
+def selected_forge_pairs() -> set[tuple[str, str]]:
+    return {tuple(dep) for alarm in list_open()
+            if isinstance(dep := alarm.get("after_forge"), list) and len(dep) == 2
+            and all(isinstance(token, str) and token for token in dep)}
+
+
+@_serialized_writer
+def admit_forge_result(alarm: dict, receipt: dict) -> bool:
+    """Record the selected receipt once, on the original alarm, before admission."""
+    items = _load(strict=True)
+    for row in items:
+        if (row.get("id") == alarm.get("id") and _is_open(row)
+                and row.get("work_id") == alarm.get("work_id") and not row.get("claim")
+                and row.get("after_forge") == [receipt["task_id"], receipt["agent_id"]]):
+            if not row.get("forge_result"):
+                row["forge_result"] = receipt
+                _save(items)
+            return row["forge_result"] == receipt
+    return False
+
+
+@_serialized_writer
 def cancel(task_id: str) -> bool:
-    items, changed = _load(), False
+    items, changed = _load(strict=True), False
     for t in items:
-        if t.get("id") == task_id and t.get("status") == "pending":
+        if t.get("id") == task_id and _is_open(t):
             t["status"], changed = "cancelled", True
     if changed:
         _save(items)
     return changed
 
 
+@_serialized_writer
 def due(now: _dt.datetime | None = None) -> list:
     """Сработавшие задачи (status=pending и время пришло). recur без when — проставить следующий."""
     now = now or _now()
-    items, changed, out = _load(), False, []
+    items, changed, out = _load(strict=True), False, []
     for t in items:
-        if t.get("status") != "pending":
+        if not _is_open(t):
             continue
-        if t.get("after_run"):
-            continue  # удержание до завершения рана; часы снимают его clear_after_run
+        if t.get("after_run") or (t.get("after_forge") and not t.get("forge_result")):
+            continue
         if t.get("claim"):
             continue  # уже поднимается прямо сейчас; снимет mark_fired или release_open_claims
         if t.get("recur") and not t.get("when"):
@@ -300,7 +370,9 @@ def due(now: _dt.datetime | None = None) -> list:
     return out
 
 
-def claim_open(task_id: str, kind: str = "") -> bool:
+@_serialized_writer
+def claim_open(task_id: str, kind: str = "", *, run_id: str = "", work_id: str = "",
+               forge_result: dict | None = None) -> bool:
     """Взять намерение В РАБОТУ, но НЕ погасить его. True — взяли.
 
     ⚠ Нашла Праксис, читая наши коммиты: «намерение может быть помечено сработавшим до
@@ -321,47 +393,88 @@ def claim_open(task_id: str, kind: str = "") -> bool:
     существует. Захват, чей ран так и не появился, снимается `release_open_claims` под
     единым замком: замок свободен и захват висит — значит поднимавший мёртв.
     """
-    items, changed = _load(), False
+    items, changed = _load(strict=True), False
     for t in items:
-        if t.get("id") == task_id and t.get("status") == "pending" and not t.get("claim"):
+        if t.get("id") == task_id and _is_open(t) and not t.get("claim"):
             t["claim"] = {"at": _now().isoformat(timespec="seconds"),
                           "for": kind or t.get("kind") or ""}
+            if run_id:
+                if (not work_id or t.get("work_id") != work_id or t.get("kind") != kind
+                        or t.get("forge_result") != forge_result
+                        or (t.get("after_forge") and not forge_result)):
+                    return False
+                t["claim"]["run_id"] = run_id
             changed = True
     if changed:
         _save(items)
     return changed
 
 
-def release_open_claims() -> list:
+@_serialized_writer
+def confirm_work_run(task_id: str, work_id: str, run_id: str, *, handoff=None) -> bool:
+    items = _load(strict=True)
+    for t in items:
+        if (t.get("id") == task_id and _is_open(t)
+                and t.get("work_id") == work_id and not t.get("recur")
+                and (t.get("claim") or {}).get("run_id") == run_id):
+            if handoff is not None:
+                handoff()
+            t["status"] = "done"
+            t["opened_run_id"] = run_id
+            t.pop("claim")
+            _save(items)
+            return True
+    return False
+
+
+@_serialized_writer
+def release_open_claims(read_work_run=None) -> list:
     """Снять зависшие захваты (их поднимавший мёртв) -> список id. Намерение снова созреет.
 
     Звать ТОЛЬКО когда держишь единый замок и живого прохода нет: тогда захват не может
     принадлежать никому живому. Тот же довод, на котором стоит жнец осиротевших ранов."""
-    items, out = _load(), []
+    items, out, changed = _load(strict=True), [], False
     for t in items:
-        if t.get("status") == "pending" and t.get("claim"):
-            t.pop("claim", None)
-            out.append(t.get("id"))
-    if out:
+        if not _is_open(t) or not t.get("claim"):
+            continue
+        run_id = t["claim"].get("run_id")
+        if run_id:
+            # Only an absent run directory proves this claim never reached run custody.
+            # A partial, unreadable or conflicting run stays held; never issue it again.
+            observed = (read_work_run(run_id, t.get("work_id"), t.get("id"))
+                        if read_work_run else "unknown")
+            if observed == "bound":
+                t["status"] = "done"
+                t["opened_run_id"] = run_id
+                t.pop("claim")
+                changed = True
+                continue
+            if observed != "absent":
+                continue
+        t.pop("claim")
+        out.append(t.get("id"))
+        changed = True
+    if changed:
         _save(items)
     return out
 
 
 def open_claims() -> list:
     """Намерения, взятые в работу прямо сейчас (для наблюдения, не для решений)."""
-    return [t for t in _load() if t.get("status") == "pending" and t.get("claim")]
+    return [t for t in _load() if _is_open(t) and t.get("claim")]
 
 
 def after_run_holds() -> list:
     """Открытые намерения, ждущие завершения рана (не входят в due до снятия удержания)."""
-    return [t for t in _load() if t.get("status") == "pending" and t.get("after_run")]
+    return [t for t in _load() if _is_open(t) and t.get("after_run")]
 
 
+@_serialized_writer
 def clear_after_run(task_id: str) -> bool:
     """Ран завершился: снять удержание — намерение созревает по своему when или немедленно."""
-    items, changed = _load(), False
+    items, changed = _load(strict=True), False
     for t in items:
-        if t.get("id") == task_id and t.get("status") == "pending" and t.get("after_run"):
+        if t.get("id") == task_id and _is_open(t) and t.get("after_run"):
             t.pop("after_run", None)
             changed = True
     if changed:
@@ -393,11 +506,12 @@ def _within(item: dict, cut) -> bool:
     return created >= cut
 
 
+@_serialized_writer
 def mark_fired(task_id: str) -> None:
     """После исполнения: одноразовое -> done; повторяющееся -> следующий запуск."""
-    items, changed = _load(), False
+    items, changed = _load(strict=True), False
     for t in items:
-        if t.get("id") == task_id and t.get("status") == "pending":
+        if t.get("id") == task_id and _is_open(t):
             t.pop("claim", None)      # владение передано рану — держать больше нечего
             if t.get("recur"):
                 t["when"], changed = _next_recur(t["recur"], _now()), True

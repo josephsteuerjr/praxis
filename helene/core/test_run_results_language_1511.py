@@ -10,7 +10,7 @@ import frame_language as frame
 import logsink
 from test_truth_agent import _RunHarness
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class RunResults(_RunHarness):
     def setUp(self):

@@ -384,7 +384,8 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         sentinel = "развёлся в марте"
         public = "любит чай"
         budget = None
-        for limit in range(16000, 40001, 100):
+        persona_chars = len(agent._persona_text())
+        for limit in range(persona_chars + 10000, persona_chars + 40001, 100):
             with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_CONTEXT_BUDGET": str(limit)}):
                 candidate = frame_for(room_ctx(owner=True, principal="42"))
             if public in candidate[2]:

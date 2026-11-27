@@ -311,33 +311,6 @@ def _automatic_memory_context(cap: int | None = None) -> str:
     )
 
 
-def _recent_windows_context(days: int = 7, cap: int = 6) -> str:
-    """Show Praxis her actual recent goals and outcomes, not opaque hashes."""
-    rows = []
-    for e in decisions(days):
-        v = str(e.get("verdict") or "").strip()
-        if not v or v.upper() == "НЕТ":
-            continue
-        d = e.get("done")
-        status = "исполнено" if d is True else ("упало" if d is False else "в работе")
-        ts = float(e.get("ts") or 0)
-        rows.append({
-            "date": local_now(ts).date().isoformat(),
-            "status": status,
-            "goal": v[:500],
-            "spent": str(e.get("spent") or "")[:120],
-            "why": str(e.get("why") or "")[:200],
-        })
-    if not rows:
-        return ""
-    receipt = {
-        "kind": "recent_window_receipts",
-        "count": len(rows),
-        "windows": rows[-cap:],
-    }
-    return "RUNTIME RECEIPT: " + json.dumps(receipt, ensure_ascii=False, sort_keys=True)
-
-
 def _transport_status() -> str:
     """PASS 30.0.e: сенсор Telegram-транспорта из agent._TELETHON (lazy — без цикла импорта)."""
     try:
@@ -389,7 +362,7 @@ def window_context(*, include_pacing: bool = True) -> str:
     parts = [p for p in (
         _pacing_context() if include_pacing else "",
         _unanswered_context(), _loops_context(),
-        _recent_windows_context(), _automatic_memory_context(),
+        _automatic_memory_context(),
         _forge_completions_context(),
     ) if p]
     return "\n\n".join(parts)

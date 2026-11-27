@@ -1,4 +1,4 @@
-"""Agent personal Git hygiene at start (2.8.4; Jarvis, 16.11: 21 GB store, five-minute commands).
+"""Agent personal Git hygiene at start (2.8.4; Atlas, 16.11: 21 GB store, five-minute commands).
 
 A synthetic home whose history carries an owner backup and a service file is healed: gc off,
 stale temporary packs gone, the paths out of HEAD and out of the whole history, every other

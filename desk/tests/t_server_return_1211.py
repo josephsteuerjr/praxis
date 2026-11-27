@@ -70,7 +70,7 @@ class Scenario:
         # After the move the window watches the server copy (remote mode).
         write(self.config, json.dumps({'mode': 'remote', 'base': 'https://agent.example', 'key': 'window-key',
                                        'server_locator': 'telegram-menu', 'tree': str(self.data), 'code': 'tree',
-                                       'app': 'app/deskapp.py', 'port': 8094, 'agent': {'name': 'Jarvis'},
+                                       'app': 'app/deskapp.py', 'port': 8094, 'agent': {'name': 'Atlas'},
                                        'model': {'model': 'sol'}, 'phone': {'enabled': True}}))
         self.row = {'id': '0' * 24, 'archive': str(self.forward), 'archive_sha': 'ab' * 32, 'phase': 'ready',
                     'destination': ['203.0.113.5', 22, 'root'], 'fingerprint': 'SHA256:pinned',
@@ -120,7 +120,7 @@ class Scenario:
             write(data / 'workspace/side/dirty.txt', 'untracked in worktree\n')
         write(install / 'helene.json', json.dumps({'mode': 'local', 'tree': 'data', 'code': 'tree',
                                                    'app': 'app/deskapp.py', 'port': 8094,
-                                                   'agent': {'name': 'Jarvis'}, 'model': {'model': 'astra-switched'},
+                                                   'agent': {'name': 'Atlas'}, 'model': {'model': 'astra-switched'},
                                                    'sandbox': {'mounts': [str(shared)]}}))
         mark = {'id': self.row['id'], 'archive_sha': self.row['archive_sha']}
         write(install / '.window-transfer.json', json.dumps(mark))
@@ -297,7 +297,7 @@ class LocalActivation(unittest.TestCase):
         write(server / 'data/memory/learned.md', 'learned on the server\n')
         write(server / 'data/workspace/notes/one.md', 'note\n')
         link(server / 'data/workspace/latest', server / 'data/workspace/notes')
-        self.config_on_server = {'agent': {'name': 'Jarvis'}, 'model': {'model': 'astra-switched'}, 'tree': 'data'}
+        self.config_on_server = {'agent': {'name': 'Atlas'}, 'model': {'model': 'astra-switched'}, 'tree': 'data'}
         archive = Path(temp.name) / 'built.zip'
         self.receipt = carry_payload.create(archive, {'data': server / 'data', 'code': server / 'code',
                                                       'app': server / 'app', 'base': server / 'base'},
@@ -333,6 +333,73 @@ class LocalActivation(unittest.TestCase):
         self.assertFalse({'base', 'key', 'server_locator'} & set(config))
         self.assertEqual(carry_scope.read_config(Path(result['code']['local_before']).parent / 'config-before.json')['tree'],
                          str(self.scene.data))
+
+    def test_return_while_neighbor_works_keeps_shared_code_and_requires_profile_resume(self):
+        from localharness import agents
+        peer = agents.create(self.scene.program, 'Local Neighbor')
+        config = self.scene.config
+        shared = carry_scope.configured_roots(peer.config, agents.read_config(peer.config))
+        before = (shared['code'] / 'b.py').read_bytes()
+        with mock.patch.object(back.transfer.owner_stop, 'stopped', return_value=False):
+            result = self.run_return()
+        cfg = agents.read_config(config)
+        self.assertEqual(result['restart'], 'profile')
+        self.assertTrue(cfg['return_pending'])
+        self.assertEqual(result['code']['shared_agents'], [peer.id])
+        self.assertEqual((shared['code'] / 'b.py').read_bytes(), before)
+        self.assertEqual((Path(cfg['code']) / 'b.py').read_text(), 'b edited on the server\n')
+        self.assertTrue(Path(cfg['app']).is_relative_to(Path(result['home'])))
+        back.release_pending(config)
+        self.assertNotIn('return_pending', agents.read_config(config))
+        self.assertEqual((Path(result['data'])/'memory/learned.md').read_text(), 'learned on the server\n')
+
+    def test_private_program_rebinds_an_internal_link_and_refuses_an_external_one(self):
+        from localharness import agents
+        agents.create(self.scene.program, 'Peer')
+        source = self.scene.program / 'tree'
+        link(source / 'other-data', self.scene.data)
+        with self.assertRaises(ValueError):
+            self.run_return()
+        self.assertEqual(agents.read_config(self.scene.config)['mode'], 'remote')
+        if os.name == 'nt':
+            (source / 'other-data').rmdir()
+        else:
+            (source / 'other-data').unlink()
+        write(source / 'library/module.py', 'before')
+        link(source / 'alias', source / 'library')
+        self.run_return()
+        private = Path(agents.read_config(self.scene.config)['code'])
+        self.assertEqual((private / 'alias').resolve(), (private / 'library').resolve())
+        write(private / 'alias/module.py', 'after')
+        self.assertEqual((source / 'library/module.py').read_text(), 'before')
+
+    def test_private_runner_inside_custom_code_rebinds_with_its_profile(self):
+        from localharness import agents
+        cfg = agents.read_config(self.scene.config)
+        cfg['runner'] = 'tree/agent.py'
+        agents._write_config(self.scene.config, cfg)
+        agents.create(self.scene.program, 'Peer')
+        self.run_return()
+        returned = agents.read_config(self.scene.config)
+        self.assertEqual(Path(returned['runner']), Path(returned['code']) / 'agent.py')
+        self.assertTrue(Path(returned['runner']).is_file())
+
+    def test_shared_application_requires_current_roster_and_stop(self):
+        from localharness import agents
+        agents.create(self.scene.program, 'First Peer')
+        scope = back.code_scope(self.scene.config, self.scene.program)
+        self.scene.raw['shared_code'] = scope['binding']
+        with mock.patch.object(back.transfer.owner_stop, 'stopped', return_value=False):
+            with self.assertRaises(back.ReturnError):
+                self.run_return()
+        agents.create(self.scene.program, 'Second Peer')
+        with self.assertRaises(back.ReturnError):
+            self.run_return()
+        self.assertEqual((self.scene.program/'tree/b.py').read_text(), 'b clean\n')
+        self.scene.raw['shared_code'] = back.code_scope(self.scene.config, self.scene.program)['binding']
+        result = self.run_return()
+        self.assertFalse(result['code']['private'])
+        self.assertEqual((self.scene.program/'tree/b.py').read_text(), 'b edited on the server\n')
 
     def test_newer_server_version_waits_for_a_local_update_without_switching(self):
         write(self.scene.program / 'helene-build.json', json.dumps({'version': '2.6.9'}))

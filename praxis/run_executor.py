@@ -51,8 +51,11 @@ from run_resume import (
     CHECKPOINT_SCHEMA,
     PLAN_SCHEMA,
     OutboundDescriptor,
+    ResumeEvidenceError,
     ResumePlan,
     ToolCallResume,
+    hourly_wrapped_closing_intent,
+    is_hourly_self_run,
 )
 
 
@@ -296,13 +299,15 @@ def _checkpoint(plan: ResumePlan) -> dict[str, Any]:
     return copy.deepcopy(value)
 
 
-def _result_ref(run_id: str, value: Any) -> dict[str, Any]:
+def _result_ref(run_id: str, call_id: str, value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") != "praxis.result-ref.v1":
         raise ResumeExecutionError("completed tool lacks a durable ResultRef")
     if value.get("run_id") != run_id:
         raise ResumeExecutionError("completed tool ResultRef belongs to another run")
     if not str(value.get("result_id") or "") or not str(value.get("sha256") or ""):
         raise ResumeExecutionError("completed tool ResultRef is incomplete")
+    if "call_id" in value and value["call_id"] != call_id:
+        raise ResumeExecutionError("completed tool ResultRef belongs to another call")
     return copy.deepcopy(value)
 
 
@@ -339,24 +344,62 @@ def _preflight_tool_replay(plan: ResumePlan, callbacks: ResumeExecutorCallbacks)
     offered = _offered_tool_names(plan)
     needs_pending = False
     needs_replay = False
+    has_wrapped_refusal = False
+    hourly_run = is_hourly_self_run(plan.context)
     for block, call in zip(blocks, calls):
         if not isinstance(call, ToolCallResume):
             raise ResumeExecutionError("tool replay contains an invalid call plan")
-        raw_input = block.get("input")
+        raw_name, raw_input = block.get("name"), block.get("input")
+        if not isinstance(raw_name, str) or raw_name not in offered:
+            raise ResumeExecutionError(
+                f"tool {raw_name!r} was not offered in the exact model input")
+        name = raw_name
         normalized_input = ({key: value for key, value in raw_input.items()
                              if value is not None}
                             if isinstance(raw_input, dict) else None)
+        if raw_name == "coding_review" and isinstance(raw_input, dict):
+            # Pending calls must preserve even null-valued public keywords.
+            # Previously started calls can retain the planner's exact legacy args.
+            if call.state == "pending_start" or call.input != normalized_input:
+                normalized_input = raw_input
+        wrapped = None
+        if isinstance(raw_input, dict) and hourly_run:
+            try:
+                wrapped = hourly_wrapped_closing_intent(raw_name, raw_input)
+            except ResumeEvidenceError as exc:
+                raise ResumeExecutionError(str(exc)) from exc
+            if wrapped is not None:
+                if call.state != "completed" or not (call.closing_word or call.closing_refused is True):
+                    raise ResumeExecutionError("wrapped hourly closing requires an accepted ResultRef")
+                name, normalized_input = wrapped
+        if (raw_name == "call" and isinstance(raw_input, dict)
+                and isinstance(raw_input.get("name"), str)
+                and raw_input["name"].strip() == "coding_review"):
+            # The planner matched this pointer to a completed inner WAL call.
+            # Decode only for evidence comparison; never dispatch this wrapper.
+            if call.state != "completed":
+                raise ResumeExecutionError("unsettled wrapped coding_review cannot be resumed")
+            try:
+                args = tool_offerings.parse_call_args(raw_input.get("args_json"))
+            except (ValueError, RecursionError) as exc:
+                raise ResumeExecutionError("completed wrapped coding_review has malformed arguments") from exc
+            name = "coding_review"
+            normalized_input = {key: value for key, value in args.items() if value is not None}
+            if call.input != normalized_input:
+                normalized_input = args
+        if call.closing_refused and (
+            call.closing_refused is not True or wrapped is None or call.closing_word
+        ):
+            raise ResumeExecutionError("wrapped refusal is not a completed closing receipt")
         if (not call.call_id or call.call_id in seen or block.get("id") != call.call_id
-                or block.get("name") != call.name or normalized_input != call.input):
+                or name != call.name or normalized_input != call.input):
             raise ResumeExecutionError("tool replay call order/content differs from model output")
-        if call.name not in offered:
-            raise ResumeExecutionError(
-                f"tool {call.name!r} was not offered in the exact model input")
         seen.add(call.call_id)
         if call.state == "completed":
             if call.replayable or call.replay_basis:
                 raise ResumeExecutionError("completed tool is incorrectly marked replayable")
-            _result_ref(plan.run_id, call.result_ref)
+            _result_ref(plan.run_id, call.call_id, call.result_ref)
+            has_wrapped_refusal = has_wrapped_refusal or call.closing_refused
         elif call.state == "pending_start":
             if call.replayable or call.replay_basis or call.result_ref is not None:
                 raise ResumeExecutionError("pending tool carries replay/result evidence")
@@ -370,6 +413,10 @@ def _preflight_tool_replay(plan: ResumePlan, callbacks: ResumeExecutorCallbacks)
             needs_replay = True
         else:
             raise ResumeExecutionError(f"unknown tool state {call.state!r}")
+    if has_wrapped_refusal and not plan.hourly_closing_words:
+        raise ResumeExecutionError("wrapped refusal requires an accepted closing word in the same batch")
+    if plan.hourly_closing_words and (not hourly_run or needs_pending or needs_replay or plan.outbound):
+        raise ResumeExecutionError("hourly closing proof requires a completed batch without outbound")
     if callbacks.continue_tool_response is None:
         raise ResumeExecutionError("continue_tool_response callback is required")
     if needs_pending and callbacks.execute_pending_tool is None:
@@ -572,7 +619,7 @@ def execute_resume(
                 call_id=call.call_id,
                 name=call.name,
                 source="durable_result_ref",
-                result_ref=_result_ref(plan.run_id, call.result_ref),
+                result_ref=_result_ref(plan.run_id, call.call_id, call.result_ref),
             ))
             continue
         if call.state == "pending_start":

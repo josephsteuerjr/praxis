@@ -9,11 +9,24 @@ without ever treating the hosted tool as a locally replayable function.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable
 
 
 class ToolOfferingError(ValueError):
     """One offered descriptor is malformed or aliases another tool identity."""
+
+
+def parse_call_args(args_json: object) -> dict:
+    """Parse the pointer wrapper's argument object as the live dispatcher does."""
+    if args_json in (None, ""):
+        return {}
+    if isinstance(args_json, dict):
+        return dict(args_json)
+    parsed = json.loads(str(args_json))
+    if not isinstance(parsed, dict):
+        raise ValueError("args_json должен быть JSON-объектом {…}")
+    return parsed
 
 
 def local_function_names(tools: Iterable[object]) -> frozenset[str]:

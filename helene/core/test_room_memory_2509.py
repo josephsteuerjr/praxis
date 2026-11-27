@@ -1,4 +1,4 @@
-"""25.09 — память комнаты (слово Егора: «как следует поднять горячий контекст комнаты»,
+"""25.09 — память комнаты (слово владельца: «как следует поднять горячий контекст комнаты»,
 «сделать приватные данные более доступными»).
 
 Что здесь прибито:
@@ -55,7 +55,7 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
         self.assertLess(hi, hard)
 
     def test_dm_defaults_are_150_250_300(self):
-        # слово Егора 25.09: «150–250 максимум»; рычаги PRAXIS_HOT_* остаются
+        # слово владельца 25.09: «150–250 максимум»; рычаги PRAXIS_HOT_* остаются
         if any(os.getenv(k) for k in ("PRAXIS_HOT_LO", "PRAXIS_HOT_HI", "PRAXIS_HOT_HARD_HI",
                                      "PRAXIS_HOT_TOKEN_CAP")):
             self.skipTest("пороги заданы окружением")
@@ -66,7 +66,7 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
 
     def test_dm_and_no_place_keep_the_old_bounds(self):
         old = (ml.HOT_LO, ml.HOT_HI, ml.HOT_HARD_HI, ml.HOT_TOKEN_CAP)
-        self.assertEqual(ml.hot_bounds("809306689"), old)
+        self.assertEqual(ml.hot_bounds("424242424"), old)
         self.assertEqual(ml.hot_bounds(None), old)
         self.assertEqual(ml.hot_bounds(""), old)
 
@@ -79,7 +79,7 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
         # как зовёт живой путь: tape_chars — потолок ленты ЭТОГО места (группе 0)
         n = ml.HOT_HI + 10
         rows = _rows(n)
-        dm = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("809306689"), place="809306689")
+        dm = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("424242424"), place="424242424")
         self.assertTrue(dm["due"], dm)
         group = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("-100999999999999999"),
                                  place="-100999999999999999")
@@ -443,7 +443,7 @@ def contextlib_all(patches):
 
 class OwnerDmTurnsAreLabelledInRecall(unittest.TestCase):
     HITS = [
-        {"path": "memory/self/turns-2026-09.jsonl", "text": "вошло: «Егор: у меня диагноз»", "source": "Praxis"},
+        {"path": "memory/self/turns-2026-09.jsonl", "text": "вошло: «Алекс: у меня диагноз»", "source": "Praxis"},
         {"path": "memory/people/x.md", "text": "факт", "source": "x"},
     ]
 
@@ -467,8 +467,8 @@ class OwnerDmTurnsAreLabelledInRecall(unittest.TestCase):
         self.assertIn("скрыто в этом канале", out)
 
     def test_owner_dm_sees_its_own_turns_plain(self):
-        owner = agent.ChannelContext(chat_id="809306689", is_dm=True, owner=True, known=True,
-                                     principal_id="809306689")
+        owner = agent.ChannelContext(chat_id="424242424", is_dm=True, owner=True, known=True,
+                                     principal_id="424242424")
         out = self._recall(owner, {"PRAXIS_RECALL_CROSS_ROOM": "show"})
         self.assertIn("диагноз", out)
         self.assertNotIn("из личной переписки", out)

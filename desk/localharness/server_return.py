@@ -38,7 +38,7 @@ import tempfile
 import time
 import zipfile
 
-from . import carry_git, carry_payload, carry_scope
+from . import agents, carry_git, carry_payload, carry_scope, ui_language
 from . import server_transfer as transfer
 from .carry_inventory import file_sha256
 from .private_files import write_private
@@ -324,12 +324,73 @@ def _base(cc, home, meta, row, program, work):
     return None, table, 'prints+departure' if overlay else 'prints'
 
 
-def merge_code(config_path, program, row, home, meta, new_data, folder):
+def code_scope(config_path, program):
+    local = carry_scope.program_roots(config_path, _config(config_path), program)
+    targets = (local['code'], local['application'])
+    shared = {}
+    for peer in agents.roster(program):
+        if peer.config.resolve() == Path(config_path).resolve():
+            continue
+        try:
+            cfg = _config(peer.config)
+        except FileNotFoundError:
+            cfg = {}  # The roster includes the main profile before its initial setup.
+        roots = carry_scope.program_roots(peer.config, cfg, program, for_copy=False)
+        if any(a.is_relative_to(b) or b.is_relative_to(a) for a in targets for b in roots.values()):
+            shared[peer.id] = [str(path) for path in roots.values()]
+    departure = transfer.saved_transfer(config_path)
+    binding = [str(Path(config_path).resolve()), departure.get('id'), departure.get('archive_sha'),
+               [str(p) for p in targets], shared]
+    return {'agents': sorted(shared), 'binding': hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
+            'stopped': transfer.owner_stop.stopped()}
+
+
+def _caption(program, key):
+    return ui_language.text('server.return.' + key, ui_language.for_root(Path(program)))
+
+
+def private_program(local, home, program):
+    """Publish the independent local merge targets together, retaining the server snapshot."""
+    # Junctions point at permanent locations on Windows. Stage at the final
+    # path and expose it to the runner only after copying Git metadata as well.
+    target = home / 'local-program'
+    attempt = 1
+    while target.exists() and not (target / '.program-ready.json').is_file():
+        attempt += 1
+        target = home / f'local-program-{attempt}'
+    destinations = {'code': target / 'roots/tree', 'application': target / 'roots/app'}
+    if target.exists():
+        return destinations
+    sources = {'tree': local['code'], 'app': local['application']}
+    repositories = []
+    exclusions = []
+    for name, source in sources.items():
+        inventory = carry_scope.inventory(source)
+        if inventory['errors'] or inventory['special']:
+            raise ReturnError(_caption(program, 'private_copy_failed') + ' ' + str(source))
+        for record in inventory['git']:
+            path = Path(record['path'])
+            if '.git' not in path.parent.parts:
+                repositories.append((name, path))
+                exclusions.append({'root': name, 'path': path.as_posix(), 'reason': 'standalone_git'})
+    with tempfile.TemporaryDirectory(prefix='private-copy-', dir=home) as work:
+        archive = Path(work) / 'program.zip'
+        receipt = carry_payload.create(archive, sources, exclusions=exclusions)
+        carry_payload.stage(archive, target, expected_sha256=receipt['sha256'])
+    cc = transfer.carry._codecarry()
+    for name, path in repositories:
+        carry_git.standalone(sources[name] / path.parent, target / 'roots' / name / path,
+                             git=cc._bundled_git(program) if cc else None)
+    _record(target / '.program-ready.json', {'sha256': receipt['sha256']})
+    return destinations
+
+
+def merge_code(config_path, program, row, home, meta, new_data, folder, *, destinations=None):
     """Server edits -> the configured local code, three-way; full copy stays in home."""
     cc = transfer.carry._codecarry()
     roots = home / 'roots'
     cfg = _config(config_path)
-    local = carry_scope.configured_roots(config_path, cfg)
+    local = destinations or carry_scope.program_roots(config_path, cfg, program)
     targets = (('tree', roots / 'code', local['code']), ('app', roots / 'app', local['application']))
     if cc is None:
         return {'note': 'переносчика правок кода нет в этой установке; серверный код целиком в ' + str(roots)}
@@ -404,8 +465,18 @@ def activate(config_path, program, row, state, home, meta):
     state['phase'] = 'activating'
     row['return'] = state
     _save(config_path, row)
-    code = merge_code(config_path, program, row, home, meta, new_data, folder)
     local = _config(config_path)
+    roots = carry_scope.program_roots(config_path, local, program)
+    scope = code_scope(config_path, program)
+    choice = state.get('shared_code')
+    if choice and (choice != scope['binding'] or not scope['stopped']):
+        raise ReturnError(_caption(program, 'review_again'))
+    private = None
+    if not choice and (scope['agents'] or not scope['stopped']):
+        private = private_program(roots, home, program)
+    code = merge_code(config_path, program, row, home, meta, new_data, folder, destinations=private)
+    code['shared_agents'] = scope['agents']
+    code['private'] = private is not None
     before = folder / 'config-before.json'
     if not before.exists():
         _record(before, local)
@@ -419,6 +490,18 @@ def activate(config_path, program, row, state, home, meta):
     _record(new_data / 'memory/.state/server-transfer.json', fresh)
     merged = transfer.carry.merge_config(local, meta.get('config') or {})
     merged['tree'] = str(new_data)
+    if private:
+        merged['code'] = str(private['code'])
+        app = (Path(config_path).parent / (local.get('app') or 'app/deskapp.py')).resolve()
+        merged['app'] = str(private['application'] / app.name)
+        if local.get('runner'):
+            runner = (Path(config_path).parent / local['runner']).resolve()
+            for kind in ('application', 'code'):
+                if runner.is_relative_to(roots[kind]):
+                    merged['runner'] = str(private[kind] / runner.relative_to(roots[kind]))
+                    break
+    if not scope['stopped']:
+        merged['return_pending'] = row['id']
     # The window watched the server copy; the agent now lives here again.
     merged['mode'] = 'local'
     for key in ('base', 'key', 'server_locator'):
@@ -426,8 +509,9 @@ def activate(config_path, program, row, state, home, meta):
     transfer.carry._write_config(Path(config_path), merged)
     retire(old_receipt, row, state)
     return {'ok': True, 'phase': 'done', 'home': str(home), 'data': str(new_data), 'code': code,
-            'previous_data': returned['previous_data'], 'restart': 'application',
-            'message': 'Агент вернулся: память, код и проекты с сервера на месте. Прежняя копия и архив '
+            'previous_data': returned['previous_data'], 'restart': 'profile' if merged.get('return_pending') else 'application',
+            'message': _caption(program, 'private_ready') if merged.get('return_pending') else
+                       'Агент вернулся: память, код и проекты с сервера на месте. Прежняя копия и архив '
                        'сохранены. Перезапусти программу и возобнови агента, когда проверишь.'}
 
 
@@ -470,6 +554,7 @@ def scope(raw, config_path, program):
             helper = upload_helper(client, remote_stage(row, identity))
             reply = helper_call(client, helper, {'action': 'scope', 'row': _row_for_server(row)}, timeout=600)
         reply['return_id'] = identity
+        reply['code_scope'] = code_scope(config_path, program)
         reply['local_version'] = _version(program)
         reply['compatible'] = compatible(reply.get('version'), reply['local_version'])
         return reply
@@ -483,7 +568,7 @@ def run(raw, config_path, program, *, projects=(), progress=None):
     config_path, program = Path(config_path), Path(program)
     with transfer.custody(config_path):
         row = _require(raw, config_path)
-        if not transfer.owner_stop.stopped():
+        if not transfer.owner_stop.stopped() and _config(config_path).get('mode') != 'remote':
             raise ReturnError('Сначала включи Stop в приложении: возврат не запускает агента сам.')
         projects = [dict(item) for item in projects]
         state = row.get('return') or {}
@@ -495,6 +580,15 @@ def run(raw, config_path, program, *, projects=(), progress=None):
             state['projects'] = projects
             if state['phase'] == 'snapshot':
                 state['phase'] = 'fenced'
+        if 'shared_code' in raw:
+            choice = raw['shared_code']
+            if choice is not None and (not isinstance(choice, str) or not choice):
+                raise ReturnError(_caption(program, 'review_again'))
+            state['shared_code'] = choice
+        if state.get('shared_code'):
+            scope_now = code_scope(config_path, program)
+            if not scope_now['stopped'] or state['shared_code'] != scope_now['binding']:
+                raise ReturnError(_caption(program, 'review_again'))
         row['return'] = state
         _save(config_path, row)
 
@@ -545,7 +639,8 @@ def run(raw, config_path, program, *, projects=(), progress=None):
         home = Path(state['home'])
         meta = metadata(archive)
         if state['phase'] in ('staged', 'activating'):
-            return activate(config_path, program, row, state, home, meta)
+            with agents._default_writer_lock(program):
+                return activate(config_path, program, row, state, home, meta)
         raise ReturnError('Неизвестное состояние возврата: ' + str(state['phase']))
 
 
@@ -567,10 +662,23 @@ def cancel(config_path):
                            'скачанное сохранено.' if state['phase'] != 'started' else 'Возврат отменён.'}
 
 
+def release_pending(config_path, program=None):
+    """Only the explicit resume of this returned profile clears its start hold."""
+    with transfer.custody(config_path):
+        cfg = _config(config_path)
+        if not cfg.get('return_pending'):
+            return
+        row = transfer.saved_transfer(config_path)
+        if cfg.get('mode') != 'local' or not row.get('returned') or row.get('phase') != 'server-stopped' or row['id'] != cfg['return_pending']:
+            raise ReturnError(_caption(program or Path(config_path).parent, 'invalid_receipt'))
+        del cfg['return_pending']
+        transfer.carry._write_config(config_path, cfg)
+
+
 def status(config_path):
     row = transfer.saved_transfer(config_path)
     state = row.get('return') or {}
     if row.get('returned'):
-        return {'ok': True, 'returned': True, 'details': row['returned']}
+        return {'ok': True, 'returned': True, 'pending_resume': bool(_config(config_path).get('return_pending')), 'details': row['returned']}
     return {'ok': True, 'returned': False, 'phase': state.get('phase'), 'progress': state.get('progress'),
             'projects': state.get('projects', []), 'id': state.get('id')}

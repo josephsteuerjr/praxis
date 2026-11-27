@@ -51,7 +51,7 @@ def _home(base: Path, name: str, *, agent: str, key: str = "sk-секрет") ->
         "mode": "local", "agent_mode": "sandbox", "python": "runtime/python.exe",
         "app": "app/deskapp.py", "runner": "app/localharness/runner.py",
         "tree": "data", "code": "tree", "port": 8094,
-        "agent": {"name": agent}, "owner": {"name": "Егор", "room": "Hélène"},
+        "agent": {"name": agent}, "owner": {"name": "Алекс", "room": "Hélène"},
         "model": {"framework": "anthropic", "base_url": "https://api.z.ai/api/anthropic",
                   "model": "glm-5.3", "key": key},
         "telegram": {"bot_token": "111:AAA", "owner_id": 7},

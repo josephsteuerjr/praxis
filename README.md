@@ -1,5 +1,7 @@
 # Hélène
 
+[Source map](desk/resources/HELENE-MAP.md) · [Build a release](release/README.md)
+
 **Download, extract, open.** Python and the ready runtime are bundled; you do not
 need Git, a compiler or a separate Python installation to start.
 
@@ -25,27 +27,59 @@ a paired phone and web interface while the host is online. Powered by Praxis.
 
 ## Reading the source
 
-This branch includes the Hélène 2.8.13 source and the live cloud Praxis snapshot
-from 21 November 2026. The two products share a base but have separate runtime
+This branch includes the Hélène 3.0.0 source and the live cloud Praxis snapshot
+from 28 November 2026. The two products share a base but have separate runtime
 and interface layers:
 
 | Path | Source |
 | --- | --- |
 | [`desk/`](desk/) | Hélène desktop host, lifecycle, installer and interfaces |
+| [`desk/praxis-window/`](desk/praxis-window/) | The Praxis window for Windows: Electron shell, its page built from the phone UI kit, an optional proxy route where the server is not reachable directly |
 | [`helene/core/`](helene/core/) | Hélène engine adaptations over the shared base |
 | [`praxis/`](praxis/) | Live cloud Praxis engine, tools and schemas |
 | [`remote/praxis-desk/`](remote/praxis-desk/) | Praxis server backend, Telegram MiniApp and PWA |
 | [`RELAY-SOURCE.json`](RELAY-SOURCE.json) | Published relay source and exact runtime binary binding |
 
-Use the immutable [`v2.8.12` tag](https://github.com/josephsteuerjr/praxis/tree/v2.8.12)
+Use the immutable [`v3.0.0` tag](https://github.com/josephsteuerjr/praxis/tree/v3.0.0)
 to inspect the shipped Hélène composition. Main also carries newer cloud engine
 changes; they require separate porting and qualification before a new desktop
 release. [Source bindings](SOURCE-SNAPSHOTS.md) record the snapshot dates and
 verification scope.
 
-The cloud snapshot also includes the qualified phone Stop and Forge history
-recovery repair: one cancellation identity, preserved corrupt bytes and explicit
-same-host reboot evidence. The cloud engine now runs a separate Telegram client for the owner's account, with its own named tools and wake rules; the server MiniApp/PWA controls it and shows its tool receipts.
+The cloud snapshot keeps the separate Telegram client for the owner's account.
+Since the previous binding the engine gained a speed line for relay models with
+per-role service tiers, holds the owner conversation while a coding task keeps
+focus, settles refused Forge reviews without leaving her turns in doubt, and
+routes native images to GLM-5.4 and Kimi effort. The server app reads the task
+list faster and serves the read-only journal reader of the desktop window.
+
+## Included in 3.0.0
+
+One window can work with several profiles: a local agent keeps its turn while you
+switch profiles, restart a neighbour or run the main profile on a server. Server
+deploy and update take the selected agent's code. On Debian and Fedora the close
+button and Alt+F4 fold the window to the taskbar; the session ends in the program
+settings. Web search and page reading connect directly by default; network
+settings can select a system HTTP/HTTPS proxy or the route used for Telegram and
+the Mini App.
+
+## Included in 2.9.2
+
+The Windows installer recognises an existing profile with long LocalAppData paths,
+and installation and update were checked as an ordinary user. The desktop app
+downloads, verifies and unpacks an update in the background; the "update ready"
+notice starts the switch, and background preparation can be turned off. After a
+brief Telegram interruption, fresh mentions and replies to the agent's messages can
+start a turn again. See the [3.0.0 release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v3.0.0).
+
+## Included in 2.9.0
+
+Open `START-HERE.md` in a desktop or server package to find its editable code map,
+source commit and matching source archive. The source archive includes the release
+kit for Windows, macOS (Apple silicon and Intel), Debian/Ubuntu, Fedora and the
+ARM64 server. The kit restores an exact working copy, builds the selected target
+and stages an update channel. Its `ci` command starts all six GitHub jobs together.
+
 ## Included in 2.8.14 Beta
 
 The chat window stops springing: status lines, agent replies and a growing
@@ -79,25 +113,34 @@ Network settings put Telegram, Mini App, the subscription relay and the SSH brid
 in one place. The relay can verify its saved route to ChatGPT without generation.
 See the [2.8.10 release notes](desk/docs/RELEASE-2.8.10.md).
 
-## Included in 2.8.9
+## Included in 2.8.9 Beta
 
-The desktop avoids repeated settings reads and status flushes while idle.
-Context preparation validates memory timestamps and checks exact run manifests.
-See the [release notes](desk/docs/RELEASE-2.8.9.md).
+The desktop reduces repeated reads and writes while the window is idle. Context
+preparation validates memory timestamps faster and checks exact run manifests.
+See the [2.8.9 release notes](desk/docs/RELEASE-2.8.9.md).
 
-## Included in 2.8.8
+## Included in 2.8.8 Beta
 
-Server-bridge installation and existing-server setup work; Forge history failures
-have precise diagnostics and explicit recovery controls. Windows edges resize
-again while maximized corner controls remain reachable. See the
-[release notes](desk/docs/RELEASE-2.8.8.md).
+The built-in SSH server bridge installs without interrupting the session. Its
+setup connects an existing tinyproxy with your SSH key, checks the route and
+applies it to the selected agent; relay proxying is a separate choice. Forge
+keeps its roster visible around damaged process observations and remembers
+card disclosure through reloads. Confirmed Mini App buttons retain their ready
+state, uncertain historical actions remain visible for reconciliation, and
+Windows edge resizing uses the compatible fixed-edge path while header movement
+stays responsive. See the [2.8.8 release notes](desk/docs/RELEASE-2.8.8.md).
+
+Device Stop and its resource owner share one durable cancellation request while
+retaining the original channel in audit records. Damaged Forge history has exact
+diagnostics and an explicit witness/reboot recovery path on the original Linux
+host; corrupted bytes and unknown action outcomes are retained.
 
 ## Included in 2.8.7 Beta
 
 The window is smooth again while the agent works: scrolling, typing, animations
 and buttons no longer wait behind half-second repaints of the whole window. On
 Windows the window follows the cursor when it is moved or resized, like any
-other window. See the [release notes](desk/docs/RELEASE-2.8.7.md).
+other window. See the [release notes](desk/docs/RELEASE-2.8.8.md).
 
 ## Included in 2.8.6 Beta
 
@@ -122,7 +165,7 @@ The interface and agent context each support Russian, English, French and Chines
 with independent settings. Includes resident skills, optional living prose,
 Windows MCP, exact program arguments, code navigation and stronger process custody.
 The bundled relay can switch ChatGPT subscriptions on quota exhaustion.
-The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/latest) includes these fixes.
+The [Latest Beta for all platforms](https://github.com/josephsteuerjr/praxis/releases/tag/v2.8.13) includes the current packages.
 On cold macOS and Linux starts, the process guardian now allows up to 60 seconds
 for preparation while keeping launch refusal and cleanup on timeout. See the
 [changes and qualification limits](desk/docs/RELEASE-2.8.5.md).

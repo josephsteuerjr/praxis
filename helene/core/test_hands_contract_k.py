@@ -2,7 +2,7 @@
 """K рассказывает о руках правду: раздел есть в реестре, называет только настоящие руки,
 а описания рук говорят про версию, три исхода и неполный поиск (09.11.2026).
 
-Слово Егора 09.11: отсутствие схем новых рук в K — почти авария.
+Слово владельца 09.11: отсутствие схем новых рук в K — почти авария.
 
 Запуск: python praxis_test.py test_hands_contract_k -v
 """
@@ -37,7 +37,7 @@ class TheContractIsInK(unittest.TestCase):
 
     def test_every_frame_carries_the_contract_whoever_speaks(self):
         marker = "## Мои руки: договор"
-        self.assertIn(marker, agent.build_system_prompt(speaker="Егор", owner=True))
+        self.assertIn(marker, agent.build_system_prompt(speaker="Алекс", owner=True))
         self.assertIn(marker, agent.build_system_prompt(speaker="Кто-то", owner=False))
 
     def test_every_named_hand_exists(self):

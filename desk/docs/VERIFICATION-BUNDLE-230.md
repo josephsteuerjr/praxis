@@ -200,7 +200,7 @@ supplied in `verification_executor`; otherwise isolated empty homes are used.
 Npm requires an explicitly selected absolute existing `npm_config_cache`
 directory in that same executor. No cache means unavailable; missing content
 means retained offline ENOTCACHED command failure, not network acquisition or
-a platform skip. An ordinary machine never silently borrows Yegor's SSH server,
+a platform skip. An ordinary machine never silently borrows the owner's SSH server,
 credentials or a global model installation.
 
 Npm preparation uses the selected hash-bound Node/npm tools and source-lock

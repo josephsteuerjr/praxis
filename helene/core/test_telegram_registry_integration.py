@@ -176,7 +176,7 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         self.assertEqual(self.fake.calls, [])
 
     def test_account_critical_call_runs_directly_and_echoes_nothing(self):
-        # Егор 10.11 («Снять целиком»): ни челленджа, ни exact-фразы из новой лички —
+        # владелец 10.11 («Снять целиком»): ни челленджа, ни exact-фразы из новой лички —
         # account-critical вызов исполняется сразу. Остаётся только редактирование:
         # параметры и результат в квитанцию не попадают.
         raw = self.tool("call", request="functions.auth.LogOutRequest")
@@ -218,7 +218,7 @@ class LiveRegistryIntegrationTests(unittest.TestCase):
         )
         token = runner.agent._TURN_CHANNEL.set(trusted)
         try:
-            # Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
+            # Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
             # заговорил. Сырой MTProto — её собственный аккаунт, и чужая реплика не
             # делает её на нём гостем. Раньше здесь ожидался отказ.
             allowed_by_agent = self.tool("search", query="send message")

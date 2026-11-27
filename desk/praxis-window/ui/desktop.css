@@ -1,0 +1,16 @@
+.praxis-desktop #chrome .rail-sign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px;
+  color: var(--ink);
+  font: 600 14px/1 var(--sans);
+}
+.praxis-desktop #chrome .rail-sign::before {
+  content: "";
+  width: 19px;
+  height: 19px;
+  background: var(--praxis-mark) center / contain no-repeat;
+}
+.praxis-desktop .frame-actions { margin: 8px 0 20px; }
+.praxis-desktop .frame-actions button { font-family: var(--sans); }

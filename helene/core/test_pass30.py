@@ -168,12 +168,12 @@ class ObserveFileTests(unittest.TestCase):
                 mock.patch("body_client.desktop_screen_capture") as capture, \
                 mock.patch("workshop.send_file") as send:
             result = agent.tool_computer(
-                "observe", path=r"C:\\Users\\yegor\\frame.jpg",
+                "observe", path=r"C:\\Users\\alex\\frame.jpg",
             )
         capture.assert_not_called()
         send.assert_not_called()
         export.assert_called_once_with(
-            "fs.export", {"path": r"C:\\Users\\yegor\\frame.jpg"},
+            "fs.export", {"path": r"C:\\Users\\alex\\frame.jpg"},
             execution="interactive", timeout=600,
         )
         return result
@@ -218,7 +218,7 @@ class ObserveFileTests(unittest.TestCase):
         ctx = agent.ChannelContext(chat_id="202", principal_id="202", is_dm=True, known=True)
         token = agent._TURN_CHANNEL.set(ctx)
         try:
-            # Решение Егора 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
+            # Решение владельца 26.07 (вариант 1): в её ходе действует ОНА, кто бы ни
             # заговорил. Грант, выданный человеку, больше не сужает ЕЁ руки: раньше
             # «computer.apps» у собеседника закрывал ей чтение файла с её же тела.
             with mock.patch("body_client.call",
@@ -499,10 +499,10 @@ class PromiseWakeTests(unittest.TestCase):
         self.assertIsNotNone(promises.detect(
             "Спасибо за гард. Теперь обратно к audit-demo — плод пора встречать."))
         # 14:34 — «принесу до 18:00» без механизма (и не принеслось)
-        self.assertIsNotNone(promises.detect("Пакет принесу до 18:00, Арет ждёт."))
+        self.assertIsNotNone(promises.detect("Пакет принесу до 18:00, Морган ждёт."))
         self.assertIsNotNone(promises.detect("Теперь сделаю зеркало придержек."))
         self.assertIsNotNone(promises.detect("К 19 соберу baseline и выложу."))
-        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Арета."))
+        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Моргана."))
         # прошедшее время и чужие слова обещанием не считаются
         self.assertIsNone(promises.detect("Теперь всё понятно, спасибо."))
         self.assertIsNone(promises.detect("Он обещал, что принесёт до 18:00."))
@@ -547,7 +547,7 @@ class PromiseWakeTests(unittest.TestCase):
         import promises
         # рабочее «обратно к X» — ловим
         self.assertIsNotNone(promises.detect("Теперь обратно к audit-demo."))
-        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Арета."))
+        self.assertIsNotNone(promises.detect("Возвращаюсь к пакету Моргана."))
         # разговорные филлеры (без ACT-глагола/срока рядом) — НЕ ловим
         self.assertIsNone(promises.detect("Возвращаюсь к твоему вопросу: да, согласна."))
         self.assertIsNone(promises.detect("Обратно к теме: ты прав про хэши."))
@@ -569,7 +569,7 @@ class PromiseWakeTests(unittest.TestCase):
         import tasks
 
         first = promises.note_self_intent(
-            "task_window", "Разобрала гард. Теперь сделаю зеркало для Арета.")
+            "task_window", "Разобрала гард. Теперь сделаю зеркало для Моргана.")
         self.assertIsNotNone(first)
         self.assertEqual(first["target"], "promise:self")
         self.assertIn("в своём окне", first["goal"])
@@ -644,7 +644,7 @@ class HeldSelfWakeTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _hold(self, reply, floor, chat="-100200"):
-        """Придержать ход кред-полом — с 10.11 (Егор, «сними») другого стопа на выходе нет."""
+        """Придержать ход кред-полом — с 10.11 (владелец, «сними») другого стопа на выходе нет."""
         import agent
 
         group = agent.ChannelContext(chat_id=chat, principal_id="202", is_dm=False)

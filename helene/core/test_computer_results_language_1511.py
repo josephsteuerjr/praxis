@@ -6,8 +6,8 @@ from unittest.mock import Mock,patch
 import agent
 import frame_language
 
-RAW='Windows body UI Automation tree PowerShell Егор 中文 {literal} $&'
-PATH='/tmp/Windows body Егор {literal} $&.txt'
+RAW='Windows body UI Automation tree PowerShell Алекс 中文 {literal} $&'
+PATH='/tmp/Windows body Алекс {literal} $&.txt'
 
 
 class ComputerResultLanguages(unittest.TestCase):

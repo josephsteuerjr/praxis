@@ -5,3 +5,9 @@
 .release-notice-open { text-decoration:underline;text-underline-offset:3px; }
 .release-notice .release-notice-close { color:var(--ink-3);font-size:20px;line-height:1;padding:3px 6px; }
 @media(max-width:600px) { .release-notice { margin:0 12px 8px;gap:8px; } }
+
+.release-ready { padding:0; gap:0; overflow:hidden; align-items:stretch; }
+.release-ready .release-notice-open { flex:1; text-align:start; padding:10px 14px; }
+.release-ready .release-notice-preserve { padding:10px 14px; border-inline-start:1px solid var(--line); }
+.release-ready button:focus-visible { outline:2px solid currentColor; outline-offset:-3px; }
+@media(max-width:600px) { .release-ready { flex-wrap:wrap; } }

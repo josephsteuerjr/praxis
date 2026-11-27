@@ -36,7 +36,7 @@ FULL = {
     "tree": "data",
     "port": 8094,
     "agent": {"name": "Hélène"},
-    "owner": {"name": "Егор", "room": "Hélène"},
+    "owner": {"name": "Алекс", "room": "Hélène"},
     "model": {"framework": "openai", "base_url": "https://api.openai.com/v1",
               "key": "sk-old", "model": "gpt-5"},
     "telegram": {"bot_token": "111:AAA", "owner_id": 42},

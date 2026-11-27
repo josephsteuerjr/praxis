@@ -35,6 +35,19 @@ class UpdateModes(unittest.TestCase):
         upstream=read(f.new/'code-upstream.json');upstream['sha256']='0'*64;write(f.new/'code-upstream.json',upstream)
         with self.assertRaisesRegex(ValueError,'stale'):policy.selected(f.old,f.new)
 
+    def test_explicit_preserve_gates_even_an_unedited_source(self):
+        f=self.f
+        fixtures.put(f.code,'module.py',fixtures.BASE)
+        policy.select(f.old,f.new,'preserve',by='window',require_review=True,resolution_owner='incoming')
+        f.preflight()
+        record=read(f.new/'code-transition-plan.json')
+        self.assertTrue(record['require_review'])
+        plan=merge.validate_inputs(record['plans'][0]['directory'])
+        self.assertEqual(plan['files']['local'],plan['files']['base'])
+        self.assertTrue(pipeline.requires_gate(plan))
+        with self.assertRaises(ValueError):
+            code_transition.validate(f.new)
+
     def test_clean_code_exact_pristine_old_code_profile_config_retained(self):
         f=self.f;write(f.tree/'memory/owner.json',{'keep':'authored data'})
         before=merge.inventory(f.code);settings=(f.old/'helene.json').read_bytes();memory=(f.tree/'memory/owner.json').read_bytes()

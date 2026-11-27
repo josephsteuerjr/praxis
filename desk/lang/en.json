@@ -1,4 +1,7 @@
 {
+  "update.ready.restart": "Update {version} is ready. Click to restart on the new code. To keep your edits, choose the update with a review panel in Settings.",
+  "update.ready.preserve": "Keep edits…",
+  "update.auto.prepare": "Automatically download and unpack updates",
   "setup.typewriter.next_finish": "Show the rest",
   "setup.typewriter.next": "Next",
   "setup.name.title": "What will you call the agent?",
@@ -4375,7 +4378,7 @@
   "connections.tray_alive": "Tray Bridge answers and passes HTTPS.",
   "connections.tray_absent": "But nothing listens on 127.0.0.1:8888 right now: start Tray Bridge or set up the server bridge below.",
   "connections.tray_not_proxy": "Something answers on 127.0.0.1:8888, but HTTPS did not get through it. Check Tray Bridge.",
-  "network.intro": "Telegram and the ChatGPT relay each reach the internet by their own route. First add a proxy source, then choose who goes through it.",
+  "network.intro": "Choose a connection for Telegram, the ChatGPT relay and web search separately. Web search connects directly by default.",
   "network.sources.title": "① Where the proxy comes from",
   "network.sources.external": "Does an external program such as Tray Bridge or a VPN provide the proxy? Then no bridge is needed: choose «Custom proxy» below.",
   "network.routes.title": "② Who goes through it",
@@ -4403,5 +4406,17 @@
   "bridge.unused": "Nothing goes through it yet: choose it below, in «Who goes through it».",
   "bridge.ready": "The bridge serves {p0}. Below, in «Who goes through it», choose it for Telegram, the relay or both, then save the settings.",
   "bridge.apply": "Apply",
-  "bridge.applied.relay": "The relay route is saved: the relay picks it up by itself, no restart needed."
+  "bridge.applied.relay": "The relay route is saved: the relay picks it up by itself, no restart needed.",
+  "server.return.private_copy_failed": "Could not create an independent copy of the code. Check links and access to the folder.",
+  "server.return.review_again": "To change shared code, enable Stop for the whole installation and review the profile list again.",
+  "server.return.private_ready": "Memory, code and projects have returned. You can now start this agent.",
+  "server.return.global_stop": "Stop is active for the whole installation. Use the installation controls to resume.",
+  "server.return.private_choice": "Profiles {agents} also use this code. By default, edits return to a separate copy for this agent.",
+  "server.return.shared_choice": "Apply edits to the code shared by the listed profiles (requires stopping all agents)",
+  "server.return.resume": "Start the returned agent",
+  "server.return.resumed": "The returned agent has started.",
+  "server.return.nested_data": "The code folder {path} contains agent data or settings. Choose a separate code folder.",
+  "server.return.invalid_receipt": "Could not verify the return of the selected agent.",
+  "route.web.title": "Web search and page reading",
+  "route.web.application": "Use the Telegram and Mini App route"
 }

@@ -17,7 +17,7 @@ const { mountAccess, mountKey, parseDenied, parseMounts, pathProblem, stamp } = 
 // fence.parse_mounts принимает три формы, потому что файл пишут руками. Окно
 // обязано понимать все три, иначе владелец смонтировал папку, а в списке её нет.
 const rows = parseMounts([
-  "C:\\Users\\Егор\\Документы",
+  "C:\\Users\\Алекс\\Документы",
   { path: "D:\\Работа", access: "write" },
   { path: "E:\\Архив", write: true },
   { path: "F:\\Фото", access: "чушь" },
@@ -67,18 +67,18 @@ assert.equal(denied[1].why, "там пароли");
 // её не проверяет. Ловим только то, что писать в файл нельзя вовсе.
 assert.ok(pathProblem(""), "пустой путь обязан отбиваться");
 assert.ok(pathProblem("Документы"), "относительный путь обязан отбиваться");
-assert.equal(pathProblem("C:\\Users\\Егор\\Документы"), "");
+assert.equal(pathProblem("C:\\Users\\Алекс\\Документы"), "");
 assert.equal(pathProblem("\\\\сервер\\общая"), "", "сетевая папка — полный путь");
 assert.equal(pathProblem("%USERPROFILE%\\Documents"), "", "переменную среды харнесс разворачивает сам");
 assert.equal(pathProblem("~/Документы"), "", "тильду харнесс разворачивает сам");
 // Агент на macOS (порт 0.7.1): полный путь — от корня или от дома, буквы диска
 // там не бывает; без слова системы правила остаются виндовыми, как были.
-assert.equal(pathProblem("/Users/yegor/Documents", "macos"), "");
+assert.equal(pathProblem("/Users/alex/Documents", "macos"), "");
 assert.equal(pathProblem("~/Documents", "macos"), "");
-assert.ok(pathProblem("C:\\Users\\Егор", "macos"), "буква диска на Mac — не полный путь");
+assert.ok(pathProblem("C:\\Users\\Алекс", "macos"), "буква диска на Mac — не полный путь");
 assert.ok(pathProblem("Documents", "macos"), "относительный путь на Mac обязан отбиваться");
 assert.ok(/\/Users\//.test(pathProblem("", "macos")), "подсказка на Mac показывает путь Mac, а не C:\\");
-assert.ok(pathProblem("/Users/yegor/Documents"), "без слова системы правила виндовые: `/` — не полный путь");
+assert.ok(pathProblem("/Users/alex/Documents"), "без слова системы правила виндовые: `/` — не полный путь");
 
 // --- 7. дата в том же виде, что пишет харнесс ------------------------------- #
 assert.equal(

@@ -1,5 +1,5 @@
 """Preserve authored app/harness/resources against their exact shipped base."""
-from pathlib import Path
+from .windows_paths import Path, walk
 import os,shutil,tempfile,time
 from . import authored_baseline,source_merge as merge
 from .package_notice import read,write
@@ -44,7 +44,7 @@ def seed(directory,operation,state):
     for path in sorted(destination.rglob('*'),key=lambda p:len(p.parts),reverse=True):
         if path.is_file():path.unlink()
         elif path.is_dir():path.rmdir()
-    for here,dirs,names in os.walk(app_plan/'result'):
+    for here,dirs,names in walk(app_plan/'result'):
         for name in names:
             source=Path(here)/name;out=destination/source.relative_to(app_plan/'result')
             out.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,out)

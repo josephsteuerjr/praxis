@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import contextvars as _cv
 import contextlib
 import time as _time
@@ -79,7 +80,7 @@ FRAMEWORKS = ("anthropic", "openai")
 ROLES = ("voice", "evaluator")
 _ROLE_RU = {"voice": "голос", "evaluator": "вспомогательная"}
 
-DEFAULT_MAX_TOKENS = {"voice": 32768, "evaluator": 8192}
+DEFAULT_MAX_TOKENS = {"voice": 1024, "evaluator": 400}
 
 # Ошибки, на которых имеет смысл фолбэк (по имени класса — одинаковы у обоих SDK).
 _FALLBACK_ERRORS = {
@@ -473,6 +474,9 @@ def _normalize(cfg: dict) -> dict:
         effort = str(cur.get("reasoning_effort") or "").strip().lower()
         if effort in REASONING_EFFORTS:
             out["roles"][role]["reasoning_effort"] = effort
+        tier = cur.get("service_tier")
+        if tier in ("default", "fast", "ultrafast"):
+            out["roles"][role]["service_tier"] = tier
         # 09.09: зрячая замена текстовой модели на ход с изображением (vision_model) —
         # тот же класс: без строки здесь нормализация стирала бы ручку владельца.
         vision = str(cur.get("vision_model") or "").strip()
@@ -889,7 +893,7 @@ def _image_payload(block: dict) -> tuple[str, str]:
     return mime, base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def messages_to_anthropic(messages: list) -> list:
+def messages_to_anthropic(messages: list, *, replay_thinking: bool = True) -> list:
     """Наша история -> Anthropic; локальные image/path превращаются в base64 source."""
     out: list[dict] = []
     for m in messages or []:
@@ -905,6 +909,8 @@ def messages_to_anthropic(messages: list) -> list:
                     "type": "base64", "media_type": mime, "data": data}})
             elif _is_image_block(b):
                 raise ValueError("non-canonical image block reached anthropic adapter")
+            elif not replay_thinking and isinstance(b, dict) and b.get("type") in SIGNED_THINKING_TYPES:
+                continue  # Provider/model fallback must not inherit Kimi's signed state.
             else:
                 blocks.append(b)
         out.append(dict(m, content=blocks))
@@ -1014,19 +1020,25 @@ def blocks_from_openai(msg) -> list:
 # server_tool_use, text(dumps the RAW search-result JSON as "Output: ..."), tool_result,
 # text(the actual clean synthesized answer)] — three "text"-typed blocks, two of them scaffolding.
 # Naively joining every text block (as real Anthropic responses safely allow) leaked raw JSON into
-# replies (observed live 05.07, see soul/skills/web_search_reader.md). Any block type besides
-# text/tool_use means "opaque server-side work happened here" — text at or before the LAST such
-# block is narration/result-dump, never her voice; only text strictly after it is genuine reply.
+# replies (observed live 05.07, see soul/skills/web_search_reader.md). An unrecognized block
+# marks opaque server-side work. Only text after the LAST such block is genuine reply.
+# On Kimi, signed thinking is replay state, not a server-tool boundary.
 # When no such block is present (the overwhelming common case, incl. every existing client tool_use
 # turn), this is a no-op and every text block is kept exactly as before.
-_KNOWN_BLOCK_TYPES = ("text", "tool_use")
+_KNOWN_BLOCK_TYPES = {"text", "tool_use"}
+_SIGNED_THINKING_FIELDS = {"thinking": ("thinking", "signature"),
+                           "redacted_thinking": ("data",)}
+SIGNED_THINKING_TYPES = frozenset(_SIGNED_THINKING_FIELDS)
 
 
-def _blocks_from_anthropic(resp) -> list:
+def _blocks_from_anthropic(resp, *, preserve_thinking: bool | None = None) -> list:
+    if preserve_thinking is None:
+        preserve_thinking = str(getattr(resp, "model", "") or "").strip().lower() == "k3.1-pro"
+    known_types = _KNOWN_BLOCK_TYPES | SIGNED_THINKING_TYPES if preserve_thinking else _KNOWN_BLOCK_TYPES
     raw = getattr(resp, "content", None) or []
     last_opaque = -1
     for i, b in enumerate(raw):
-        if getattr(b, "type", None) not in _KNOWN_BLOCK_TYPES:
+        if getattr(b, "type", None) not in known_types:
             last_opaque = i
     blocks = []
     for i, b in enumerate(raw):
@@ -1037,6 +1049,12 @@ def _blocks_from_anthropic(resp) -> list:
             blocks.append({"type": "text", "text": b.text})
         elif t == "tool_use":
             blocks.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+        elif preserve_thinking and t in SIGNED_THINKING_TYPES:
+            fields = {key: getattr(b, key, None) for key in _SIGNED_THINKING_FIELDS[t]}
+            # Only replay complete provider state; never synthesize a signature.
+            if all(isinstance(value, str) and (key == "thinking" or value)
+                   for key, value in fields.items()):
+                blocks.append({"type": t, **fields})
     return blocks
 
 
@@ -1236,18 +1254,24 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
 def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                     reasoning_effort: str | None = None) -> LLMResponse:
     # reasoning_effort — словарь реле (openai-путь). Здесь глубину задаёт thinking-бюджет;
-    # для glm-* ступень роли проецируется в z.ai-диалект (25.08, см. _GLM_EFFORT),
-    # для остальных моделей принимается-и-игнорируется, а не роняет вызов на общем kw-пути.
+    # для glm-* и Kimi K3.1 Pro ступень роли проецируется в Messages API
+    # output_config.effort (официальная схема Kimi Messages, 26.11). Остальные
+    # модели принимают-и-игнорируют ступень, а не роняют вызов на общем kw-пути.
+    kimi = model.strip().lower() == "k3.1-pro"
     kw: dict = {"model": model, "max_tokens": max_tokens,
-                "messages": messages_to_anthropic(messages)}
+                "messages": messages_to_anthropic(messages, replay_thinking=kimi)}
     if system:
         kw["system"] = system
     anthropic_tools = tools_to_anthropic(tools)
     if anthropic_tools:
         kw["tools"] = anthropic_tools
     glm = model.strip().lower().startswith("glm-")
-    if thinking:
+    if thinking and not kimi:
         kw["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
+        kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
+    elif thinking and kimi:
+        # K3.1 Preserved Thinking is always on and has no request `thinking`
+        # field. Do not send an unsupported budget; retain the output ceiling.
         kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
     if glm and (thinking or reasoning_effort):
         # The z.ai Anthropic dialect uses output_config.effort, NOT the
@@ -1259,6 +1283,13 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
                   else str(reasoning_effort).strip().lower())
         kw.setdefault("thinking", {"type": "enabled"})
         kw["extra_body"] = {"output_config": {"effort": _GLM_EFFORT.get(effort, "low")}}
+    elif model.strip().lower() == "k3.1-pro" and reasoning_effort and not thinking:
+        # Kimi Messages API задаёт глубину через output_config.effort (low/high/max);
+        # top-level reasoning_effort относится к Chat Completions, не к этому пути.
+        # Явный token budget остаётся сильнее фоновой ступени роли.
+        effort = str(reasoning_effort).strip().lower()
+        if effort in ("low", "high", "max"):
+            kw["extra_body"] = {"output_config": {"effort": effort}}
     # PASS 10.0: всегда стримом — SDK кидает «Streaming is required for operations that
     # may take longer than 10 minutes» на больших max_tokens (ночные окна умирали, кап
     # сгорал впустую). get_final_message() возвращает тот же Message (blocks/usage/
@@ -1291,8 +1322,9 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
         # model without an error. Preserve what the response says: usage/brain telemetry
         # downstream is explicitly defined as the actually observed backend, not config.
         log.warning("llm: запросила %s/%s, ответ пришёл от %s", "anthropic", model, actual_model)
+    blocks = _blocks_from_anthropic(resp, preserve_thinking=kimi)
     return _guard_answer(LLMResponse(
-        text=text_of(resp), blocks=_blocks_from_anthropic(resp),
+        text="".join(b["text"] for b in blocks if b["type"] == "text").strip(), blocks=blocks,
         stop_reason=str(getattr(resp, "stop_reason", None) or "end_turn"),
         usage=_usage,
         framework="anthropic", model=actual_model))
@@ -1326,7 +1358,7 @@ REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # СЕРВЕРНЫЙ ДЕФОЛТ — max на каждый вызов; thinking обязателен и невыключаем,
 # поэтому «none/minimal» глубже low не проецируются — выключить нечего).
 _GLM_EFFORT = {"none": "low", "minimal": "low", "low": "low",
-               "medium": "high", "high": "high", "xhigh": "max"}
+               "medium": "low", "high": "high", "xhigh": "max"}
 
 
 def _effective_effort(thinking, role_effort) -> str | None:
@@ -1382,7 +1414,8 @@ def accepts_images(role: str = "voice", model: str | None = None) -> bool:
     """Whether a model is in a deliberately verified sighted family."""
     name = str(model if model is not None else role_model(role) or "").strip()
     return bool(
-        _SIGHTED_GLM_V_RE.fullmatch(name)
+        name.casefold() == "glm-5.4"  # Native PNG input verified on Z.ai Messages.
+        or _SIGHTED_GLM_V_RE.fullmatch(name)
         or _SIGHTED_GLM_FLASH_RE.fullmatch(name)
         or _SIGHTED_GPT_RE.match(name)
         or _SIGHTED_CLAUDE_RE.match(name)
@@ -1906,7 +1939,18 @@ _CACHE_MARKS = (
 #: Технические свежие контексты Forge не проходят через agent.build_system_parts и потому
 #: объявляют отдельный структурный адрес по роли. Держать их в `_CACHE_MARKS` нельзя:
 #: там тест требует, чтобы каждому ПРОЗОВОМУ маркеру соответствовал живой основной кадр.
-_CACHE_STRUCTURAL_TAGS = ("forge_scout", "forge_worker", "forge_reviewer")
+_CACHE_STRUCTURAL_TAGS = ("forge_scout", "forge_worker", "forge_reviewer", "forge_merger")
+_FORGE_ADDRESS = _cv.ContextVar("forge_cache_address", default=None)
+
+
+@contextlib.contextmanager
+def forge_address(role: str, unit_scope: str):
+    """Bind the actual unit identity across dispatch, retry and usage accounting."""
+    token = _FORGE_ADDRESS.set((role, unit_scope))
+    try:
+        yield
+    finally:
+        _FORGE_ADDRESS.reset(token)
 _CACHE_TAGS = tuple(dict.fromkeys(
     [tag for _, tag in _CACHE_MARKS] + list(_CACHE_STRUCTURAL_TAGS)))
 _CACHE_ROOM_RE = re.compile(r"room_id=(-?\d+)")
@@ -1944,6 +1988,10 @@ def cache_address(model: str, sys_text: str) -> str:
     """Стабильный адрес разговора для `prompt_cache_key`. Пусто — значит не шлём."""
     if (os.getenv("PRAXIS_CACHE_KEY") or "").strip().lower() in ("off", "0", "no", "false"):
         return ""
+    unit = _FORGE_ADDRESS.get()
+    if unit:
+        role, scope = unit
+        return f"praxis:{model or '?'}:forge_{role}:-:{scope}"
     text = sys_text or ""
     if not text:
         return ""
@@ -1996,8 +2044,24 @@ def _max_tokens_field(cli) -> str:
     return "max_completion_tokens" if direct_openai else "max_tokens"
 
 
+class SpeedRequestRejected(RuntimeError):
+    """A request-local rejection; it is not a hold on the ordinary Relay route."""
+
+
+class SpeedStreamRejected(TornStreamError):
+    """The speed request ended after output; preserve evidence without fallback."""
+
+
+class SpeedRouteUnavailable(SpeedRequestRejected):
+    """The actual versioned POST returned 404, not the ordinary route."""
+    status_code = 404
+
+
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
-                 reasoning_effort: str | None = None) -> LLMResponse:
+                 reasoning_effort: str | None = None,
+                 service_tier: str | None = None,
+                 service_tier_binding: list[str] | None = None,
+                 service_tier_relay: bool = False) -> LLMResponse:
     msgs = messages_to_openai(messages)
     sys_text = system_text(system)
     if sys_text:
@@ -2010,6 +2074,17 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     address = cache_address(model, sys_text)
     if address:
         kw["extra_body"] = {"prompt_cache_key": address}
+    if service_tier is not None:
+        binding = _service_tier_binding(getattr(cli, "base_url", ""), getattr(cli, "api_key", ""))
+        if list(binding) == service_tier_binding:
+            if service_tier_relay:
+                # Only the new relay serves this path. A warm catalogue followed by
+                # a rollback must not let the old relay silently drop a paid tier.
+                cli = cli.with_options(base_url=_models_url(binding[0]).removesuffix("/models")
+                                       + "/praxis-speed-v1")
+            kw.setdefault("extra_body", {})["service_tier"] = service_tier
+        else:
+            log.warning("llm: speed not sent because the OpenAI connection changed")
     effort = _effective_effort(thinking, reasoning_effort)
     if effort:
         # неизвестное SDK поле — только через extra_body; релей примет reasoning_effort
@@ -2038,15 +2113,29 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     ot = tools_to_openai(tools)
     if ot:
         kw["tools"] = ot
-    resp = cli.chat.completions.create(**kw)
+    sent_tier = kw.get("extra_body", {}).get("service_tier")
+    speed_route = service_tier_relay and sent_tier in ("fast", "ultrafast")
+    try:
+        resp = cli.chat.completions.create(**kw)
+    except Exception as exc:
+        if speed_route and getattr(exc, "status_code", None) == 404:
+            raise SpeedRouteUnavailable("The advertised Praxis speed route returned 404") from exc
+        raise
     # единый объект с .choices[0].message — не-стрим (фейк-клиент/обычный сервер): прежний разбор
     choices = getattr(resp, "choices", None)
     if choices and getattr(choices[0], "message", None) is not None:
         # ⚠ Этот return уходил ДО сторожа: openai-совместимый сервер, отдавший единый объект
         # с пустым message, возвращался успешным 'end_turn'. Теперь сторож один на оба разбора.
-        return _guard_answer(_openai_from_completion(resp, model))
-    # итератор чанков (relay/реальный OpenAI stream); здоровье канала проверяет тот же сторож
-    return _guard_answer(_openai_from_stream(resp, model))
+        result = _openai_from_completion(resp, model)
+    else:
+        result = _openai_from_stream(resp, model, speed_route=speed_route)
+    if sent_tier:
+        log.info("llm: %s service tier requested=%s observed=%s", model, sent_tier,
+                 result.provider_observation.get("service_tier", "unknown"))
+        # Факт провода (ревью a5a6942c F1): binding мог смениться после выбора тира —
+        # тогда тир НЕ ушёл на провод, и след не имеет права называть его «запрошенным».
+        result.provider_observation["service_tier_sent"] = True
+    return _guard_answer(result)
 
 
 def _note_truncation(out: "LLMResponse", role: str) -> None:
@@ -2114,7 +2203,13 @@ def _openai_from_completion(resp, model: str) -> LLMResponse:
                "in": _openai_fresh_in(usage, cached),
                "out": int(getattr(usage, "completion_tokens", 0) or 0),
                **({"cache_read": cached} if cached else {})},
-        framework="openai", model=model)
+        framework="openai", model=model,
+        provider_observation=_speed_observation(resp))
+
+
+def _speed_observation(packet) -> dict:
+    tier = getattr(packet, "service_tier", None)
+    return {"service_tier": tier} if tier in ("default", "fast", "priority", "ultrafast") else {}
 
 
 def _openai_fresh_in(usage, cached: int) -> int:
@@ -2188,19 +2283,36 @@ def _stream_transport_error(exc: Exception) -> bool:
     return False
 
 
-def _openai_from_stream(stream, model: str) -> LLMResponse:
+# A versioned Relay speed request owns retries on the Relay side. Its named
+# terminal is not permission to retry or buy a second response in Core.
+_SPEED_RELAY_FAILURES = frozenset({"upstream_error", "speed_request_rejected", "upstream_torn"})
+
+
+def _openai_from_stream(stream, model: str, *, speed_route: bool = False) -> LLMResponse:
     """Собрать ответ из SSE-чанков openai-протокола (delta.content + delta.tool_calls)."""
     parts: list[str] = []
     tools_acc: dict[int, dict] = {}
     finish = "stop"
     u_in = u_out = u_cached = 0
     observations = provider_observation.Collector()
+    speed = {}
+
+    def reject_speed():
+        if not (parts or tools_acc):
+            raise SpeedRequestRejected("Upstream rejected the Praxis speed request")
+        partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model,
+                                        observation={**observations.receipt(), **speed})
+        raise SpeedStreamRejected("The Praxis speed stream failed after output began", partial=partial)
+
     try:
         for chunk in stream:
             import model_progress
             progress = model_progress.packet_of(chunk)
             if progress:model_progress.emit(progress)
             observations.merge(provider_observation.packet_of(chunk))
+            tier = getattr(chunk, "service_tier", None)
+            if tier in ("default", "fast", "priority", "ultrafast"):
+                speed["service_tier"] = tier
             # 25.09: терминал реле — ДО choices и content. Диагностика лимита подписки
             # приходила текстом в content и читалась как ответ модели (см.
             # RelayTerminalError); типизированный код становится типизированной ошибкой,
@@ -2213,6 +2325,8 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
                         try:close()
                         except Exception:pass
                     raise RunawayGenerationError(metrics=progress)
+                if speed_route and term["code"] in _SPEED_RELAY_FAILURES:
+                    reject_speed()
                 typed = _terminal_error(term)
                 if typed is not None:
                     raise typed
@@ -2225,6 +2339,9 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
             if not chs:
                 continue
             ch = chs[0]
+            reason = getattr(ch, "finish_reason", None)
+            if speed_route and reason in _SPEED_RELAY_FAILURES:
+                reject_speed()
             d = getattr(ch, "delta", None)
             if d is not None:
                 c = getattr(d, "content", None)
@@ -2241,8 +2358,8 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
                             slot["name"] = fn.name
                         if getattr(fn, "arguments", None):
                             slot["args"] += fn.arguments
-            if getattr(ch, "finish_reason", None):
-                finish = ch.finish_reason
+            if reason:
+                finish = "error" if reason in ("upstream_torn", "upstream_error") else reason
     except Exception as exc:
         if not _stream_transport_error(exc):
             raise
@@ -2251,13 +2368,13 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
         # это EmptyResponseError (same-channel retry допустим), после текста/фрагмента руки
         # — TornStreamError с partial (повтор поверх уже начатого ответа запрещён).
         partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model,
-                                        observation=observations.receipt())
+                                        observation={**observations.receipt(), **speed})
         try:
             return _guard_answer(partial)
         except BrokenChannelError as broken:
             raise broken from exc
     return _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model,
-                                 observation=observations.receipt())
+                                 observation={**observations.receipt(), **speed})
 
 
 def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: str,
@@ -2307,7 +2424,82 @@ def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: 
 #  берём ближайшее живое (та же семья, старшая версия), не роняя ход. Кэш на TTL.
 # --------------------------------------------------------------------------- #
 
-_MODELS_CACHE: dict[str, tuple[float, list[str]]] = {}   # framework -> (expiry_epoch, [ids])
+# One record per framework, bound to the URL and credential used for discovery.
+_MODELS_CACHE: dict[str, tuple[tuple[str, str], float, list[str], bool]] = {}
+_MODELS_LOCK = threading.Lock()
+
+# https://learn.chatgpt.com/docs/agent-configuration/speed and the OpenAI Fast guide.
+_ULTRAFAST_MODELS = frozenset({"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol"})
+_FAST_MODELS = _ULTRAFAST_MODELS | {"gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"}
+
+
+def _speed_models_dump() -> None:
+    """Списки скоростной линии — соседним службам (deskctl канала окна).
+
+    Контейнер надзора видит из дерева агента только memory/, не llm.py, а
+    кнопки «Быстрый/Ультрабыстрый» в «Системе» миниаппа и PWA должны знать эти
+    списки. Пишем их в memory/.state/speed-models.json при импорте модуля:
+    списки меняются только правкой этого файла, то есть вместе с перезапуском
+    мозга — и дамп обновляется сам. Путь — от USAGE_PATH, как у всего llm.py:
+    под стендом _sandbox уводит BASE в одноразовый, и дамп не трогает живое
+    дерево. Мягкий отказ среды (ro-маунт, нет места) не роняет мозг — сосед
+    увидит прежний список до следующего старта, но со следом в логе и без
+    мусорного .tmp; отказ стража живого дерева (RuntimeError) проходит наружу
+    — это громкий сигнал о порядке импорта, а не наша ошибка записи.
+    KeyboardInterrupt и SystemExit не глотаем — это не наша ошибка записи."""
+    dump = USAGE_PATH.parent / "speed-models.json"
+    tmp = dump.with_name(".tmp-speed-models.json")
+    try:
+        dump.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema": 1, "source": "llm.py",
+                   "fast": sorted(_FAST_MODELS), "ultrafast": sorted(_ULTRAFAST_MODELS)}
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+                       encoding="utf8")
+        os.replace(tmp, dump)
+    except OSError:
+        log.debug("speed-models.json не записался", exc_info=True)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
+_speed_models_dump()
+
+
+def _service_tier_binding(base_url, key) -> tuple[str, str]:
+    return str(base_url or "").rstrip("/"), hashlib.sha256(str(key or "").encode()).hexdigest()
+
+
+def _primary_service_tier(rc: dict, framework: str, model: str, *, observed: list | None = None) -> dict:
+    # A rotation, visual substitute or fallback is not a speed purchase for that model.
+    tier = rc.get("service_tier")
+    if framework != "openai" or tier not in ("default", "fast", "ultrafast") or model != rc.get("model"):
+        return {}
+    if tier != "default" and model not in (_ULTRAFAST_MODELS if tier == "ultrafast" else _FAST_MODELS):
+        return {}
+    fw = (_config().get("frameworks") or {}).get(framework) or {}
+    binding = _service_tier_binding(fw.get("base_url"), fw.get("api_key"))
+    fields = {"service_tier": tier, "service_tier_binding": list(binding)}
+    try:
+        url = urlparse(binding[0])
+        direct = (url.scheme == "https" and url.hostname == "api.openai.com"
+                  and url.port in (None, 443) and url.username is None
+                  and url.path.rstrip("/") == "/v1" and not (url.query or url.fragment))
+    except ValueError:
+        return {}
+    if direct:
+        # This path is Chat Completions; OpenAI documents Ultrafast for Responses.
+        return fields if tier in ("default", "fast") else {}
+    if tier == "default":
+        # Standard for Relay is its unchanged request without a speed override.
+        return {}
+    hit = _MODELS_CACHE.get(framework)
+    if (url.scheme in ("http", "https") and url.hostname and url.username is None
+            and url.path.rstrip("/") in ("", "/v1") and not (url.query or url.fragment)
+            and hit and hit[0] == binding and hit[1] > _time.time() and hit[3] and model in hit[2]):
+        if observed is not None:
+            observed.append(hit)
+        return {**fields, "service_tier_relay": True}
+    return {}
 _MODELS_TTL = float(os.getenv("PRAXIS_MODELS_TTL", "600"))
 
 
@@ -2330,24 +2522,36 @@ def _available_models(framework: str) -> list[str]:
     if os.environ.get("PRAXIS_TEST") or framework in _TEST_CLIENTS:
         return []
     now = _time.time()
+    fw = (_config().get("frameworks") or {}).get(framework) or {}
+    base, key = fw.get("base_url") or "", fw.get("api_key") or ""
+    binding = _service_tier_binding(base, key)
     hit = _MODELS_CACHE.get(framework)
-    if hit and hit[0] > now:
-        return hit[1]
+    if hit and hit[0] == binding and hit[1] > now:
+        return hit[2]
     ids: list[str] = []
+    relay_tiers = False
     try:
-        fw = (_config().get("frameworks") or {}).get(framework) or {}
-        base, key = fw.get("base_url") or "", fw.get("api_key") or ""
         if base:
             import urllib.request
             req = urllib.request.Request(_models_url(base), headers={
                 "Authorization": f"Bearer {key}", "x-api-key": key,
                 "anthropic-version": "2023-06-01"})
-            data = json.loads(urllib.request.urlopen(req, timeout=6).read())
+            response = urllib.request.urlopen(req, timeout=6)
+            try:
+                data = json.loads(response.read())
+                headers = getattr(response, "headers", {})
+                relay_tiers = (headers.get("x-praxis-relay-service-tier") == "1" and
+                               response.geturl() == req.full_url)
+            finally:
+                close = getattr(response, "close", None)
+                if close:
+                    close()
             ids = [str(m.get("id")) for m in (data.get("data") or []) if m.get("id")]
     except Exception as e:
         log.debug("llm: список моделей %s не получить (%s)", framework, type(e).__name__)
         ids = []
-    _MODELS_CACHE[framework] = (now + _MODELS_TTL, ids)
+    with _MODELS_LOCK:
+        _MODELS_CACHE[framework] = (binding, now + _MODELS_TTL, ids, relay_tiers)
     return ids
 
 
@@ -2462,6 +2666,8 @@ def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMRe
 
 
 def _fallbackable(e: Exception) -> bool:
+    if isinstance(e, (SpeedRequestRejected, SpeedStreamRejected)):
+        return False
     if isinstance(e, BrokenChannelError):
         # Вырожденный ответ канала — повод уйти на другой фреймворк. Оба вида: и пустота,
         # и оборванный стрим. Различаются они не здесь, а в повторе по СВОЕМУ каналу.
@@ -2596,7 +2802,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     model = resolved_model
     # Keep the caller's original image tape available to a different fallback leg.
     # Sanitising one text-only leg must not blind a later natively sighted leg.
-    image_messages = messages
+    original_messages = messages
+    primary_input = messages
     # Узкий взгляд — ДО маршрутизации: если картинку удалось описать одним обращением,
     # дальше едет обычная текстовая лента, и подмены модели не происходит вовсе.
     if vision_prepass_enabled():
@@ -2604,9 +2811,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         if described:
             log.info("llm: %s — картинок описано узким взглядом: %d; ход остаётся на %s",
                      _ROLE_RU[role], described, model)
-            messages = image_messages = described_messages
+            primary_input = described_messages
     model, messages, vision_used, pixels_omitted = _route_image_leg(
-        role, fw, model, image_messages)
+        role, fw, model, primary_input)
     if vision_used:
         log.info("llm: %s — image turn routed to %s/%s", _ROLE_RU[role], fw, model)
     elif pixels_omitted:
@@ -2639,6 +2846,10 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     _sys_sha = (hashlib.sha1(_sys_text.encode("utf-8", "replace")).hexdigest()[:8]
                 if _sys_text else "")
     _key = cache_address(model, _sys_text) if fw == "openai" else ""
+    # 22.11: тиры в следе вызова. Инициализация до try: синтетический отказ
+    # удержания эндпойнта поднимается ДО расчёта тира, и терминальная нога
+    # должна видеть пустой запрошенный тир, а не NameError.
+    tier: dict = {}
     try:
         # 25.09: эндпойнт основной ноги закрыт лимитом подписки (RelayTerminalError ниже)
         # и есть запасная нога на ДРУГОМ эндпойнте — не ходим в реле за очередным
@@ -2656,10 +2867,27 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     code=str(_hold.get("code") or ""), slot=str(_hold.get("slot") or ""),
                     resets_at=_hold.get("until"), synthetic=True)
             _hold["probed_at"] = _time.time()
-        resp, empty_retries = _call_retrying_empty(
-            fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
-            system=system, messages=messages, tools=tools,
-            max_tokens=mt, thinking=thinking, reasoning_effort=role_effort)
+        # A changed explicit address or vision leg does not inherit a paid role tier,
+        # even when catalog rotation lands on the configured slug again.
+        observed_catalog = []
+        tier = (_primary_service_tier(rc, fw, model, observed=observed_catalog)
+                if (requested_model in ("", rc["model"]) and not vision_used
+                    and not _IN_VISION_PREPASS.get()) else {})
+        if not tier and rc.get("service_tier") and fw == "openai":
+            log.warning("llm: %s — requested speed unavailable for %s; using ordinary request",
+                        role, model)
+        try:
+            resp, empty_retries = _call_retrying_empty(
+                fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
+                system=system, messages=messages, tools=tools,
+                max_tokens=mt, thinking=thinking, reasoning_effort=role_effort,
+                **tier)
+        except SpeedRouteUnavailable:
+            # Only the selecting process can retire the exact observed entry.
+            with _MODELS_LOCK:
+                if observed_catalog and _MODELS_CACHE.get(fw) is observed_catalog[0]:
+                    _MODELS_CACHE.pop(fw, None)
+            raise
         if _hold is not None:
             _release_endpoint(fw)
         if empty_retries:
@@ -2692,7 +2920,10 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
                     retries=empty_retries, gap_sec=_gap, tools_digest=_tools, vision=vision_used,
                     key=_key, sys_sha8=_sys_sha, sys_len=_sys_len,
-                    cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
+                    cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1),
+                    tier_requested=(str(tier.get("service_tier") or "")
+                                    if (resp.provider_observation or {}).get("service_tier_sent") else ""),
+                    tier_actual=str((resp.provider_observation or {}).get("service_tier") or ""))
         return resp
     except Exception as e:
         if _IN_VISION_PREPASS.get():
@@ -2706,7 +2937,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и
             # говорим об этом словами — при смене состояния, не на каждый ход.
             _journal_hold_once(role, fw, _hold_endpoint(fw, e))
-        if end_after_spoken and isinstance(e, (BrokenChannelError, RelayTerminalError)):
+        if end_after_spoken and isinstance(e, (BrokenChannelError, RelayTerminalError, SpeedRequestRejected)):
             # Конец хода, а не смерть канала: сказанное уже доставлено, и любая смерть
             # продолжения закрывает ход сказанным — в том числе терминал реле и
             # синтетический отказ по удержанию (A1 F1: иначе запасная модель переисполняла
@@ -2715,7 +2946,12 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
                         gap_sec=_gap, tools_digest=_tools, vision=vision_used,
-                        key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
+                        key=_key, sys_sha8=_sys_sha, sys_len=_sys_len,
+                        # F1: факт провода доказуем только Speed-терминалами — релей
+                        # отверг тир, который реально получил (запрос или стрим).
+                        # Обрыв канала факт провода не доказывает.
+                        tier_requested=(str(tier.get("service_tier") or "")
+                                        if isinstance(e, (SpeedRequestRejected, SpeedStreamRejected)) else ""))
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
                                usage={}, framework=fw, model=model, vision=vision_used)
         err = f"{type(e).__name__}: {str(e)[:120]}"
@@ -2774,8 +3010,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             raise
         # Route each effective leg independently from the original image tape. A
         # fallback framework may use only its own explicit vision_models entry.
+        fallback_input = original_messages if accepts_images(model=resolved_fb_model) else primary_input
         resolved_fb_model, fallback_messages, fallback_vision_used, fallback_omitted = (
-            _route_image_leg(role, other, resolved_fb_model, image_messages)
+            _route_image_leg(role, other, resolved_fb_model, fallback_input)
         )
         # Vision substitution can collapse two same-account legs even when their
         # configured text models differed. Never retry the failed effective channel.
@@ -2854,8 +3091,19 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 retries: int = 0, gap_sec: float = -1.0,
                 tools_digest: str = "", vision: bool = False,
                 fallback: bool = False, key: str = "", sys_sha8: str = "",
-                sys_len: int = 0, cc: int = -1) -> None:
+                sys_len: int = 0, cc: int = -1,
+                tier_requested: str = "", tier_actual: str = "") -> None:
     """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
+
+    22.11: `service_tier_requested` / `service_tier_actual` — скоростная линия
+    (fast/ultrafast) видна соседям по следу вызова: deskctl «Системы» читает
+    хвост llm_calls.jsonl и показывает в окне запрошенный и подтверждённый
+    провайдером режим. Поля пишутся только когда тир реально ушёл на провод
+    (`service_tier_sent` от `_call_openai`): смена binding после выбора тира
+    отправляет запрос БЕЗ тира, и след не имеет права называть его запрошенным
+    (ревью F1). Значения — default/fast/priority/ultrafast, как их возвращает
+    провайдер. Нога падения и фолбэк-нога тиров не несут: у падения нет факта
+    провода, фолбэк не покупает тир вовсе — отсутствие полей там не баг.
 
     `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
     system и в `prompt_cache_key` не входят (`cache_address` ниже): без отпечатка
@@ -2869,6 +3117,10 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                "retries": int(retries or 0), "iter": int(_CALL_ITER.get() or 0)}
         if fallback:
             row["fallback"] = True
+        if tier_requested:
+            row["service_tier_requested"] = str(tier_requested)[:16]
+            if tier_actual:
+                row["service_tier_actual"] = str(tier_actual)[:16]
         if tools_digest:
             row["tools"] = str(tools_digest)[:16]
         # 13.09 (K1). Адрес кэша и отпечаток system РЯДОМ с cached: без них промах первого

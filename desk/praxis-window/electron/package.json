@@ -1,0 +1,7 @@
+{
+  "name": "praxis-window",
+  "productName": "Пракс",
+  "version": "1.2.1",
+  "private": true,
+  "main": "main.cjs"
+}

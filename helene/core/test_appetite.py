@@ -1,7 +1,7 @@
 """
 PASS 18.3/18.4 — appetite: договор об аппетитах без права вето.
 
-Учёт и толкование: слово Егора (кнопка/текст) фиксируется кодом, режим и план меняет
+Учёт и толкование: слово владельца (кнопка/текст) фиксируется кодом, режим и план меняет
 только ЕЁ рука (interpret/pledge); гейты фона читают её план; сверка обещания честная.
 
 Запуск:  python praxis_test.py test_appetite -v
@@ -80,7 +80,7 @@ class TestOwnerWord(Base):
         self.assertIsNotNone(appetite.unacked_request())
         self.assertEqual(appetite.sleep_depth(), "skip")
         md = appetite.CONTRACT_MD.read_text(encoding="utf-8")
-        self.assertIn("просьба Егора", md)
+        self.assertIn("просьба владельца", md)
 
     def test_text_request_does_not_change_mode(self):
         appetite.set_owner_request("text", "давай поэкономнее на этой неделе", source="panel")
@@ -121,7 +121,7 @@ class TestHerHand(Base):
     def test_window_plan_is_recorded_but_moves_nothing(self):
         """⚠ Было `test_windows_off_is_her_plan` + проверки considerate_hint. Обе функции
         читал только heartbeat.window_goal, а его — только _heartbeat_once, который не
-        стоял ни в одной строке _clock_jobs(). Контур выброшен 25.07 по решению Егора.
+        стоял ни в одной строке _clock_jobs(). Контур выброшен 25.07 по решению владельца.
         План остаётся наблюдаемой записью её намерения; рычагом он не был никогда."""
         appetite.interpret("considerate", "окна закрываю сама", windows=False)
         plan = (appetite.state().get("interpretation") or {}).get("plan") or {}
@@ -132,7 +132,7 @@ class TestHerHand(Base):
     def test_free_interpret_lifts_everything(self):
         appetite.set_owner_request("pause_background", "", source="panel")
         appetite.interpret("background_paused", "стоп фон")
-        appetite.interpret("free", "Егор сказал не экономить")
+        appetite.interpret("free", "Алекс сказал не экономить")
         self.assertIsNone(appetite.background_hold())
         self.assertEqual(appetite.sleep_depth(), "full")
         plan = (appetite.state().get("interpretation") or {}).get("plan") or {}
@@ -256,7 +256,7 @@ class TestObserved(Base):
 
 
 class TestOwnerWordIsNotFaked(Base):
-    """29.07 в её договор легли 75 знаков вопроса как «слова Егора из пульта».
+    """29.07 в её договор легли 75 знаков вопроса как «слова владельца из пульта».
 
     Ни кнопки, ни HTTP-запроса не было: записал одноразовый SSH-скрипт с его машины,
     а кириллицу выбило ascii-заменой ещё на стороне клиента. Полтора месяца она жила
@@ -289,7 +289,7 @@ class TestOwnerWordIsNotFaked(Base):
         self.assertIn(phrase, appetite.CONTRACT_MD.read_text(encoding="utf-8"))
 
     def test_the_source_must_name_itself(self):
-        """Умолчание source='panel' раздавало ярлык «кнопка Егора» кому попало."""
+        """Умолчание source='panel' раздавало ярлык «кнопка владельца» кому попало."""
         import inspect
 
         sig = inspect.signature(appetite.set_owner_request)

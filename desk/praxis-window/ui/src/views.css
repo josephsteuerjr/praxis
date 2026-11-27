@@ -1,0 +1,1216 @@
+/* Разделы окна: раскладка того, что добавлено поверх её элементов. Цвета, шрифты,
+   карточки, кнопки, строки задач, шаги и лента — её (phone.css и её модули);
+   здесь только раскладка для широкого экрана. Шкала размеров — переменные в shell.css. */
+
+/* ---------- общие ---------- */
+
+.small {
+  font-size: 12px;
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+.err-text {
+  color: var(--err);
+}
+
+.ev {
+  position: relative;
+}
+
+.ev.failed .ev-title {
+  color: var(--err);
+}
+
+.ev.live .ev-title::before,
+.instr-item.run.live .instr-item-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+}
+
+.ev.failed .ev-title::before,
+.instr-item.run.failed .instr-item-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--err);
+  vertical-align: 1px;
+}
+
+.ev-inspect {
+  position: absolute;
+  right: 0;
+  top: 10px;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-std);
+}
+
+.ev:hover .ev-inspect,
+.ev:focus-within .ev-inspect,
+.ev.open .ev-inspect {
+  opacity: 1;
+}
+
+.ev-chosen,
+.ev.chosen {
+  background: var(--accent-soft);
+}
+
+/* ---------- две колонки: список слева, содержание справа ---------- */
+
+/* Экран целиком от шапки до низа: список и содержание прокручиваются каждый сам,
+   а дом раздела сам не прокручивается и не оставляет полей. */
+.view-host[data-view="chats"],
+.view-host[data-view="files"],
+.view-host[data-view="instruments"] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+  max-width: none;
+  padding: 0;
+}
+
+.chat-columns,
+.file-columns,
+.instr-columns-run {
+  display: grid;
+  grid-template-columns: minmax(280px, 304px) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-columns.no-list,
+.file-columns.no-list,
+.instr-columns-run.no-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-columns.no-list .chat-side,
+.file-columns.no-list .file-side,
+.instr-columns-run.no-list .instr-side {
+  display: none;
+}
+
+.chat-side,
+.file-side,
+.instr-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 12px 10px 12px 12px;
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+
+.chat-search {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/1.4 var(--sans);
+}
+
+.chat-list,
+.file-tree,
+.instr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Строка списка — её же строка комнаты (`.room`): 15px и 44px высоты, как на телефоне */
+.chat-list .room {
+  gap: 10px;
+  border-radius: 10px;
+}
+
+.chat-list .room .room-name.hand {
+  font-size: 19px;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  -webkit-text-stroke: 0.35px currentColor;
+}
+
+.chat-list .room-count {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 12px;
+}
+
+.chat-list .room[aria-current="true"],
+.chat-list .room:hover {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.chat-room,
+.file-reader {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-head,
+.file-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 58px;
+  padding: 8px 24px 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-title {
+  margin: 0;
+  font: 400 22px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-meta {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-feed {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  padding: 4px 28px 10px;
+  scrollbar-gutter: stable;
+}
+
+/* Лента — её же, только строка не длиннее газетной и кегль как в окне Элен */
+.chat-feed .msg {
+  max-width: 48em;
+}
+
+.chat-feed .msg.own {
+  max-width: min(84%, 48em);
+}
+
+.chat-feed .msg.agent .msg-body {
+  font-size: var(--t-lead);
+}
+
+.chat-feed .msg-body {
+  font-size: 14.5px;
+}
+
+.chat-feed .msg-head {
+  font-size: 12px;
+}
+
+.chat-feed .empty {
+  padding: 40px 12px;
+}
+
+.chat-feed .empty b {
+  font: 400 22px/1.25 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+  font-variation-settings: normal;
+}
+
+/* Её ходы в этой комнате — свёрнутая строка со счётчиком; раскрывается щелчком */
+.chat-turns {
+  flex-shrink: 0;
+  max-height: 36vh;
+  overflow: auto;
+  padding: 0 28px;
+  border-top: 1px solid var(--line);
+  scrollbar-gutter: stable;
+}
+
+.chat-turns[open] {
+  padding-bottom: 8px;
+}
+
+.chat-turns-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  margin: 0;
+  font: 500 11px/1.4 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  list-style: none;
+  cursor: default;
+}
+
+.chat-turns-title::-webkit-details-marker {
+  display: none;
+}
+
+.chat-turns-title::before {
+  content: "▸";
+  font: 400 12px/1 var(--sans);
+  letter-spacing: 0;
+  color: var(--ink-3);
+  transition: transform var(--dur-1) var(--ease-std);
+}
+
+.chat-turns[open] > .chat-turns-title {
+  color: var(--ink-3);
+}
+
+.chat-turns[open] > .chat-turns-title::before {
+  transform: rotate(90deg);
+}
+
+.chat-turns-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.chat-turn {
+  margin: 6px 0;
+}
+
+.chat-turn summary {
+  cursor: default;
+}
+
+.chat-turn-out {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-composer {
+  flex-shrink: 0;
+  padding: 8px 20px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-composer .composer-row textarea {
+  min-height: 40px;
+  font: 15px/1.4 var(--sans);
+}
+
+.chat-composer .send {
+  width: 40px;
+  height: 40px;
+}
+
+/* ---------- «Сейчас» ---------- */
+
+.now-head {
+  padding: 8px 0 2px;
+}
+
+.now-phrase {
+  display: -webkit-box;
+  max-width: 30em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; /* длинное название хода — не больше трёх строк */
+  font: 400 var(--t-h1)/1.2 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+}
+
+.now-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.now-alarms {
+  margin-top: 4px;
+}
+
+.now-alarms p {
+  margin: 4px 0;
+  font-size: 13.5px;
+}
+
+/* Карточка расхода — её сводка, разложенная в строку на широком экране */
+.now-usage .usage-summary {
+  grid-template-columns: auto auto minmax(300px, 1fr);
+  align-items: center;
+  gap: 2px 24px;
+  padding: 13px 18px 12px;
+}
+
+.now-usage .usage-summary-title {
+  font: 400 20px/1.25 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+}
+
+.now-usage .usage-summary-toggle {
+  font-size: 12.5px;
+}
+
+.now-usage .usage-brief {
+  grid-column: 3;
+  grid-row: 1;
+  gap: 36px;
+  justify-content: flex-start;
+}
+
+.now-usage .usage-brief b {
+  font-size: 21px;
+}
+
+.now-usage .usage-limits-brief {
+  gap: 6px 40px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.now-usage .usage-limit-brief {
+  min-width: 210px;
+}
+
+/* ---------- «Задачи» ---------- */
+
+.tasks-top {
+  margin-bottom: 8px;
+}
+
+.task-pane .task-row {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.tasks-forge {
+  margin-top: 6px;
+}
+
+/* ---------- «Пробуждения» ---------- */
+
+.wake-next {
+  padding: 8px 0 6px;
+}
+
+.wake-when {
+  font: 400 30px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+}
+
+.wake-list .ev-head {
+  padding-left: 4px;
+}
+
+/* ---------- «Файлы» ---------- */
+
+.file-group {
+  margin: 4px 0 8px;
+}
+
+.file-group summary {
+  min-height: 30px;
+  padding: 6px 10px;
+  font: 500 11px/1.4 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.file-group summary .n {
+  font: 11.5px var(--mono);
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.file {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink-2);
+  font: 400 var(--t-body)/1.35 var(--sans);
+  text-align: left;
+}
+
+.file:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.file.chosen {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.file.readonly .file-name::after {
+  content: " · подписан";
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-when {
+  font: 12px var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.file-path {
+  margin: 0;
+  font: 500 13.5px/1.4 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.file-meta {
+  margin: 1px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.file-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.file-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 28px 44px;
+}
+
+.file-paper {
+  max-width: 800px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: var(--t-lead);
+  line-height: 1.7;
+}
+
+.file-paper h1,
+.file-paper h2,
+.file-paper h3 {
+  line-height: 1.3;
+}
+
+.file-edit {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  resize: none;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---------- «Система» ---------- */
+
+.sys-grid {
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.sys-grid > .wide {
+  grid-column: 1 / -1;
+}
+
+.sys-card > h3 {
+  margin: 0 0 6px;
+  font: 400 var(--t-h3)/1.25 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+}
+
+.sys-card.plain > h2.screen-title {
+  display: none;
+}
+
+.sys-card .task-row {
+  background: transparent;
+  border: 0;
+  padding: 5px 0;
+}
+
+.sys-card .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.sys-brain {
+  background: var(--surface-2);
+}
+
+.sys-field {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 13.5px;
+}
+
+.sys-field input,
+.sys-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font: var(--t-body) var(--sans);
+}
+
+.table-actions {
+  white-space: nowrap;
+}
+
+.table-actions .chip + .chip {
+  margin-left: 6px;
+}
+
+.container-log > td {
+  background: var(--surface-2);
+}
+
+.phone-code {
+  width: min(460px, 100%);
+  padding: 8px 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14.5px;
+}
+
+.sys-card.own > .chip {
+  margin: 2px 8px 8px 0;
+}
+
+.sys-card.look .look-card {
+  border: 0;
+  padding: 0;
+}
+
+/* масштаб страницы: мельче | 100 % | крупнее | сбросить */
+.sys-zoom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sys-zoom-value {
+  min-width: 52px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- «Приборы» ---------- */
+
+/* Строка вкладок: кнопка списка слева, вкладки за ней */
+#app.window[data-view="instruments"] .instr-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 8px 16px 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+#app.window[data-view="instruments"] .instr-tabs {
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.instr-tabs .chip.on {
+  border-color: var(--line-strong);
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.instr-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Экран вкладки: обычные читаются с прокруткой, с двумя колонками — от шапки до низа */
+.instr-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 28px 44px;
+  scrollbar-gutter: stable;
+}
+
+.instr-view-columns {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  scrollbar-gutter: auto;
+}
+
+.instr-view-columns[hidden],
+.instr-view[hidden] {
+  display: none;
+}
+
+.instr-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink-2);
+  font: var(--t-body)/1.35 var(--sans);
+  text-align: left;
+}
+
+.instr-item:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.instr-item[aria-current="true"] {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.instr-item:disabled {
+  opacity: 0.5;
+}
+
+.instr-item-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instr-item-hint,
+.instr-item-meta {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.instr-item-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.instr-item-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.instr-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 28px 44px;
+}
+
+.instr-head .chips,
+.instr-detail > .chips {
+  margin: 0 0 10px;
+}
+
+.instr-card {
+  margin: 0 0 14px;
+  padding: 15px 17px 14px;
+}
+
+.instr-card > h3 {
+  margin: 0 0 8px;
+  font: 400 var(--t-h3)/1.25 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+}
+
+.instr-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px 24px;
+}
+
+.instr-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.instr-fact-value {
+  font: 500 23px/1.15 var(--sans);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.instr-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.calls {
+  min-width: 860px;
+}
+
+.calls tr {
+  cursor: default;
+}
+
+.calls tr.chosen td {
+  background: var(--accent-soft);
+}
+
+.stack {
+  display: flex;
+  width: 120px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.stack i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.stack i + i {
+  margin-left: 1px;
+}
+
+.instr-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px 26px;
+  margin-top: 12px;
+}
+
+.instr-part h4 {
+  margin: 0 0 6px;
+  font: 500 11px/1.4 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.instr-part > p {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.instr-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.instr-block {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: 13.5px/1.4 var(--sans);
+  text-align: left;
+}
+
+.instr-block:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.instr-block-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instr-block.call .instr-block-label::before {
+  content: "⤷ ";
+  color: var(--accent);
+}
+
+.instr-block.result .instr-block-label::before {
+  content: "⤶ ";
+  color: var(--ok);
+}
+
+.instr-viewer-box {
+  margin-top: 12px;
+}
+
+.instr-viewer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.instr-viewer {
+  max-height: 40vh;
+}
+
+.instr-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 2px 0 12px;
+}
+
+.instr-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.instr-count > .muted {
+  font-size: 13px;
+}
+
+.journal tr {
+  cursor: default;
+}
+
+.journal td.when {
+  white-space: nowrap;
+}
+
+.journal tr.full td {
+  background: var(--surface-2);
+}
+
+.kv-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0 28px;
+}
+
+.instr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.instr-toolbar .select {
+  width: auto;
+  min-width: 200px;
+}
+
+.instr-run-title {
+  margin: 0 0 4px;
+  font: 500 18px/1.35 var(--sans);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+table tr.quiet td {
+  color: var(--ink-3);
+}
+
+/* журналы: короткие колонки не переносятся, подробность — в последней, остальное — щелчком */
+.journal td {
+  white-space: nowrap;
+}
+
+.journal td:last-child {
+  min-width: 300px;
+  max-width: 560px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.instr-detail .table {
+  min-width: 0;
+}
+
+/* таблица вызовов: числа в ячейках не переносятся */
+.calls td {
+  white-space: nowrap;
+}
+
+.calls td .small {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.calls td:nth-child(3) {
+  min-width: 190px;
+}
+
+.calls td:nth-child(4) {
+  min-width: 150px;
+}
+
+.calls td:last-child {
+  min-width: 210px;
+  white-space: normal;
+}
+
+.calls th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* ---------- её готовые блоки в окне ---------- */
+
+/* Заголовки её блоков («Сейчас идёт», «Предыдущие ходы», «Управление Пракс») — тем же
+   почерком, что и заголовки окна: на телефоне они мелкие и жирные, потому что экран узкий. */
+.now-actions .phone-current-heading,
+.now-actions .phone-history > summary,
+.now-actions .phone-agents > summary,
+.side-body .phone-history > summary,
+.side-body .phone-agents > summary,
+.window .screen-title,
+.window .sys-card.plain > h2 {
+  font: 400 var(--t-h4)/1.3 var(--hand);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+  color: var(--ink);
+}
+
+.now-actions .phone-current-heading,
+.window .screen-title,
+.window .sys-card.plain > h2 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+/* Свёрнутые блоки («Предыдущие ходы», «Субагенты», «Проверки оператора»): вместо тяжёлого
+   системного треугольника — свой тихий шеврон, который поворачивается при раскрытии */
+.now-actions .phone-history > summary,
+.now-actions .phone-agents > summary,
+.now-actions .phone-operators > summary,
+.side-body .phone-history > summary,
+.side-body .phone-agents > summary {
+  padding: 7px 4px;
+  font: 400 var(--t-h4)/1.3 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+  list-style: none;
+}
+
+.now-actions .phone-history > summary::-webkit-details-marker,
+.now-actions .phone-agents > summary::-webkit-details-marker,
+.now-actions .phone-operators > summary::-webkit-details-marker,
+.side-body .phone-history > summary::-webkit-details-marker,
+.side-body .phone-agents > summary::-webkit-details-marker {
+  display: none;
+}
+
+.now-actions .phone-history > summary::before,
+.now-actions .phone-agents > summary::before,
+.now-actions .phone-operators > summary::before,
+.side-body .phone-history > summary::before,
+.side-body .phone-agents > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin: 0 12px 2px 1px;
+  border-left: 6px solid currentColor;
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+  opacity: 0.55;
+  transition: transform var(--dur-2) var(--ease-std);
+}
+
+.now-actions details[open] > summary::before,
+.side-body details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.now-actions .phone-history > summary:focus-visible,
+.now-actions .phone-agents > summary:focus-visible,
+.now-actions .phone-operators > summary:focus-visible,
+.side-body .phone-history > summary:focus-visible,
+.side-body .phone-agents > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.window .screen-title .n {
+  font: 12px var(--mono);
+  -webkit-text-stroke: 0;
+  color: var(--muted);
+}
+
+/* В «Предыдущих ходах» название — её span со своим мелким шрифтом: приводится к заголовку */
+.now-actions .phone-history > summary .turns-title,
+.side-body .phone-history > summary .turns-title {
+  font: 400 var(--t-h4)/1.3 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: var(--hand-line) currentColor;
+  color: var(--ink);
+}
+
+.now-actions .phone-history > summary .turns-n,
+.side-body .phone-history > summary .turns-n {
+  font: 12.5px/1.4 var(--sans);
+  color: var(--muted);
+  -webkit-text-stroke: 0;
+}
+
+.now-actions .phone-current > p,
+.side-body .phone-current > p {
+  font-size: var(--t-lead);
+}
+
+/* Кнопки её блоков — пилюлями, как на её телефоне (`#screen .chip`) */
+.window button.chip {
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 12.5px/1.4 var(--sans);
+  cursor: default;
+  transition: border-color var(--dur-1) var(--ease-std), background var(--dur-1) var(--ease-std);
+}
+
+.window button.chip:hover:enabled {
+  border-color: var(--ink-3);
+  background: var(--surface-2);
+}
+
+.window button.chip:disabled {
+  opacity: 0.45;
+}
+
+.window .task-row .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.window .task-row p {
+  font-size: var(--t-body);
+  line-height: 1.55;
+}
+
+/* кнопки хода в узкой панели и на «Сейчас»: под заголовком, с воздухом до шагов */
+.side-body .turn > .actions,
+.now-actions .turn > .actions {
+  margin: 2px 4px 6px 60px;
+}
+
+.side-body .turn > .actions .chip,
+.now-actions .turn > .actions .chip {
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+.side-body .phone-current {
+  margin-top: 4px;
+}
+
+/* ---------- уже ---------- */
+
+@media (max-width: 1179px) {
+  .chat-columns,
+  .file-columns,
+  .instr-columns-run {
+    grid-template-columns: minmax(250px, 280px) minmax(0, 1fr);
+  }
+
+  .now-usage .usage-summary {
+    grid-template-columns: auto auto;
+  }
+
+  .now-usage .usage-brief {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

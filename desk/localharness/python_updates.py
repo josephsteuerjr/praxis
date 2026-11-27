@@ -4,7 +4,10 @@ import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path
+if __package__:
+    from .windows_paths import Path, wide
+else:
+    from windows_paths import Path, wide
 import re
 import subprocess
 import time
@@ -254,7 +257,10 @@ def _download(url, target, expected='', progress=None):
         actual=digest.hexdigest()
         if expected and expected!=actual:raise ValueError('Update SHA256 differs')
         # A hard link publishes without replacing a racing existing download.
-        os.link(stage,target)
+        try:os.link(stage,target)
+        except FileExistsError:
+            with target.open('rb') as published:
+                if not expected or hashlib.file_digest(published,'sha256').hexdigest()!=expected:raise
         return {'path':str(target),'bytes':count,'sha256':actual,'sha_ok':True if expected else None}
     finally:stage.unlink(missing_ok=True)
 
@@ -274,27 +280,29 @@ def update_download(owner,url,sha256=None,extensions=None):
     from .update_progress import Progress
     job = getattr(owner, 'update_job', None)
     operation=job['id'] if job else uuid.uuid4().hex
-    report=Progress(program_state.progress(owner.root,operation),operation,owner.root,event=owner.event)
-    report.phase('downloading')
+    report=None if getattr(owner,'prefetch_only',False) else Progress(program_state.progress(owner.root,operation),operation,owner.root,event=owner.event)
+    if report:report.phase('downloading')
     selected=installed_extensions(owner.root) if extensions is None else extensions
     if not isinstance(selected,list) or any(s not in EXTENSION_ASSETS for s in selected):raise ValueError('Unknown extension selection')
-    result=_download(url,folder/name,sha256 or asset_sha(url),report)
+    progress=report or getattr(owner,'prefetch_progress',None)
+    result=_download(url,folder/name,sha256 or asset_sha(url),progress)
     components=[]
     cache=folder/'components'/name.removesuffix('.zip');cache.mkdir(parents=True,exist_ok=True)
     from . import component_downloads
     manifest=component_downloads.incoming(result['path'])
     if manifest is not None:
         changed=component_downloads.changed_extensions(owner.root,manifest,selected) if extensions is None else selected
-        components=component_downloads.fetch(owner.root,manifest,changed,report)
+        components=component_downloads.fetch(owner.root,manifest,changed,progress)
     else:
         # Old packages have no map. Only that legacy format uses same-tag URLs.
         for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):
             component_url=urllib.parse.urlunsplit(parsed._replace(path=parsed.path.rsplit('/',1)[0]+'/'+component))
-            components.append(_download(component_url,cache/component,asset_sha(component_url),report))
+            components.append(_download(component_url,cache/component,asset_sha(component_url),progress))
     receipt=folder/(name+'.download.json')
-    receipt.write_text(json.dumps({'archive':result,'components':components,'extensions':selected,
-                                   'progress':str(report.path)},indent=2),encoding='utf-8')
-    report.save()
+    from .package_notice import write
+    write(receipt,{'archive':result,'components':components,'extensions':selected,
+                   'progress':str(report.path) if report else ''})
+    if report:report.save()
     result['components']=components
     return result
 
@@ -427,8 +435,10 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     verified={}
     try:
         progress.phase('unpacking',staging=str(destination))
-        for item in archives:
-            verified.update(_extract(item,destination,progress,verify=sourceMode!='clean'))
+        from . import prepared_update
+        if not job or not prepared_update.take(owner.root,destination,archives,job['archive_sha256']):
+            for item in archives:
+                verified.update(_extract(item,destination,progress,verify=sourceMode!='clean'))
         if job:
             from .package_notice import write
             write(destination / 'extraction.json', {'archive_sha256':job['archive_sha256'], 'verified':verified})
@@ -474,7 +484,8 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
         checkpoint(owner, job, phase='preparing', staging=str(destination))
     predicate = getattr(owner, 'update_cancelled', None)
     cancellation = _Cancellation(predicate) if predicate else None
-    review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions,cancelled=cancellation)
+    review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions,cancelled=cancellation,
+        require_review=sourceMode=='preserve')
     _wait_pause(owner,progress,source_mode=sourceMode)
     # No old window closes on preparation failure. The helper independently
     # reacquires the lease and binds the snapshot identity before admission.
@@ -547,6 +558,7 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
     from .package_notice import write
     from .authored_baseline import mode as eligible
     sourceMode=eligible(old,sourceMode)
+    require_review = require_review or sourceMode == 'preserve'
     try:
         try:
             return _prepare_code(old,new_root,progress,sourceMode,forceExtensions,cancelled,require_review,resolution_owner)
@@ -668,7 +680,7 @@ def _discard_extraction(owner, destination):
         if function is not os.unlink or not isinstance(failure[1], PermissionError):
             raise failure[1]
         remove_created_file(path)
-    shutil.rmtree(destination, onerror=readonly)
+    shutil.rmtree(wide(destination), onerror=readonly)
 
 
 def _launch_handoff(owner, destination, new_root, interpreter, progress):
@@ -695,7 +707,9 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
     # Verified input ZIPs remain a reusable cache, not disposable updater output.
     log=destination/'update.log'
     with log.open('ab') as output:
-        child=subprocess.Popen(argv,cwd=destination,stdin=subprocess.DEVNULL,
+        from .update_process import python_launch
+        argv,cwd=python_launch(argv,destination)
+        child=subprocess.Popen(argv,executable=argv[0],cwd=cwd,stdin=subprocess.DEVNULL,
             stdout=output,stderr=subprocess.STDOUT,
             creationflags=background_flags(),
             start_new_session=os.name!='nt')
@@ -723,3 +737,8 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
     return {'dir':str(owner.root),'updater_pid':child.pid,'log':str(log),
             'old_install_retained':True,'staging':str(destination),'progress':str(progress.path),
             'operation_id':progress.value['id']}
+
+
+def update_background(owner):
+    from .prepared_update import status
+    return status(owner)

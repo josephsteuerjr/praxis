@@ -504,7 +504,7 @@ class TestNameVisibility(Base):
             mtproto_runner.agent._CURRENT_SCOPE = "owner"
             mtproto_runner._buf = collections.defaultdict(lambda: collections.deque(maxlen=20))
             mtproto_runner._buf["809"].append(
-                "Егор: Напиши Васе «привет» и сообщи, когда он ответит")
+                "Алекс: Напиши Васе «привет» и сообщи, когда он ответит")
             path = Path(self.tmpdir.name) / "followups.json"
             mtproto_runner.telegram_followups.LEDGER = (
                 mtproto_runner.telegram_followups.FollowUpLedger(path))

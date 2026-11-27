@@ -35,9 +35,11 @@ def build(source,output,*,version,arch,relay):
         raise ValueError('Native relay provenance does not bind these bytes and architecture')
     core,core_origins=compose_core(source);app,app_origins=application(source)
     output.mkdir(parents=True)
+    archive_modes = {}
     def write(name,raw,mode=0o644):
         target=output/name;target.parent.mkdir(parents=True,exist_ok=True)
         target.write_bytes(raw);target.chmod(mode)
+        archive_modes[name] = mode
     def record(name,value):write(name,(json.dumps(value,ensure_ascii=False,indent=2)+'\n').encode())
     for name,entry in core.items():write('tree/'+name,entry.data,int(entry.mode[-3:],8))
     for name,entry in app.items():write(name,entry.data,int(entry.mode[-3:],8))
@@ -52,6 +54,11 @@ def build(source,output,*,version,arch,relay):
     write('helene.json',(source/'desk/server/helene.server.json').read_bytes())
     for name in ('data','components','component-store','component-state'):(output/name).mkdir(exist_ok=True)
     target='linux-'+arch
+    if (source / "release/README.md").is_file():
+        from release_guide import documents
+        start = "# Hélène Server\n\nИнструкция для установки и обновления — [руководство сервера](server/README-СЕРВЕР.md)."
+        for name, data in documents(source, version, target, start).items():
+            write(name, data)
     unavailable={name:'Local optional speech payload has not been qualified for this server target' for name in ('whisper','xtts')}
     record('app/component-downloads.json',dict(format='helene-component-downloads.v1',target=target,extensions={name:[] for name in unavailable},artifacts={},unavailable=unavailable))
     record('python-app.json',dict(format='helene-python-app.v1',version=version,target=target,server=True,window=None))
@@ -73,7 +80,13 @@ def build(source,output,*,version,arch,relay):
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED,strict_timestamps=False) as z:
         for p in sorted(output.rglob('*')):
             if p.is_symlink():raise ValueError('Linked server stage')
-            if p.is_file():z.write(p,'Helene/'+p.relative_to(output).as_posix())
+            if p.is_file():
+                name = p.relative_to(output).as_posix()
+                info = zipfile.ZipInfo.from_file(p, 'Helene/' + name)
+                info.create_system = 3
+                info.external_attr = (0o100000 | archive_modes[name]) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(info, p.read_bytes())
     archive.with_name(archive.name+'.sha256').write_text(digest(archive.read_bytes())+'  '+archive.name+'\n')
     return archive
 

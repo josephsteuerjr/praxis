@@ -7,7 +7,7 @@ import hands
 
 DESCRIPTION = (
     'YOUR EDITING HAND. Without task_id, paths are in your home: workspace/soul/memory; '
-    'core edits need proposal_id. With task_id, paths and execution belong to that Forge task. '
+    'CODEMAP.md is directly editable at home; core edits need proposal_id. With task_id, paths and execution belong to that Forge task. '
     'replace: old occurs exactly once, or all=true replaces all non-overlapping matches; write: full content (home overwrite/force are explicit); '
     'patch: unified diff in a Forge task, git apply --check then apply, no per-file SHA guarantee; '
     'batch: versioned replacements. Pass expected_sha256 from fs_read; a confirmed edit after_sha256 is valid for the next edit. '

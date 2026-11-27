@@ -221,6 +221,8 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     seal_code(output);seal_authored_baseline(output)
     # Use the same byte inventory the updater preserves. Mutable configuration,
     # user data, component overlays and this inventory itself are not retired.
+    from release_guide import write_stage
+    write_stage(DESK.parent, output, version, "macos" if target.startswith("macos-") else "linux", target)
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')
            if p.is_file() and p.relative_to(output).parts[0] not in ('tree','components','data','downloads')
            and p.name not in ('helene.json','python-package-files.json')}

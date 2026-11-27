@@ -57,7 +57,7 @@ class FakeClient:
                 if isinstance(system, list):
                     system = "".join(str(block.get("text", "")) for block in system
                                      if isinstance(block, dict))
-                # С 10.11 (Егор, «сними») второго вызова на выходе нет: судьи приватности
+                # С 10.11 (владелец, «сними») второго вызова на выходе нет: судьи приватности
                 # не стало. Если он вернётся, тест увидит это по числу calls, а не здесь.
                 self.last = kw
                 return FakeResp(self.reply)
@@ -168,7 +168,7 @@ class TestGroupVoice(Base):
                       "в группе нет presence-фрейма")
         self.assertIn("[молчу]", text)
         self._client("ответ2")
-        agent.voice_turn("777", "егор: привет", speaker="Егор", is_owner=True, is_dm=True)
+        agent.voice_turn("777", "алекс: привет", speaker="Алекс", is_owner=True, is_dm=True)
         text = "".join(b["text"] for b in self.fc.last["system"]) \
             if isinstance(self.fc.last["system"], list) else self.fc.last["system"]
         self.assertNotIn('живая группа, в которой ты участвуешь', text,
@@ -208,7 +208,7 @@ class TestGroupVoice(Base):
         # в личке анти-повтор не давит: переспросили — можно повторить
         notes.append("777", "т · сказала: «норм ответ»")
         self._client("норм ответ")
-        out = agent.voice_turn("777", "егор: повтори", speaker="Егор", is_owner=True, is_dm=True)
+        out = agent.voice_turn("777", "алекс: повтори", speaker="Алекс", is_owner=True, is_dm=True)
         self.assertEqual(out, "норм ответ")
 
     def test_perceive_machinery_gone(self):
@@ -219,7 +219,7 @@ class TestGroupVoice(Base):
 class TestVoiceTurn(Base):
     def test_owner_tools_and_gist(self):
         self._client("ну смотри, кэш греет вход")
-        out = agent.voice_turn("777", "егор: расскажи про кэш", speaker="Егор", is_owner=True)
+        out = agent.voice_turn("777", "алекс: расскажи про кэш", speaker="Алекс", is_owner=True)
         self.assertEqual(out, "ну смотри, кэш греет вход")
         names = [t["name"] for t in self.fc.last.get("tools", [])]
         self.assertIn("shell", names, "у голоса владельца должны быть руки")
@@ -244,13 +244,13 @@ class TestWindowTool(Base):
 
     def test_opens_focus_window_now(self):
         import tasks
-        out = agent.tool_focus("код: скрипт для Егора")
+        out = agent.tool_focus("код: скрипт для Алекса")
         self.assertIn('ближайший тик', out)
         self.assertNotIn("скрипт", out, "подтверждение — краткое, без деталей (видно и в группе)")
         open_ = [t for t in tasks.list_open() if t["kind"] == "window"]
         self.assertTrue(open_, "фокус-окно не поставлено")
         t = open_[-1]
-        self.assertEqual(t["goal"], "код: скрипт для Егора")
+        self.assertEqual(t["goal"], "код: скрипт для Алекса")
         self.assertEqual(t["target"], "", "PASS 26: focus больше не метит __auto__")
         self.assertEqual(t["author"], "praxis", "провенанс: её сознательный фокус")
         self.assertTrue(t["when"], "when должен быть проставлен (in 0m → сейчас)")
@@ -297,7 +297,7 @@ class TestReplyGuard(Base):
     """Что держит её слово на выходе в группе.
 
     27.07 судья в разговорах стал СОВЕТОМ («давай в разговорах его ослабим, ну его нахер»),
-    10.11 Егор снял и совет («сними»). Твёрдым остался ровно один рельс — механический
+    10.11 владелец снял и совет («сними»). Твёрдым остался ровно один рельс — механический
     кред-пол. Живой повод 27.07: 26.07 судья придержал её рассказ о СВОЕЙ ЖЕ работе, она
     переписала и отправила то же самое сама через 48 секунд, — придержка стоила хода и не
     предотвратила ничего.

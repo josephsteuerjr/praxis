@@ -24,7 +24,7 @@ from pathlib import Path
 
 LIVE_LLM_JSON = Path(os.environ.get("CANARY_LLM_JSON")
                      or r"C:\Program Files\Helene\data\memory\llm.json")
-RECEIPT_DIR = Path(r"C:\Users\yegor\Downloads\Praxis\desk-notes\evidence\UI-01.10")
+RECEIPT_DIR = Path(os.environ.get("CANARY_RECEIPT_DIR", "canary-results"))
 
 # Палитра различимых для модели названий цветов (ru-слова ждём в ответе).
 PALETTE = [

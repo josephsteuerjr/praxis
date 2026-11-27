@@ -1,7 +1,7 @@
 //! Windows-руки мастера 1.2 (27.09): job-объект на детей, запуск установленной
 //! программы вне его, поднятый исполнитель «для всех», снятие песочницы без питона.
 //!
-//! Требования Егора, ради которых это есть: «уборка за собой при падении — процессы,
+//! Требования владельца, ради которых это есть: «уборка за собой при падении — процессы,
 //! которые мастер породил, гасятся»; «для всех» — один запрос прав, дальше без
 //! вопросов; удаление быстрое.
 #![cfg(windows)]
@@ -84,7 +84,7 @@ const ESCAPE_TASK_DIR: &str = "Helene";
 /// Мастер родился внутри чужого job — выйти из него до первого окна. -> `true`: копия
 /// вне job поднята, этому процессу пора выйти.
 ///
-/// 28.09, живой случай. Агент Егора запустил установщик рукой `computer run`
+/// 28.09, живой случай. Агент владельца запустил установщик рукой `computer run`
 /// (`Start-Process`): тело кладёт каждый прогон в свой job с KILL_ON_JOB_CLOSE и без
 /// права выхода, а сам агент живёт в задаче планировщика службы. Владелец нажал
 /// «Обновить до 1.2.4», мастер остановил службу — служба сняла свою задачу со всеми
@@ -182,12 +182,12 @@ mod escape_tests {
 
     #[test]
     fn task_line_quotes_paths_and_carries_the_task_name() {
-        let exe = Path::new(r"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe");
+        let exe = Path::new(r"C:\Users\владелец\Downloads\Helene-1.2.5-setup.exe");
         let line = escape_task_line(exe, &["--update".into(), "--dir".into(), r"C:\Program Files\Helene".into()],
                                     r"Helene\setup-escape-7");
         assert_eq!(
             line,
-            r#"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe --update --dir "C:\Program Files\Helene" --escaped-job=Helene\setup-escape-7"#
+            r#"C:\Users\владелец\Downloads\Helene-1.2.5-setup.exe --update --dir "C:\Program Files\Helene" --escaped-job=Helene\setup-escape-7"#
         );
         let spaced = escape_task_line(Path::new(r"C:\a b\s.exe"), &[], "T");
         assert!(spaced.starts_with(r#""C:\a b\s.exe" "#), "{spaced}");

@@ -1,4 +1,4 @@
-"""Regression cases from the actual independent Jarvis update review."""
+"""Regression cases from the actual independent Atlas update review."""
 import json
 from pathlib import Path
 import sys

@@ -131,7 +131,7 @@ class FrameBase(unittest.TestCase):
 
     # --- проход голоса с подменённым тул-циклом ---
 
-    def run_turn(self, *, ctx=None, user="Егор: привет", history=None,
+    def run_turn(self, *, ctx=None, user="Алекс: привет", history=None,
                  extra_system="", extra_evidence="", call_id="model-a", bind=True):
         """Один ход до самого шва сборки кадра. Мока ровно той формы, что у соседей.
 
@@ -148,7 +148,7 @@ class FrameBase(unittest.TestCase):
 
         def body():
             seen["reply"] = agent._voice_impl(
-                user, list(history or []), "Егор", ctx=ctx or self.owner_dm(),
+                user, list(history or []), "Алекс", ctx=ctx or self.owner_dm(),
                 extra_system=extra_system, extra_evidence=extra_evidence,
             )
             seen["trace"] = frame_trace.current()
@@ -226,7 +226,7 @@ class TheJoinOfMarksIsTheZoneItself(FrameBase):
     def test_all_three_zones_join_back_byte_for_byte(self):
         with frame_trace.capture():
             persona, tail_text, evidence = agent._build_prompt_parts(
-                speaker="Егор", ctx=self.owner_dm())
+                speaker="Алекс", ctx=self.owner_dm())
             self.assertEqual(frame_trace.join("persona"), persona)
             self.assertEqual(frame_trace.join("dynamic"), tail_text)
             self.assertEqual(frame_trace.join("evidence"), evidence)
@@ -306,7 +306,7 @@ class EveryRosterNameIsEitherMarkedOrDeclaredAbsent(FrameBase):
 
     def _names(self, ctx) -> list[str]:
         with frame_trace.capture():
-            agent._build_prompt_parts(speaker="Егор", ctx=ctx)
+            agent._build_prompt_parts(speaker="Алекс", ctx=ctx)
             return [row["name"] for row in frame_trace.sections()]
 
     def test_four_shapes_of_context_each_name_exactly_once(self):
@@ -325,7 +325,7 @@ class EveryRosterNameIsEitherMarkedOrDeclaredAbsent(FrameBase):
         for ctx, expected in ((self.owner_dm(), True), (self.own_run(), True),
                               (self.family_dm(), False), (self.unknown_group(), False)):
             with frame_trace.capture():
-                agent._build_prompt_parts(speaker="Егор", ctx=ctx)
+                agent._build_prompt_parts(speaker="Алекс", ctx=ctx)
                 row = next(r for r in frame_trace.sections()
                            if r["name"] == "contract.owner_tools")
             self.assertEqual(row["included"], expected, row)
@@ -335,7 +335,7 @@ class EveryRosterNameIsEitherMarkedOrDeclaredAbsent(FrameBase):
     def test_the_place_variant_names_which_of_three_literals_travelled(self):
         for ctx, variant in ((self.owner_dm(), "owner_dm"), (self.own_run(), "own_run")):
             with frame_trace.capture():
-                agent._build_prompt_parts(speaker="Егор", ctx=ctx)
+                agent._build_prompt_parts(speaker="Алекс", ctx=ctx)
                 row = next(r for r in frame_trace.sections()
                            if r["name"] == "state.owner_place")
             self.assertEqual(row["variant"], variant)
@@ -349,7 +349,7 @@ class ThreeDifferentZeroesStayDifferent(FrameBase):
         (self.soul / "VOICE.md").write_text("", encoding="utf-8")
         with mock.patch.dict(os.environ, {"PRAXIS_CONTEXT_BUDGET": "200"}):
             with frame_trace.capture():
-                agent._build_prompt_parts(speaker="Егор", ctx=self.owner_dm())
+                agent._build_prompt_parts(speaker="Алекс", ctx=self.owner_dm())
                 rows = frame_trace.sections()
         by_name = {}
         for row in rows:
@@ -378,7 +378,7 @@ class ThreeDifferentZeroesStayDifferent(FrameBase):
     def test_a_tier_that_never_assembled_gets_no_record_at_all(self):
         """Четвёртый ноль — «до решения не дошли» — записи не получает по построению."""
         with frame_trace.capture():
-            agent._build_prompt_parts(speaker="Егор", ctx=self.owner_dm())
+            agent._build_prompt_parts(speaker="Алекс", ctx=self.owner_dm())
             counts = frame_trace.current().counts
             rows = frame_trace.sections()
         tier_rows = [r for r in rows if r["name"] == "evidence.tier"]
@@ -390,7 +390,7 @@ class TheBudgetIsMeasuredWithTheSameRuler(FrameBase):
     def test_used_start_is_the_expression_the_code_itself_uses(self):
         with frame_trace.capture():
             persona, tail_text, _evidence = agent._build_prompt_parts(
-                speaker="Егор", ctx=self.owner_dm())
+                speaker="Алекс", ctx=self.owner_dm())
             budget = frame_trace.current().budget
         self.assertEqual(budget["used_start"], len(persona) + len(tail_text))
         self.assertEqual(budget["unit"], "chars")
@@ -409,7 +409,7 @@ class TheBudgetIsMeasuredWithTheSameRuler(FrameBase):
         with mock.patch.dict(os.environ, {"PRAXIS_CONTEXT_BUDGET": "200"}):
             with frame_trace.capture():
                 _persona, _tail, evidence = agent._build_prompt_parts(
-                    speaker="Егор", ctx=self.owner_dm())
+                    speaker="Алекс", ctx=self.owner_dm())
                 rows = frame_trace.sections()
                 budget = frame_trace.current().budget
         spoken = ""
@@ -574,12 +574,12 @@ class ReceiptBase(FrameBase):
         return [row for row in self.manager.events(run_id)
                 if row.get("kind") == "model_input"]
 
-    def voice_turn(self, run, *, ctx=None, user="Егор: привет"):
+    def voice_turn(self, run, *, ctx=None, user="Алекс: привет"):
         response = types.SimpleNamespace(stop_reason="end_turn", text="готово", blocks=[])
         with run_context.bind_run(run), \
                 mock.patch.object(agent.llm, "chat", return_value=response), \
                 frame_trace.capture():
-            return agent._voice_impl(user, [], "Егор", ctx=ctx or self.owner_dm())
+            return agent._voice_impl(user, [], "Алекс", ctx=ctx or self.owner_dm())
 
 
 class TheReceiptCarriesTheTraceAndResumeSurvivesIt(ReceiptBase):
@@ -641,7 +641,7 @@ class TheSecondCallOnTheSameFrameIsMarkedReused(ReceiptBase):
 
     def _sealed_frame(self):
         persona, dynamic, evidence = agent._build_prompt_parts(
-            speaker="Егор", ctx=self.owner_dm())
+            speaker="Алекс", ctx=self.owner_dm())
         system = agent._system(persona, dynamic)
         frame_trace.seal(persona=persona, dynamic=dynamic, evidence=evidence,
                          system=system)
@@ -686,7 +686,7 @@ class AForeignFrameNeverGetsTheTrace(FrameBase):
         seen = self.run_turn()
         with frame_trace.capture():
             persona, dynamic, evidence = agent._build_prompt_parts(
-                speaker="Егор", ctx=self.owner_dm())
+                speaker="Алекс", ctx=self.owner_dm())
             mine = agent._system(persona, dynamic)
             frame_trace.seal(persona=persona, dynamic=dynamic, evidence=evidence,
                              system=mine)
@@ -703,7 +703,7 @@ class AForeignFrameNeverGetsTheTrace(FrameBase):
     def test_clear_detaches_the_trace_the_way_the_resume_path_does(self):
         with frame_trace.capture():
             persona, dynamic, evidence = agent._build_prompt_parts(
-                speaker="Егор", ctx=self.owner_dm())
+                speaker="Алекс", ctx=self.owner_dm())
             system = agent._system(persona, dynamic)
             frame_trace.seal(persona=persona, dynamic=dynamic, evidence=evidence,
                              system=system)
@@ -742,7 +742,7 @@ class AnInstrumentFailureNeverCostsHerTurn(ReceiptBase):
                 run_context.bind_run(run), \
                 mock.patch.object(agent.llm, "chat", return_value=response), \
                 frame_trace.capture():
-            answer = agent._voice_impl("Егор: привет", [], "Егор", ctx=self.owner_dm())
+            answer = agent._voice_impl("Алекс: привет", [], "Алекс", ctx=self.owner_dm())
         self.assertEqual(answer, "готово")
         self.assertEqual(stopped, [], "сбой прибора увёл ход в _stop_for_durability")
         row = self.model_input_events(run.run_id)[0]
@@ -770,7 +770,7 @@ class TheScrubberDoesNotReAnchorTheTrace(ReceiptBase):
                 mock.patch.object(agent.llm, "chat", return_value=response), \
                 frame_trace.capture():
             persona, dynamic, evidence = agent._build_prompt_parts(
-                speaker="Егор", ctx=self.owner_dm())
+                speaker="Алекс", ctx=self.owner_dm())
             system = agent._system(persona, dynamic)
             frame_trace.seal(persona=persona, dynamic=dynamic, evidence=evidence,
                              system=system)
@@ -916,7 +916,7 @@ class NoTokensAndNoContent(FrameBase):
     MODE = "on"
 
     def test_not_a_single_token_quantity(self):
-        """Решение Егора, закреплённое механически: прибор печатает наблюдённое."""
+        """Решение владельца, закреплённое механически: прибор печатает наблюдённое."""
         encoded = json.dumps(self.run_turn()["meta"], ensure_ascii=False).lower()
         self.assertNotIn("token", encoded)
         self.assertNotIn("токен", encoded)
@@ -1081,7 +1081,7 @@ class TheInstrumentIsActuallyBoundOnTheLiveSeam(FrameBase):
 
         with mock.patch.object(agent, "_terminal_tool_loop", loop), \
              mock.patch.object(agent, "_create_durable_run", lambda **_kw: None):
-            reply = agent._voice("Егор: привет", [], "Егор", ctx=self.owner_dm())
+            reply = agent._voice("Алекс: привет", [], "Алекс", ctx=self.owner_dm())
 
         self.assertEqual(reply, "ок")
         self.assertTrue(seen["bound"],
@@ -1096,7 +1096,7 @@ class TheInstrumentIsActuallyBoundOnTheLiveSeam(FrameBase):
         with mock.patch.object(agent, "_terminal_tool_loop",
                                lambda **_kw: "ок"), \
              mock.patch.object(agent, "_create_durable_run", lambda **_kw: None):
-            agent._voice("Егор: привет", [], "Егор", ctx=self.owner_dm())
+            agent._voice("Алекс: привет", [], "Алекс", ctx=self.owner_dm())
         self.assertIsNone(frame_trace.current(),
                           "след пережил ход: следующий кадр получил бы чужую разметку")
 

@@ -53,7 +53,7 @@ class WorkPC(unittest.TestCase):
         self.assertIn('kind', result); self.assertIn('Действие не выполнено', result)
 
     def test_imported_recent_answer_recovers_roles_instead_of_only_initial_greeting(self):
-        hot = [{'direction':'out','line':'Initial hello','actor':'Jarvis','ts':1},
+        hot = [{'direction':'out','line':'Initial hello','actor':'Atlas','ts':1},
                {'direction':'in','line':'Current request','actor':'Owner','ts':5}]
         canonical = [dict(outgoing=True,text='Initial hello',timestamp='2026-10-08T10:00:00Z'),
             dict(outgoing=False,text='Do the task',timestamp='2026-10-12T10:00:00Z'),

@@ -9,7 +9,7 @@ import rooms
 from localharness import ui_language as native_ui
 from test_room_authority import RoomsHarness
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class RoomCaptionAxes(RoomsHarness):
     def config(self,ui_language,frame_language):

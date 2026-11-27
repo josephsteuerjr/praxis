@@ -1,6 +1,7 @@
 """Durable facts for one existing Forge agents/<unit> directory, not a task store.
 
-The worker is the only writer (OS-held writer.lock). Checkpoints contain the full
+The OS-held writer.lock serializes the worker and, after proven exit, the
+coordinator appending a reconstructed child-wait result. Checkpoints contain the full
 model transcript, including route-bound protocol sidecars. Immutable UTF-8 payloads
 hold complete tool arguments/results; events record their order. Readers never
 infer process liveness from a phase or silently discard damaged journal records.
@@ -147,7 +148,8 @@ def _events(directory):
 def request_identity(request: dict) -> str:
     # Core adds PID/birth/status after spawning; none changes the assignment.
     stable = {k: v for k, v in request.items() if k not in {
-        "supervisor_pid", "supervisor_started_at", "process_identity", "status", "_verified_request_path"}}
+        "supervisor_pid", "supervisor_started_at", "process_identity", "status", "_verified_request_path",
+        "wait_launch_id"}}
     return hashlib.sha256(_json_bytes(stable)).hexdigest()
 
 
@@ -214,6 +216,84 @@ def continuation_info(directory) -> dict:
             "generation": checkpoint.get("generation"), "next_boundary": boundary,
             "safe": safe, "reason": "settled boundary" if safe else
             "in-flight outcome unknown or terminal; no automatic replay"}
+
+
+def wait_checkpoint(directory: Path, request: dict, child: str) -> tuple[dict, dict] | None:
+    """The only in-flight tool with a coordinator-owned result reconstruction."""
+    try:
+        raw = (directory / "checkpoint.json").read_bytes()
+        state = json.loads(raw)
+        pending = state["pending"]
+        call = pending["calls"][pending["next_call"]]
+        args = {key: value for key, value in call["input"].items() if value is not None}
+        if (state.get("next_boundary") == "tool_in_flight"
+                and state.get("request_sha256") == request_identity(request)
+                and state.get("task_id") == request["task_id"]
+                and state.get("unit_id") == request["id"] == directory.name
+                and state.get("generation") and call.get("id")
+                and call["name"] == "delegate" and args == {"action": "wait", "agent_id": child}):
+            return state, {"schema": 1, "checkpoint_sha256": hashlib.sha256(raw).hexdigest(),
+                           "generation": state["generation"], "call_id": call["id"]}
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _wait_events(directory, state: dict, binding: dict) -> tuple[dict, ...]:
+    return tuple(row for row in _events(directory)
+                 if row["seq"] > state["event_seq"] and row.get("generation") == state["generation"]
+                 and row.get("iteration") == state["iteration"] and row.get("call_id") == binding["call_id"])
+
+
+def settle_wait(journal, state: dict, binding: dict, output: str, child: str) -> str:
+    """Use the ordinary result->checkpoint recovery lane without dispatching a tool."""
+    events = _wait_events(journal.directory, state, binding)
+    kinds = tuple(row.get("kind") for row in events)
+    if (kinds not in {("tool_start", "tool_dispatch"), ("tool_start", "tool_dispatch", "tool_result")}
+            or any(row.get("tool", "delegate") != "delegate" for row in events)
+            or json.loads(read_payload_full(journal.directory, events[0]["input_ref"]))
+                != {"action": "wait", "agent_id": child}):
+        return ""
+    if kinds[-1] == "tool_result":
+        event = events[-1]
+        # Do not contradict what the old worker durably returned, including unknown.
+        if (event.get("input_ref") != events[0]["input_ref"]
+                or read_payload_full(journal.directory, event["output_ref"]) != output):
+            return ""
+    else:
+        journal.state = state
+        event = journal.event("tool_result", call_id=binding["call_id"], tool="delegate",
+                              input_ref=events[0]["input_ref"], output_ref=journal.payload(output),
+                              executions=[], recovered_from="forge_child_result")
+    return hashlib.sha256(_json_bytes(event)).hexdigest()
+
+
+def owns_wait_launch(directory: Path, receipt: dict) -> bool:
+    import process_liveness
+    declared = _read(directory / "request.json", {})
+    handoff = _read(directory / "handoff.json", {})
+    pid = os.getpid()
+    birth = process_liveness.process_started_at(pid)
+    launch_id = receipt.get("wait_launch_id")
+    return (bool(launch_id and birth) and isinstance(declared, dict) and isinstance(handoff, dict)
+            and handoff.get("wait_launch_id") == launch_id
+            and declared.get("wait_launch_id") == launch_id and declared.get("status") == "running"
+            and declared.get("supervisor_pid") == pid and declared.get("supervisor_started_at") == birth)
+
+
+def _verify_wait_resume(directory, state: dict, receipt: dict) -> None:
+    handoff = _read(directory / "handoff.json", {})
+    events = _wait_events(directory, state, receipt)
+    child = receipt["child_unit_id"]
+    digest = receipt["child_result_sha256"]
+    if (not owns_wait_launch(directory, receipt) or not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", child)
+            or handoff.get("child_unit_id") != child or handoff.get("result_sha256") != digest
+            or handoff.get("state") != "returned" or handoff.get("restart_requested") is not True
+            or tuple(row.get("kind") for row in events) != ("tool_start", "tool_dispatch", "tool_result")
+            or hashlib.sha256(_json_bytes(events[-1])).hexdigest() != receipt["wait_event_sha256"]
+            or hashlib.sha256((directory.parent / child / "result.json").read_bytes()).hexdigest() != digest):
+        raise ContinuationRefused("child wait launch or selected result no longer matches its receipt")
+    read_payload_full(directory, events[-1]["output_ref"])
 
 
 class Journal:
@@ -297,7 +377,11 @@ class Journal:
             "observed_at": now(), "seq": self.seq, "status": "observed", **fields})
 
     def start(self, request: dict, initial: dict) -> dict:
-        source = request.get("continuation_source")
+        receipt_path = self.directory / "resume.json"
+        receipt = _read(receipt_path, {})
+        # A former explicit continuation retains its original provenance in
+        # the request. A later same-ID wait receipt names this unit's checkpoint.
+        source = None if "wait_event_sha256" in receipt else request.get("continuation_source")
         origin = self.directory
         if source:
             if not isinstance(source, dict):
@@ -314,8 +398,6 @@ class Journal:
         path = origin / "checkpoint.json"
         if path.exists():
             info = continuation_info(origin)
-            receipt_path = self.directory / "resume.json"
-            receipt = _read(receipt_path, {})
             if not all(receipt.get(key) is True for key in (
                     "authorized", "old_writer_ended", "task_control_permits")):
                 raise ContinuationRefused("explicit coordinator continuation receipt required")
@@ -327,7 +409,15 @@ class Journal:
                 raise ContinuationRefused("source checkpoint changed")
             if not info["safe"]:
                 raise ContinuationRefused(info["reason"])
-            state = _recover_result(origin, _read(path))
+            old_state = _read(path)
+            if "wait_event_sha256" in receipt:
+                try:
+                    _verify_wait_resume(origin, old_state, receipt)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                    raise ContinuationRefused("child wait recovery evidence unavailable or changed") from exc
+            state = _recover_result(origin, old_state)
+            if state.get("ordinary_context_sha256") != initial.get("ordinary_context_sha256"):
+                raise ContinuationRefused("ordinary worker assignment or source context changed")
             if any(state.get(key) != initial.get(key) for key in ("adapter_id", "tools", "call_options",'route_identity')):
                 raise ContinuationRefused("execution adapter/route changed")
             if not source and state.get("request_sha256") != request_identity(request):

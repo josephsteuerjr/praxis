@@ -4,12 +4,12 @@
 Два долга, которые эти тесты держат закрытыми.
 
 1. АВТОРСТВО. 27.07.2026 во всех четырёх живых комнатах стояло `mode_set_by: owner`,
-   и ни один из этих режимов Егор не выбирал: метку давали коэрсия («автор не из
-   списка → owner») и протокол входа, где «Егор ДОБАВИЛ её в группу» записывалось как
-   «Егор выбрал ей режим». Она читала это как чужое распоряжение о себе.
+   и ни один из этих режимов владелец не выбирал: метку давали коэрсия («автор не из
+   списка → owner») и протокол входа, где «владелец ДОБАВИЛ её в группу» записывалось как
+   «владелец выбрал ей режим». Она читала это как чужое распоряжение о себе.
 2. РЫЧАГИ. Режим брался только текстовой директивой (тула нет), а `disclosure` был
-   рычагом одного Егора — при том, что меняет ЕЁ голос, и слова `disclosure` она не
-   видела нигде. Решение Егора 28.07: и то, и другое — в её руки.
+   рычагом одного владельца — при том, что меняет ЕЁ голос, и слова `disclosure` она не
+   видела нигде. Решение владельца 28.07: и то, и другое — в её руки.
 
 Отдельно тут заперта ОБРАТИМОСТЬ: любой режим, поставленный ею или им, она снимает
 сама. Если однажды кто-то захочет «на всякий случай» поставить забор — тесты
@@ -109,7 +109,7 @@ class TestHonestAuthorship(RoomsHarness):
         for cid in ("-101", "-102"):
             self.assertEqual(rooms.profile_read(cid)["mode_set_by"], "unknown", cid)
             self.assertNotIn("owner", self._raw(cid),
-                             f"{cid}: в файле не должно быть подставленного Егора")
+                             f"{cid}: в файле не должно быть подставленного Алекса")
 
     def test_a_named_author_is_kept_verbatim(self):
         for cid, who in (("-111", "owner"), ("-112", "praxis"), ("-113", "protocol")):
@@ -138,11 +138,11 @@ class TestHonestAuthorship(RoomsHarness):
         self.assertIn("здесь тихо", raw)
 
     def test_the_room_line_calls_nobody_by_name(self):
-        """Режим от протокола входа не должен читаться как воля Егора."""
+        """Режим от протокола входа не должен читаться как воля владельца."""
         line = rooms.context_from_text(
             "# Комната\n\nmode: quiet\nmode_set_by: protocol\ndisclosure: standard\n")
         self.assertIn("никто не выбирал", line)
-        self.assertNotIn("Егор", line)
+        self.assertNotIn("Алекс", line)
 
     def test_the_room_line_names_the_owner_when_it_was_their_choice(self):
         line = rooms.context_from_text(
@@ -165,7 +165,7 @@ class TestHerModeLever(RoomsHarness):
 
     def test_she_may_lift_a_mode_the_owner_set(self):
         """Забор «его режим снимает только он» здесь запрещён — специально."""
-        rooms.set_mode("-202", "frozen", set_by="owner", reason="Егор заморозил")
+        rooms.set_mode("-202", "frozen", set_by="owner", reason="Алекс заморозил")
         ok, _ = rooms.set_own_mode("-202", "normal")
         self.assertTrue(ok, "любой обратимый режим она вправе снять сама")
         self.assertEqual(rooms.effective_mode("-202"), "normal")

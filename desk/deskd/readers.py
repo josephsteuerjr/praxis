@@ -140,11 +140,16 @@ def desk_build(root: Path | None = None) -> dict:
         return _DESK_CACHE["value"]
     raw = _load_json(path)
     value: dict = {}
-    modern = (isinstance(raw,dict) and 'product' not in raw
-              and isinstance(raw.get('files'),dict) and raw.get('files')
-              and isinstance(raw.get('version'),str)
-              and re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?',raw['version'])
-              and all(isinstance(raw.get(key),str) and re.fullmatch('[a-f0-9]{64}',raw[key]) for key in ('digest','static')))
+    modern = False
+    if isinstance(raw, dict) and "product" not in raw:
+        # Server manifests record one digest over the whole app, including its UI.
+        server = raw.get("flavor") in ("server-linux-x86_64", "server-linux-arm64")
+        hashes = ("digest",) if server and "static" not in raw else ("digest", "static")
+        modern = (isinstance(raw.get("files"), dict) and raw["files"]
+                  and isinstance(raw.get("version"), str)
+                  and re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", raw["version"])
+                  and all(isinstance(raw.get(k), str) and re.fullmatch("[a-f0-9]{64}", raw[k])
+                          for k in hashes))
     if isinstance(raw, dict) and (raw.get("product") == "desk" or modern):
         value = {"version": str(raw.get("version") or ""),
                  "flavor": str(raw.get("flavor") or ""),
@@ -502,7 +507,11 @@ def run_dir(run_id: str) -> Path | None:
         return None
     month = f"{match.group(1)}-{match.group(2)}"
     path = tree() / "memory" / "runs" / month / run_id
-    return path if path.is_dir() else None
+    try:
+        return path if path.is_dir() else None
+    except PermissionError:
+        # A separate server channel account can see the heartbeat but not a private run.
+        return None
 
 
 def list_runs(limit: int = 80, kind: str = "", before: str = "",
@@ -611,7 +620,7 @@ def _room_titles() -> dict[str, str]:
 
     Хвост turns.jsonl (см. chat_titles) живёт 300–600 строк и после компакта
     забывает чаты, где давно не было хода, — список «Чаты» показывал «чат
-    -1004301095307» вместо «mycelium» (замечено владельцем 08.09). Настоящие имена
+    -100888888888888888» вместо «mycelium» (замечено владельцем 08.09). Настоящие имена
     лежат дольше: заголовок `# Имя` в memory/rooms/<peer>.md (профиль места) и
     known_ids.json (id → имя для личек). Кэш — по mtime каталога rooms и файла
     known_ids; топики докладываются из проекции group_context по запросу.
@@ -2187,7 +2196,7 @@ def safe_read_md(rel: str) -> dict:
         return {"error": "Файл не открылся.", "code": "io",
                 "detail": f"{type(exc).__name__}: {exc}"}
     if stat.st_size > _MD_CAP:
-        # Дневники за месяцы легко превышают кап (Егор 11.10: «не открываются
+        # Дневники за месяцы легко превышают кап (владелец 11.10: «не открываются
         # многие файлы»). Отказ читался как поломка. Отдаём хвост: свежие записи
         # дневника важнее шапки, а правка из окна для хвоста запрещена
         # (`tail: true` — клиент прячет «Править», иначе сохранение стёрло бы голову).

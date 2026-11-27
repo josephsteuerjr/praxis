@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <title>Праксис</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script src="./config.js"></script>
+  </head>
+  <body>
+    <div id="app" class="window no-anim" data-view="now">
+      <aside id="rail" class="rail" aria-label="Разделы">
+        <div class="rail-sign" id="rail-sign">Праксис</div>
+        <div class="rail-state" id="rail-state" data-level="off"><span class="state-dot"></span><span id="rail-phrase">Подключение…</span></div>
+        <nav id="rail-nav" class="rail-nav"></nav>
+        <div class="rail-foot">
+          <button type="button" class="rail-item" id="rail-theme"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 3v14M10 3a7 7 0 0 1 0 14" /></svg><span id="rail-theme-label">Тема</span></button>
+          <span class="rail-build" id="rail-build"></span>
+        </div>
+      </aside>
+      <main id="main" class="main">
+        <header id="top" class="top">
+          <button type="button" class="edge-btn" id="toggle-rail" aria-pressed="true" title="Свернуть полку (Ctrl+B)" aria-label="Свернуть полку разделов" aria-controls="rail">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5" /><path d="M7.75 4v12" /><path d="M3.3 5.2q0-.9.9-.9h2.8v11.4H4.2q-.9 0-.9-.9z" fill="currentColor" stroke="none" /></svg>
+          </button>
+          <div class="top-main">
+            <div class="top-kicker" id="top-kicker"></div>
+            <h1 class="top-title" id="top-title"></h1>
+          </div>
+          <div class="top-tools" id="top-tools"></div>
+          <button type="button" class="edge-btn" id="toggle-panel" aria-pressed="true" hidden title="Свернуть панель хода (Ctrl+J)" aria-label="Свернуть панель текущего хода" aria-controls="side">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5" /><path d="M12 3.75v12.5" /></svg>
+          </button>
+        </header>
+        <section id="view" class="view" aria-live="off"></section>
+      </main>
+      <aside id="side" class="side" aria-label="Текущий ход">
+        <div class="side-head"><span class="side-title">Сейчас идёт</span></div>
+        <div class="side-body" id="side-inner"></div>
+      </aside>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

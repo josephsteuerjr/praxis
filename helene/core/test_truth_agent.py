@@ -68,7 +68,7 @@ class _RunHarness(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-truth-{suffix}",
@@ -940,7 +940,7 @@ class GuardInputSnapshotTests(_RunHarness):
         )
         self.assertEqual(value["draft"], "ровно этот черновик")
         # STATE в снимке не хранится: его собирал только судья приватности, которого
-        # с 10.11 нет (Егор, «сними»), — пустое поле здесь врало бы о заземлении.
+        # с 10.11 нет (владелец, «сними»), — пустое поле здесь врало бы о заземлении.
         self.assertNotIn("state", value)
         read = agent._outbound_guard_input(context.run_id, draft="ровно этот черновик")
         self.assertEqual(read["draft"], "ровно этот черновик")
@@ -971,8 +971,8 @@ class OutboundNeverPaysForStateTests(unittest.TestCase):
     """Выход к не-owner аудитории не собирает STATE и не зовёт модель.
 
     Сбор STATE — две сетевые пробы (serverd ~0.15 с, тело до 10 с при выключенном ПК
-    Егора) плюс обход всех нетерминальных ранов с замком на каждый. Его платил только
-    судья приватности; с 10.11 (Егор, «сними») судьи нет — и сбора на выходе нет вовсе.
+    владельца) плюс обход всех нетерминальных ранов с замком на каждый. Его платил только
+    судья приватности; с 10.11 (владелец, «сними») судьи нет — и сбора на выходе нет вовсе.
     """
 
     def test_silence_credential_and_ordinary_reply_never_build_state(self):
@@ -1198,7 +1198,7 @@ class HostOutputTruthTests(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 #  10. Рычаги темпа — по принципалу, не по аудитории
 #
-#  Замедлить себя и сменить себе мозг она могла ТОЛЬКО когда её слушает Егор
+#  Замедлить себя и сменить себе мозг она могла ТОЛЬКО когда её слушает владелец
 #  (`_active_scope() == "owner"`), то есть ровно не там, где это нужно: в группе,
 #  которая её заливает, оба рычага были заперты. Ключ переведён на принципала — той же
 #  правкой, что `conation_authorship` выше и набор рук в `_is_praxis_self`.
@@ -1285,7 +1285,7 @@ class PacingByPrincipalTests(unittest.TestCase):
 #
 #  До 28.07 режим комнаты нельзя было выбрать ничем, кроме директивы `РЕЖИМ:` в тексте,
 #  а единственный указатель на неё не печатался: режим ни одной живой комнаты не выбирал
-#  никто. Раскрытие меняло ЕЁ голос и лежало только в панели у Егора.
+#  никто. Раскрытие меняло ЕЁ голос и лежало только в панели у владельца.
 # --------------------------------------------------------------------------- #
 
 class RoomLeversTests(unittest.TestCase):
@@ -1317,7 +1317,7 @@ class RoomLeversTests(unittest.TestCase):
         self.assertEqual(agent.rooms.effective_mode("-1001999"), "observer",
                          "решение обязано доехать до профиля комнаты")
         state = agent.rooms.room_state("-1001999")
-        self.assertEqual(state["mode_set_by"], "praxis", "автор режима — она, не Егор")
+        self.assertEqual(state["mode_set_by"], "praxis", "автор режима — она, не Алекс")
         self.assertIn("наблюдай", out)
 
     def test_the_english_name_from_the_profile_works_too(self):
@@ -1379,7 +1379,7 @@ class RoomLeversTests(unittest.TestCase):
             self._in_room("mode", mode="замри", reason="давят")
         wrote = " ".join(str(c.args[0]) for c in journal.call_args_list)
         self.assertIn("[режим]", wrote, "её собственное решение обязано быть в дневнике")
-        self.assertTrue(cards, "заморозку комнаты Егор обязан увидеть карточкой")
+        self.assertTrue(cards, "заморозку комнаты Алекс обязан увидеть карточкой")
 
     def test_disclosure_is_hers_and_the_answer_names_the_edge_of_the_lever(self):
         out = self._in_room("disclosure", disclosure="open")

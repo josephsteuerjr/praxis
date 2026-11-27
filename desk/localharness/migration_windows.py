@@ -1,7 +1,7 @@
 """Retire the identified legacy Windows package after proving the new owner."""
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, walk
 import subprocess
 import time
 from .python_windows import AUTOMATIC_ARGUMENTS,powershell,shortcut,shortcut_binding
@@ -809,7 +809,7 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
         if Path(row['old']).resolve()!=old and Path(row['old']).resolve().is_relative_to(old))
     for folder in sorted(program_roots):
         if folder.is_dir() and not linked(folder) and not retained(folder):
-            for directory,dirs,entries in os.walk(folder,followlinks=False):
+            for directory,dirs,entries in walk(folder,followlinks=False):
                 check();here=Path(directory)
                 dirs[:]=[n for n in dirs if n.lower() not in ('models','model','memory','.secrets')
                     and not retained(here/n) and not linked(here/n)]
@@ -858,7 +858,7 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
                     path.unlink();removed+=1;removed_bytes+=expected['size']
                     publish(files=removed,total_files=len(files),bytes=removed_bytes);continue
                 except PermissionError:pass
-            # 11.11 (Yegor): cleaning up the previous installation never asks for
+            # 11.11 (the owner): cleaning up the previous installation never asks for
             # administrator rights. A file Windows protects stays where it is and is
             # named in the result; the old programme is already stopped and unhooked.
             remaining[name]=expected

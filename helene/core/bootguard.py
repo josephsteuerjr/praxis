@@ -340,7 +340,7 @@ def run() -> None:
     while True:
         if panic_active():
             if not panicked:
-                journal("я остановлена (panic). Подниму себя, когда Егор уберёт memory/.panic.")
+                journal("я остановлена (panic). Подниму себя, когда владелец уберёт memory/.panic.")
                 log.warning("PANIC sentinel — простаиваю, жду снятия (%s)", PANIC_SENTINEL)
                 panicked = True
             _reap_orphans()
@@ -360,7 +360,7 @@ def run() -> None:
                 save_state(state)
                 continue
             journal(f"моя правка {head} не проходит preflight ({err}), а откатываться некуда — "
-                    f"нужна твоя рука, Егор.")
+                    f"нужна твоя рука, владелец.")
             _reap_orphans()
             time.sleep(stuck_sleep)
             continue

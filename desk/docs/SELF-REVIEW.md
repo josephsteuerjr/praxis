@@ -102,7 +102,7 @@ The code-only snapshot excludes memory, persona, settings and credentials.
 
 ## Conflicting source updates
 
-`source_update` uses a dedicated restricted Forge merger, not an ordinary Jarvis conflict turn. Only retained conflict paths can change. The mandatory panel receives inventory-bound A/L/B/M, explicit absence/modes and material gaps; syntax-ready is not review-clear. Findings create a bounded new merger attempt and candidate-bound review operation. Apply rechecks canonical critic bytes, inputs and owner Stop/Pause. Unknown/unavailable evidence retains the old program with `needs_attention`. Historical dedicated completion events are also quieted.
+`source_update` uses a dedicated restricted Forge merger, not an ordinary the agent conflict turn. Only retained conflict paths can change. The mandatory panel receives inventory-bound A/L/B/M, explicit absence/modes and material gaps; syntax-ready is not review-clear. Findings create a bounded new merger attempt and candidate-bound review operation. Apply rechecks canonical critic bytes, inputs and owner Stop/Pause. Unknown/unavailable evidence retains the old program with `needs_attention`. Historical dedicated completion events are also quieted.
 
 Downloaded files cannot retrofit the already-running old updater. Preserved authored Forge without the explicit adapter remains unsupported, not silently replaced.
 

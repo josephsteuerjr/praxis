@@ -44,7 +44,7 @@ class ReceiptTests(unittest.TestCase):
         self.addCleanup(env.stop)
         self.ctx = SimpleNamespace(chat_id=1, owner=True, is_dm=True, owner_audience=True)
 
-    def ingress(self, mid, direction, content, actor='Егор'):
+    def ingress(self, mid, direction, content, actor='Алекс'):
         role = 'assistant' if direction == 'out' else 'user'
         return live.capture_ingress('1', is_dm=True, source_id=mid, direction=direction,
                                     payload={'role': role, 'content': content, 'actor': actor})

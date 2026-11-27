@@ -1458,22 +1458,34 @@ class FrameDidNotMove(unittest.TestCase):
                                  f"{name} сдвинулся: len={len(str(value))}")
 
     def test_the_gutter_is_applied_only_inside_render(self):
-        """Автоматический часовой: снимок пишется из ТОЙ ЖЕ строки, что едет в промпт.
+        """Snapshot inputs may share evidence with the prompt, but not its gutter."""
+        import ast
 
-        `extra` на 11987 / 13122 / 13896 — один МАТЕРИАЛ с промптом, но другой
-        ОБЪЕКТ (конкатенация создаёт новую строку).  Значит писатель снимка
-        физически не может дотянуться до кадра — но только пока гуттер
-        накладывается ВНУТРИ `run_snapshot.render`, на локальную копию.
-        """
-        source = Path(agent.__file__).read_text(encoding="utf-8").split("\n")
-        callers = [index for index, line in enumerate(source)
-                   if "## Runtime continuity" in line or "## Lower-role evidence" in line]
-        # Три места: 11987 (`## Lower-role evidence`), 13122 и 13896
-        # (`## Runtime continuity`).  Четвёртое совпадение — `# Runtime continuity
-        # for this run` на 11908 — сюда не входит: там одна решётка, и это чисто
-        # промптовый блок, снимка он не касается вовсе.
-        self.assertEqual(len(callers), 3, "материал кадра переехал — пересобрать часового")
-        for index in callers:
+        text = Path(agent.__file__).read_text(encoding="utf-8")
+        source = text.splitlines()
+        sites = []
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for statement in node.body:
+                # Calls can sit inside branches; nested function definitions own their sites.
+                stack = [statement]
+                while stack:
+                    item = stack.pop()
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        continue
+                    if isinstance(item, ast.Constant) and item.value in (
+                        "\n\n## Runtime continuity\n", "\n\n## Lower-role evidence\n",
+                    ):
+                        sites.append((node.name, item.value.strip(), item.lineno - 1))
+                    stack.extend(ast.iter_child_nodes(item))
+        self.assertCountEqual([(name, heading) for name, heading, _ in sites], [
+            ("_voice", "## Lower-role evidence"),
+            ("voice_turn_envelope", "## Runtime continuity"),
+            ("task_window", "## Runtime continuity"),
+            ("task_window", "## Lower-role evidence"),
+        ])
+        for _, _, index in sites:
             window = "\n".join(source[max(0, index - 6):index + 6])
             self.assertNotIn("run_snapshot", window,
                              f"снимок вмешался в материал кадра около строки {index + 1}")

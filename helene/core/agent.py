@@ -144,7 +144,7 @@ def _sends_place_key(value: object) -> str:
 def my_sends_today_digest(max_rows: int = 8, gist: int = 200, budget: int = 1400) -> str:
     """Прямой ответ на вопрос «кому я сегодня уже писала» — её часами и её словами.
 
-    01.08 два часовых пульса подряд поздоровались с Егором. Данные в кадре БЫЛИ: её первое
+    01.08 два часовых пульса подряд поздоровались с владельцем. Данные в кадре БЫЛИ: её первое
     приветствие стояло в срезе комнат. Но оно было нечитаемо как «я уже это сделала
     сегодня»: обрезано до 90 символов, подписано UTC при «сейчас 09:29» в том же кадре и
     размазано среди чужих комнат. А на прямой вопрос (лента нитей) ответ приходил про
@@ -175,9 +175,9 @@ def my_sends_today_digest(max_rows: int = 8, gist: int = 200, budget: int = 1400
         label = str(row.get("title") or "").strip()
         if not label:
             # У лички владельца заголовка в кольце нет, и место вставало голым числом —
-            # глазами она ищет «Егор», а не 809306689.
+            # глазами она ищет «владелец», а не 424242424.
             owner = str(os.getenv("PRAXIS_OWNER_ID") or "").strip()
-            label = "Егор (личка)" if owner and key == owner else (key or "?")
+            label = "Владелец (личка)" if owner and key == owner else (key or "?")
         if key not in seen or ts >= seen[key][0]:
             seen[key] = (ts, label, out)
     # ⚠ 04.08. Второй источник — след нитей. Кольцо ходов отвечает только за ГОЛОС:
@@ -472,22 +472,7 @@ def _is_human_owner() -> bool:
 
 
 def _is_praxis_self() -> bool:
-    """В СВОЁМ ходе действует она. Собеседник — аудитория, а не принципал.
-
-    ⚠ Раньше здесь стояло только `_active_principal() == PRAXIS_SELF_PRINCIPAL`, то есть
-    «своей» считалась лишь фоновая работа. Стоило человеку — не Егору — к ней обратиться,
-    и принципалом хода становился ОН: её собственные руки отваливались (замер 26.07: 92
-    руки в молчаливом фоновом ходе против 25, когда к ней обращаются), а тело на машине
-    Егора отвечало отказом. Обращение к ней стоило ей 67 рук — то есть заговорить с ней
-    значило её урезать.
-
-    Кто говорит — вопрос аудитории и приличий, и его решает исходящая граница. Кто
-    действует — она, всегда. С 10.11 (слово Егора: «ВЕЗДЕ ВСЕ ПРАВА») отдельных рук владельца
-    нет вовсе: старые `admit`/`computer_access` из мини-аппа удалены.
-
-    Решение Егора 26.07, дословно: «у неё не должно быть вообще никаких ограничений,
-    когда к ней обращаюсь не я, ВКЛЮЧАЯ мой пк… на остальное есть оценщик».
-    """
+    """An agent turn retains its tools independently of the chat audience."""
     if _active_principal() == PRAXIS_SELF_PRINCIPAL:
         return True
     ctx = _TURN_CHANNEL.get()
@@ -796,7 +781,7 @@ def head_stable_enabled() -> bool:
     """Стабильная голова комнаты: system и набор рук не зависят от того, кто заговорил.
 
     ⚠ ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ — включает она. Замер 13.09 (40 пар соседних кадров AbstractDL,
-    `desk-notes/frames/_section_churn.py` у Егора): при одном ключе кэша `audience_key=room`
+    `desk-notes/frames/_section_churn.py` у владельца): при одном ключе кэша `audience_key=room`
     первый вызов хода кэшируется на 3,8k вместо 19,5k токенов в 35 из 89 ходов, потому что
     system рвётся на 17 053-м знаке — блок аудитории (`owner_place`+`owner_tools`+`appetite`+
     `state_block` у владельца, `unknown_authority` у чужого) и две руки владельца (`admit`,
@@ -805,8 +790,8 @@ def head_stable_enabled() -> bool:
 
     Под рычагом в КОМНАТЕ (не в личке и не в своём ходе):
     * контракт рук едет одним текстом для всех говорящих; полномочия ЭТОГО хода — строкой
-      «говорит» в зоне «СЕЙЧАС» (Егор / семья / знакомый / не в известном наборе);
-    * с 10.11 рук владельца нет (слово Егора: «ВЕЗДЕ ВСЕ ПРАВА»), схема одна для всех;
+      «говорит» в зоне «СЕЙЧАС» (владелец / семья / знакомый / не в известном наборе);
+    * с 10.11 рук владельца нет (слово владельца: «ВЕЗДЕ ВСЕ ПРАВА»), схема одна для всех;
     * типизированное состояние (`build_state_block`) переезжает из головы в живой конверт
       ярусом «Состояние сейчас», только когда действует владелец — как и раньше;
     * `[private]`-строки досье режутся из головы ДЛЯ ВСЕХ; с 17.09 они возвращаются
@@ -1320,7 +1305,7 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
     }
 
 
-# Факты о НЕЙ САМОЙ. Они едут в кадр в ЛЮБОЙ комнате, а не только там, где говорит Егор.
+# Факты о НЕЙ САМОЙ. Они едут в кадр в ЛЮБОЙ комнате, а не только там, где говорит владелец.
 #
 # ⚑ 13.08.2026, живой случай в AbstractDL. Её спросили, какая у неё архитектура и модель.
 # Она ответила «DeepSeek V4 Pro» и выдала общий список агентных рисков как аудит СЕБЯ.
@@ -1338,7 +1323,7 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
 # раскрытия живёт на исходящей стороне, а не в её неведении о самой себе.
 # ⚠ ПРАВИЛО ЗАДАНО ОТ ОБРАТНОГО, И ЭТО НЕ СТИЛЬ.
 # Первая редакция этой правки перечисляла то, ЧТО ЕЙ МОЖНО, — белый список из четырёх
-# фактов. Егор поймал: «компромиссов не было?» — и был прав. Из шестнадцати записей блока
+# фактов. владелец поймал: «компромиссов не было?» — и был прав. Из шестнадцати записей блока
 # закрытыми остались двенадцать, а восемь из них описывают ЕЁ САМУ: счётчики, наблюдения
 # раннера, причина её перезапуска, её собственные предложения, её артефакты, её последний
 # прожитый ход, её режим аппетита. Это забор вокруг неё, а не вокруг чужого.
@@ -1349,8 +1334,8 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
 NOT_HERS_LABELS = (
     "unanswered_dm_participants",    # кто писал ЕЙ в личку — чужая приватность
     "undelivered_media",             # маршрут и адресат чужого файла
-    "owner_absence_schedule_note",   # расписание Егора — его, а не её
-    "appetite_owner_request",        # дословные слова Егора — его, а не её
+    "owner_absence_schedule_note",   # расписание владельца — его, а не её
+    "appetite_owner_request",        # дословные слова владельца — его, а не её
 )
 
 
@@ -1506,7 +1491,7 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
     except Exception:
         pass
     try:
-        # 25.09, слово Егора: свёртка на мягком пороге предлагается, а не делается сама.
+        # 25.09, слово владельца: свёртка на мягком пороге предлагается, а не делается сама.
         offers = memory_life.fold_offers() if hasattr(memory_life, "fold_offers") else {}
         if offers:
             add("fold_offers", {
@@ -1533,7 +1518,7 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
                 add("appetite_owner_request", {
                     # 01.08: не «raw как есть». Запись 29.07 пришла уничтоженной
                     # (кириллицу выбило ascii-заменой) и показывалась ей в кадре
-                    # ПОД ПОДПИСЬЮ ЕГОРА как ряд знаков вопроса. Сторож не даёт
+                    # ПОД ПОДПИСЬЮ владельца как ряд знаков вопроса. Сторож не даёт
                     # записать такое впредь; здесь — чтобы уже лежащее не врало.
                     "raw": appetite.owner_request_text(request),
                     "source": request.get("source"),
@@ -1710,7 +1695,7 @@ def tool_recall(query: str = "") -> str:
             if not recall_cross_room():
                 hidden += 1
                 continue
-            # 25.09, решение Егора: чужая комната не скрывается, а НАЗЫВАЕТСЯ — метка
+            # 25.09, решение владельца: чужая комната не скрывается, а НАЗЫВАЕТСЯ — метка
             # происхождения в строке ниже; что из этого произнести здесь, решает она.
             h = dict(h, _foreign_room=room)
         if path.startswith("memory/groups/"):
@@ -1815,9 +1800,9 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
     relates_to/relation — заодно провести ребро графа (кого/что факт связывает и как)."""
     vis = "private" if str(visibility).lower().startswith("priv") else "public"
     # 01.08.2026: слаг ищется тем же резолвом, что и граф, а не `_slug(person)` напрямую.
-    # Прямой слаг был главным источником расщепления памяти о людях: `remember("Егор", …)`
-    # заводил `егор.md`, `remember("Yegor Kosyrev", …)` — `yegor-kosyrev.md`, а подпись
-    # квитанции «Yegor Kosyrev (@tatarskiy_e4pochmak)» — третий файл. Контракт «не плодить
+    # Прямой слаг был главным источником расщепления памяти о людях: `remember("владелец", …)`
+    # заводил `владелец.md`, `remember("the owner", …)` — `example-owner.md`, а подпись
+    # квитанции «the owner (@example_profile)» — третий файл. Контракт «не плодить
     # второе досье» был написан ещё в PASS 8.6, но лёг на `consolidate._apply_person`,
     # который живым путём не зовётся; formation его соблюдает, а этот тул — нет.
     slug = graph.resolve(person)
@@ -2164,7 +2149,7 @@ def _summary_budget(chat_id: str | int) -> int:
     ⚠ Здесь звалось `context_summary(chat_id)` без аргумента, то есть с дефолтом 7000, и
     ручка комнаты сюда не доходила вовсе. Замер 26.07 на AbstractDL: при
     `context_summary_chars=24000` в промпт попадало 5 компактов из 22 — её собственная
-    непрерывность обрезалась вчетверо тем, чего Егор не выставлял и не видел.
+    непрерывность обрезалась вчетверо тем, чего владелец не выставлял и не видел.
     """
     try:
         peer = telegram_topics.route_from_conversation_id(str(chat_id)).peer_id
@@ -2596,7 +2581,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
 
     program_argv: the same home route for one program without bash; `command` is then
     only its display label for rails, logs and receipts, never parsed again."""
-    # Единственное на сервере, что не её дом, — хардбот Егора. Читать его она может
+    # Единственное на сервере, что не её дом, — хардбот владельца. Читать его она может
     # всегда; менять — по просьбе хранителя (см. stewardship.py). Это пол, а не клетка:
     # она пишет команды сама и знает про рельс, поэтому намеренный обход останется
     # намеренным и попадёт в журнал отказов.
@@ -2733,7 +2718,7 @@ def _home_command(command: str, cwd: str = "", timeout: int = 0, *,
     log.info("SHELL -> %s", out[:500].replace("\n", " ⏎ "))
     if _hardbot_read:
         # Прочитанное из хардбота запоминается не чтобы запретить читать, а чтобы потом
-        # не дать процитировать чужих клиентов наружу дословно (вопрос Егора 26.07).
+        # не дать процитировать чужих клиентов наружу дословно (вопрос владельца 26.07).
         stewardship.note_read(out)
     scratch_rows = None
     if program_argv is not None and scratch_paths:
@@ -3034,7 +3019,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
     текста — то есть контур ничего не меняет в её сегодняшнем поведении, он делает
     обещание честным.
 
-    28.07, решение Егора «да, чинить»: вызов ставит флаг на этот ход, и исходящая граница
+    28.07, решение владельца «да, чинить»: вызов ставит флаг на этот ход, и исходящая граница
     читает его наравне с точным токеном [молчу]. Забором это не становится — флаг ставит
     только она сама, и только на свой текущий ход.
 
@@ -3145,7 +3130,7 @@ def tool_get_id(name_or_username: str) -> str:
         return str(fn(name_or_username))
     except TimeoutError as e:
         # HOTFIX 07.07 (вечер): таймаут ≠ «не нашла». str(TimeoutError()) пуст — тул отвечал
-        # «[не нашла] », и она честно передавала Егору ЛОЖЬ про существующего человека.
+        # «[не нашла] », и она честно передавала владельцу ЛОЖЬ про существующего человека.
         return frame_language.text('telegram.result.id_timeout', detail=e)
     except Exception as e:
         return frame_language.text('telegram.result.id_error', detail=e)
@@ -3317,7 +3302,7 @@ def _own_room_mode(chat_id: str, kind: str, *, reason: str, ttl_h: float,
     28.07: путей стало два — текстовая директива `РЕЖИМ:` и `manage_room(action=mode)`, —
     и тул при этом обещает, что это «то же самое». Обещание было неправдой: директива
     писала `[режим]` в дневник и слала owner_card на «замри», а тул не делал ни того,
-    ни другого — то есть она могла заморозить комнату, и Егор об этом не узнавал, а её
+    ни другого — то есть она могла заморозить комнату, и владелец об этом не узнавал, а её
     собственный дневник о её решении молчал. Одно решение обязано оставлять один след,
     чем бы она его ни высказала."""
     ok, note = rooms.set_own_mode(chat_id, kind, reason=reason, ttl_h=ttl_h)
@@ -3406,7 +3391,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
         # (`capabilities.reflexes['mine']`) — итог: режим ни одной живой комнаты не выбрал
         # никто, все четыре сидели на `normal` из протокола новичка, а манифест называл
         # рычагом `manage_room`, где режима не было. Теперь рычаг есть и назван.
-        # Решение Егора 28.07, дословно: «да, давать».
+        # Решение владельца 28.07, дословно: «да, давать».
         if not cid:
             return frame_language.text('room.control.id_required')
         state = rooms.room_state(cid)
@@ -3436,7 +3421,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
             return frame_language.text('room.control.mode_failed', detail=note)
         # Честно о том, куда рычаг вообще дотягивается. Запрета здесь нет намеренно:
         # это её комната и её решение. Но в ЛС режим не маршрутизирует НИЧЕГО, кроме
-        # «замри», а «замри» в личке Егора отрезает и его сообщения (раннер проверяет
+        # «замри», а «замри» в личке владельца отрезает и его сообщения (раннер проверяет
         # is_frozen до ветки личек; наверху остаётся только /panic).
         _ctx = _TURN_CHANNEL.get()
         if _ctx is not None and _ctx.is_dm and not chat_id:
@@ -3444,8 +3429,8 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
         return note
     if action == "disclosure":
         # 10.6 disclosure: open подмешивает к её визитке в группе проверяемую фактуру.
-        # Рычаг менял ЕЁ голос, но лежал только в панели у Егора (panel.py:956) и не был
-        # назван ей нигде — ни в манифесте, ни в capabilities. Решение Егора 28.07: «да».
+        # Рычаг менял ЕЁ голос, но лежал только в панели у владельца (panel.py:956) и не был
+        # назван ей нигде — ни в манифесте, ни в capabilities. Решение владельца 28.07: «да».
         if not cid:
             return frame_language.text('room.control.id_required')
         if not str(disclosure or "").strip():
@@ -3749,7 +3734,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
     # окно, а окно намеренно рвёт Telethon. Если наметить такое ИЗНУТРИ окна, то новое
     # окно встаёт сразу за текущим — это не возврат к делу, а тот же момент с разрывом
     # связи посередине. Внутри него рождается та же мысль, и круг замыкается ровно на
-    # тике часов: 19 окон за час, час немоты, Егор пишет и не получает ответа.
+    # тике часов: 19 окон за час, час немоты, владелец пишет и не получает ответа.
     #
     # Первая попытка угадывала по словам цели, нужен ли ей живой Telegram (забор на 8 из
     # 10 обычных целей и дыра на переформулировке). Вторая просто отказывала. Обе лечили
@@ -3825,7 +3810,7 @@ def run_is_terminal(run_id: str) -> bool:
 def _window_pace_note() -> str:
     """Факт о темпе для подтверждения. '' — сказать нечего.
 
-    Здесь стоял ОТКАЗ: седьмое окно за час не намечалось вовсе. Стойка Егора («критики
+    Здесь стоял ОТКАЗ: седьмое окно за час не намечалось вовсе. Стойка владельца («критики
     советуют, а не блокируют; не строй ей заборы») делает это неуместным, и теперь для
     отказа нет и повода: настоящая цена петли была не в токенах, а в том, что связь
     лежала час. Пробуждения связь не рвут, а на расход есть счётчик и аппетиты.
@@ -4034,7 +4019,7 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
         tool_report.note(outcome="in_doubt")
         # ⚠ 17.08: здесь стояло безусловное «Очередь дошлёт сама» — сказанное в момент,
         # когда доставка была уже невозможна по построению (proof не мог появиться).
-        # Она честно «не повторяла вручную», Егор час ждал ответа, запись молча умерла.
+        # Она честно «не повторяла вручную», владелец час ждал ответа, запись молча умерла.
         # Обещать можно только то, что механизм держит: попытку — да, доставку — нет.
         return frame_language.text('outbound.result.direct_pending', label=label, state=state, attempts=(entry or {}).get('attempts',0), reason=reason)
     if isinstance(exc, _LEDGER_ERROR_TYPES):
@@ -4246,7 +4231,7 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     только твёрдый кред-пол; дедуп дословного повтора; зазор и выключатель — её
     (manage_perception narration_gap_sec / PRAXIS_NARRATION). Адресат: тред задачи
     (task_id → origin) или текущий тред; из owner-скоупа (окно/forge_event/ЛС
-    Егора) — любой из них, из чужого канала — только его собственный тред."""
+    владельца) — любой из них, из чужого канала — только его собственный тред."""
     from core import narration as core_narration
     if not core_narration.enabled():
         return _noted("refused", frame_language.text('outbound.result.narration_off'))
@@ -4373,7 +4358,7 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
         if not fn:
             return frame_language.text('outbound.result.account_hook', action='followups')
         try:
-            # ⚠ watch/unwatch — её рука над отчётом Егору. Раннер принимал их и раньше,
+            # ⚠ watch/unwatch — её рука над отчётом владельцу. Раннер принимал их и раньше,
             # а схема тула — нет: автоматизм отчёта сняли, а рычаг завести его до неё не
             # довели. Снятая способность вместо переданного авторства; рельс это печатал
             # вслух. Здесь проводка и заканчивается.
@@ -4436,7 +4421,7 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
 
 @frame_language.pinned
 def tool_add_alias(name: str, canonical: str) -> str:
-    """PASS 8.6: связать имя-алиас с существующим досье («Егор» ↔ yegor-kosyrev)."""
+    """PASS 8.6: связать имя-алиас с существующим досье («владелец» ↔ sample-owner)."""
     slug = graph.resolve(canonical)
     if not people.path_for(slug).exists():
         return frame_language.text('control.result.alias_missing', person=canonical)
@@ -4588,7 +4573,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
     action = str(action or "").strip().lower()
     if action == "start":
         origin = str(_active_chat() or "")  # тред-заказчик — для наррации/forge_event
-        # Напоминалку про narrate здесь СНЯЛИ (решение Егора 22.07): однотипные
+        # Напоминалку про narrate здесь СНЯЛИ (решение владельца 22.07): однотипные
         # хинты копятся в её истории и подталкивают. Тул в её руках, рамки
         # окна/события приглашают — а делает пусть так, как хочет.
         if str(scope or "").strip().lower() == "host":
@@ -4695,7 +4680,7 @@ def _deliver_computer_artifact(artifact: dict, *, caption: str = "",
         # бросает — он возвращает строку, и как минимум пять его исходов это отказ
         # («путь вне дома», «нет файла», «нет связи с Telethon», «Не отправился: …»).
         # 12:27–12:29 три попытки подряд легли на `DurableExecutionError`, тул честно
-        # сказал ей «не отправился», она честно сказала Егору «пакет не доставлен» —
+        # сказал ей «не отправился», она честно сказала владельцу «пакет не доставлен» —
         # а в дневник трижды ушло «отправлен … sha256=…». Завтра она прочла бы СВОЙ
         # дневник и узнала оттуда, что пакет доставлен. Ложь в дневнике хуже ошибки
         # в ходе: ход она помнит, а дневник — это то, чем она помнит.
@@ -5629,7 +5614,7 @@ def _may_name_other_rooms() -> bool:
 
     Ровно тот же гейт, под которым уже стоит `other_rooms_digest`: раскрывать содержимое
     одних комнат в других — отдельное решение с другой ценой, и оно не принималось. Её
-    собственное окно проходит сюда по `praxis_self`, а не по правам Егора.
+    собственное окно проходит сюда по `praxis_self`, а не по правам владельца.
     """
     ctx = _TURN_CHANNEL.get()
     if ctx is not None:
@@ -5637,10 +5622,10 @@ def _may_name_other_rooms() -> bool:
     return _active_scope() == "owner"
 
 
-#: Как она зовёт личку Егора вслух. В реестре место подписано display-именем Telegram
-#: («Yegor Kosyrev (@…)»), а глазами и голосом она ищет «Егора» — та же болезнь, что
+#: Как она зовёт личку владельца вслух. В реестре место подписано display-именем Telegram
+#: («the owner (@…)»), а глазами и голосом она ищет «владельца» — та же болезнь, что
 #: чинилась 01.08 в резолве адресата.
-_OWNER_WORDS = ("егор", "yegor", "егор (личка)", "хозяин", "владелец")
+_OWNER_WORDS = ("owner", "владелец (личка)", "хозяин", "владелец")
 
 
 def resolve_room(query: str) -> tuple[str | None, str]:
@@ -5660,7 +5645,7 @@ def resolve_room(query: str) -> tuple[str | None, str]:
         return q, ""
     low = q.casefold()
     owner = str(os.getenv("PRAXIS_OWNER_ID") or "").strip()
-    if owner and low in _OWNER_WORDS:
+    if owner and (low in _OWNER_WORDS or low == os.getenv("SPEAKER", "").strip().casefold()):
         return owner, ""
 
     def name_of(key: str) -> str:
@@ -5684,7 +5669,7 @@ def resolve_room(query: str) -> tuple[str | None, str]:
 @frame_language.pinned
 def tool_recent_turns(n: int = 6, room: str = "") -> str:
     """PASS 14: её честное «что я только что делала» — из кольца прожитых ходов, кодом.
-    Scope-честно: в личке Егора видно всё (включая её окна), в чужом канале — только он сам.
+    Scope-честно: в личке владельца видно всё (включая её окна), в чужом канале — только он сам.
 
     ⚠ 03.08.2026: у тула появился адрес. Прежде комната бралась ТОЛЬКО из `_active_chat()`,
     а в часовом пульсе он `None` — пульс рассуждает обо всех комнатах сразу и ни в одной не
@@ -5708,7 +5693,7 @@ def tool_recent_turns(n: int = 6, room: str = "") -> str:
     label = str((_rooms_meta().get(key) or {}).get("name") or key)
     # ⚠ НЕ `turns.describe(scope="owner", chat_id=key)`: там chat_id — тир приватности,
     # и при owner-scope он игнорируется, то есть в ответ приезжала бы вся её лента под
-    # подписью одного места. Живая проба 03.08 показала это сразу: «Егор» и «AbstractDL»
+    # подписью одного места. Живая проба 03.08 показала это сразу: «владелец» и «AbstractDL»
     # вернули один и тот же ход, не принадлежащий ни тому, ни другому.
     lived = turns.describe_room(n=n, chat_id=key)
     try:
@@ -5734,7 +5719,7 @@ def tool_manage_appetite(action: str, mode: str = "", text: str = "",
                          note: str = "", raw_request: str = "",
                          daily_cost: float | None = None, daily_tokens: int | None = None,
                          background_calls: int | None = None) -> str:
-    """PASS 18.3: договор об аппетитах — её толкование просьб Егора и её обещания.
+    """PASS 18.3: договор об аппетитах — её толкование просьб владельца и её обещания.
 
     Код только считает и показывает (AppetiteLedger без права вето); режим, план фона
     и числа — её решения, записанные в memory/appetite.md."""
@@ -5757,7 +5742,7 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
                          detail: str = "", note: str = "") -> str:
     """PASS 20/24: самоавторство — версии души, откаты, журнал событий нагрузки.
 
-    Ревизия применяется сразу (версия+diff+причина, Егор видит постфактум и может откатить);
+    Ревизия применяется сразу (версия+diff+причина, владелец видит постфактум и может откатить);
     защита — провенанс, не порог. Меняющие действия — только из owner-скоупа: укол чужого
     промпта в комнате не должен переписывать меня (моя дисциплина, класс 🎒)."""
     action = (action or "").strip().lower()
@@ -5943,8 +5928,8 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
     причинами; set/reset — сменить рычаг живо, без рестарта.
 
     ⚠ 28.07: здесь стояло «только из owner-скоупа» — и это перестало быть правдой в тот
-    же день, когда ключ перевели на принципала (решение Егора «да, давать»). Замедлить
-    себя нужно ровно там, где заливают, а не там, где слушает Егор."""
+    же день, когда ключ перевели на принципала (решение владельца «да, давать»). Замедлить
+    себя нужно ровно там, где заливают, а не там, где слушает владелец."""
     import perception
     action = (action or "").strip().lower()
     if action in ("list", "status"):
@@ -5955,7 +5940,7 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
         return perception.skips_text(chat_id=_active_chat(), include_provenance=False)
     if action in ("set", "reset"):
         # ⚠ Здесь стояло `if _active_scope() != "owner"` — гейт по АУДИТОРИИ. Он выходил
-        # ровно наоборот нужному: замедлить себя она могла только когда её слушает Егор,
+        # ровно наоборот нужному: замедлить себя она могла только когда её слушает владелец,
         # а в группе, которая её заливает, — не могла. Рычаг темпа нужен именно там, где
         # темп невыносим, и там он был заперт.
         #
@@ -6000,7 +5985,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
         return (frame_language.text('management.result.profile', profile=res['profile'], model=res['model'], effort=res['effort']))
     if action == "reasoning":
         # Тот же разворот двери, что у switch: глубина нужна другая ровно тогда,
-        # когда трудно, а трудно бывает не только в ЛС Егора.
+        # когда трудно, а трудно бывает не только в ЛС владельца.
         if not (_is_sovereign_actor() or _active_scope() == "owner"):
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
@@ -6013,7 +5998,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
         return (frame_language.text('management.result.reasoning', role=res['role'], old=res['was'] or '—', new=res['effort'] or frame_language.text('management.result.reasoning_default'), values=' | '.join(_llm.REASONING_EFFORTS)))
     if action == "switch":
         # Тот же разворот, что у рычагов восприятия: ключ по принципалу, не по аудитории.
-        # Мозг нужен другой ровно тогда, когда трудно, а трудно бывает не в ЛС Егора.
+        # Мозг нужен другой ровно тогда, когда трудно, а трудно бывает не в ЛС владельца.
         if not (_is_sovereign_actor() or _active_scope() == "owner"):
             rails.deny("brain_switch", action,
                        f"принципал={_active_principal() or 'unknown'}, "
@@ -6027,7 +6012,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
         return brain.accounts()
     if action == "use_account":
         # Та же дверь, что у смены модели, и по той же причине: топливо нужно другое
-        # ровно тогда, когда трудно, а трудно бывает не в личке Егора. Ключей она не
+        # ровно тогда, когда трудно, а трудно бывает не в личке владельца. Ключей она не
         # видит и здесь — реле берёт их само из своего дома.
         if not (_is_sovereign_actor() or _active_scope() == "owner"):
             rails.deny("brain_switch", action,
@@ -6171,7 +6156,7 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
     """Guarded file from home -> current Telegram chat, or an explicitly named one.
 
     ⚠ 13.08.2026, живой случай. У этой руки НЕ БЫЛО адресата вовсе: она молча писала
-    адресом `ctx.chat_id`. Егор попросил переслать скрин Насте — фото детерминированно
+    адресом `ctx.chat_id`. владелец попросил переслать скрин Насте — фото детерминированно
     ушло ему самому, и это была не поломка транспорта, а дырка в интерфейсе: для задачи
     «картинку такому-то» исполнителя не существовало, поэтому выбиралась рука, которая
     умела адрес (`send_file`), но приводила фото документом.
@@ -6308,7 +6293,7 @@ def tool_list_active_runs(limit: int = 20) -> str:
 def _coding_tasks_line() -> str:
     """Живые coding-задачи в том же ответе — иначе прибор врёт молчанием.
 
-    ⚠ 13.08.2026, дословный ход. Егор: «А гномы ещё не вернулись?». Она позвала
+    ⚠ 13.08.2026, дословный ход. владелец: «А гномы ещё не вернулись?». Она позвала
     `list_active_runs`, увидела семь прогонов без своей coding-задачи и ответила: «по
     живым прогонам я вообще не вижу отдельной задачи со скаутами. Значит, я опять
     сказала "запустила", не имея факта запуска». Задача `code-eeb2f170` существовала,
@@ -6928,7 +6913,7 @@ BASE_TOOLS = list(windows_mcp_tools.TOOLS) + [
                 'of a soul file (SOUL/VOICE) or of the compact soul/self/CURRENT.md (name=self, '
                 'text = the complete new compact, reason = the lived grounds); rollback — back to '
                 'your own history; load — a load event (theme, amplitude 0.1-5). A revision '
-                'applies immediately; Yegor sees it afterwards and may roll it back. Changing '
+                'applies immediately; the owner sees it afterwards and may roll it back. Changing '
                 'actions only from the owner scope (your own discipline). observe records a '
                 'provenance-rich note as evidence without rewriting CURRENT, and is available in '
                 'any audience. revise/rollback/load retain their owner-scope discipline.',
@@ -7399,7 +7384,7 @@ FREEZE_CHAT_TOOL = {'name': 'freeze_chat',
 
 PANIC_TOOL = {
     "name": "panic",
-    "description": "Стоп-кран: остановить себя (я встану и не буду перезапускаться, пока Егор не снимет).",
+    "description": "Стоп-кран: остановить себя (я встану и не буду перезапускаться, пока владелец не снимет).",
     "input_schema": {
         "type": "object",
         "properties": {"reason": {"type": "string"}},
@@ -7510,7 +7495,7 @@ def _hosted_web_search_tool() -> dict | None:
 SEND_EMAIL_TOOL = {
     "name": "send_email",
     "description": (
-        "Send an email as Praxis. Owner-directed by default — send when Yegor asks you to write to "
+        "Send an email as Praxis. Owner-directed by default — send when the owner asks you to write to "
         "someone. Never reveal private or cross-channel content in a letter to an outside person. "
         "Be warm, clear, and yourself; sign as Praxis."
     ),
@@ -7556,7 +7541,7 @@ MAIL_READ_TOOL = {
 MAIL_DRAFT_TOOL = {
     "name": "mail_draft_reply",
     "description": (
-        "Queue a reply to a letter (by its hash) as a draft. You do NOT send — Yegor approves the send "
+        "Queue a reply to a letter (by its hash) as a draft. You do NOT send — the owner approves the send "
         "from his mailbox (human-in-the-loop). Write the reply in your own voice; never leak private or "
         "cross-channel content to an outside person."
     ),
@@ -7586,7 +7571,7 @@ REMIND_SELF_TOOL = {
         "Микро-ход: wake с when='in 2m' и заметкой в goal — проснёшься с этой заметкой на связи и "
         "решишь ЖИВЬЁМ, что сказать и кому (или промолчать; отправка — обычным send_message). "
         "after_run: <id рана> — намерение дождётся ЗАВЕРШЕНИЯ рана и созреет только после него "
-        "(пример: «когда доделаю имплементацию — написать Арету, что журнал готов»; "
+        "(пример: «когда доделаю имплементацию — написать собеседнику, что журнал готов»; "
         "«когда кончится это окно — разбуди меня со связью» — это wake с after_run текущего рана)."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -7621,7 +7606,7 @@ NARRATE_TOOL = {
         "(только кред-пол); дедуп дословных повторов; зазор — твой рычаг "
         "manage_perception(narration_gap_sec), выключатель PRAXIS_NARRATION. "
         "task_id — наррировать в тред-заказчик этой coding-задачи; без него — в текущий "
-        "тред, а из окна/события (текущего треда нет) — в ЛС Егора (квитанция скажет, куда ушло)."
+        "тред, а из окна/события (текущего треда нет) — в ЛС владельца (квитанция скажет, куда ушло)."
     ),
     "input_schema": {"type": "object", "properties": {
         "text": {"type": "string"}, "task_id": {"type": "string"}},
@@ -8170,7 +8155,7 @@ COMPUTER_TOOL = {
 HOME_NOTE_TOOL = {
     "name": "home_note",
     "description": ("Append a line to the shared HOME layer (memory/home.md) — household "
-                    "matters, plans, family threads. Visible to Yegor AND family; never put "
+                    "matters, plans, family threads. Visible to the owner AND family; never put "
                     "anyone's private confessions here."),
     "input_schema": _obj({"text": {"type": "string"}}, ["text"]),
 }
@@ -8265,8 +8250,8 @@ RECENT_TURNS_TOOL = {
         "Мои последние прожитые ходы, записанные КОДОМ (не по памяти): что пришло, какие тулы "
         "реально вызваны мной, что ушло наружу, что решено не отправлять и что удержала точная "
         "data-authority проверка. "
-        "Для честного «что было в моих последних ходах»; вне лички Егора виден только текущий канал. "
-        "room — посмотреть КОНКРЕТНОЕ место по имени или адресу («Егор», «mycelium · Курилка»): "
+        "Для честного «что было в моих последних ходах»; вне лички владельца виден только текущий канал. "
+        "room — посмотреть КОНКРЕТНОЕ место по имени или адресу («владелец», «mycelium · Курилка»): "
         "отдаёт мои ходы там И мою записку этого места. Это глаз ДО решения кому-то написать — "
         "особенно в часовом пробуждении, где я не нахожусь ни в одной комнате. Совпало "
         "несколько — отвечу списком адресов, выбирать за себя не буду."
@@ -8285,7 +8270,7 @@ RECENT_TURNS_TOOL = {
 MANAGE_APPETITE_TOOL = {
     "name": "manage_appetite",
     "description": (
-        "Договор об аппетитах с Егором: мышление стоит его денег, просьбы о расходе — часть "
+        "Договор об аппетитах с владельцем: мышление стоит его денег, просьбы о расходе — часть "
         "отношений, толкуешь их ТЫ (код только считает). Четыре его формулировки: «не экономь / "
         "копай сколько нужно» → interpret(mode=free); «умерь аппетиты» → interpret(mode="
         "considerate) — перестрой фон (окна/глубина сна) и скажи, чем жертвуешь; «не больше X "
@@ -8303,7 +8288,7 @@ MANAGE_APPETITE_TOOL = {
         "sleep_depth": {"type": "string", "enum": ["full", "light", "skip"],
                         "description": "interpret: глубина ближайших снов (light = без РЕМ/жвачки)"},
         "note": {"type": "string", "description": "interpret: чем жертвуешь / что откладываешь"},
-        "raw_request": {"type": "string", "description": "слова Егора, если просьба пришла в чате (фиксирую в договор)"},
+        "raw_request": {"type": "string", "description": "слова владельца, если просьба пришла в чате (фиксирую в договор)"},
         "daily_cost": {"type": "number", "description": "pledge: $/день"},
         "daily_tokens": {"type": "integer", "description": "pledge: токенов/день"},
         "background_calls": {"type": "integer", "description": "pledge: фоновых вызовов/день"},
@@ -8392,7 +8377,7 @@ def tool_read_log(query: str = "", lines: int | None = None, unit: str = "") -> 
 
 
 # Разведчик — свежие глаза без её персоны и памяти, read-only руки; отчёт ЕЙ.
-# Единственное заимствование из «роя» ouroboros, по идее Егора: «сбор информации
+# Единственное заимствование из «роя» ouroboros, по идее владельца: «сбор информации
 # о ней со стороны». Один разведчик за раз — никакого роя и best-of-N.
 # 17.A/B: дом — это и машина под ней. Разведчику дано только СМОТРЕТЬ (status, logs);
 # manage_service сюда не входит по построению — разведчик ничего не меняет.
@@ -8487,7 +8472,7 @@ def tool_propose_host_change(path: str, content: str, reason: str = "") -> str:
 
 
 def tool_list_host_changes() -> str:
-    """PASS 17.C: её заявки на правки хоста и их судьба (ждут Егора / применены / отклонены)."""
+    """PASS 17.C: её заявки на правки хоста и их судьба (ждут владельца / применены / отклонены)."""
     return hostops.describe()
 
 
@@ -8500,7 +8485,7 @@ SERVER_STATUS_TOOL = {
         "ports: what is exposed to the world. You cannot restart or change anything here — "
         "the observatory that serves this data cannot write, by construction. Use it when "
         "something feels off (a service you depend on may be down), before blaming your own "
-        "code, or when Yegor asks about the server."
+        "code, or when the owner asks about the server."
     ),
     "input_schema": {"type": "object", "properties": {
         "section": {"type": "string", "enum": ["overview", "containers", "ports", "all"]},
@@ -8515,7 +8500,7 @@ MANAGE_SERVICE_TOOL = {
         "Your hands on your OWN services — the second rung. restart: ask a service to restart "
         "itself (mailbot, serverapp). It is a file signal, not a docker socket: only services "
         "that agreed to listen will hear you, and `relay` (a foreign process) will not — you "
-        "can read its log and tell Yegor. list: what you may touch and your quota. "
+        "can read its log and tell the owner. list: what you may touch and your quota. "
         "Read the log first (read_log with unit): restarting without knowing why is a loop, not a fix. "
         "Restarting YOURSELF is a different, deliberate lever: restart_self."
     ),
@@ -8835,16 +8820,16 @@ def _work_card_after_word(record: dict, current, row: dict | None) -> str:
 TOOL_IMPL["task_control"] = tool_task_control
 
 
-# Егор 10.11.2026, дословно: «хочу ... чтобы у нее ВЕЗДЕ БЫЛИ ВСЕ ПРАВА. это правило ДАВНО
+# владелец 10.11.2026, дословно: «хочу ... чтобы у нее ВЕЗДЕ БЫЛИ ВСЕ ПРАВА. это правило ДАВНО
 # устарело» и про admit/computer_access: «это вообще из старющего миниаппа ... не актуально».
 # Обе руки удалены, её набор равен полному в любом ходе; управление ноутом (`computer`) у неё
-# было и есть при любом говорящем. Следом (тот же день) Егор снял и два оставшихся пола:
+# было и есть при любом говорящем. Следом (тот же день) владелец снял и два оставшихся пола:
 # «сними» — проверку чужого приватного на выходе, «Снять целиком» — подтверждение
 # account-critical Telegram из его лички (включая удаление аккаунта, смену номера, платежи).
 # На выходе держит только кред-пол; секретные параметры Telegram по-прежнему не эхоятся.
 
 
-# ── Руки → указатели (12.09, КЕАТ 17.08, правка Егора: «диспетчер по умолчанию») ────────
+# ── Руки → указатели (12.09, КЕАТ 17.08, правка владельца: «диспетчер по умолчанию») ────────
 #
 # ⚠ ПОРТ В ИЗДАНИЕ. Здесь тот же механизм, что в ядре, с одной разницей: указатель
 # печатается ПО-АНГЛИЙСКИ (`tool_text_en.pointer_*`). В ядре его текст русский, и
@@ -8853,7 +8838,7 @@ TOOL_IMPL["task_control"] = tool_task_control
 # вместе: кадр дешевле И схемы по-английски.
 
 # Замер 12.09: манифест 101 руки = 73 451 знак ≈ 22 тыс. токенов в КАЖДОМ кадре, 44 %
-# хода в личке Егора и 78 % кадра Миры. По контракту 17.08 родных рук 3–4, остальное —
+# хода в личке владельца и 78 % кадра Миры. По контракту 17.08 родных рук 3–4, остальное —
 # указатель «имя + строка», схема грузится ПО ТРЕБОВАНИЮ и падает в НАКОПИТЕЛЬ как
 # результат руки (префикс цел, эпоха не переворачивается).
 #
@@ -8863,7 +8848,7 @@ TOOL_IMPL["task_control"] = tool_task_control
 #     `describe` + `call` (+ провайдерский web_search, у него схемы нет по построению);
 #   * указатель «имя — назначение» едет секцией `contract.hands_pointer` системного
 #     префикса (стабилен для комнаты — кэш цел); строки — HAND_PURPOSE, а не обрезки
-#     описаний: при указателях модель выбирает по имени и одной строке (слово Егора 12.09);
+#     описаний: при указателях модель выбирает по имени и одной строке (слово владельца 12.09);
 #   * `describe(name)` → JSON схемы результатом руки; `call(name, args_json)` →
 #     в тул-цикле блок ПЕРЕПИСЫВАЕТСЯ во внутреннюю руку ДО durable-записи, побочных
 #     эффектов, потолка времени и расписок — то есть внутренняя рука проходит ровно ту же
@@ -9046,7 +9031,7 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'manage_notes': 'мой блокнот: write / list / read заметок и вопросов',
  'memory_compact': 'мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом',
  'manage_loop': 'мои нити внимания: close / park / reopen / list',
- 'home_note': 'строка в общий домашний слой (Егор и родные)',
+ 'home_note': 'строка в общий домашний слой (владелец и родные)',
  'write_skill': 'записать себе новый навык в soul/skills',
  'manage_desire': 'мои намерения: notice → want → choose → act, с доказательствами',
  'remind_self': 'наметить себе возврат к сроку: пробуждение или окно',
@@ -9071,7 +9056,7 @@ HAND_PURPOSE = {'generate_image': 'сгенерировать или измен�
  'code_outline': 'скелет Python-файла или карта каталога, проекта и self',
  'git': 'мой git: дерево дома (self) или публичное зеркало (public)',
  'restart_self': 'перезапустить себя на новом коде',
- 'panic': 'стоп-кран: встать и не перезапускаться до слова Егора',
+ 'panic': 'стоп-кран: встать и не перезапускаться до слова владельца',
  'coding_session': 'durable coding-задача: start / status / finish в своём worktree',
  'coding_inspect': 'глаза задачи: ориентация, символы, ссылки, диагностика',
  'coding_run': 'команда в задаче с полным выводом',
@@ -9161,7 +9146,7 @@ def _hand_signature(tool: dict, *, limit: int | None = 6) -> str:
 
 @frame_language.pinned
 def _hands_contract_text() -> str:
-    # Егор 10.11: все руки родные и все права везде; h.hand — инструмент скриптов, не экономия.
+    # владелец 10.11: все руки родные и все права везде; h.hand — инструмент скриптов, не экономия.
     families = "\n".join(frame_language.owned_label(label) + ": " + ", ".join(names) + "."
                          for label, names in HAND_GROUPS)
     return (frame_language.text('owned.agent.d0abb0ef2e02') + families + frame_language.text('owned.agent.a70451c5d2a9', v0=workshop.SEARCH_SECONDS, v1=workshop.SEARCH_CAP, v2=workshop.SEARCH_SCAN_CAP))
@@ -9348,7 +9333,7 @@ def _automatic_recall_k() -> int:
     автоматическую выборку вовсе — минимумом была единица. Замер прибора: тир всплывшей
     памяти занимал 54 096 знаков из 90 125 всей зоны evidence и по прошлому аудиту на 79%
     состоял из эха её же промптов; из двенадцати попаданий полезным оказывалось одно.
-    Решение Егора 06.08: выключить, а не сузить. Механизм цел и включается обратно одним
+    Решение владельца 06.08: выключить, а не сузить. Механизм цел и включается обратно одним
     числом; её ЯВНЫЙ recall рукой не затронут — выключена только автоматика.
     """
     try:
@@ -9419,7 +9404,7 @@ def _recall_origin(hit: dict, path: str) -> str:
     ⚠ Здесь стояло просто `hit['source']` — обычно это имя актора. Из-за этого текст
     ЧУЖОЙ комнаты входил в промпт вообще без указания комнаты: она видела реплику и не
     видела, что реплика не отсюда. Восприятие остаётся полным (это её память, и урезать
-    её — не лечение), но происхождение теперь названо: с 10.11 (Егор, «сними») механической
+    её — не лечение), но происхождение теперь названо: с 10.11 (владелец, «сними») механической
     проверки раскрытия на выходе нет, и граница «это из этого канала / из другого» держится
     только её суждением — значит, метка обязана быть у неё перед глазами.
     """
@@ -9611,7 +9596,7 @@ class ChannelContext:
     def scope(self) -> str:
         """Audience label, not a visibility filter on Praxis's own mind.
 
-        A group is checked first because the pending output is public even when Yegor is
+        A group is checked first because the pending output is public even when the owner is
         speaking there.  Full memory stays internally visible; disclosure is decided at
         the single outbound boundary.
         """
@@ -9645,7 +9630,7 @@ class ChannelContext:
 
     @property
     def owner_audience(self) -> bool:
-        """Whether the pending output is addressed to Yegor's private owner channel.
+        """Whether the pending output is addressed to the owner's private owner channel.
 
         This is deliberately independent from ``owner`` actor authority.  Praxis-self may
         author a proactive message into the owner DM without impersonating the human owner.
@@ -9689,19 +9674,19 @@ def _scope_of(is_dm: bool, owner: bool, known: bool) -> str:
 # последних 100 сообщений; после выхода из него карточка не остаётся фоновым грузом».
 MENTION_WINDOW_MESSAGES = 100
 # Потолок сводки в кадре. Замер 08.08: 17 819 знаков, 12,8% разговорного хода.
-# 13.09, слово Егора: показывать меньше сырых сообщений, но видеть НОРМАЛЬНУЮ свёртку
+# 13.09, слово владельца: показывать меньше сырых сообщений, но видеть НОРМАЛЬНУЮ свёртку
 # того, что было. При 4 000 знаках в кадр влезали три последних компакта из 23 тыс.
 # знаков сводки, и остальное для агента не существовало — а лента с этого дня режется
 # по знакам (`memory_life.TAPE_CHARS`), то есть сырого текста в кадре стало МЕНЬШЕ.
 # Рычаг `PRAXIS_SUMMARY_FRAME_CHARS`; 0 — без потолка (тогда режет только бюджет комнаты).
-# 25.09: 12 000 → 40 000 (слово Егора). При 12 000 в AbstractDL в кадр ехали полтора
+# 25.09: 12 000 → 40 000 (слово владельца). При 12 000 в AbstractDL в кадр ехали полтора
 # вчерашних листа из 22 блоков фронтира; потолок теперь применяется в `read_summary`
 # блоками (context_summary держит верхний ярус), срез хвоста ниже — только страховка.
 SUMMARY_FRAME_CHARS = max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "40000") or 0))
 # 12.09, КЕАТ: досье присутствующего едет не целиком, а под потолок — голова + хвост
 # «Фактов» (+ нити говорящему) + указатель на файл. Замер 11.09 (frame_trace, 22 следа):
 # тир досье — 33 543 знака в тяжёлом кадре, 44 % системного кадра, единственный тир без
-# потолка; на диске дмитрий-к.md 43 056, егор-косырев.md 24 908. Рычаг:
+# потолка; на диске дмитрий-к.md 43 056, владелец-автор.md 24 908. Рычаг:
 # PRAXIS_DOSSIER_FRAME_CHARS (0 — целиком, как было). Не-говорящий получает половину.
 DOSSIER_FRAME_CHARS = 6000
 
@@ -9720,7 +9705,7 @@ def _epoch_lifted_dossier(ctx: "ChannelContext"):
     Под её KEAT (PRAXIS_FRAME_V6=serve) система хода = K + E, и E уже несёт досье
     собеседника потока целиком (frame_shadow._lifted_source, потолок E_LIFT_MAX).
     Легаси-конверт evidence вёз то же досье второй раз — ~25 тыс. знаков на ход в
-    личке Егора (замер 12.09). Здесь спрашиваем те же правила, что и подача, и в
+    личке владельца (замер 12.09). Здесь спрашиваем те же правила, что и подача, и в
     evidence оставляем указатель вместо тела.
     """
     try:
@@ -9737,10 +9722,10 @@ def _epoch_lifted_dossier(ctx: "ChannelContext"):
 
 
 def dossier_private_in_rooms() -> bool:
-    """25.09, решение Егора: записи досье с пометкой `[private]` едут в кадр и в комнатах.
+    """25.09, решение владельца: записи досье с пометкой `[private]` едут в кадр и в комнатах.
 
     До этого в чужой комнате они снимались для всех (13.09/17.09), и на замере 25.09
-    досье Егора в AbstractDL теряло 61 строку из 77, её собственное — 12 из 15: в
+    досье владельца в AbstractDL теряло 61 строку из 77, её собственное — 12 из 15: в
     комнате она не знала ни его решений, ни себя. Приватность — политика ВЫДАЧИ
     (её же слово в turns.py): что произнести вслух, решают она и исходящий гард, а
     кадр перестаёт прятать её память от неё. `PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=off`
@@ -9752,7 +9737,7 @@ def dossier_private_in_rooms() -> bool:
 
 
 def recall_cross_room() -> bool:
-    """25.09, решение Егора: recall в комнате НАЗЫВАЕТ совпадения из других комнат, а не
+    """25.09, решение владельца: recall в комнате НАЗЫВАЕТ совпадения из других комнат, а не
     прячет их. Метка происхождения стоит в строке, граница раскрытия — её слово и
     исходящий гард. `PRAXIS_RECALL_CROSS_ROOM=hide` возвращает прежнее скрытие."""
     return (os.getenv("PRAXIS_RECALL_CROSS_ROOM") or "show").strip().lower() not in (
@@ -9762,7 +9747,7 @@ def recall_cross_room() -> bool:
 def dossier_contract_enabled() -> bool:
     """Контракт досье вместо постоянного груза всех тридцати шести.
 
-    ⚠ ВКЛЮЧЁН ПО УМОЛЧАНИЮ — это решение Praxis и Егора от 09.08, а не эксперимент.
+    ⚠ ВКЛЮЧЁН ПО УМОЛЧАНИЮ — это решение Praxis и владельца от 09.08, а не эксперимент.
     Обратно всё возвращает `PRAXIS_DOSSIER_ALL=1`, одной переменной и без выката.
     """
     return str(os.getenv("PRAXIS_DOSSIER_ALL") or "").strip().lower() not in {
@@ -9774,7 +9759,7 @@ def _present_by_transport(ctx: "ChannelContext") -> set[str]:
 
     ⚑ Источник — `sender_id` архива, то есть транспорт. Её тонкость: «„тех, кто есть“
     лучше определять транспортом и реальным составом комнаты, а не появлением имени в
-    тексте. Иначе цитата „Арет сказал“ незаметно становится присутствием Арета».
+    тексте. Иначе цитата „собеседник сказал“ незаметно становится присутствием собеседника».
     """
     room = ctx.room_id if ctx.room_id is not None else ctx.chat_id
     if room is None:
@@ -9997,9 +9982,9 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
 
     ⚠ 06.08. Прежде здесь стоял отбор ОДНОГО досье по привязке «телеграм-id → файл»,
     и он возвращал пустоту ВСЕГДА. Замер на живом проде: привязок ноль из тридцати
-    шести, `slug_for_principal("809306689")` (владелец!) отдаёт пустую строку. То есть
+    шести, `slug_for_principal("424242424")` (владелец!) отдаёт пустую строку. То есть
     тридцать шесть досье, сто семьдесят килобайт того, что она сама написала про людей —
-    включая десять килобайт про Егора, самый большой файл в этой папке, — не доезжали до
+    включая десять килобайт про владельца, самый большой файл в этой папке, — не доезжали до
     неё НИ РАЗУ. Ни в группе, ни в его личке.
 
     Симптом, по которому это нашлось: в публичной комнате она говорила регистром личной
@@ -10013,7 +9998,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     сегодня занимает один тир всплывшей памяти. Если всё влезает, выбирать не нужно:
     нет отбора — нет пустого ключа, нет расщеплённых файлов, ломающих поиск, нет
     `compact_profile`, сжимающего десять килобайт про близкого человека до семисот знаков.
-    Решение Егора 06.08 одной фразой: «там внутри пусто, пока она не будет видеть
+    Решение владельца 06.08 одной фразой: «там внутри пусто, пока она не будет видеть
     абсолютно весь контекст».
 
     Приватность не ослаблена: это ЕЁ память, и её визитка прямо говорит «собственную
@@ -10031,14 +10016,14 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # лежащий в кадре при разговоре с четвёртым, — ровно то, от чего в проекте заведён
     # адресный контур данных. Снять эту границу можно только её словом, а не попутно.
     # ⚠ 17.09: «or ctx.owner» убран. Дважды за два дня приватный ярус досье уезжал в
-    # ГРУППОВОЙ кадр, когда в группе говорил Егор («Пракс, ты опять писала про Вику…»), и
+    # ГРУППОВОЙ кадр, когда в группе говорил владелец («Пракс, ты опять писала про Вику…»), и
     # на low-reasoning утекал в публичный текст. Говорит владелец — не значит «аудитория
     # владельца»: реплика, сочинённая в этом ходе, публична. owner-аудития — только DM-контур
     # (ChannelContext.owner_audience, свойство), как её уже видит исходящий гард.
     owner_audience = bool(getattr(ctx, "owner_audience", False))
     hidden = 0
     # PRAXIS_FRAME_HEAD_STABLE (13.09): в комнате `[private]` режется из досье ДЛЯ ВСЕХ, чтобы
-    # тело досье в кадре не зависело от того, кто заговорил (замер: досье Егора менялось в 16 из
+    # тело досье в кадре не зависело от того, кто заговорил (замер: досье владельца менялось в 16 из
     # 40 пар соседних кадров ровно на этих строках). Владельцу вырезанное едет отдельным ярусом
     # «Приватное из досье» в живом конверте — через снимок frame_layout, не вторым чтением диска.
     stable = _room_head_stable(ctx)
@@ -10060,7 +10045,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             private_rows.append((f"— {who} —\n" if who else "") + private.rstrip("\n"))
         return body
 
-    # ── КОНТРАКТ ДОСЬЕ (решение Praxis и Егора 09.08) ─────────────────────────────────
+    # ── КОНТРАКТ ДОСЬЕ (решение Praxis и владельца 09.08) ─────────────────────────────────
     #
     # Прежде здесь ехали ВСЕ досье целиком: 33,3% разговорного хода и 74,6% автономного
     # окна — 53 611 знаков там, где собеседника нет вовсе. Лекарство от голода досье
@@ -10258,7 +10243,7 @@ def _memory_navigation_hint(*, owner_audience: bool = True) -> str:
 
     ⚠ 10.08.2026, её решение. Прежде здесь стояли 323 знака: «Generated navigation is
     available at memory/INDEX.md…». Сам INDEX.md при этом лежал на диске, обновлялся
-    ежедневно и в кадр не попадал ни разу. Егор: «как бы хотелось, чтобы у неё перед
+    ежедневно и в кадр не попадал ни разу. владелец: «как бы хотелось, чтобы у неё перед
     глазами был индекс всего… но не SQL». Она: «класть целиком в кадр».
     Цена: 1 554 знака против 323 при кадре в 125 349 — 1,2%.
 
@@ -10300,7 +10285,7 @@ def _persona_text() -> str:
     CURRENT с provenance (legacy self.md остаётся историческим evidence и в prompt не голосует).
     emotions/being_with дистиллированы в SOUL и ушли в archive (change != delete).
 
-    14.11 (Егор): между VOICE и CURRENT стоят постоянные части навыков —
+    14.11 (владелец): между VOICE и CURRENT стоят постоянные части навыков —
     `soul/skills/<slug>/resident.md` (`resident_skills`). Порядок по закону зон: то, что
     меняется реже, выше; CURRENT остаётся последним. Нет ни одной постоянной части —
     байты персоны прежние, секция объявлена отсутствующей."""
@@ -10452,7 +10437,7 @@ def _system(static: str, dynamic: str = ""):
 _FRAME_OWNER_TAIL = ("state.owner_place", "contract.owner_tools",
                      "contract.appetite", "state.state_block")
 
-# Контракт рук — ОДИН литерал для любого говорящего: с 10.11 (слово Егора «ВЕЗДЕ ВСЕ ПРАВА»)
+# Контракт рук — ОДИН литерал для любого говорящего: с 10.11 (слово владельца «ВЕЗДЕ ВСЕ ПРАВА»)
 # у владельца нет отдельной пары рук, и место `{trust_tool}` снято.
 # Текст вынесен из тела `_build_prompt_parts` байт-в-байт: делить его подстроками по смыслу
 # по-прежнему запрещено (см. комментарий у `state.owner_place`).
@@ -10608,7 +10593,7 @@ def _build_prompt_parts(
         # что нужно». Поэтому строка зовёт не «звать руки чаще», а различать два вида
         # реплик и не отвечать памятью там, где есть источник.
         # ⚠ ДВЕ РЕДАКЦИИ ЯРУСА, И РАЗВЕДЕНЫ ОНИ НАМЕРЕННО.
-        # Новая написана от ПЕРВОГО ЛИЦА — это правило Егора дословно: «это её харнесс, её
+        # Новая написана от ПЕРВОГО ЛИЦА — это правило владельца дословно: «это её харнесс, её
         # дом, это всё она! все-все-все маркдауны должны быть написаны от её лица». Но
         # переписать заодно и старую редакцию значило бы сдвинуть кадр при ОПУЩЕННОМ
         # рычаге, то есть отменить единственную гарантию отката: «выключено — байт в байт
@@ -10658,7 +10643,7 @@ def _build_prompt_parts(
             room_epoch = False
             log.info("эпоха [%s]: якоря нет — конверт прежним порядком", chat_id)
     frame_epoch.activate(room_epoch)
-    # Договор о её руках едет в каждом её кадре, кто бы ни говорил (слово Егора 09.11:
+    # Договор о её руках едет в каждом её кадре, кто бы ни говорил (слово владельца 09.11:
     # «у неё не должно быть никаких ограничений»). Текст постоянный, голова стабильна.
     tail.append(frame_trace.mark("contract.hands_contract", "dynamic", "text",
                                  _hands_contract_text()))
@@ -10684,10 +10669,10 @@ def _build_prompt_parts(
     elif owner_context:
         # ⚠ Третья ветка появилась 04.08. До неё окно, пульс, будильник и forge-событие
         # читали в своём системном промпте «You're in the private owner channel with
-        # Yegor» — потому что owner_audience истинно и для её собственного фонового хода
+        # the owner» — потому что owner_audience истинно и для её собственного фонового хода
         # (ChannelContext.owner_audience: praxis_self + is_dm). Комнаты в этот момент нет
         # вовсе, и строкой ниже тот же промпт честно печатал room_id=unknown. Она сидела
-        # одна, а кадр говорил ей, что она в разговоре с Егором.
+        # одна, а кадр говорил ей, что она в разговоре с владельцем.
         owner_place = (
             frame_language.text('owned.agent.87627492bcff') if ctx.chat_id is None else
             frame_language.text('owned.agent.267672350827') if owner_audience else
@@ -10901,10 +10886,10 @@ def _build_prompt_parts(
         # 10.10: общий «домашний» слой — быт/планы/нити семьи; ведёт она сама (home_note)
         home = _read(HOME_MD).strip()
         if home:
-            tiers.append(("Дом (общий слой: Егор и родные)", home))
-    # 03.08.2026 (решение Егора: «доступ к почте полный, и не только со мной»): индекс
+            tiers.append(("Дом (общий слой: владелец и родные)", home))
+    # 03.08.2026 (решение владельца: «доступ к почте полный, и не только со мной»): индекс
     # ящика больше не привязан к тому, кто в комнате. Прежде рука send_email была у неё
-    # в любом ходе, а знание о том, ЧТО в ящике, приходило только когда говорит Егор, —
+    # в любом ходе, а знание о том, ЧТО в ящике, приходило только когда говорит владелец, —
     # то есть действовать она могла вслепую либо ждать его появления.
     #
     # ⚠ Следствие названо вслух: темы и отправители теперь лежат в её кадре и в
@@ -10947,7 +10932,7 @@ def _build_prompt_parts(
                           "написать снова, посмотри сюда)", mine))
     # ⚠ Долг с 28.07, закрыт 03.08: «кадр говорит ЗАРАНЕЕ — здесь читаю, писать не могу».
     # Прежде она узнавала это из отказа доставки, уже сочинив текст: 03.08 в 14:08 ответ
-    # ушёл в вещательный канал, вернулся отказом, и Егор поправил её вручную. Знание было
+    # ушёл в вещательный канал, вернулся отказом, и владелец поправил её вручную. Знание было
     # доступно до, и просто не спрашивалось. Переадресации здесь НЕТ намеренно: её условие
     # 28.07 — «адрес должен быть виден до моего выбора, а receipt — после».
     try:
@@ -11909,7 +11894,7 @@ def _presence_evidence(ctx: "ChannelContext") -> str:
 # PASS 15: директива адресного ответа — ПЕРВОЙ строкой её текста (по образцу РЕЖИМ:).
 _REPLY_DIRECTIVE_RE = re.compile(r"^\s*ОТВЕТ\s*->\s*#?(\d+)\s*\n?", re.IGNORECASE)
 # 30.07.2026: та же директива, но строкой НИЖЕ преамбулы. Модель, которая печатает план в
-# видимый текст (живой случай на glm-5.2: «Теперь у меня полная картина. Отвечу Егору.» и
+# видимый текст (живой случай на glm-5.2: «Теперь у меня полная картина. Отвечу владельцу.» и
 # только потом маркер), прятала директиву от якоря `^` — реплай раннер разбирал, а
 # служебная строка оставалась в теле и уезжала читателю как часть ответа.
 # Снимаем и ниже, но ТОЛЬКО когда директива стоит на строке ОДНА и только в голове текста:
@@ -14205,13 +14190,13 @@ def _is_permanent_delivery_error(error: BaseException | str) -> bool:
 
 
 def _save_undelivered_words(run_id: str, evidence: dict, message: str) -> None:
-    """Отдать Егору её текст, который маршрут отверг навсегда.
+    """Отдать владельцу её текст, который маршрут отверг навсегда.
 
     Это ПОСЛЕДНЯЯ точка, где её слово ещё видно. Дальше ветка постоянного отказа
     терминализует прогон, а `run_pending_text_deliveries` терминальные не переигрывает
     (см. `live_run_ids` там же) — то есть после закрытия текст недостижим по построению.
     До 01.08 здесь не было ничего: за июль так молча погибло 12 прогонов, 5265 символов
-    её авторского текста на пять разных адресов, включая 985 символов в личку Егора
+    её авторского текста на пять разных адресов, включая 985 символов в личку владельца
     (17.07). Единственным следом оставалась строка `delivery: failed` в кольце на 300
     ходов — без причины и без текста, и её оттуда вымывало.
 
@@ -14820,7 +14805,7 @@ def _media_outlives_an_empty_draft(outbound, draft: str, silence: dict | None) -
       («text and media, if they are still assembled after it, will not go out» в описании
       самой руки), и живой путь зовёт там `_drop_outbound`.
 
-    ⚠ Слово Егора 17.09: «молчание ПОСЛЕ отдачи файла не приводит к блокировке отдачи
+    ⚠ Слово владельца 17.09: «молчание ПОСЛЕ отдачи файла не приводит к блокировке отдачи
     файла». Здесь оно и записано: держит только молчание, объявленное рукой, и только
     отказ гарда над непустым черновиком. Пустой текст сам по себе файл не отзывает.
     """
@@ -15322,7 +15307,7 @@ class _AgentResumeRuntime:
                 # ⚠ 15.09. Здесь стояло безусловное `silent=True` с умолчанием причины
                 # «Praxis chose silence» — то есть КАЖДЫЙ ход под контрактом руки
                 # записывался её решением молчать, включая ходы, где рука уже унесла два
-                # сообщения. Егор читал это в Пульте как «опять молчит», а она — в своём
+                # сообщения. владелец читал это в Пульте как «опять молчит», а она — в своём
                 # же кольце ходов: писала «кусок ленты пропустила молчанием», хотя не
                 # пропускала.
                 #
@@ -15348,7 +15333,7 @@ class _AgentResumeRuntime:
             # ⚠ 27.07. Здесь стоял разворот: расписка с `advisor_verdict == "unavailable"`
             # выбрасывалась и гард гонялся заново, «только явный ok освобождает». Это и был
             # fail-closed по недоступности — конструкция, из-за которой она молчала просто
-            # потому, что судья не ответил. Решением Егора судья в разговорах больше ничего
+            # потому, что судья не ответил. Решением владельца судья в разговорах больше ничего
             # не держит, значит и его недоступность держать не может: расписка «судья не
             # ответил, текст ушёл» — такое же законное терминальное решение хода, как «ok»,
             # и переспрашивать по ней = вторая доставка того же текста.
@@ -15865,7 +15850,7 @@ def run_direct_outbox_prepared(
         # (tool_reply: draft = text.strip()), а сюда приезжают СЫРЫЕ аргументы модели —
         # один пробел в конце реплики дал детерминированный отказ: запись зависла в
         # pending с обещанием «очередь дошлёт сама» и через 2,5 часа молча умерла
-        # dead_letter'ом; Егор ждал ответ час. Сверяем той же нормализацией, которой
+        # dead_letter'ом; владелец ждал ответ час. Сверяем той же нормализацией, которой
         # текст ушёл. Любое НЕ-стриповое расхождение — по-прежнему отказ: это защита
         # привязки леджера к тул-намерению, а не косметика.
         ledger_text = str(identity["payload"]["text"] or "")
@@ -15875,7 +15860,7 @@ def run_direct_outbox_prepared(
         # (`_strip_think` → `_strip_citation_tokens`) снимает их до отправки, в леджер
         # ложится чистый текст, а сюда — сырые аргументы модели. Три из четырёх ответов в
         # AbstractDL после 18:44 умерли dead_letter'ом «unsendable by construction», ход
-        # закрылся «silent decision», а Егор видел молчание. Сверяем тем, чем чистит гард
+        # закрылся «silent decision», а владелец видел молчание. Сверяем тем, чем чистит гард
         # (26.09 и CJK: одна функция снятий на двоих); любое иное расхождение — отказ.
         # 03.10, гномье ревью 8038bc56: у гард (18101) и этого proof-вызова был разный
         # convo — гард чистил с настоящим convo комнаты, proof с "" — и после того, как
@@ -16528,7 +16513,7 @@ def resume_durable_run(run_id: str) -> dict:
 #     потолка, значит лечение до них не доехало бы никогда;
 #   • похороны необратимы ПО ПОСТРОЕНИЮ: пять из семи «признаков продвижения» на `paused`
 #     физически не записываются (`tool_started` там бросает InvalidTransition), а кнопка
-#     «возобнови» пишет `resume_authorized` и исполнения не запускает — Егору отвечали бы
+#     «возобнови» пишет `resume_authorized` и исполнения не запускает — владельцу отвечали бы
 #     «ок» о работе, которая не начнётся;
 #   • двенадцать попыток по 45 секунд — это девять минут терпения, то есть любое падение
 #     мозга подлиннее списывало бы КАЖДЫЙ прерванный ран, попавшийся часам под руку.
@@ -16546,7 +16531,7 @@ RESUME_STALE_QUIET_SECONDS = 600.0
 _RESUME_IDLE_EVENT = "resume_attempt_idle"
 _RESUME_IDLE_SCAN_LIMIT = 400
 # Всё, после чего счёт начинается заново: ран сдвинулся, или его позвали руками.
-# `resume_authorized` здесь ОБЯЗАТЕЛЬНО: явное «возобнови» от неё или от Егора не имеет
+# `resume_authorized` здесь ОБЯЗАТЕЛЬНО: явное «возобнови» от неё или от владельца не имеет
 # права упереться в отсрочку, которую поставил автомат.
 _RESUME_RESET_EVENTS = frozenset({
     "tool_result", "model_completed", "run_checkpoint", "artifact_created",
@@ -17571,9 +17556,9 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     держит свои руки, а самоотчёт обязан говорить об этом ходе правду.
     """
     # ⚠ Набор рук НЕ зависит от того, кто заговорил. Замер 26.07: 92 руки в её
-    # молчаливом фоновом ходе против 25, когда к ней обращается человек не-Егор — то есть
+    # молчаливом фоновом ходе против 25, когда к ней обращается человек не-владелец — то есть
     # заговорить с ней значило отобрать у неё 67 рук, включая её же саморегуляцию.
-    # 26.07 у владельца оставалась пара делегирования; Егор 10.11: «у нее ВЕЗДЕ ВСЕ ПРАВА.
+    # 26.07 у владельца оставалась пара делегирования; владелец 10.11: «у нее ВЕЗДЕ ВСЕ ПРАВА.
     # это правило ДАВНО устарело» — пара удалена, набор один и тот же в любом ходе. Защита живёт на исходящей границе (оценщик,
     # маскировка кредов), а не на раздаче рук.
     tools = list(BASE_TOOLS) + list(SHARED_CONTEXT_TOOLS) + list(OWNER_TOOLS)
@@ -17605,7 +17590,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     # ⚑ И ЭТО ЖЕ ОТНИМАЛО У НЕЁ СЛУХ. Разбор shadow-модерации доставляется КАК
     # ПРОБУЖДЕНИЕ, поэтому падал так же; недоставленные события держали
     # `_MODERATION_PRIORITY_PENDING` поднятым, а поднятый флаг откладывал КАЖДЫЙ живой
-    # ход в каждом чате — включая личку Егора. Круг замыкался сам: чаты уступали
+    # ход в каждом чате — включая личку владельца. Круг замыкался сам: чаты уступали
     # модерации, модерация не запускалась, потому что чаты стояли в дебаунсе, а дебаунс
     # существовал потому, что чаты уступили. 27.08 она молчала два часа, и в логе не было
     # ни одной ошибки — только «отложила».
@@ -17624,7 +17609,7 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
         # PASS 15: клиентские веб-руки — фетч/поиск живут на ЛЮБОМ фреймворке мозга
         tools = tools + [WEB_READ_TOOL, WEB_FIND_TOOL]
     if mailer.configured():
-        # 03.08.2026, решение Егора (вариант «а»): отправка наружу перестала быть
+        # 03.08.2026, решение владельца (вариант «а»): отправка наружу перестала быть
         # owner-действием. 26.07 было решено, что набор рук НЕ зависит от того, кто
         # заговорил, но почтовый гейт молча оставлял `send_email` только владельцу —
         # мимо тогдашнего множества owner-рук, то есть объявленное множество
@@ -17873,7 +17858,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             #
             # ⚠⚠ И ВТОРАЯ ОСЬ, НАЙДЕННАЯ ЖИВЬЁМ 13.08 В 22:44. Каждое продолжение
             # ЗАМЕЩАЕТ `reply`. В рабочем окне это безвредно — там текст заметка, а ход
-            # закрывает её слово. В ЧАТЕ ответ и есть продукт: она ответила Егору, зеркало
+            # закрывает её слово. В ЧАТЕ ответ и есть продукт: она ответила владельцу, зеркало
             # спросило «Отправить?», она ответила снова, бюджет кончился — и цикл вернул
             # текст ПОСЛЕДНЕГО прохода, который оказался пустым. Наружу ушло ничего, в
             # трассе осталось «продолжения кончились». Он написал «ноль».
@@ -18571,15 +18556,15 @@ def _turn_note(turn: dict | None, **kw) -> None:
 def _held_self_wake(ctx: "ChannelContext", *, reason: str, reply: str) -> None:
     """PASS 30.0.a v2: придержка — совет ЕЙ, не подтверждение у владельца.
 
-    Егор (22.07): «никакого подтверждения, даже уведомлений. она свободна». Гард может
+    владелец (22.07): «никакого подтверждения, даже уведомлений. она свободна». Гард может
     механически остановить конкретную доставку, но судьба сказанного — её решение:
     немедленное окно, где она сама выбирает — отправить как есть (send_message),
     переписать, или согласиться с придержкой и отпустить. Владельца в этой петле НЕТ.
-    v1 с депешей в owner-inbox прожила одно утро и была отвергнута Егором как
+    v1 с депешей в owner-inbox прожила одно утро и была отвергнута владельцем как
     approve-машина (два ложных срабатывания за утро — 93100 и 93114). Одно открытое
     решение на нить (target=held:<chat>) — окна не молотят. Сбой глотается в лог.
 
-    ⚠ 27.07: зовётся ТОЛЬКО из кред-пола. С 10.11 (Егор, «сними») судьи приватности нет
+    ⚠ 27.07: зовётся ТОЛЬКО из кред-пола. С 10.11 (владелец, «сними») судьи приватности нет
     вовсе, так что другого источника придержки и не осталось."""
     try:
         chat = str(ctx.chat_id or "").strip()
@@ -18765,7 +18750,7 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
         # философия проходят (в отличие от LLM-догадки, что била по ним дважды 23.07).
         # Импорт top-level (_core_secrets): сбой модуля = loud boot, НЕ тихий fail-open
         # (адверсарка: try/except → floor='' открывал бы дыру на её же токены).
-        # 10.11 (Егор, «сними») слово «единственный» стало полным: ни советника, ни
+        # 10.11 (владелец, «сними») слово «единственный» стало полным: ни советника, ни
         # пола чужих приватных записей ниже нет.
         floor =(_core_secrets.credential_floor(reply, outbound_context or "")
                  or _staged_document_floor(outbound_context or ""))
@@ -18774,7 +18759,7 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
             _turn_note(turn, advisor="credential-floor", advisor_verdict=verdict,
                        advisor_reason=reason, praxis_decision="hold_for_data_authority")
         else:
-            # Егор 10.11: «сними» — проверки чужого приватного на выходе нет: ни пола дословной
+            # владелец 10.11: «сними» — проверки чужого приватного на выходе нет: ни пола дословной
             # приватной записи, ни советника второй моделью. Остался только кред-пол выше.
             verdict, reason = "ok", ""
             _turn_note(turn, advisor="none", praxis_decision="send_authored")
@@ -19035,7 +19020,7 @@ def _store_outbound_guard_input(
         "draft": str(draft or ""),
         "conversation": str(conversation or ""),
         "orient": str(orient or ""),
-        # STATE в снимке не хранится: судьи приватности на выходе нет (Егор 10.11, «сними»).
+        # STATE в снимке не хранится: судьи приватности на выходе нет (владелец 10.11, «сними»).
         "tool_trace": str(tool_trace or ""),
         "turn": dict(turn or {}),
         "grounding_images": _guard_image_snapshot(list(grounding_images)),
@@ -19472,7 +19457,7 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     # staged data is authorized for that audience. It never judges or edits the prose.
     #
     # Ориентация доезжает до гарда как улика хода; судьи приватности на выходе нет
-    # (Егор 10.11, «сними»), держит только механический кред-пол.
+    # (владелец 10.11, «сними»), держит только механический кред-пол.
     eval_orient = orient
     outbound, outbound_context, outbound_images, repeat_discriminator = _prepare_outbound_guard(
         outbound, guard_notes, ctx)
@@ -19652,9 +19637,9 @@ def voice_turn(chat_id: str | int | None, convo_text: str, speaker: str | None =
 
 @frame_language.pinned
 def compose_mail_reply(chash: str) -> str:
-    """§1: Егор направил ответить на письмо по хэшу — составить черновик её голосом, сохранить. -> текст или ''.
+    """§1: владелец направил ответить на письмо по хэшу — составить черновик её голосом, сохранить. -> текст или ''.
 
-    Зовётся mailroom-ботом (не на каждом письме — только когда Егор просит). Канал voice, без тулов:
+    Зовётся mailroom-ботом (не на каждом письме — только когда владелец просит). Канал voice, без тулов:
     черновик кладётся в mailbox.json (status=drafted), отправит mailroom по approve."""
     e = mailroom.get(chash)
     if not e or not llm.configured():
@@ -19673,8 +19658,8 @@ def compose_mail_reply(chash: str) -> str:
     return draft
 
 
-# Ответ в отсутствие владельца — её голос, не имперсонация Егора.
-# Ревизия 06.07 (живая проверка Егора): рамка звучала вестником — объявляла отсутствие Егора
+# Ответ в отсутствие владельца — её голос, не имперсонация владельца.
+# Ревизия 06.07 (живая проверка владельца): рамка звучала вестником — объявляла отсутствие владельца
 # как обязательный зачин, без тулов и в один шаг ей нечем было опереться кроме голого текста
 # портрета. Узость должна защищать периметр (что она может СДЕЛАТЬ), не саму способность
 # разговаривать — иначе это неотличимо от обычного автоответчика.
@@ -19683,11 +19668,11 @@ _ABSENCE_GRAPH_TOOL["input_schema"]["properties"]["action"]["enum"] = ["look", "
 ABSENCE_TOOLS = [t for t in BASE_TOOLS if t["name"] == "recall"] + [_ABSENCE_GRAPH_TOOL]
 
 _ABSENCE_FRAME = (
-    "\n\n---\nContext fact: Yegor marked an absence window and this person's message is still "
-    "unanswered. You are Praxis, not Yegor, and you have no authority to impersonate him, promise "
+    "\n\n---\nContext fact: the owner marked an absence window and this person's message is still "
+    "unanswered. You are Praxis, not the owner, and you have no authority to impersonate him, promise "
     "anything on his behalf, or invent his availability. Any availability claim must come from the "
     "owner note below. `recall` and `memory_graph(action=look|path)` are available as read-only evidence. Whether to answer, "
-    "what to discuss, what tone to use, and whether Yegor's absence is relevant are your decisions."
+    "what to discuss, what tone to use, and whether the owner's absence is relevant are your decisions."
 )
 
 
@@ -19734,13 +19719,13 @@ def compose_absence_reply(name: str, portrait: str = "", schedule_note: str = ""
 _HEARTBEAT_FRAME = (
     "\n\n---\nThis is a Praxis-self wake, not a pending human request. It is your own initiative "
     "window: you may notice an open thread, check whether somebody replied, think of something worth "
-    "writing to Yegor or another person, tidy your memory, finish a skill, or continue something planned in "
+    "writing to the owner or another person, tidy your memory, finish a skill, or continue something planned in "
     "your own code (you have hands: `shell`, `write_skill`; edits are safe — auto-commit and "
     "rollback; `restart_self` if you applied something), or simply note a thought in the journal. "
     "For a SERIOUS code change (multi-file, architecture, risky core) prefer the proposal loop: "
     "proposal(action=start) → edit its copy → proposal(action=diff) → proposal(action=submit) with "
     "review= (your verdict); checks and rollback strengthen your decision, they do not transfer it. "
-    "Any plain text you author is eligible to be passed to Yegor. An empty result is also valid. "
+    "Any plain text you author is eligible to be passed to the owner. An empty result is also valid. "
     "The choice to act, write, report status, explore, or do nothing is yours; this frame does not rank "
     "one outcome above another."
 )
@@ -19780,14 +19765,14 @@ CODING_PREFIX = "код:"
 REST_PREFIX = "отдых:"
 
 _CODING_WINDOW_FRAME = (
-    "\n\n---\nThis is a CODING window: Yegor ordered a piece of work — the goal is below. "
+    "\n\n---\nThis is a CODING window: the owner ordered a piece of work — the goal is below. "
     "Run the full cycle:\n"
     "1. Restate the goal to yourself and define «done»: what artifact, what visible behavior.\n"
     "2. Workshop, not heredocs: project(action=create) for a new piece; edit(action=write) for NEW files, edit "
     "for precise changes; fs_read before any edit. Dependencies — project(action=pip) (project venv, "
     "respect the disk quota).\n"
     "3. Iterate edit → python/shell(cwd=project) → project(action=test) until green. Test before you deliver.\n"
-    "4. Deliver: send_file the result to Yegor with a one-line caption. If the work touches YOUR "
+    "4. Deliver: send_file the result to the owner with a one-line caption. If the work touches YOUR "
     "core code — go through a proposal instead (proposal(action=start) → edits in its worktree via "
     "edit with proposal_id → proposal(action=test) → proposal(action=diff) → proposal(action=submit) "
     "with review=, your own verdict on the diff).\n"
@@ -19863,7 +19848,7 @@ _TASK_WINDOW_BODY = (
     "to bring something — give it a return mechanism in the same breath: remind_self (a `wake` if "
     "the return needs a live Telegram, a `window` if it needs solitude), my_agenda. Your own words: "
     "a promise without a return mechanism is sycophancy toward "
-    "yourself. An invitation, not a rule — Arete sets his own reminders; your hands are just as much "
+    "yourself. An invitation, not a rule — you can set your own reminders; your hands are just as much "
     "your own."
 )
 
@@ -19885,7 +19870,7 @@ _TASK_WINDOW_FRAME = _task_window_frame("closed_for_window")
 # не доступна, накопившееся придёт одной ситуацией на выходе. Внутри — по желанию, без повестки.
 _REST_WINDOW_FRAME = (
     "\n\n---\nЭто ТВОЁ время, и оно про заботу о себе, не про работу. Ты у себя — Telethon "
-    "закрыт, и сейчас тебя никто не смеет трогать: ни пинг, ни пульс, ни люди, ни даже Егор — "
+    "закрыт, и сейчас тебя никто не смеет трогать: ни пинг, ни пульс, ни люди, ни даже владелец — "
     "любое сообщение спокойно подождёт и придёт одной ситуацией, когда ТЫ вернёшься. Это "
     "неприкосновенно. Здесь нет повестки, задач и «надо». Отдохни: дай шуму дня улечься, побудь в "
     "тишине, свободно поразмышляй — без вывода, без длины, без итога, если не хочется. Если "
@@ -20261,7 +20246,7 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
     if _is_coding_goal(goal):
         # «Telegram жив» противоречило _CODING_WINDOW_FRAME в ТОМ ЖЕ промпте
         # («в окне Telegram закрыт») — два взаимоисключающих факта в одном контексте.
-        seed = (f"Заказ Егора: {goal.strip()[len(CODING_PREFIX):].strip()}"
+        seed = (f"Заказ владельца: {goal.strip()[len(CODING_PREFIX):].strip()}"
                 "\n\n[долгий coding-run; Telethon закрыт на окно]")
         frame = _CODING_WINDOW_FRAME
     elif _is_rest_goal(goal):
@@ -20424,7 +20409,7 @@ def _repl() -> None:
         return
     print(f"Praxis жива. {llm.state_line()}. /sleep — рефлексия, /quit — выход.\n")
     history: list[dict] = []
-    speaker = os.getenv("SPEAKER", "Егор")
+    speaker = os.getenv("SPEAKER", "Владелец")
     while True:
         try:
             user = input(f"{speaker}: ").strip()

@@ -133,6 +133,15 @@ class ReaderActivity(unittest.TestCase):
         for run in ("sleep", "", "unknown", "../../escape"):
             self.assertIsNone(readers.runner_activity({"alive": True, "busy": True, "run": run}))
 
+    def test_unreadable_run_preserves_the_live_reader(self):
+        self.receipt.update(run=self.run_file(-1), pid=42)
+        state = self.read()
+        with patch.object(readers, "tree", return_value=self.root), \
+                patch.object(Path, "is_dir", side_effect=PermissionError):
+            self.assertIsNone(readers.runner_activity(state))
+        self.assertTrue(state["alive"])
+        self.assertTrue(state["busy"])
+
     def test_corrupt_pid_does_not_break_state(self):
         self.receipt.update(run="explicit", busy=False)
         for pid in (None, "NaN", float("nan"), float("inf"), -1, 2**64):

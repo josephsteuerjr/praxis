@@ -30,7 +30,7 @@ class TapeLevers(unittest.TestCase):
         with mock.patch.object(memory_life, "TAPE_CHARS", 5500), \
                 mock.patch.object(memory_life, "GROUP_TAPE_CHARS", 0):
             self.assertEqual(memory_life.tape_chars_for("-100999999999999999"), 0)
-            self.assertEqual(memory_life.tape_chars_for("809306689"), 5500)
+            self.assertEqual(memory_life.tape_chars_for("424242424"), 5500)
             self.assertEqual(memory_life.tape_chars_for("-100123__topic__7"), 0)
         self.assertTrue(memory_life.is_group_place("-12345"))
         self.assertFalse(memory_life.is_group_place("42"))
@@ -62,9 +62,9 @@ class TapeLevers(unittest.TestCase):
             memory_life.compact_if_due("-100999999999999999")
             self.assertEqual(seen["tape_chars"], 0)
             self.assertEqual(seen["place"], "-100999999999999999")
-            memory_life.compact_if_due("809306689")
+            memory_life.compact_if_due("424242424")
             self.assertEqual(seen["tape_chars"], 5500)
-            self.assertEqual(seen["place"], "809306689")
+            self.assertEqual(seen["place"], "424242424")
 
     def test_group_tape_lever_defaults_to_room_budget(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -80,7 +80,7 @@ class TapeLevers(unittest.TestCase):
 class SummaryLever(unittest.TestCase):
     def test_summary_frame_chars_is_a_lever_with_a_wider_default(self):
         import agent
-        # 25.09: 12 000 → 40 000 (слово Егора; см. test_room_memory_2509)
+        # 25.09: 12 000 → 40 000 (слово владельца; см. test_room_memory_2509)
         self.assertEqual(agent.SUMMARY_FRAME_CHARS, 40000)
         with mock.patch.dict(os.environ, {"PRAXIS_SUMMARY_FRAME_CHARS": "3000"}):
             self.assertEqual(max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "40000") or 0)), 3000)
@@ -120,7 +120,7 @@ from test_authorship_support_1910 import AuthoredMemoryBase
 class AuthoredChronicler(AuthoredMemoryBase):
     def test_quotes_people_and_paths_are_retained_verbatim(self):
         recap = (
-            "I retained the distinction: Yegor said «read the sources»; "
+            "I retained the distinction: Alex said «read the sources»; "
             "Hope disagreed about memory/life/example.md. "
             "I did not treat Hope's words as my own."
         )

@@ -102,7 +102,7 @@ def _pair_score(a: str, b: str) -> tuple[float, str]:
             if x == y:
                 return 1.0, frame_language.text('owned.sleep.fdd2314d5760', v0=na)
             # 01.08.2026: одно имя в двух написаниях детектор НЕ ВИДЕЛ вовсе —
-            # «Егор Косырев» и «Yegor Kosyrev» давали ratio 0.00, и пара никогда не
+            # «владелец» и «the owner» давали ratio 0.00, и пара никогда не
             # попадала в предложения, хотя на живом дереве это было пять досье на
             # одного человека. Ключ имени складывает написания; порог тут 1.0, но
             # ночной проход всё равно только ПРЕДЛАГАЕТ (allow_merge=False) —
@@ -791,7 +791,7 @@ def run(depth: str | None = None) -> str:
     except Exception:
         pass
     _journal(report, salience=2)
-    try:  # 18.3: сверка моего обещания Егору — каждый сон, пока обещание живо
+    try:  # 18.3: сверка моего обещания владельцу — каждый сон, пока обещание живо
         pline = appetite.promise_line()
         if pline:
             _journal(frame_language.text('owned.sleep.22182a907c6f', v0=pline), salience=2)
@@ -854,7 +854,7 @@ def run_scheduled(now: float | None = None) -> str:
     следующей ночью (метка попытки пишется в любом случае — не крэш-луп раз в 30 мин).
     Часовое пробуждение живёт отдельно; у него нет дневного поведенческого капа."""
     t = now if now is not None else time.time()
-    try:  # 18.4: пауза фона (слово Егора / моё состояние) — новый сон не начинаю;
+    try:  # 18.4: пауза фона (слово владельца / моё состояние) — новый сон не начинаю;
         # метку last_run не ставлю: снятие паузы вернёт сон в ближайший тик.
         hold = appetite.background_hold()
     except Exception:

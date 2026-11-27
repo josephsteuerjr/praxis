@@ -133,10 +133,10 @@ def _resolve_write(path: str, proposal_id: str = "") -> tuple[Path | None, str]:
     except (OSError, ValueError):
         return None, "путь вне дома"
     first = rel.parts[0] if rel.parts else ""
-    if first not in WRITE_ZONES:
+    if first not in WRITE_ZONES and rel.parts != ("CODEMAP.md",):
         return None, ("ядро — через предложение: proposal(action=start) → правки в его worktree "
                       "(передай proposal_id) → proposal(action=submit). Без него пишу только в "
-                      "workspace/, soul/, memory/.")
+                      "workspace/, soul/, memory/ и CODEMAP.md.")
     return cand, ""
 
 
@@ -951,6 +951,12 @@ def mutation_lock():
                     timeout=10.0)
 
 
+def _edit_root(target: Path) -> Path:
+    # A home map edit occupies this one file. A project elsewhere in /app
+    # can keep running; an owner of /app itself still covers the map.
+    return target if target == BASE.resolve() / "CODEMAP.md" else target.parent
+
+
 def _serialized_write(path,proposal_id,operation) -> dict:
     import forge
     import forge_roots
@@ -959,8 +965,8 @@ def _serialized_write(path,proposal_id,operation) -> dict:
     result=None
     try:
         # Same order as Forge: physical root -> short workshop transaction.
-        with forge_roots.transaction(target.parent,forge.STATE_DIR,10):
-            reason=forge_roots.foreign_writer_reason(forge,'',root=target.parent)
+        with forge_roots.transaction(_edit_root(target),forge.STATE_DIR,10):
+            reason=forge_roots.foreign_writer_reason(forge,'',root=_edit_root(target))
             if reason:return hands.outcome('refused','Write not admitted while Forge owns this root: '+reason)
             with mutation_lock() as lock:
                 result=operation()
@@ -1029,10 +1035,10 @@ def _serialized_batch(files, proposal_id, mode):
     value = None
     try:
         # One enclosing physical-root lock avoids self-deadlock on overlapping parents.
-        common = Path(os.path.commonpath([str(p.parent) for p in targets]))
+        common = Path(os.path.commonpath([str(_edit_root(p)) for p in targets]))
         with forge_roots.transaction(common, forge.STATE_DIR, 10):
             for target in targets:
-                reason = forge_roots.foreign_writer_reason(forge, '', root=target.parent)
+                reason = forge_roots.foreign_writer_reason(forge, '', root=_edit_root(target))
                 if reason:
                     return edit_batch.refused(files, 'Write not admitted while Forge owns this root: '+reason)
             with mutation_lock() as lock:

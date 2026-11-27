@@ -214,7 +214,7 @@ class Harness(unittest.TestCase):
         self.tree = Path(self.tmp.name)
         (self.tree / "memory" / "groups").mkdir(parents=True)
         self.agent = _Agent(self.tree)
-        self.desks = transport.Desks(self.tree, "Егор", "Hélène", memory_life=None,
+        self.desks = transport.Desks(self.tree, "Алекс", "Hélène", memory_life=None,
                                      agent_name="Мира")
         transport.install(self.agent, self.desks)
         self.saved = {k: getattr(runner, k) for k in
@@ -222,7 +222,7 @@ class Harness(unittest.TestCase):
                        "_deliver_unspoken", "_bot", "_speaker")}
         runner._tree, runner._desks, runner._desk = self.tree, self.desks, self.desks.default
         runner._agent, runner._life, runner._bot = self.agent, None, None
-        runner._agent_name, runner._deliver_unspoken, runner._speaker = "Мира", True, "Егор"
+        runner._agent_name, runner._deliver_unspoken, runner._speaker = "Мира", True, "Алекс"
 
     def tearDown(self):
         for k, v in self.saved.items():

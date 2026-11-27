@@ -1,6 +1,6 @@
 //! Что уже стоит на машине и какая память агентов на ней лежит (1.2, 27.09).
 //!
-//! Требование Егора к 1.2: «если при установке найдена память — мастер предлагает
+//! Требование владельца к 1.2: «если при установке найдена память — мастер предлагает
 //! продолжить с <имя> / выбрать из найденных / начать заново — предложение выбрать
 //! агента существующего (или агентов, лол)». До 1.2 мастер смотрел в одно место —
 //! запись в «Приложениях» (только HKCU и 64-битный вид HKLM) или папку по умолчанию, —
@@ -319,18 +319,18 @@ mod tests {
         std::fs::write(r.join("data").join("soul").join("SOUL.md"), "Я — Мира.").unwrap();
         std::fs::write(
             r.join("helene.json"),
-            r#"{"setup_complete":true,"agent":{"name":"Мира"},"owner":{"name":"Егор"},"installed":{"version":"1.1.1"}}"#,
+            r#"{"setup_complete":true,"agent":{"name":"Мира"},"owner":{"name":"владелец"},"installed":{"version":"1.1.1"}}"#,
         )
         .unwrap();
-        std::fs::create_dir_all(r.join("agents").join("jarvis")).unwrap();
-        std::fs::write(r.join("agents").join("jarvis").join("helene.json"), r#"{"agent":{"name":"Джарвис"}}"#).unwrap();
+        std::fs::create_dir_all(r.join("agents").join("atlas")).unwrap();
+        std::fs::write(r.join("agents").join("atlas").join("helene.json"), r#"{"agent":{"name":"Атлас"}}"#).unwrap();
         let f = look(&r, "", "user").expect("находка");
         assert_eq!(f.kind, "leftover");
         assert_eq!(f.agent, "Мира");
-        assert_eq!(f.owner, "Егор");
+        assert_eq!(f.owner, "владелец");
         assert_eq!(f.version, "1.1.1");
         assert!(!f.program);
-        assert_eq!(f.agents, vec!["Джарвис".to_string()]);
+        assert_eq!(f.agents, vec!["Атлас".to_string()]);
         assert!(!f.last.is_empty());
         let _ = std::fs::remove_dir_all(&r);
     }

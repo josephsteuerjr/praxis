@@ -1,3 +1,13 @@
+## 23.11.2026 — Praxis GLM effort and Telegram Mini App live
+
+Core 127e2f9f. Anthropic GLM-5.3 and GLM-5.4 receive medium as low, high as high and xhigh as max. Focused 89, two independent full Linux runs on the integrated revision (see gates.json for counts). SDK request bodies checked for create and stream. Private rollback tag rollback-praxis-phone-2311.
+
+Praxis Desk c117af84, package bd710c77. Home-screen PWA at /m/ with existing device pairing and stable manifest. Owner confirmed the Now screen from the old iPhone icon. Telegram Mini App previously accepted on the same phone. Editable TS and offline build in workspace/projects/praxis-phone; all 53 frontend files rebuilt inside the agent match HTTPS. Evidence in /opt/deploy-operator/praxis-phone-2311/.
+
+## 23.11.2026 — GLM-5.4 vision live
+
+Runtime b1d6536c, previous b367e97b. GLM-5.4 receives original images through Z.ai Anthropic Messages, including a sighted fallback after a separate description. When GLM-5.3 is selected, catalog discovery picks GLM-5.4 for a separate description and uses GLM-5.3-Flash on the older catalog. An explicit vision override retains precedence. Native image output was not observed on the raw Messages endpoint. In a live provider round trip, GLM-5.4 called generate_image, Codex returned a verified PNG, and GLM-5.4 recognized its contents. Voice stayed on gpt-6.2-sol. Both full gates ran 7440 tests with 19 skips; 124 focused tests passed. Core ready in 203.891 seconds. Operator evidence /opt/deploy-operator/praxis-glm54-2311 and rollback tag rollback-praxis-glm54-2311.
+
 ## CURRENT17 November2026 — Stop convergence and Forge history recovery live
 
 Runtime source 725a390f8efd90f947b48d2814903db70d26f050, app b69d03b34e724a4779e7d44bb38eb402527eae05, fast-forward from67111dfb/e52ce54.

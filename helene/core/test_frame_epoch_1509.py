@@ -75,7 +75,7 @@ class EpochStore(unittest.TestCase):
             self.assertTrue(frame_epoch.applies(room_ctx(owner=False, known=False)))
             # личка и свой ход — никогда
             self.assertFalse(frame_epoch.applies(agent.ChannelContext(
-                chat_id="809306689", room_id="809306689", is_dm=True, owner=True)))
+                chat_id="424242424", room_id="424242424", is_dm=True, owner=True)))
             self.assertFalse(frame_epoch.applies(own_ctx()))
         with mock.patch.dict(os.environ, {"PRAXIS_FRAME_EPOCH": "1", "PRAXIS_FRAME_EPOCH_ROOMS": "*"}):
             self.assertTrue(frame_epoch.applies(room_ctx(owner=False)))
@@ -423,7 +423,7 @@ class EpochDossiers(unittest.TestCase):
         # отфильтрованный корпус, что гость: реплика, сочинённая в этом ходе, публична.
         # Дважды за два дня приватный ярус утекал из групповых ходов владельца в текст.
         # 25.09: снятие — под рычагом PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=off (умолчание — on,
-        # см. следующий стенд): решение Егора оставить приватное в кадре комнаты.
+        # см. следующий стенд): решение владельца оставить приватное в кадре комнаты.
         with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "off"}):
             _p, _d, guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
             guest_epoch = frame_epoch.taken()[0]
@@ -442,7 +442,7 @@ class EpochDossiers(unittest.TestCase):
         self.assertIn("приватных записей снято 1", owner)
 
     def test_private_line_stays_in_the_shared_epoch_body_by_default(self):
-        # 25.09, решение Егора: в комнате приватные записи досье остаются в кадре как
+        # 25.09, решение владельца: в комнате приватные записи досье остаются в кадре как
         # внутреннее знание. Инвариант эпохи тот же — гость и владелец делят ОДНО
         # замороженное тело (reused, досье не в drift); приватного яруса нет ни у кого;
         # строка «передо мной» называет, что строки оставлены и вслух их не произносить.
@@ -467,8 +467,8 @@ class EpochDossiers(unittest.TestCase):
         # строка в теле, вейл-строки «снято N» нет.
         with mock.patch.dict(os.environ, LEVER):
             _p, _d, dm = frame_for(agent.ChannelContext(
-                chat_id="809306689", room_id="809306689", is_dm=True, owner=True,
-                principal_id="809306689", _scope_override="owner"))
+                chat_id="424242424", room_id="424242424", is_dm=True, owner=True,
+                principal_id="424242424", _scope_override="owner"))
             frame_epoch.taken()
         self.assertIn("развёлся", dm, "в личке владельца приватные строки едут телом досье")
         self.assertNotIn("приватных записей снято", dm)

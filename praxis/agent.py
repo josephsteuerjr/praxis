@@ -61,6 +61,8 @@ import computer_memory
 import context_envelope
 import desires
 import frame_continuation
+import dm_continuation
+import focus_interrupt
 import frame_dossiers
 import frame_epoch
 import epoch_repair
@@ -97,11 +99,14 @@ import notes
 import people
 import rails
 import resident_skills
+import self_wake_library
 import rooms
 import lessons
 import selfdev
 import selfgit
 import work_loop
+import hourly_continuity
+import social_pulse
 import work_store
 import promises
 import self_model
@@ -1421,7 +1426,7 @@ def _notices_block(*, mid_turn: bool = False) -> str:
     или выход адресован ему; иначе содержимое личек в блоке не печатается.
     """
     from core import notices as core_notices
-    if not core_notices.enabled():
+    if not core_notices.enabled() or focus_interrupt.active():
         return ""
     try:
         current = run_context.current_run()
@@ -3590,7 +3595,9 @@ def _target_is_stranger(resolved_id, target: str) -> bool:
 
 
 def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
-                     after_run: str = "") -> str:
+                     after_run: str = "", work_id: str = "",
+                     focus_note_id: str | None = None,
+                     after_forge_task: str = "", after_forge_agent: str = "") -> str:
     """Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет.
     kind: wake (разбудить себя СО СВЯЗЬЮ) | window (уйти в фокус; Telethon закрыт) |
     message (намерение сказать человеку к сроку; перед отправкой проснуться и решить заново) |
@@ -3716,16 +3723,45 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
         # приняли и не записали, — ровно то, что уже признавали неправильным (rails).
         tool_journal("[подмена вида] просила окно сразу за окном — наметила пробуждение: "
                      f"окно рвёт Telegram, а цель «{goal[:80]}» этого не требовала", salience=2)
+    after_forge = (after_forge_task, after_forge_agent) if after_forge_task or after_forge_agent else None
+    if work_id or focus_note_id is not None or after_forge:
+        # Explicit personal return only; source/room text cannot declare a work binding.
+        owner_id = _stable_numeric_principal(os.getenv("PRAXIS_OWNER_ID"))
+        if (not current_run_id or run_now.scope != "owner"
+                or not (run_now.principal_id == PRAXIS_SELF_PRINCIPAL
+                        or (owner_id and _stable_numeric_principal(run_now.principal_id) == owner_id))
+                or not work_id or kind not in {"wake", "window"} or recur
+                or _is_rest_goal(goal)):
+            return "[remind_self] Для возврата нужна личная работа, её точный ID и разовый будильник."
+        try:
+            row = work_store.card(work_id)
+            if not row or row.get("id") != work_id or row.get("status") in work_store.TERMINAL:
+                return "[remind_self] Эта карточка работы закрыта или недоступна."
+            if any(t.get("work_id") == work_id for t in tasks.list_open()):
+                return "[remind_self] У этой работы уже есть ожидающий будильник."
+            if after_forge:
+                import forge
+                if after_run or forge.observe_focus_child(row, *after_forge) is None:
+                    return "[remind_self] Нужен точный дочерний воркер этой работы; нельзя совмещать с after_run."
+            if focus_note_id is not None:
+                import work_focus
+                work_focus.bind_note(BASE, work_id, focus_note_id)
+        except (ValueError, OSError, work_store.WorkConflict):
+            return "[remind_self] Не удалось связать карточку с выбранной открытой общей запиской."
     t = tasks.add(kind, goal, when or None, target or None,
                   target_id=resolved_id, risky=risky, author="praxis",
                   after_run=after_run or None,
-                  swapped_from="window" if swapped else None)
+                  swapped_from="window" if swapped else None,
+                  **({"work_id": work_id} if work_id else {}),
+                  **({"after_forge": after_forge} if after_forge else {}))
     # Считаем ПОСЛЕ записи: фраза про темп включает и этот подъём, иначе число в ней на
     # единицу меньше того, что она про себя утверждает.
     crowded = _window_pace_note() if t["kind"] in ("window", "wake") else ""
     w = t["recur"] or t["when"] or "как можно скорее"
     if t.get("after_run"):
         w = f"когда завершится ран {t['after_run'][:12]}" + (f", затем {w}" if t.get("when") else "")
+    if after_forge:
+        w = f"после сохранённого результата {after_forge[0]}/{after_forge[1]}, не раньше {w}"
     note = (" Адресат мне незнаком — напишу как незнакомцу, от своего лица." if risky else "")
     if swapped:
         note += (" Я сейчас в окне, а окно сразу за окном — не возврат, а тот же момент с "
@@ -5420,11 +5456,12 @@ def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str 
                       model: str = "", result_sha256: str = "", disposition: str = "",
                       phase: str = "",success_criteria: list[str] | None = None,
                       payload_sha256: str = '',kind: str = 'payload',offset: int = 0,
-                      limit: int = 8000,after_seq: int = 0) -> str:
+                      limit: int = 8000,after_seq: int = 0,sources: list[dict] | None = None) -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
                        model=model, max_iters=max_iters, tail=tail,result_sha256=result_sha256,
                        disposition=disposition,phase=phase,success_criteria=success_criteria,
-                       payload_sha256=payload_sha256,kind=kind,offset=offset,limit=limit,after_seq=after_seq)
+                       payload_sha256=payload_sha256,kind=kind,offset=offset,limit=limit,after_seq=after_seq,
+                       **({'sources': sources} if sources is not None else {}))
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -5454,7 +5491,7 @@ def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_gen
 
 def tool_coding_review(task_id: str,action: str = 'status',**kwargs) -> str:
     import forge_review
-    return forge_review.command(task_id,action,**kwargs)
+    return forge_review.command(task_id,action,_execution=current_tool_execution(),**kwargs)
 
 
 def tool_coding_learn(task_id: str, action: str = "recall", query: str = "",
@@ -6752,7 +6789,7 @@ def _forge_task_receipt(task_id: str) -> dict:
         return {}
 
 
-def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
+def _receipt_for_outstanding(started: dict, *, run_id: str = "", call_id: str = "") -> tuple[str, dict] | None:
     """Собственная расписка незакрытого вызова -> (outcome, улика); None — улики нет.
 
     Только ПОЛОЖИТЕЛЬНАЯ улика. Отсутствие записи ничего не доказывает и молча
@@ -6760,6 +6797,10 @@ def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
     """
     tool = str(started.get("tool") or "")
     args = dict(started.get("args") or {})
+    if tool == "coding_review" and args.get("action") == "decide":
+        import forge_review
+        proof = forge_review.decision_receipt(run_id, call_id, args)
+        return ("completed", proof) if proof else None
     if tool == "coding_session" and str(args.get("action") or "").lower() == "finish":
         task_id = str(args.get("task_id") or "").strip()
         if not task_id:
@@ -6798,7 +6839,7 @@ def reconcile_in_doubt_from_receipts(*, run_ids=None) -> list[dict]:
         if run_ids is not None and run_id not in run_ids:
             continue
         for call_id, started in sorted(_outstanding_rows(run_id).items()):
-            found = _receipt_for_outstanding(started)
+            found = _receipt_for_outstanding(started, run_id=run_id, call_id=call_id)
             if found is None:
                 continue
             outcome, proof = found
@@ -7666,7 +7707,11 @@ REMIND_SELF_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "kind": {"type": "string", "enum": ["wake", "window", "email", "message", "note"]},
         "goal": {"type": "string"}, "when": {"type": "string"}, "target": {"type": "string"},
-        "after_run": {"type": "string"}},
+        "after_run": {"type": "string"},
+        "work_id": {"type": "string", "description": "Exact open work card ID for a one-shot return. wake keeps Telegram connected; window is a private retreat."},
+        "focus_note_id": {"type": "string", "description": "Optional open global authored note to link to this work; empty detaches it. Omission leaves the prior link alone."},
+        "after_forge_task": {"type": "string", "description": "Wait for a saved terminal result from one direct Forge child of the named work; supply both IDs. Not with after_run."},
+        "after_forge_agent": {"type": "string", "description": "Exact Forge child ID in after_forge_task. This is a new activation of the same work, not replay of a prior run."}},
         "required": ["kind", "goal"]},
 }
 
@@ -8456,7 +8501,7 @@ def second_look(brief: str) -> str:
             if resp.stop_reason == "tool_use":
                 blocks, results = [], []
                 for b in resp.blocks:
-                    if b["type"] == "text":
+                    if b["type"] == "text" or b["type"] in llm.SIGNED_THINKING_TYPES:
                         blocks.append(b)
                     elif b["type"] == "tool_use":
                         blocks.append(b)
@@ -8790,8 +8835,14 @@ def tool_task_control(action: str, summary: str = "", evidence: str = "",
     run_id = str(getattr(current, "run_id", "") or "")
     row = None
     try:
-        row = work_store.for_run(run_id) if run_id else None
+        bound_work_id = getattr(current, "work_id", "")
+        row = work_store.card(bound_work_id) if bound_work_id else (
+            work_store.for_run(run_id) if run_id else None)
+        if bound_work_id and (not row or row.get("status") in work_store.TERMINAL):
+            return _noted("refused", "[task_control] bound work was closed or is unavailable.")
     except Exception:
+        if getattr(current, "work_id", ""):
+            return _noted("refused", "[task_control] cannot read bound work.")
         log.warning("карточка работы не прочиталась [%s]", run_id, exc_info=True)
     if name == "done" and _work_dod_enabled():
         accepted, why = work_store.dod_verdict(row, evidence)
@@ -9326,17 +9377,6 @@ def tool_describe(name: str = "") -> str:
     return "\n\n".join(out)
 
 
-def _parse_call_args(args_json) -> dict:
-    if args_json in (None, ""):
-        return {}
-    if isinstance(args_json, dict):
-        return dict(args_json)
-    parsed = json.loads(str(args_json))
-    if not isinstance(parsed, dict):
-        raise ValueError("args_json должен быть JSON-объектом {…}")
-    return parsed
-
-
 def _unwrap_dispatch(block: dict) -> tuple[dict, bool, str | None]:
     """`call(name, args_json)` → блок внутренней руки, ДО durable-записи и воронки.
 
@@ -9359,7 +9399,7 @@ def _unwrap_dispatch(block: dict) -> tuple[dict, bool, str | None]:
     if not callable(TOOL_IMPL.get(inner)):
         return block, False, f"call: у руки «{inner}» нет исполнителя в этом ходе"
     try:
-        args = _parse_call_args(raw.get("args_json"))
+        args = tool_offerings.parse_call_args(raw.get("args_json"))
     except Exception as exc:
         return block, False, (f"call({inner}): аргументы не разобрались как JSON-объект — "
                               f"{type(exc).__name__}: {str(exc)[:120]}. Схема: describe({inner})")
@@ -10407,6 +10447,8 @@ def _persona_text() -> str:
                                       "\n\n---\n" + resident))
     else:
         frame_trace.absent("persona.resident_skills", "persona", "md", "empty")
+    parts.append(frame_trace.mark("persona.self_library", "persona", "md",
+                                  self_wake_library.render(BASE, SKILLS_DIR)))
     current_self = self_model.current_prompt(BASE)
     if current_self:
         parts.append(frame_trace.mark("persona.self_current", "persona", "md",
@@ -11160,7 +11202,7 @@ def _build_prompt_parts(
     # решение с другой ценой.
     # 06.08.2026: оба социальных тира сняты с АВТОМАТИЧЕСКОЙ подачи по её решению —
     # обоснование и её дословные слова в `_social_tiers_in_frame`. Руки целы.
-    if owner_audience and _social_tiers_in_frame():
+    if owner_audience and _social_tiers_in_frame() and not focus_interrupt.active():
         with pre_model_timing.span("old_context.digests"):
             digest = other_rooms_digest(exclude_chat_id=chat_id)
         if digest:
@@ -12329,6 +12371,13 @@ def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
     if name in owner_telegram_tools.NAMES:
         return owner_telegram_rpc.mutates(name, call_input)
+    if name == "coding_review":
+        import forge_review
+        try:
+            args = forge_review.validate_call(call_input)
+        except (TypeError, ValueError):
+            return True  # Invalid calls are refused before dispatch, not read/replayed.
+        return args.get("action", "status") not in ("", "status")
     action = call_input.get("action")
     if name == "proposal":
         return not (action in {"list", "diff"} or
@@ -12642,6 +12691,33 @@ def _durable_tool_output(name: str, call_input: dict, output: object) -> str:
     return _scrub_critical_text(text, _critical_secret_values(call_input))
 
 
+def _has_signed_thinking(blocks: list | tuple) -> bool:
+    return any(isinstance(b, dict) and b.get("type") in llm.SIGNED_THINKING_TYPES
+               for b in blocks)
+
+
+def _history_has_signed_thinking(messages: list[dict]) -> bool:
+    return any(_has_signed_thinking(m["content"]) for m in messages
+               if isinstance(m, dict) and isinstance(m.get("content"), list))
+
+
+def _signed_thinking_omitted(blocks: list | tuple, safe: list | tuple,
+                             *, messages: list[dict] | None = None) -> bool:
+    """Whether known-critical scrubbing made provider replay state incomplete."""
+    if len(blocks) != len(safe):
+        return True
+    secrets = _merged_secret_values(
+        _critical_secret_values_from_blocks(blocks),
+        _critical_secret_values_from_messages(messages or []),
+    )
+    if not secrets:
+        return False
+    return any(isinstance(original, dict) and isinstance(block, dict)
+               and original.get("type") in llm.SIGNED_THINKING_TYPES
+               and original != block
+               for original, block in zip(blocks, _scrub_critical_value(blocks, secrets)))
+
+
 def _durable_model_blocks(blocks: list | tuple, *,
                           secret_values: tuple[str, ...] = ()) -> list:
     raw = list(blocks or ())
@@ -12671,7 +12747,11 @@ def _durable_model_blocks(blocks: list | tuple, *,
         block["input"] = _durable_tool_input(
             str(raw_block.get("name") or ""), raw_block["input"],
         )
-    return safe
+    # Scrubbing a signed payload invalidates it. Privacy takes precedence over
+    # replay if a thinking block contains a known critical credential.
+    return [block for original, block in zip(raw, safe)
+            if not (isinstance(original, dict) and original.get("type") in llm.SIGNED_THINKING_TYPES
+                    and original != block)]
 
 
 def _durable_model_text(text: object, blocks: list | tuple, *,
@@ -12799,10 +12879,31 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
             frame_meta["keat_economy"] = keat_live.economy_measurement()
     pre_model_timing.mark(phase_timer, "canary")
     continuation_receipt = frame_continuation.receipt()
+    dm_measure = None
+    if getattr(current, "kind", None) == "chat_turn" and not prior_secrets:
+        if dm_continuation.active(_active_chat()) and provider_messages is messages:
+            try:
+                dm_measure = dm_continuation.measure(_active_chat(), system, messages, tools,
+                                                     [llm.role_model("voice"), llm._config_stamp()])
+                if dm_measure:
+                    continuation_receipt = dm_measure[1]
+            except Exception:
+                log.debug("DM continuation measurement unavailable", exc_info=False)
     if continuation_receipt is not None:
         frame_meta = dict(frame_meta or {}, frame_continuation=continuation_receipt)
     rollback_input = ({"frame_v6_live_system": _scrub_critical_value(live_system, prior_secrets)}
                       if served is not None and served["status"] == "served" else {})
+    # A scrubbed signed block in durable history makes later replay incomplete,
+    # even when this call's own output is clean.
+    input_signed_thinking_omitted = any(
+        isinstance(original, dict) and isinstance(safe, dict)
+        and isinstance(original.get("content"), list)
+        and isinstance(safe.get("content"), list)
+        and _signed_thinking_omitted(original["content"], safe["content"],
+                                     messages=provider_messages)
+        for original, safe in zip(
+            provider_messages, _durable_model_messages(provider_messages))
+    )
     if provider_messages is not messages:
         rollback_input["keat_economy_legacy_messages"] = _durable_model_messages(messages)
     if current is not None:
@@ -12823,9 +12924,12 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                 json.dumps({**rollback_input, **({"keat": keat_receipt} if keat_receipt is not None else {}),
                             "system": _scrub_critical_value(system, prior_secrets),
                             "messages": _durable_model_messages(provider_messages),
+                            "signed_thinking_omitted": input_signed_thinking_omitted,
                             "tools": _scrub_critical_value(tools or [], prior_secrets)},
                            ensure_ascii=False, indent=2, default=str),
-                call_id=call_id, name="model-input", inline_chars=512,
+                call_id=call_id, name="model-input",
+                inline_chars=0 if (_history_has_signed_thinking(messages)
+                                   or _history_has_signed_thinking(provider_messages)) else 512,
                 media_type="application/json; charset=utf-8", event_kind="model_input",
                 idempotent=True,
                 metadata=frame_meta,
@@ -12872,10 +12976,12 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                         json.dumps({
                             "system": _scrub_critical_value(system, prior_secrets),
                             "messages": _durable_model_messages(messages),
+                            "signed_thinking_omitted": input_signed_thinking_omitted,
                             "tools": _scrub_critical_value(tools or [], prior_secrets),
                             "reason": "keat_final_revocation",
                         }, ensure_ascii=False, indent=2, default=str),
-                        call_id=call_id, name="model-input-fallback", inline_chars=512,
+                        call_id=call_id, name="model-input-fallback",
+                        inline_chars=0 if _history_has_signed_thinking(messages) else 512,
                         media_type="application/json; charset=utf-8",
                         event_kind="model_input_fallback", idempotent=True,
                     )
@@ -12900,6 +13006,11 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
             response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
         frame_continuation.observe(system=system, messages=provider_messages,
                                    tools=tools, critical=bool(prior_secrets))
+        if dm_measure and provider_messages is messages:
+            try:
+                dm_continuation.accept(dm_measure[0])
+            except Exception:
+                log.warning("DM continuation checkpoint unavailable")
     except Exception as exc:
         if current is not None:
             try:
@@ -12922,6 +13033,12 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
             response_secrets = _merged_secret_values(
                 prior_secrets, _critical_secret_values_from_blocks(response_blocks),
             )
+            safe_blocks = _durable_model_blocks(
+                response_blocks, secret_values=response_secrets,
+            )
+            signed_thinking_omitted = _signed_thinking_omitted(
+                response_blocks, safe_blocks, messages=messages,
+            )
             _runs().store_result(
                 current.run_id,
                 json.dumps({
@@ -12930,9 +13047,8 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                         response_blocks,
                         messages=messages,
                     ),
-                    "blocks": _durable_model_blocks(
-                        response_blocks, secret_values=response_secrets,
-                    ),
+                    "blocks": safe_blocks,
+                    "signed_thinking_omitted": signed_thinking_omitted,
                     "stop_reason": _scrub_critical_text(
                         getattr(response, "stop_reason", ""), response_secrets),
                     "framework": _scrub_critical_text(
@@ -12945,7 +13061,8 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                     "usage": _scrub_critical_value(
                         dict(getattr(response, "usage", None) or {}), response_secrets),
                 }, ensure_ascii=False, indent=2, default=str),
-                call_id=call_id, name="model-output", inline_chars=512,
+                call_id=call_id, name="model-output",
+                inline_chars=0 if _has_signed_thinking(response_blocks) else 512,
                 media_type="application/json; charset=utf-8", event_kind="model_output",
                 idempotent=True,
             )
@@ -13039,7 +13156,9 @@ def _run_context_markdown(*, ctx: "ChannelContext", kind: str, goal: str,
 
 def _create_durable_run(*, ctx: "ChannelContext", kind: str, goal: str,
                         conversation: str, history: list[dict] | None = None,
-                        extra: str = "", run_id: str = "") -> run_context.RunContext:
+                        extra: str = "", run_id: str = "",
+                        hourly_pulse_id: str = "", work_id: str = "",
+                        work_alarm_id: str = "") -> run_context.RunContext:
     principal = (PRAXIS_SELF_PRINCIPAL if ctx.praxis_self
                  else _stable_numeric_principal(ctx.principal_id) or "unknown")
     try:
@@ -13053,6 +13172,8 @@ def _create_durable_run(*, ctx: "ChannelContext", kind: str, goal: str,
             delivery_chat_id=ctx.chat_id,
             model_profile="voice",
             run_id=run_id,
+            hourly_pulse_id=hourly_pulse_id,
+            work_id=work_id, work_alarm_id=work_alarm_id,
         )
         persisted = _runs().create(
             created,
@@ -13333,10 +13454,12 @@ def _run_recap_markdown(run_id: str, *, outcome: str, final_text: str = "",
 
 def _finish_durable_run(run_id: str, status: str, *, final_text: str = "",
                         reason: str = "", details: dict | None = None,
-                        strict: bool = False) -> bool:
+                        strict: bool = False, respect_controls: bool = False) -> bool:
     try:
         manifest = _runs().manifest(run_id)
         before = str(manifest.get("status") or "")
+        if respect_controls and before in {"paused", "cancelled", "in_doubt"}:
+            return False  # keep the control owner and its checkpoint
         if before in run_manager.TERMINAL_STATUSES and before != status:
             raise run_manager.InvalidTransition(f"{run_id}: already terminal as {before}")
         recap = manifest.get("recap") or {}
@@ -13356,6 +13479,16 @@ def _finish_durable_run(run_id: str, status: str, *, final_text: str = "",
                     f"{run_id}: cannot become {status} with outstanding tool calls: "
                     + ", ".join(sorted(outstanding))
                 )
+        context = manifest.get("context") or {}
+        hourly_self = bool(context.get("hourly_pulse_id") and run_resume.is_hourly_self_run(
+            run_context.RunContext.from_dict(context)))
+        if (status == "done" and before == "running" and hourly_self
+                and not (details or {}).get("task_control") and work_loop.finished(run_id)):
+            action, _, note = work_loop.finish_note(run_id).partition(": ")
+            if action in work_loop.CLOSING_ACTIONS and not _core_secrets.credential_floor(note):
+                details = {**(details or {}), "hourly_end_turn": {
+                    "action": action, "note": note[:240],
+                }}
         recap_markdown = ""
         if status in run_manager.TERMINAL_STATUSES:
             note_ledger = authored_notes.AuthoredNoteLedger(BASE)
@@ -13369,7 +13502,16 @@ def _finish_durable_run(run_id: str, status: str, *, final_text: str = "",
         elif before not in run_manager.TERMINAL_STATUSES:
             _runs().transition(run_id, status, expected=before, reason=reason, details=details)
         if status in run_manager.TERMINAL_STATUSES:
-            _runs().write_recap(run_id, recap_markdown, promote=True)
+            try:
+                _runs().write_recap(run_id, recap_markdown, promote=True)
+            except Exception:
+                if not (hourly_self and before == "running" and status == "done"
+                        and ((details or {}).get("task_control") or (details or {}).get("hourly_end_turn"))):
+                    raise
+                # The exact transition already carries her accepted word. RECAP
+                # recovery owns this separate projection failure; do not turn the
+                # committed hourly closure into a failed pulse.
+                log.warning("hourly closure committed; RECAP deferred [%s]", run_id, exc_info=True)
             # Слот рабочего хода живёт ровно столько, сколько живёт прогон. Без парного
             # release словарь `work_loop` тёк бы вечно: раньше состояние умирало вместе с
             # контекстом само, теперь оно наше и убирать его нам.
@@ -15236,10 +15378,11 @@ class _AgentResumeRuntime:
                     f"uncertain side effect in {name}"
                     + ("" if tool_error is not None else " (hand ceiling expired)"),
                 ) from tool_error
+            metadata = _tool_result_metadata(outbound_before, execution, tool_error, expired)
             result_ref = self.manager.store_result(
                 current.run_id, output_text, call_id=call_id, name=name,
                 inline_chars=context_policy.inline_chars(), idempotent=True,
-                metadata=_tool_result_metadata(outbound_before, execution, tool_error, expired),
+                metadata=metadata,
             )
             images = tuple(dict(image) for image in getattr(output, 'images', ()))
             self.tool_trace.append(_tool_trace_line(name, call_input, output))
@@ -15678,24 +15821,30 @@ class _AgentResumeRuntime:
         self, request: run_executor.CheckpointControlRequest,
     ) -> dict:
         checkpoint = dict(request.checkpoint or {})
-        with self.bind():
+        with self.bind() as current:
             work_loop.restore(checkpoint.get("work_loop"))
+            _run_status_gate(phase="before landing checkpointed closing word")
             control = work_loop.taken(self.plan.run_id)
-            if not control:
-                raise DurableExecutionError(
-                    "checkpoint_control has no accepted work-loop word")
-            status, reason, details = work_loop.closing(control)
+            if control:
+                status, reason, details = work_loop.closing(control)
+            elif run_resume.is_hourly_self_run(current) and work_loop.finished(self.plan.run_id):
+                status, reason, details = "done", "hourly window closed by her explicit end_turn", {}
+            else:
+                raise DurableExecutionError("checkpoint_control has no accepted closing word")
             final_text = _recovered_authored_text(self.plan.run_id)[0]
             _finish_durable_run(
                 self.plan.run_id, status, final_text=final_text,
                 reason=reason, details=details, strict=True,
             )
-        return {"run_status": status, "task_control": dict(control)}
+        return {"run_status": status, **({"task_control": dict(control)} if control else {})}
 
     def continue_checkpoint(
         self, request: run_executor.CheckpointContinuationRequest,
     ) -> dict:
         checkpoint = dict(request.checkpoint or {})
+        if checkpoint.get("signed_thinking_omitted") is True:
+            raise DurableExecutionError(
+                "signed thinking was omitted from durable checkpoint; exact provider replay refused")
         work_state = checkpoint.get("work_loop")
         with self.bind():
             # Новый budget остаётся снимком среды текущего процесса; checkpoint держит
@@ -15756,11 +15905,31 @@ class _AgentResumeRuntime:
         blocks.extend(images)
         return blocks
 
+    def _restore_hourly_response_words(self, request: run_executor.ToolResponseContinuationRequest) -> bool:
+        """Restore only closing words proved by the completed tool batch."""
+        if not run_resume.is_hourly_self_run(request.context) or self.outbound:
+            return False
+        work_loop.restore((request.checkpoint or {}).get("work_loop"))
+        words = self.plan.hourly_closing_words
+        if any(resolution.source != "durable_result_ref" for resolution in request.resolutions):
+            # A newly run bridge can accept a nested hand. The parent callback cannot
+            # attest to that word; prove the whole batch from durable receipts instead.
+            words = run_resume.prove_live_hourly_batch(
+                self.manager, self.plan, outbound_roots=[_media_spool().root],
+            )
+        state = {**work_loop.snapshot(), **run_resume.hourly_closing_slots(words)}
+        work_loop.restore(state)
+        return bool(state["control"] or state["finished"])
+
     def continue_tool_response(
         self, request: run_executor.ToolResponseContinuationRequest,
     ) -> dict:
         model_input = request.model_input
         model_output = request.model_output
+        if (model_input.get("signed_thinking_omitted") is True
+                or model_output.get("signed_thinking_omitted") is True):
+            raise DurableExecutionError(
+                "signed thinking was omitted from durable model state; exact provider replay refused")
         if (not isinstance(model_input.get("messages"), list)
                 or not isinstance(model_input.get("tools"), list)
                 or "system" not in model_input
@@ -15796,11 +15965,22 @@ class _AgentResumeRuntime:
             # вовсе. Явное «этот кадр собран не здесь»: молча не иметь следа законно,
             # подсунуть ему чужой — катастрофа.
             frame_trace.clear()
+            accepted_hourly_word = self._restore_hourly_response_words(request)
             _persist_tool_loop_checkpoint(
                 current=run_context.current_run(), iteration=completed_iteration,
                 system=copy.deepcopy(frame_serve.resume_system(model_input)), messages=messages,
                 tools=copy.deepcopy(model_input["tools"]),
             )
+            if accepted_hourly_word:
+                _run_status_gate(phase="after recovered tool-loop checkpoint")
+                landed = self._land_addressee_free_work_control("")
+                if landed is not None:
+                    return landed
+                _finish_durable_run(
+                    self.plan.run_id, "done", reason="hourly window closed by her explicit end_turn",
+                    strict=True,
+                )
+                return {"run_status": "done"}
             reply = _terminal_tool_loop(
                 system=copy.deepcopy(frame_serve.resume_system(model_input)), messages=messages,
                 tools=copy.deepcopy(model_input["tools"]), max_iters=None,
@@ -17211,7 +17391,8 @@ class _AgentHandRuntime(_AgentResumeRuntime):
             return {'status': 'refused', 'message': 'This hand is not in the current turn catalogue.'}
         if not callable(TOOL_IMPL.get(name)):
             return {'status': 'refused', 'message': 'This hand has no live implementation.'}
-        args = {k: v for k, v in args.items() if v is not None}
+        if name != 'coding_review':
+            args = {k: v for k, v in args.items() if v is not None}
         forwarded = hand_bridge.peer() or {}
         script = forwarded.get('script')
         if script is not None:
@@ -17397,6 +17578,9 @@ def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     # remember без fact → run in_doubt 02.10 21:17). Проверяем привязку по сигнатуре
     # до исполнения и отвечаем текстом починки, а не исключением.
     try:
+        if name == "coding_review":
+            import forge_review
+            call_input = forge_review.validate_call(call_input)
         inspect.signature(impl).bind(**call_input)
     except (TypeError, ValueError) as exc:
         log.warning("call %s: аргументы не привязались к сигнатуре: %s", name, exc)
@@ -17584,9 +17768,18 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
         return
     outbound = [dict(item) for item in _tool_outbound_snapshot()]
     secrets = _critical_secret_values_from_messages(messages)
+    safe_messages = _durable_model_messages(messages)
+    signed_thinking_omitted = any(
+        isinstance(message, dict) and isinstance(safe_message, dict)
+        and isinstance(message.get("content"), list)
+        and isinstance(safe_message.get("content"), list)
+        and _signed_thinking_omitted(message["content"], safe_message["content"], messages=messages)
+        for message, safe_message in zip(messages, safe_messages)
+    )
     payload = json.dumps({
         "schema": "praxis.tool-loop-checkpoint.v1",
         "iteration": int(iteration),
+        "signed_thinking_omitted": signed_thinking_omitted,
         # 02.08: близнец той же ошибки, что в `_model_call`, и он опаснее. Отсюда
         # `run_executor` восстанавливает прерванный тул-цикл ПОСЛЕ ПЕРЕЗАПУСКА
         # контейнера (`system=copy.deepcopy(checkpoint["system"])`), поэтому пока здесь
@@ -17594,7 +17787,7 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
         # каждом возобновлении — даже когда живой путь уже был починен. Соседние
         # `messages`/`tools`/`outbound` всё это время шли структурно.
         "system": _scrub_critical_value(system, secrets),
-        "messages": _durable_model_messages(messages),
+        "messages": safe_messages,
         "tools": _scrub_critical_value(tools, secrets),
         "outbound": _scrub_critical_value(outbound, secrets),
         "work_loop": work_loop.snapshot(),
@@ -17603,7 +17796,8 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
         _runs().store_result(
             current.run_id, payload,
             call_id=f"checkpoint-{uuid.uuid4().hex}", name="tool-loop-checkpoint",
-            inline_chars=256, media_type="application/json; charset=utf-8",
+            inline_chars=0 if _history_has_signed_thinking(messages) else 256,
+            media_type="application/json; charset=utf-8",
             event_kind="run_checkpoint",
         )
     except Exception as exc:
@@ -17855,6 +18049,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     # восстанавливается без разбора строк.
     hands = 0
     while max_iters is None or iteration < max(0, int(max_iters)):
+        if focus_interrupt.active():
+            focus_interrupt.checkpoint(run_context.current_run(), iteration)
         _run_status_gate(phase="before model step")
         iteration += 1
         # Номер поворота — в след вызова. Внутри цикла префикс растёт монотонно, значит
@@ -17879,6 +18075,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 raise RunStopped(current.run_id, target, reason)
             raise DurableExecutionError(reason)
         if resp.stop_reason != "tool_use":
+            if focus_interrupt.active():
+                focus_interrupt.checkpoint(run_context.current_run(), iteration)
             _run_status_gate(phase="after terminal model step")
             reply = _durable_model_text(
                 resp.text, list(getattr(resp, "blocks", None) or ()),
@@ -17912,7 +18110,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
         assistant_blocks, tool_results = [], []
         loop_notes: list[str] = []
         for b in resp.blocks:
-            if b["type"] == "text":
+            if b["type"] == "text" or b["type"] in llm.SIGNED_THINKING_TYPES:
                 assistant_blocks.append(b)
                 continue
             if b["type"] != "tool_use":
@@ -17958,7 +18156,10 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 continue
             # OpenAI strict mode emits explicit null for optional fields.  Tool functions own
             # their defaults, so nulls are removed on every provider path.
-            call_input = {k: v for k, v in b["input"].items() if v is not None}
+            # Review dispatch normalizes known optional nulls after rejecting
+            # malformed required fields and unknown keywords.
+            call_input = (dict(b["input"]) if b["name"] == "coding_review" else
+                          {k: v for k, v in b["input"].items() if v is not None})
             current = run_context.current_run()
             _run_status_gate(phase=f"before tool {b['name']}")
             side_effect = _tool_has_side_effect(b["name"], call_input)
@@ -18036,12 +18237,12 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     current.run_id, "paused",
                     f"stable {b['name']} intent is pending transport acceptance",
                 ) from tool_error
-            if tool_error is not None and current is not None and side_effect and not idempotency_key:
-                # The implementation may have crossed an external boundary
-                # before raising.  Preserve the error as evidence, but do NOT
-                # emit a normal tool outcome: ``tool_result``/``tool_failed``
-                # would close the ledger call and make explicit in-doubt
-                # reconciliation impossible.
+            expired = isinstance(out, ToolCeilingExpired)
+            if (tool_error is not None or expired) and current is not None and side_effect and not idempotency_key:
+                # The implementation may still be running after the ceiling or
+                # may have crossed an external boundary before raising. Preserve
+                # the evidence without closing the call with a normal outcome,
+                # so it remains available for explicit in-doubt reconciliation.
                 try:
                     _runs().store_result(
                         current.run_id, out_text, call_id=call_id,
@@ -18056,28 +18257,33 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 try:
                     before = str(_runs().manifest(current.run_id).get("status") or "")
                     if before == "running":
-                        safe_error = _durable_tool_output(
-                            b["name"], call_input,
-                            f"{type(tool_error).__name__}: {tool_error}",
-                        )
+                        if tool_error is not None:
+                            safe_error = _durable_tool_output(
+                                b["name"], call_input,
+                                f"{type(tool_error).__name__}: {tool_error}",
+                            )
+                            reason = (f"tool {b['name']} raised after an uncertain side effect: "
+                                      f"{safe_error}")
+                        else:
+                            reason = (f"tool {b['name']} did not return within its "
+                                      f"{int(TOOL_CEILING_SEC)}s ceiling; the call may still be "
+                                      f"running, so its side effect is unknown")
                         _runs().transition(
-                            current.run_id, "in_doubt", expected="running",
-                            reason=(f"tool {b['name']} raised after an uncertain side effect: "
-                                    f"{safe_error}"),
+                            current.run_id, "in_doubt", expected="running", reason=reason,
                             details={"call_id": call_id, "tool": b["name"]},
                         )
                 finally:
                     raise RunStopped(
                         current.run_id, "in_doubt",
-                        f"uncertain side effect in {b['name']}",
+                        f"uncertain side effect in {b['name']}"
+                        + ("" if tool_error is not None else " (hand ceiling expired)"),
                     ) from tool_error
             if current is not None:
                 try:
                     ref = _runs().store_result(
                         current.run_id, out_text, call_id=call_id, name=b["name"],
                         inline_chars=context_policy.inline_chars(), idempotent=True,
-                        metadata=_tool_result_metadata(
-                            outbound_before, execution, tool_error, isinstance(out, ToolCeilingExpired)),
+                        metadata=_tool_result_metadata(outbound_before, execution, tool_error, expired),
                     )
                     model_text = _result_for_model(ref)
                 except Exception as exc:
@@ -18129,6 +18335,9 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             system=system, messages=messages, tools=tools,
         )
         _run_status_gate(phase="after tool-loop checkpoint")
+        if focus_interrupt.active() and (work_loop.taken() or work_loop.finished()):
+            focus_interrupt.checkpoint(run_context.current_run(), iteration)
+            _run_status_gate(phase="after owner interrupt")
         # Её слово о конце хода не ждёт следующей реплики: сказала `task_control` — цикл
         # выходит здесь же, а не тратит ещё один вызов модели на «ну всё, готово».
         control = work_loop.taken()
@@ -18253,7 +18462,8 @@ def _voice_impl(
     # A selected epoch is already a complete frozen conversation. Legacy turn
     # windows must not slide it again after the runner's source selection.
     epoch_history = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
-    selected_history = history if epoch_history else history[-HISTORY_TURNS:]
+    complete_history = epoch_history or (ctx.is_dm and dm_continuation.active(ctx.chat_id))
+    selected_history = history if complete_history else history[-HISTORY_TURNS:]
     # Issue only the delivered original; history has opaque references, not lookup.
     capture_state = _KEAT_CAPTURE_STATE.get()
     if capture_state is _KEAT_CAPTURE_UNSET and _KEAT_ORIGINAL_INGRESS.get():
@@ -18267,12 +18477,12 @@ def _voice_impl(
         try:
             sidecar = _KEAT_PROJECTION.get()
             projection = dict(
-                history=(sidecar['history'] if epoch_history else sidecar['history'][-HISTORY_TURNS:]),
+                history=(sidecar['history'] if complete_history else sidecar['history'][-HISTORY_TURNS:]),
                 current=sidecar['current'],
             )
             if 'projection_history' in sidecar:
                 projection.update(
-                    projection_history=(sidecar['projection_history'] if epoch_history else sidecar['projection_history'][-HISTORY_TURNS:]),
+                    projection_history=(sidecar['projection_history'] if complete_history else sidecar['projection_history'][-HISTORY_TURNS:]),
                     projection_current=sidecar['projection_current'],
                 )
             capture_state = keat_live.adopt_projection(
@@ -18326,7 +18536,7 @@ def _voice_impl(
     # здесь, где обе величины ещё видны: `history` — всё, что дал источник, срез — то, что
     # вправду уедет. Число тиров на этот вопрос не отвечает и отвечать не имеет права.
     frame_layout.stash(tape_delivered=len(selected_history),
-                       tape_available=len(history), tape_limit=(0 if epoch_history else HISTORY_TURNS),
+                       tape_available=len(history), tape_limit=(0 if complete_history else HISTORY_TURNS),
                        tape_source=("ролевая лента разговора" if history else ""))
     # Пятая зона кадра. Строится ЗДЕСЬ: только отсюда видно, есть ли у неё дом (конверт
     # evidence) и предложены ли руки — от второго зависит, вправе ли прибор сказать «последней».
@@ -20245,7 +20455,10 @@ def wake_turn(goal: str = "", *, on_run=None, source_id=None,
 
 
 def task_window(goal: str = "", *, mailbox_index: str | None = None,
-                transport: str = "closed_for_window", on_run=None) -> str:
+                transport: str = "closed_for_window", on_run=None,
+                hourly: social_pulse.HourlyWindow | None = None,
+                work_id: str = "", assigned_run_id: str = "",
+                focus_result: dict | None = None, work_alarm_id: str = "") -> str:
     """Длинный run её работы над собой; на время окна раннер закрывает Telethon (B2). -> '' обычно.
 
     PASS 8.5: цель с префиксом «код:» — КОДИНГ-окно: рабочая рамка полного цикла заказа
@@ -20261,10 +20474,17 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
     уединение в них смысл, а не побочность."""
     global _CURRENT_CHAT, _CURRENT_HISTORY
     if not llm.configured():
+        if hourly is not None:
+            raise DurableExecutionError("hourly window has no configured model")
         return ""
+    if hourly is not None and (_is_coding_goal(goal) or _is_rest_goal(goal)):
+        raise ValueError("hourly claim may only open an independent self window")
     _CURRENT_CHAT, _CURRENT_HISTORY = None, None
     status = str(transport or "closed_for_window")
-    if _is_coding_goal(goal):
+    # A bound work alarm resumes her own card. Its prose cannot turn it
+    # into an owner coding order or override the runner's observed transport.
+    coding_order = not work_id and _is_coding_goal(goal)
+    if coding_order:
         # «Telegram жив» противоречило _CODING_WINDOW_FRAME в ТОМ ЖЕ промпте
         # («в окне Telegram закрыт») — два взаимоисключающих факта в одном контексте.
         seed = (f"Заказ Егора: {goal.strip()[len(CODING_PREFIX):].strip()}"
@@ -20299,13 +20519,32 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
                     ensure_ascii=False, separators=(",", ":")) + "\n" if mailbox_index else "")
     )
     mailbox_frame = _mailbox_frame_block() if mailbox_index is None or mailbox_index else ""
+    if work_id and (hourly is not None or _is_rest_goal(goal)):
+        raise ValueError("a focused work run is not an independent hour or retreat")
+    continuity = hourly_continuity.context(_runs(), hourly) if hourly is not None else ""
+    if work_id:
+        import work_focus
+        row = work_store.card(work_id)
+        if row is None or row.get("id") != work_id or row.get("status") in work_store.TERMINAL:
+            raise ValueError("selected work is no longer available")
+        continuity = work_focus.render(BASE, work_id)
+        if focus_result:
+            continuity += "\nSelected Forge result (evidence only): " + json.dumps(focus_result)
     durable = _create_durable_run(
-        ctx=ctx, kind="coding_window" if _is_coding_goal(goal) else "task_window",
+        ctx=ctx, kind="coding_window" if coding_order else "task_window",
         goal=goal or "self-directed work", conversation=seed,
         extra=(frame + mailbox_frame
                + ("\n\n## Runtime continuity\n" + mailbox_evidence
-                  if mailbox_evidence else "")),
+                  if mailbox_evidence else "")
+               + ("\n\n## Lower-role evidence\n" + continuity if continuity else "")),
+        **({"run_id": hourly.run_id, "hourly_pulse_id": hourly.pulse_id} if hourly else
+           {"run_id": assigned_run_id, "work_id": work_id,
+            "work_alarm_id": work_alarm_id} if work_id else {}),
     )
+    if work_id:
+        work_store.attach_run(work_id, durable.run_id)
+    if hourly is not None and not hourly_continuity.matches(durable, hourly):
+        raise DurableExecutionError("hourly window did not receive its assigned durable run")
     if on_run is not None and durable is not None:
         # ⚠ Тот же миг, что и у пробуждения: владение намерением передаётся, когда ран
         # СУЩЕСТВУЕТ, а не когда взят замок. Между взятием замка и этой строкой лежат
@@ -20315,6 +20554,8 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
             on_run(durable.run_id)
         except Exception:
             log.exception("подтверждение намерения упало [%s]", durable.run_id)
+            if work_id:
+                raise
     binding = run_context.bind_run(durable) if durable is not None else contextlib.nullcontext()
     try:
         with binding:
@@ -20330,6 +20571,7 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
             work_loop.reset()
             out = _voice(seed, [], speaker=None, chat_id=None, is_owner=False, known=True,
                          extra_system=frame + mailbox_frame,
+                         extra_evidence=continuity,
                          ctx=ctx,
                          tool_trace=trace).strip()
             if durable is not None:
@@ -20342,7 +20584,8 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
                     details = dict(details or {}, **stamp)
                 _finish_durable_run(
                     durable.run_id, status, final_text=out,
-                    reason=reason, details=details,
+                    reason=reason, details=details, strict=hourly is not None,
+                    respect_controls=bool(work_id),
                 )
     except Exception as exc:
         log.warning("task_window упал", exc_info=True)
@@ -20351,9 +20594,12 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
                 durable.run_id, "failed",
                 reason=f"{type(exc).__name__}: {exc}",
                 details={"blind_identity_load": blind_snapshot} if blind_load else None,
+                respect_controls=bool(work_id),
             )
         turn["tools"], turn["held"] = trace, "error"
         turns.record(turn)
+        if hourly is not None:
+            raise
         return ""
     turn["tools"], turn["out"] = trace, out
     turns.record(turn)

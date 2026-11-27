@@ -1,0 +1,2 @@
+# Адрес своего сервера — рядом с программой, а не в исходнике (образец: electron/server.example.json).
+electron/server.json

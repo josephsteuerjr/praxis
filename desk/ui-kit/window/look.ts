@@ -1,5 +1,5 @@
 import { t as uiText } from "../../lang/lang";
-// «Вид» — облик и физика окна на выбор владельца (Егор 28.09: «добавить в настройки
+// «Вид» — облик и физика окна на выбор владельца (владелец 28.09: «добавить в настройки
 // визуала и всю палитру цветов фона… и базовые настройки физики (несколько вариантов)»;
 // ползунков — нет, «мне не нужно 12 ползунков»: только варианты).
 //
@@ -19,7 +19,7 @@ interface Choice { id: string; name: string }
 interface Paper extends Choice { color: string }
 interface Accent extends Choice { fill: string; inkDay: string; inkNight: string }
 
-/** Бумага днём: тон фона. Первый — референс Егора (`design-refs-2809/cat-paws.jpg`). */
+/** Бумага днём: тон фона. Первый — референс владельца (`design-refs-2809/cat-paws.jpg`). */
 export const PAPER_DAY: Paper[] = [
   { id: "warm", get name() { return uiText("ui.ui.kit.window.look.6938395185"); }, color: "#f4e4cf" },
   { id: "light", get name() { return uiText("ui.ui.kit.window.look.ac7e899bd3"); }, color: "#f8eee0" },

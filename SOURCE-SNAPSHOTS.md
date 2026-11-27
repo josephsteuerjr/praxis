@@ -1,12 +1,18 @@
 # Source and package bindings
 
-## Hélène 2.8.13 source base
+## Hélène 3.0.0 source base
 
-The immutable `v2.8.13` tag at
-`a636c85d331040b9f39c4b518863d1d449e893d1` identifies the latest all-platform
+The immutable `v3.0.0` tag at
+`043372658d5663a373e5730b6db3f77e3835188b` identifies the latest all-platform
 release. Shipped per-platform inventories bind its qualified composition.
 This main sync incorporates that already-public history and then the newer
 cloud source below. It does not redefine the shipped desktop composition.
+
+## Hélène 2.8.14 source base
+
+The immutable `v2.8.14` tag at
+`389a1726a3a5559a56bc3c1282c2e2d3e28fc326` identifies an all-platform
+release. Shipped per-platform inventories bind its qualified composition.
 
 ## Hélène 2.8.12 source base
 
@@ -45,16 +51,27 @@ beyond that frozen desktop code.
 ## Current cloud Praxis mirror
 
 `praxis/` mirrors the selected public code of running cloud Praxis at
-`140e5719a8a87d3d145eec91e2cbb69a8bad1fc7`. [CORE-SOURCE.json](CORE-SOURCE.json) binds
-804 files and their executable modes. The engine adds an independent
-Telegram client for the owner's account with named tools and wake rules.
-The final core passed two full Linux gates before deployment, each with 7,372 tests,
-19 skips and zero failures.
+`583e0b38a4697b95c701f731fe93d5e4ac085a38`. [CORE-SOURCE.json](CORE-SOURCE.json) binds
+821 files and their executable modes. Since the previous binding (20 November) the
+engine rewrote its chat-buffer store, gained a speed line for Fast and Ultrafast relay
+models with per-role service tiers, keeps the owner conversation available while a
+coding task holds focus, scopes Forge prompt caches per unit, settles refused Forge
+reviews without leaving her turns in doubt, routes native images to GLM-5.4 and maps
+Kimi K3.1 Pro effort. Her own rollout records name two full Linux gates of the
+23 November core (7,438 and 7,440 tests, 19 skips, zero failures each) and targeted
+gates for the 26 November model-routing changes. The sync itself ran no tests.
 
-`remote/praxis-desk/` mirrors app source `4f2ddd50df869c0c6b668b00736f49909b68dd66`.
-The MiniApp/PWA controls the owner's Telegram service and shows its tool receipts.
-All 21 deployed backend files equal this source after line-ending normalization,
-and the deployed frontend was built from the same commit.
+`remote/praxis-desk/` mirrors the deployed server app. All 22 deployed backend files
+equal this source after line-ending normalization; the 46 MiniApp and PWA files equal
+the 20 November capture (source `4f2ddd50df869c0c6b668b00736f49909b68dd66`) byte for byte, and the recipe
+is unchanged. Since that capture the backend gained the speed line of the supervision
+service, a faster Forge reader for the task list and the read-only journal reader of
+the desktop window (`/api/window/*`).
+
+`desk/praxis-window/` is the desktop window for Windows, added with this sync: an
+Electron shell, a page built from the phone UI kit of `remote/praxis-desk/`, and an
+optional SSH-tunnel proxy for networks without direct access to the server. The
+owner's server address is not part of the source.
 
 The cloud mirror retains its public templates and Hélène-origin files.
 Two existing comment and docstring sanitizations preserve the executable AST.

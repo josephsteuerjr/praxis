@@ -1,4 +1,7 @@
 {
+  "update.ready.restart": "La mise à jour {version} est prête. Cliquez pour redémarrer avec le nouveau code. Pour conserver vos modifications, choisissez la mise à jour avec revue dans les paramètres.",
+  "update.ready.preserve": "Conserver les modifications…",
+  "update.auto.prepare": "Télécharger et décompresser automatiquement les mises à jour",
   "setup.typewriter.next_finish": "Tout afficher",
   "setup.typewriter.next": "Suivant",
   "setup.name.title": "Comment nommer l'agent ?",
@@ -4375,7 +4378,7 @@
   "connections.tray_alive": "Tray Bridge répond et laisse passer le HTTPS.",
   "connections.tray_absent": "Mais rien n’écoute sur 127.0.0.1:8888 pour l’instant : lance Tray Bridge ou configure le pont serveur ci-dessous.",
   "connections.tray_not_proxy": "Quelque chose répond sur 127.0.0.1:8888, mais le HTTPS ne passe pas. Vérifiez Tray Bridge.",
-  "network.intro": "Telegram et le relais ChatGPT accèdent chacun à Internet par leur propre itinéraire. Ajoutez d’abord une source de proxy, puis choisissez qui passe par elle.",
+  "network.intro": "Choisissez la connexion de Telegram, du relais ChatGPT et de la recherche web séparément. Par défaut, la recherche web utilise une connexion directe.",
   "network.sources.title": "① D’où vient le proxy",
   "network.sources.external": "Un programme externe comme Tray Bridge ou un VPN fournit le proxy ? Alors aucun pont n’est nécessaire : choisissez « Proxy personnalisé » ci-dessous.",
   "network.routes.title": "② Qui passe par lui",
@@ -4403,5 +4406,17 @@
   "bridge.unused": "Rien ne passe encore par lui : choisissez-le ci-dessous, dans « Qui passe par lui ».",
   "bridge.ready": "Le pont sert {p0}. Ci-dessous, dans « Qui passe par lui », choisissez-le pour Telegram, le relais ou les deux, puis enregistrez les réglages.",
   "bridge.apply": "Appliquer",
-  "bridge.applied.relay": "L’itinéraire du relais est enregistré : le relais le prend en compte de lui-même, sans redémarrage."
+  "bridge.applied.relay": "L’itinéraire du relais est enregistré : le relais le prend en compte de lui-même, sans redémarrage.",
+  "server.return.private_copy_failed": "Impossible de créer une copie indépendante du code. Vérifiez les liens et les droits sur le dossier.",
+  "server.return.review_again": "Pour modifier le code partagé, arrêtez tous les agents avec Stop et vérifiez de nouveau la liste des profils.",
+  "server.return.private_ready": "La mémoire, le code et les projets ont été rapatriés. Vous pouvez démarrer cet agent.",
+  "server.return.global_stop": "Tous les agents sont arrêtés. Utilisez les commandes de l’installation pour reprendre.",
+  "server.return.private_choice": "Ces profils utilisent aussi ce code : {agents}. Par défaut, les modifications sont rapatriées dans une copie propre à cet agent.",
+  "server.return.shared_choice": "Appliquer les modifications au code partagé par les profils indiqués (nécessite l’arrêt de tous les agents)",
+  "server.return.resume": "Démarrer l’agent rapatrié",
+  "server.return.resumed": "L’agent rapatrié a démarré.",
+  "server.return.nested_data": "Le dossier de code {path} contient les données ou les paramètres de l’agent. Choisissez un dossier de code distinct.",
+  "server.return.invalid_receipt": "Impossible de confirmer le retour de l’agent sélectionné.",
+  "route.web.title": "Recherche et lecture de pages web",
+  "route.web.application": "Utiliser la connexion de Telegram et de la Mini App"
 }

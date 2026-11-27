@@ -55,6 +55,19 @@ class Admission(unittest.TestCase):
             row['product']='someone-else';(path/'desk.json').write_text(json.dumps(row))
             self.assertEqual(readers.desk_build(path),{})
 
+    def test_native_server_manifest_uses_one_app_digest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            manifest = path / 'desk.json'
+            row = {'version': '2.9.2', 'files': {'deskapp.py': 'a'*64}, 'digest': 'b'*64}
+            for flavor in ('server-linux-x86_64', 'server-linux-arm64'):
+                manifest.write_text(json.dumps({**row, 'flavor': flavor}))
+                self.assertEqual(readers.desk_build(path)['version'], row['version'])
+            for invalid in ({'flavor': 'other'}, {'flavor': flavor, 'digest': ''},
+                            {'flavor': flavor, 'static': 'broken'}):
+                manifest.write_text(json.dumps({**row, **invalid}))
+                self.assertEqual(readers.desk_build(path), {})
+
     def test_local_runner_cannot_be_restarted_through_another_agents_global_resume(self):
         with tempfile.TemporaryDirectory() as folder:
             tree=Path(folder);state=tree/'memory/.state';state.mkdir(parents=True)

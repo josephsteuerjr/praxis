@@ -1,4 +1,19 @@
 {
+  "update.ready.restart": {
+    "en": "e240392b",
+    "fr": "e240392b",
+    "zh": "e240392b"
+  },
+  "update.ready.preserve": {
+    "en": "3b4befc6",
+    "fr": "3b4befc6",
+    "zh": "3b4befc6"
+  },
+  "update.auto.prepare": {
+    "en": "36c82792",
+    "fr": "36c82792",
+    "zh": "36c82792"
+  },
   "setup.typewriter.next_finish": {
     "en": "e349914f",
     "fr": "e349914f",
@@ -21880,9 +21895,9 @@
     "zh": "d32ea64d"
   },
   "network.intro": {
-    "en": "059dc785",
-    "fr": "059dc785",
-    "zh": "059dc785"
+    "en": "1366fa67",
+    "fr": "1366fa67",
+    "zh": "1366fa67"
   },
   "network.sources.title": {
     "en": "0d98724e",
@@ -22023,5 +22038,65 @@
     "en": "250e34aa",
     "fr": "250e34aa",
     "zh": "250e34aa"
+  },
+  "server.return.private_copy_failed": {
+    "en": "73c0483a",
+    "fr": "73c0483a",
+    "zh": "73c0483a"
+  },
+  "server.return.review_again": {
+    "en": "4a47432b",
+    "fr": "4a47432b",
+    "zh": "4a47432b"
+  },
+  "server.return.private_ready": {
+    "en": "5cb4c23b",
+    "fr": "5cb4c23b",
+    "zh": "5cb4c23b"
+  },
+  "server.return.global_stop": {
+    "en": "f7c8c585",
+    "fr": "f7c8c585",
+    "zh": "f7c8c585"
+  },
+  "server.return.private_choice": {
+    "en": "764551ae",
+    "fr": "764551ae",
+    "zh": "764551ae"
+  },
+  "server.return.shared_choice": {
+    "en": "f06e922b",
+    "fr": "f06e922b",
+    "zh": "f06e922b"
+  },
+  "server.return.resume": {
+    "en": "c1d372ae",
+    "fr": "c1d372ae",
+    "zh": "c1d372ae"
+  },
+  "server.return.resumed": {
+    "en": "bec9aee6",
+    "fr": "bec9aee6",
+    "zh": "bec9aee6"
+  },
+  "server.return.nested_data": {
+    "en": "4e566ea4",
+    "fr": "4e566ea4",
+    "zh": "4e566ea4"
+  },
+  "server.return.invalid_receipt": {
+    "en": "223fd6ed",
+    "fr": "223fd6ed",
+    "zh": "223fd6ed"
+  },
+  "route.web.title": {
+    "en": "bb6973fc",
+    "fr": "bb6973fc",
+    "zh": "bb6973fc"
+  },
+  "route.web.application": {
+    "en": "b92b3db2",
+    "fr": "b92b3db2",
+    "zh": "b92b3db2"
   }
 }

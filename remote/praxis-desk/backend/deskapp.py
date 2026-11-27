@@ -1289,6 +1289,9 @@ from deskd import xtts_ui
 ROUTES += xtts_ui.routes(Route)
 from deskd import praxis_phone
 ROUTES += praxis_phone.routes(Route, Fail)
+# Owner window instruments: read-only, owner-only (not in the channel's device list).
+from deskd import praxis_window
+ROUTES += praxis_window.routes(Route)
 
 def _route_regex(path: str) -> "re.Pattern[str]":
     return re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", path) + "$")

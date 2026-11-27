@@ -69,9 +69,9 @@ def logs(unit: str, tail: int = 60) -> str:
     unit = (unit or "").strip()
     if unit not in services.LOG_ALLOWED:
         return (f"Логи «{unit}» не в моей зоне. Могу смотреть: {', '.join(services.LOG_ALLOWED)} "
-                "— чужие проекты Егора на этой машине не моё дело.")
+                "— чужие проекты владельца на этой машине не моё дело.")
     if not available():
-        return "Глаза закрыты: PRAXIS_AGENT_TOKEN не задан (рычаг Егора в .env)."
+        return "Глаза закрыты: PRAXIS_AGENT_TOKEN не задан (рычаг владельца в .env)."
     tail = max(1, min(200, int(tail or 60)))
     d = _get(f"/api/agent/logs?unit={urllib.parse.quote(unit)}&tail={tail}")
     if d is None:
@@ -181,7 +181,7 @@ def describe(section: str = "overview") -> str:
     if section not in SECTIONS:
         return f"Не знаю раздел «{section}». Есть: {', '.join(SECTIONS)}."
     if not available():
-        return ("Глаза закрыты: PRAXIS_AGENT_TOKEN не задан (это рычаг Егора в .env). "
+        return ("Глаза закрыты: PRAXIS_AGENT_TOKEN не задан (это рычаг владельца в .env). "
                 "Пока его нет, обсерватория меня не пускает — и правильно делает.")
     d = fetch()
     if d is None:

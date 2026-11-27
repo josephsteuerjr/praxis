@@ -47,6 +47,33 @@ class PortablePaths(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'unavailable'):portable.bind_program(self.root)
         self.assertFalse(self.data.exists())
 
+    def test_prepared_secondary_can_bind_once_before_its_runner_starts(self):
+        from localharness import agents
+        self.config()
+        peer = agents.create(self.root, 'Peer')
+        self.assertFalse(peer.tree.exists())
+        receipt = peer.config.parent / 'kit-birth.json'
+        original = receipt.read_bytes()
+        bound = portable.bind_program(self.root)
+        self.assertEqual(bound['profiles']['agents/peer/helene.json']['path'], str(peer.tree))
+        self.assertEqual(receipt.read_bytes(), original)
+        peer.tree.rename(peer.tree.with_name('disconnected'))
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            portable.bind_program(self.root)
+        self.assertFalse(peer.tree.exists())
+
+    def test_spent_or_misaddressed_birth_cannot_create_a_missing_home(self):
+        from localharness import agents
+        self.config()
+        peer = agents.create(self.root, 'Peer')
+        receipt = peer.config.parent / 'kit-birth.json'
+        birth = read(receipt)
+        for change in ({'state': 'started'}, {'tree': str(self.data)}, {'source': 'other'}):
+            write(receipt, {**birth, **change})
+            with self.assertRaisesRegex(ValueError, 'unavailable'):
+                portable.bind_program(self.root)
+            self.assertFalse(peer.tree.exists())
+
     def test_two_agents_cannot_accidentally_share_one_writable_profile(self):
         self.config();write(self.root/'agents/second/helene.json',{'mode':'local','tree':str(self.data),'code':'../../tree'})
         with self.assertRaisesRegex(ValueError,'same writable profile'):portable.bind_program(self.root)

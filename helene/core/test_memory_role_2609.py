@@ -47,7 +47,7 @@ class MemoryRoleFollowsLlmRoles(unittest.TestCase):
 
     def test_compaction_never_uses_even_a_configured_voice_role(self):
         inputs = [
-            {"line": "Егор: привет", "text": "привет", "salience": 3},
+            {"line": "Алекс: привет", "text": "привет", "salience": 3},
             {"line": "Она: здравствуй", "text": "здравствуй", "salience": 2},
         ]
         with mock.patch.object(llm, "_client_for", return_value=object()), \
@@ -72,5 +72,5 @@ from test_authorship_support_1910 import AuthoredMemoryBase
 class MemoryUsesActingAuthor(AuthoredMemoryBase):
     def test_author_text_is_the_recap_not_a_role_generated_substitute(self):
         self.assert_authored_success(
-            "I retain Yegor's greeting and my answer, with their authors distinct."
+            "I retain Alex's greeting and my answer, with their authors distinct."
         )

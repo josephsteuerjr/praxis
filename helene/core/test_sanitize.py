@@ -44,7 +44,7 @@ class TestStripThink(unittest.TestCase):
 
 
 class TestOutboundSpeechBoundary(unittest.TestCase):
-    """Егор 10.11 («сними»): ни судьи приватности, ни пола чужих приватных записей.
+    """владелец 10.11 («сними»): ни судьи приватности, ни пола чужих приватных записей.
 
     Во всех аудиториях её слово уходит как написано; у не-владельца держит только
     механический кред-пол. Ни одной модели на выходе — любой вызов llm.chat здесь ошибка.
@@ -107,7 +107,7 @@ class TestOutboundSpeechBoundary(unittest.TestCase):
     def test_private_dm_does_not_cut_authored_speaker_or_mode_lines(self):
         ctx = agent.ChannelContext(chat_id="known", is_dm=True, owner=False, known=True)
         draft = "Мой текст.\nЕгор: это цитата\nРЕЖИМ: тише"
-        convo = "Егор: исходное сообщение"
+        convo = "Алекс: исходное сообщение"
 
         self.assertEqual(agent.guard_outbound_reply(draft, convo, ctx=ctx), draft)
 

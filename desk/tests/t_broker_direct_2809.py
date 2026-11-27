@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Поручение службе напрямую, без окна и без «да» (28.09, слово Егора).
+"""Поручение службе напрямую, без окна и без «да» (28.09, слово владельца).
 
 «С включённым тумблером не надо запрашивать у владельца: говорит службе — та делает».
 На Windows харнесс ходит в трубу службы сам: имя трубы — из пути установки (FNV-1a,
@@ -36,7 +36,7 @@ def _tree(root: Path, token: str | None = "a" * 32) -> Path:
 
 class PipeName(unittest.TestCase):
     def test_same_name_as_the_service_for_the_same_folder(self):
-        # Живое имя службы Егора 28.09 (service.log): helene-broker-b1e730f13e0af00c.
+        # Живое имя службы владельца 28.09 (service.log): helene-broker-b1e730f13e0af00c.
         want = r"\\.\pipe\helene-broker-b1e730f13e0af00c"
         self.assertEqual(broker.pipe_name(r"C:\Program Files\Helene"), want)
         self.assertEqual(broker.pipe_name("C:/Program Files/Helene/"), want)

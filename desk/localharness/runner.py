@@ -26,7 +26,6 @@
 Дерево данных — из PRAXIS_DESK_TREE (кладёт оболочка) или из `tree` конфига.
 """
 from __future__ import annotations
-from localharness import machine_words
 
 import argparse
 import contextlib
@@ -41,9 +40,10 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from localharness import product_notices
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Desktop and server supervisors launch this file directly, from the profile directory.
+_harness_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_harness_dir), str(_harness_dir.parent)]
+from localharness import machine_words, product_notices
 import body
 import boot
 import botapi
@@ -783,7 +783,7 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         # передаёт его «да» исполнителю обновлений. Служебные ходы (рождение, будильник,
         # отчёт об обновлении) тоже идут с owner=True в окне, но их повод пишет «Hélène».
         _owner_words[0] = bool(getattr(ctx, "owner", False)) and speaker != updates.SYSTEM_SPEAKER
-        # 07.10 (Джарвис): приоритетный баннер встаёт ПЕРВОЙ строкой orient —
+        # 07.10 (агент): приоритетный баннер встаёт ПЕРВОЙ строкой orient —
         # кадр открывается «сработал приоритет, требуется действие».
         turn_orient = orient
         if getattr(_agent, '_application_speech', None) is not None:
@@ -1428,7 +1428,7 @@ def _telegram_document(row) -> bool:
 def _telegram_document_note(row, chat_id, scope, spool, owned) -> str:
     """A received Telegram document as the turn sees it: path, size and SHA, or why not.
 
-    16.11 (AbstractDL): Praxis sent Jarvis a ZIP three times. The bytes were in
+    16.11 (AbstractDL): Praxis sent the agent a ZIP three times. The bytes were in
     memory/telegram-media/<hash>.bin, but the frame only said "no visual preview", with no
     path, so he searched the workspace and found an empty folder. Images already went into
     the scoped media spool (workspace/media/inbound/...); a document now goes there too,
@@ -1584,7 +1584,7 @@ def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_sourc
         sender_name, sender_id = sender_override
     is_dm = bool(meta.get("is_dm", True))
     owner = bool(_bot.owner_id) and str(sender_id) == str(_bot.owner_id)
-    # 07.10 (Джарвис): фокус-окно. Приоритетная реплика (префикс) открывает
+    # 07.10 (агент): фокус-окно. Приоритетная реплика (префикс) открывает
     # кадр секцией «ПРИОРИТЕТ — требуется действие»: в любом состоянии следующим
     # ходом агент видит, что сработал приоритет и что его просят сделать.
     # Гист зафиксирован в момент приёма (история хода несёт «Имя: текст» —
@@ -1927,7 +1927,7 @@ def _config_watch_forever(config_path: Path, tree: Path, code_dir: Path) -> None
             continue
         try:
             # 1.2.5: со следом — кто сменил голос (владелец в Настройках, установщик), чтобы
-            # агент не гадал, чья это воля (Джарвис 29.09: «конфиг стёрло обновление»).
+            # агент не гадал, чья это воля (агент 29.09: «конфиг стёрло обновление»).
             import brain_trail
             log.info("helene.json изменился — %s",
                      brain_trail.project(tree, config_path, cfg,
@@ -1955,7 +1955,7 @@ _LOW_PRIORITY_LOCK = None
 def _low_priority():
     """На время тяжёлой работы процессора (расшифровка, прогрев модели) — ниже обычного.
 
-    26.09, у мамы Егора: четыре потока whisper на домашней машине забирали процессор
+    26.09, у мамы владельца: четыре потока whisper на домашней машине забирали процессор
     целиком, и окно дёргалось. Ниже обычного — значит окно и всё, что делает человек,
     идут первыми, а расшифровка берёт остаток; на её длине это почти не сказывается.
     Только Windows: на POSIX nice обратно не поднять. Вложенные входы считаются —
@@ -2004,7 +2004,7 @@ def _low_priority():
 def _warm_voice_models(cfg: dict) -> None:
     """Модели голоса — в память со старта, если владелец велел держать слух между голосовыми.
 
-    Иначе первое голосовое дня ждало загрузки полутора гигабайт (у мамы Егора 26.09 —
+    Иначе первое голосовое дня ждало загрузки полутора гигабайт (у мамы владельца 26.09 —
     14 с на семь секунд речи). Ниже обычного приоритета и в своём потоке: старт движка
     и первый ход этого не ждут. Голос ответа (piper) греется там же, если включён, —
     через загрузчик голоса, а не через синтез: пробный файл в media/tts не нужен.
@@ -2576,7 +2576,7 @@ def _birth_note(*, note_written: bool = False) -> str:
         # Предлог — внутри подстановки: при пустом platform.node() шаблон
         # «на устройстве {device}» давал «на устройстве этот компьютер».
         device = platform.node()
-        # 26.09: паспорт вместо «осмотрись». Первый ход у мамы Егора ушёл на поиски
+        # 26.09: паспорт вместо «осмотрись». Первый ход у мамы владельца ушёл на поиски
         # своей папки по чужим адресам (135 с, семь команд, `/app`): агент офигевал,
         # кто он и где. Теперь дом, имена и границы названы в самой записке.
         note = _frame_word('native.runner.birth_note', _BIRTH_NOTE, where=_frame_word('native.runner._birth_note.2476', 'на устройстве {p0}', p0=f'{device}') if device
@@ -2915,12 +2915,12 @@ def _forge_events_due() -> None:
 
 
 def _name_the_owner(owner: str) -> None:
-    """Назвать собеседника кадра ИМЕНЕМ ВЛАДЕЛЬЦА, а не «Егор».
+    """Назвать собеседника кадра ИМЕНЕМ ВЛАДЕЛЬЦА, а не «владелец».
 
     ⚠ В самой свежей части кадра — зоне «СЕЙЧАС» user-сообщения, той единственной
     строке, что отвечает на вопрос «кто передо мной», — стоял литерал
-    `frame_layout.py:960: bits.append(own("это Егор"))`. У владельца по имени Иван
-    агент на каждом ходе читал «говорит «Иван» … это Егор»: одна строка называла
+    `frame_layout.py:960: bits.append(own("это владелец"))`. У владельца по имени Иван
+    агент на каждом ходе читал «говорит «Иван» … это владелец»: одна строка называла
     собеседника двумя разными людьми, и ни один из них не был владельцем.
 
     Дерево править нельзя, поэтому подменяем сборщик слота — тем же приёмом, каким
@@ -2928,7 +2928,7 @@ def _name_the_owner(owner: str) -> None:
     в слоте, а чужие значения приезжают в кавычках «…», поэтому хвост строки
     ни с чем не спутать.
     """
-    if not owner or owner == "Егор":
+    if not owner:
         return
     try:
         import frame_layout
@@ -2940,19 +2940,21 @@ def _name_the_owner(owner: str) -> None:
     original = getattr(frame_layout, "_speaker", None)
     if original is None or getattr(original, "_helene_owner", ""):
         return
-    tail = "это Егор"
+    tails = ("это владелец", "это Егор")  # Also recognize the older authored frame.
 
     def _speaker(ctx, speaker, snap):
         text, kind = original(ctx, speaker, snap)
         body = str(text)
-        if body.endswith(tail):
-            text = gutter.Own(body[:-len(tail)] + "это " + owner,
-                              getattr(text, "guest", False))
+        for tail in tails:
+            if body.endswith(tail):
+                text = gutter.Own(body[:-len(tail)] + "это " + owner,
+                                  getattr(text, "guest", False))
+                break
         return text, kind
 
     _speaker._helene_owner = owner
     frame_layout._speaker = _speaker
-    log.info("кадр: собеседник назван «%s» (в дереве стоял литерал «Егор»)", owner)
+    log.info("кадр: собеседник назван «%s»", owner)
 
 
 def _announce_git(tree: Path) -> None:
@@ -3570,7 +3572,7 @@ def main() -> None:
     _role = str(_mode.get("name") or cfg.get("mode") or "окно")
     busy = boot.claim_tree(tree, agent=boot.agent_name(cfg), role=_role)
     if busy:
-        # 27.09 (проба Егора, «для всех» со службой): два движка стартуют вместе —
+        # 27.09 (проба владельца, «для всех» со службой): два движка стартуют вместе —
         # службу только что поставили, окно открыл мастер. Замок берёт тот, что
         # быстрее, а через секунды его гасит собственный надзор (порт держит другой).
         # Проигравший раньше выходил кодом 3 («конфиг») — навсегда, и агент оставался
@@ -3794,7 +3796,7 @@ def main() -> None:
     if window_root:
         from localharness import window_preferences
         window_preferences.install(agent, Path(window_root))
-    # Имя владельца в текстах дерева: дерево говорит с Егором, издание — с тем, кого
+    # Имя владельца в текстах дерева: дерево говорит с владельцем, издание — с тем, кого
     # назвал мастер. Правятся только авторские тексты (схемы, указатели, окна,
     # контракты кадра); память и реплики не трогаются.
     try:

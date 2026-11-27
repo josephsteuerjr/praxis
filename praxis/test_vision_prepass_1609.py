@@ -197,6 +197,47 @@ class VisionPrepass(Base):
         self.assertEqual(len(t.calls), 1, "её модель и так видит — смотреть отдельно незачем")
         self.assertTrue(_has_pixels(t.calls[0]["messages"]))
 
+    def test_glm_54_direct_and_catalog_selected_helper(self):
+        for primary, catalog, expected in (
+            ("glm-5.4", ["glm-5.3-flash", "glm-5.4"], ["glm-5.4"]),
+            ("glm-5.3", ["glm-5.3-flash", "glm-5.4"], ["glm-5.4", "glm-5.3"]),
+            ("glm-5.3", ["glm-5.3-flash"], ["glm-5.3-flash", "glm-5.3"]),
+        ):
+            with self.subTest(primary=primary, catalog=catalog):
+                cfg = llm._config()
+                cfg["roles"]["voice"]["model"] = primary
+                llm.save_config(cfg)
+                transport = _Transport()
+                with mock.patch.object(llm, "_available_models", return_value=[PRIMARY, *catalog]):
+                    self._run(transport, lever="1")
+                self.assertEqual([c["model"] for c in transport.calls], expected)
+                first = transport.calls[0]["messages"]
+                self.assertEqual(len(first), len(_room_tape()) if primary == "glm-5.4" else 1)
+                self.assertEqual(llm.messages_to_anthropic(first)[-1]["content"].count(_PIXEL), 1)
+                if len(expected) == 2:
+                    self.assertFalse(_has_pixels(transport.calls[-1]["messages"]))
+                    self.assertIn(expected[0], _flat_text(transport.calls[-1]["messages"]))
+        self.assertFalse(llm.accepts_images(model="glm-5.4-text-only"))
+
+    def test_glm_54_fallback_receives_pixels_after_a_completed_prepass(self):
+        from test_llm import RateLimitError
+
+        cfg = llm._config()
+        cfg["roles"]["voice"].update(fallback_framework="anthropic", fallback_model="glm-5.4")
+        llm.save_config(cfg)
+        transport = _Transport()
+        def call(framework, model, **kw):
+            if model == PRIMARY:
+                self.assertFalse(_has_pixels(kw["messages"]))
+                raise RateLimitError("429")
+            return transport(framework, model, **kw)
+        with mock.patch.object(llm, "_available_models", return_value=[PRIMARY, "glm-5.4"]):
+            answer = self._run(call, lever="1")
+        self.assertEqual(answer.model, "glm-5.4")
+        look, turn = transport.calls
+        self.assertEqual(len(look["messages"]), 1)
+        self.assertEqual(turn["messages"], _room_tape())
+
     def test_the_narrow_look_does_not_look_again_inside_itself(self):
         """Защита от рекурсии: узкий вызов идёт через тот же `chat`."""
         t = _Transport()

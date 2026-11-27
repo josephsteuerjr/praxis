@@ -1,5 +1,5 @@
 """Private, program-bound mechanical state; no new sibling litter."""
-from pathlib import Path
+from .windows_paths import wide, Path
 import os,re
 
 
@@ -25,8 +25,8 @@ def hidden(path):
         kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         kernel.GetFileAttributesW.argtypes=[ctypes.c_wchar_p];kernel.GetFileAttributesW.restype=ctypes.c_ulong
         kernel.SetFileAttributesW.argtypes=[ctypes.c_wchar_p,ctypes.c_ulong];kernel.SetFileAttributesW.restype=ctypes.c_int
-        flags=kernel.GetFileAttributesW(str(path))
-        if flags==0xffffffff or not kernel.SetFileAttributesW(str(path),flags|2):raise ctypes.WinError(ctypes.get_last_error())
+        flags=kernel.GetFileAttributesW(wide(path))
+        if flags==0xffffffff or not kernel.SetFileAttributesW(wide(path),flags|2):raise ctypes.WinError(ctypes.get_last_error())
     return path
 
 
@@ -47,7 +47,7 @@ def tidy_program(program):
                   'code-transition.json','code-transition-plan.json','old-program-retirement.json',
                   'source-materials.json','source-materials-retired.json','.webview','.migration-webview'))
     changed=[]
-    for name in sorted(names-{'helene.exe','Helene.exe','data','memory','agents','profile','backups'}):
+    for name in sorted(names-{'helene.exe','Helene.exe','START-HERE.md','data','memory','agents','profile','backups'}):
         path=program/name
         if path.exists():
             _plain(path);hidden(path);changed.append(name)

@@ -85,7 +85,7 @@ class TestReach(Base):
         self.assertIn("serverapp", msg)
 
     def test_foreign_projects_are_not_in_log_allowlist(self):
-        """Чужие проекты Егора на этой машине (dasha, vroom, hardbot…) — не её дело."""
+        """Чужие проекты владельца на этой машине (dasha, vroom, hardbot…) — не её дело."""
         for foreign in ("dasha-bot", "vroom", "hardbot2-bot-1", "amnezia-awg2",
                         "praxis-dockerproxy"):
             self.assertNotIn(foreign, services.LOG_ALLOWED)
@@ -191,7 +191,7 @@ class TestReceipts(Base):
         text = services.describe()
         self.assertIn("serverapp", text)
         self.assertIn("1/3", text)
-        self.assertIn("только Егор", text)
+        self.assertIn("только владелец", text)
         self.assertIn("relay", text)
 
 

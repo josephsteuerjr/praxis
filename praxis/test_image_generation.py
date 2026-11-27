@@ -37,9 +37,9 @@ class ImageGenerationTests(Base):
                                "generation_id": "generation-test"}],
                      "usage": {"input_tokens": 21, "output_tokens": 515}}
 
-    def configure(self, framework="anthropic"):
+    def configure(self, framework="anthropic", model="glm-5.3"):
         cfg = llm._from_env()
-        cfg["roles"]["voice"].update(framework=framework, model="glm-5.3" if framework == "anthropic" else "gpt-5.6-sol")
+        cfg["roles"]["voice"].update(framework=framework, model=model)
         cfg["frameworks"]["openai"] = {"base_url": "http://localhost:5011/v1", "api_key": "fixture-key"}
         cfg["images"] = {**imagegen.DEFAULTS, "enabled": True, "quality": "low"}
         llm.save_config(cfg)
@@ -64,13 +64,15 @@ class ImageGenerationTests(Base):
                 imagegen.validate({"model": value})
 
     def test_generate_hand_queues_real_image_on_glm_and_relay(self):
-        for framework in ("anthropic", "openai"):
-            with self.subTest(framework=framework):
-                self.configure(framework)
+        for framework, model, native in (("anthropic", "glm-5.3", False),
+                                         ("anthropic", "glm-5.4", True),
+                                         ("openai", "gpt-5.6-sol", True)):
+            with self.subTest(framework=framework, model=model):
+                self.configure(framework, model)
                 ctx = agent.ChannelContext(chat_id="777", is_dm=True, owner=True)
                 pending = []
                 with mock.patch.object(agent, "_media_spool", return_value=self.spool), \
-                     mock.patch.object(llm, "can_see", return_value=framework == "openai"), \
+                     mock.patch.object(llm, "_available_models", return_value=[model]), \
                      mock.patch.object(agent, "_model_view_image", side_effect=lambda path, **kw: (path, "image/png")), \
                      mock.patch.object(imagegen, "_post", return_value=(self.body, "request-test")) as post:
                     token = agent._TURN_CHANNEL.set(ctx)
@@ -91,7 +93,7 @@ class ImageGenerationTests(Base):
                 self.assertEqual(post.call_count, 1)
                 self.assertTrue(post.call_args.args[0].endswith("/v1/images/generations"))
                 self.assertEqual(post.call_args.args[2]["model"], "gpt-image-2")
-                self.assertEqual(isinstance(out, agent.ToolObservation), framework == "openai")
+                self.assertEqual(isinstance(out, agent.ToolObservation), native)
 
     def test_edit_contract_and_disabled_and_invalid_artifact(self):
         cfg = self.configure()

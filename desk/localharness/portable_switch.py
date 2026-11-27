@@ -575,7 +575,7 @@ def finish(old,new,value,window,*,stopped=None):
     cleanup_work(new,value)
     backend.remove(old)
     from .first_start import receipt,_write,cleanup_leftovers
-    # 11.11 (Yegor): protected files stay and are named instead of an administrator prompt.
+    # 11.11 (the owner): protected files stay and are named instead of an administrator prompt.
     leftovers=cleanup_leftovers(backend,[old]) if old.exists() else list(backend.notes)
     completed=read(receipt(new));completed['update']={'id':value['note']['id'],
         'confirmed_at':dt.datetime.now(dt.timezone.utc).isoformat(),'healthy_seconds':TRIAL_SECONDS}

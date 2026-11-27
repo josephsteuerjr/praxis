@@ -783,6 +783,28 @@ class RunManager:
     def path(self, run_id: str) -> Path:
         return self._find(run_id)
 
+    def creation_absent(self, run_id: str) -> bool:
+        """Unlike manifest lookup, an unfinished run directory counts as custody.
+
+        The caller must hold admission for this fresh allocated ID; this does
+        not establish absence of an old, retained-away run.
+        """
+        import stat
+        run_id = self._validate_id(run_id)
+        try:
+            buckets = list(self.root.iterdir())
+        except FileNotFoundError:
+            return True
+        for bucket in buckets:
+            if not stat.S_ISDIR(bucket.stat().st_mode):
+                continue
+            try:
+                (bucket / run_id).lstat()
+            except FileNotFoundError:
+                continue
+            return False
+        return True
+
     def _manifest_rows(self) -> list[tuple[str, Path, Path]]:
         """Read current membership without recursive per-run directory walks.
 
@@ -2393,6 +2415,8 @@ class RunManager:
 
     @staticmethod
     def _inline_text(text: str, budget: int) -> dict:
+        if budget == 0:  # Private replay payload: retain the full artifact, not a preview.
+            return {"head": "", "tail": "", "truncated": bool(text), "omitted_chars": len(text)}
         budget = max(128, int(budget))
         if len(text) <= budget:
             return {"head": text, "tail": "", "truncated": False, "omitted_chars": 0}
@@ -2475,6 +2499,10 @@ class RunManager:
                                "truncated": len(payload) > 192,
                            }),
             }
+            if call_id and event_kind == "tool_result":
+                # A current receipt carries its call identity independently of the WAL envelope.
+                # Historical refs lack this field; do not backfill their immutable bytes.
+                ref["call_id"] = str(call_id)
             event_data: dict[str, Any] = {"result": ref, "name": str(name)}
             if call_id:
                 event_data["call_id"] = str(call_id)

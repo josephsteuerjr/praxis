@@ -1,6 +1,6 @@
 # Production-entry desktop coverage (test equipment)
 
-This runner serves **built app/dist/index.html**, never installs or launches Hélène/Jarvis. All API, native bridge and attachment data are synthetic. The fixture binds a random loopback port; no installed profile is read. The runner blocks off-origin requests and deliberately exercises the HTTP API transport. The existing generic UI fixture can also run its WebSocket transport; WebSocket-specific error-code parity is not asserted here.
+This runner serves **built app/dist/index.html**, never installs or launches Hélène/the agent. All API, native bridge and attachment data are synthetic. The fixture binds a random loopback port; no installed profile is read. The runner blocks off-origin requests and deliberately exercises the HTTP API transport. The existing generic UI fixture can also run its WebSocket transport; WebSocket-specific error-code parity is not asserted here.
 
 ## Reproduce
 

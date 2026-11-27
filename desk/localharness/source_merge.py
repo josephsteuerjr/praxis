@@ -9,7 +9,8 @@ import hashlib
 import errno
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
+from .windows_paths import Path, walk
 import re
 import shutil
 import subprocess
@@ -52,7 +53,7 @@ def inventory(root,*,application=False):
     if not root.is_dir():
         raise FileNotFoundError(root)
     result = {}
-    for directory, dirs, names in os.walk(root, followlinks=False):
+    for directory, dirs, names in walk(root, followlinks=False):
         checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if allowed((here / d).relative_to(root).as_posix()))
@@ -122,6 +123,13 @@ def executable(*programs):
 
 
 def git(repo, *args, data=None, check=True, exe='git'):
+    from .windows_paths import child_directory
+    repo = Path(repo).resolve()
+    with child_directory(repo.parent) as cwd:
+        return _git(repo.name, cwd, args, data, check, exe)
+
+
+def _git(git_dir, cwd, args, data, check, exe):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_AUTHOR_NAME='Helene source update', GIT_AUTHOR_EMAIL='update@helene.local',
@@ -130,14 +138,13 @@ def git(repo, *args, data=None, check=True, exe='git'):
     # Git-for-Windows validates an absolute --git-dir before command config is
     # applied. A relative private repository plus local longpaths handles both
     # that early setup and later loose objects without changing user settings.
-    repo = Path(repo).resolve()
     command = [exe, '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.hooksPath=' + os.devnull,
                '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.quotepath=false',
-               '--git-dir=' + repo.name, *args]
+               '--git-dir=' + git_dir, *args]
     from .validation_read import current,checkpoint
     if current() is not None and args==('rev-parse','HEAD') and data is None:
         checkpoint()
-        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=repo.parent,
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
             started=time.monotonic()
             try:
@@ -157,7 +164,7 @@ def git(repo, *args, data=None, check=True, exe='git'):
                     failure.output=output;failure.stderr=error
                 raise
     else:
-        done = subprocess.run(command, input=data, capture_output=True, env=env, cwd=repo.parent, timeout=120,
+        done = subprocess.run(command, input=data, capture_output=True, env=env, cwd=cwd, timeout=120,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if check and done.returncode:
         raise RuntimeError('Source merge Git failed: ' + done.stderr.decode('utf-8', 'replace')[-1600:])

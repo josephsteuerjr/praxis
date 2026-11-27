@@ -28,6 +28,9 @@ import praxis_time
 import agent
 import owner_telegram_rpc
 import bufstore
+import dm_continuation
+import focus_interrupt
+import contextvars
 import context_envelope
 import formation
 import frame_epoch
@@ -269,6 +272,8 @@ class _OneMind(asyncio.Lock):
         super().__init__()
         self._parked = 0
         self._generation = 0
+        self._recipient = None
+        self._handover_finished = None
 
     async def acquire(self) -> bool:  # type: ignore[override]
         # A busy period begins only when the lock is completely idle.  If waiters already
@@ -277,9 +282,36 @@ class _OneMind(asyncio.Lock):
             self._generation += 1
         self._parked += 1
         try:
-            return await super().acquire()
+            while True:
+                finished = self._handover_finished
+                if finished is not None and self._recipient is not asyncio.current_task():
+                    await finished.wait()
+                    continue
+                await super().acquire()
+                if self._handover_finished is None or self._recipient is asyncio.current_task():
+                    return True
+                # A reservation was made after this waiter had joined the FIFO.
+                super().release()
         finally:
             self._parked -= 1
+
+    async def yield_to(self, recipient):
+        """Park the current owner. The ordinary chat task must acquire this same lock."""
+        if not self.locked() or self._recipient is not None:
+            raise RuntimeError("focus cannot hand over an unowned or reserved lock")
+        finished = self._handover_finished = asyncio.Event()
+        self._recipient = recipient
+        self.release()
+        try:
+            await asyncio.shield(recipient)
+        except asyncio.CancelledError:
+            if not recipient.cancelled():
+                raise
+        finally:
+            self._recipient = asyncio.current_task()
+            await self.acquire()
+            self._recipient = self._handover_finished = None
+            finished.set()
 
     def free_now(self) -> bool:
         """True — захват вернётся не отдав управление (никто не держит и не ждёт)."""
@@ -292,6 +324,8 @@ class _OneMind(asyncio.Lock):
 
 
 _ONE_MIND = _OneMind()
+_FOCUS_YIELD = None
+_OFFLINE_WORKER = None
 # One visible defer per intention and continuous _ONE_MIND ownership period.  The scheduler
 # may retry the same due wake/window every few seconds; those retries are transport churn,
 # not thousands of distinct decisions by Praxis.  ``generation`` advances only when the
@@ -1340,7 +1374,11 @@ def _dm_dialogue(chat_id: str, *, occurrence_sidecar: dict | None = None) -> tup
     try:
         # 12.09: окно то же, что у сплошной ленты (PRAXIS_LAST_N), и потолок в знаках
         # (PRAXIS_TAPE_CHARS) — то, что не влезло, лежит в сводке и достаётся recall.
-        rows = memory_life.tape_window(memory_life.hot_records(chat_id, _hot_window()))
+        if occurrence_sidecar is not None and dm_continuation.enabled():
+            rows, dm_source = dm_continuation.select(chat_id, memory_life.hot_records(chat_id), _hot_window())
+        else:
+            dm_source = None
+            rows = memory_life.tape_window(memory_life.hot_records(chat_id, _hot_window()))
     except Exception:
         log.warning("роли разговора не собрались [%s] — иду сплошным текстом", chat_id,
                     exc_info=True)
@@ -1371,6 +1409,8 @@ def _dm_dialogue(chat_id: str, *, occurrence_sidecar: dict | None = None) -> tup
         admitted = [(rows[i], turns[i]) for g, turn in zip(batches, logical_turns)
                     if turn[1].strip() for i in g]
         if history and current and admitted:
+            if dm_source is not None:
+                occurrence_sidecar["_dm_source"] = dm_source
             captured = [bool((r.get("meta") or {}).get("keat_occurrence"))
                         for r, _ in admitted]
             first = 0 if all(captured) else max(
@@ -4038,6 +4078,11 @@ async def on_new(event) -> None:
     # буферы/память/реплаи пишут текст КАК ЕСТЬ, а флаг уходит в meta, чтобы ход
     # миновал кулдаун и открылся баннером «требуется действие».
     priority_msg, _priority_text = split_priority(text)
+    if (_FOCUS_YIELD is not None and is_private and is_owner and chat_id == str(OWNER_ID)
+            and not msg.out and focus_interrupt.original(msg, OWNER_ID)
+            and focus_interrupt.fingerprint(msg) == _FOCUS_YIELD.signal):
+        _FOCUS_YIELD.native_mid = int(mid)
+        priority_msg = True
     _meta[chat_id] = {"entity": event.chat_id, "peer_id": peer_id,
                       "topic_id": route.topic_id, "sender_id": sender_id,
                       "origin_message_id": (int(mid) if mid is not None else None),
@@ -5509,6 +5554,8 @@ async def _run_pass(chat_id: str) -> None:
     # реплика не ждёт своего темпа: «следующим ходом» — часть просьбы Егора.
     priority_pass = bool(meta.get("priority")) if is_dm else bool(
         getattr(wake, "priority", False))
+    if _FOCUS_YIELD is not None and _FOCUS_YIELD.addressed(chat_id, meta):
+        priority_pass = True
     if not priority_pass:
         cd = _cooldown(is_dm, meta.get("room_mode", "normal"), addressed=addressed)
         if elapsed < cd:
@@ -5553,6 +5600,8 @@ async def _run_pass(chat_id: str) -> None:
     # сообщение в тот же чат отменяет таск ровно на этом await. Держим свою уборку сами.
     try:
         mind_requested = time.perf_counter()
+        if _FOCUS_YIELD is not None and _FOCUS_YIELD.addressed(chat_id, meta):
+            _FOCUS_YIELD.offered.put_nowait(asyncio.current_task())
         await _ONE_MIND.acquire()
     except BaseException:
         _passing.discard(chat_id)
@@ -5767,7 +5816,10 @@ async def _run_pass(chat_id: str) -> None:
         topic_token = _TURN_TOPIC_ROUTE.set(route)
         try:
             if is_dm:
-                if priority_pass:
+                if (_FOCUS_YIELD is not None and _FOCUS_YIELD.addressed(chat_id, meta)
+                        and str(meta.get("origin_text", "")).strip() == _priority_prefix()):
+                    topic_orient = "Владелец позвал тебя из фокуса. Ты снова с ним в личке.\n\n" + topic_orient
+                elif priority_pass:
                     # ⚠ 07.10: баннер приоритета — первый элемент кадра: «сработал
                     # приоритет, требуются срочные действия». Суть — теми же словами,
                     # как прислал человек (без префикса).
@@ -5777,14 +5829,15 @@ async def _run_pass(chat_id: str) -> None:
                         "её срочной. Прочитай её как просьбу, требующую действия "
                         "сейчас; не откладывай на окно и не своди к наблюдению.\n\n"
                         + topic_orient)
-                envelope, cancellation_seen = await _await_despite_cancellation(
-                    _voice_turn_with_typing(
-                        entity, chat_id, last_n, speaker,
-                        ctx=ctx, orient=topic_orient, media_refs=turn_media,
-                        history=turn_history, current_text=turn_current,
-                        occurrence_sidecar=turn_occurrences or None,
+                with dm_continuation.bind(turn_occurrences.pop("_dm_source", None)):
+                    envelope, cancellation_seen = await _await_despite_cancellation(
+                        _voice_turn_with_typing(
+                            entity, chat_id, last_n, speaker,
+                            ctx=ctx, orient=topic_orient, media_refs=turn_media,
+                            history=turn_history, current_text=turn_current,
+                            occurrence_sidecar=turn_occurrences or None,
+                        )
                     )
-                )
             else:
                 # в группе без «печатает…»: тишина ([молчу]) — частый честный исход, не изображаем набор
                 # Якорь эпохи привязывается к ходу здесь: сборщик кадра (agent) читает его из
@@ -6117,6 +6170,8 @@ async def _run_pass(chat_id: str) -> None:
         if (finished_inbox is not None and remaining_wake is not None
                 and finished_inbox.was_read(remaining_wake.message_id)):
             _group_wakes[chat_id] = replace(remaining_wake, unread_during_turn=False)
+        if _FOCUS_YIELD is not None and _FOCUS_YIELD.addressed(chat_id, meta):
+            _FOCUS_YIELD.finished_pass(meta, delivery_run_id)
         _ONE_MIND.release()
         if delivery_run_id:
             _TEXT_SENDING.discard(delivery_run_id)
@@ -6379,9 +6434,134 @@ async def _note_one_mind_defer(stage: str, goal: str) -> None:
     _ONE_MIND_DEFERRED[key] = generation
 
 
+class _FocusYield:
+    """A bell changes scheduling only. The native Telegram reader owns all chat admissions."""
+    def __init__(self, loop, work_id):
+        self.loop = loop
+        self.work_id = work_id
+        self.parent_run_id = None
+        self.token = None
+        self.signal = None
+        self.native_mid = None
+        self.offered = None
+        self.chat_run = ""
+
+    def watch(self, **args):
+        return owner_telegram_rpc.request("focus_watch", {"chat": _self_id, **args}, timeout=10)
+
+    async def open(self):
+        if _self_id and OWNER_ID:
+            result = await asyncio.to_thread(self.watch)
+            self.token = result.get("token")
+            if self.token is None:
+                log.warning("focus bell unavailable at open")
+
+    def checkpoint(self, run_id, iteration):
+        if not self.token:
+            if _self_id and OWNER_ID:
+                self.token = self.watch().get("token")
+            return
+        result = self.watch(token=self.token)
+        if result.get("expired"):
+            new = self.watch()
+            self.token = new.get("token")
+            return
+        signal = result.get("signal")
+        if signal is None or signal == self.signal:
+            return
+        self.signal = signal
+        self.parent_run_id = run_id
+        agent._run_event_strict("focus_parked", work_id=self.work_id, completed_iteration=iteration)
+        # Only the code thread blocks. No run or tool authority is copied into the event loop.
+        future = contextvars.Context().run(asyncio.run_coroutine_threadsafe, self.handover(), self.loop)
+        run = future.result()
+        agent._run_event_strict("focus_returned", interrupt_run_id=run, completed_iteration=iteration)
+
+    def addressed(self, chat, meta):
+        return (self.native_mid is not None and chat == str(OWNER_ID)
+                and meta.get("is_dm") and meta.get("is_owner")
+                and meta.get("sender_id") == OWNER_ID
+                and int(meta.get("origin_message_id") or 0) >= self.native_mid)
+
+    def finished_pass(self, meta, run_id):
+        if run_id:
+            self.chat_run = run_id
+            self.answered_mid = int(meta.get("origin_message_id") or 0)
+            self.awaiting_question = str(meta.get("origin_text", "")).strip() == _priority_prefix()
+
+    async def handover(self):
+        global _FOCUS_YIELD
+        self.native_mid, self.chat_run = None, ""
+        self.offered = asyncio.Queue()
+        self.answered_mid = 0
+        self.awaiting_question = False
+        _FOCUS_YIELD = self
+        try:
+            await client.connect()
+            await client.catch_up()
+            # A revoked or edited knock cannot leave the original worker parked.
+            source = None
+            async for msg in client.iter_messages(OWNER_ID):
+                if int(msg.date.timestamp()) < self.signal[0]:
+                    break
+                if (not msg.out and focus_interrupt.original(msg, OWNER_ID)
+                        and focus_interrupt.fingerprint(msg) == self.signal):
+                    source = msg.id
+                    break
+            if source is None:
+                return ""
+            # The existing reader may coalesce a later message in the same DM.
+            # It must reach the normal lock acquisition with authentic source metadata.
+            admission_deadline = time.monotonic() + RECONNECT_TIMEOUT_SEC
+            while True:
+                try:
+                    task = await asyncio.wait_for(self.offered.get(), timeout=10)
+                except TimeoutError:
+                    if _SHUTDOWN.is_set():
+                        return self.chat_run
+                    if self.parent_run_id:
+                        parent = await asyncio.to_thread(agent._runs().manifest, self.parent_run_id)
+                        if parent.get("status") != "running" or (parent.get("control") or {}).get("action"):
+                            return self.chat_run
+                    if self.awaiting_question:
+                        # A bare bell summoned the conversation. The owner can now say why.
+                        continue
+                    current = await client.get_messages(OWNER_ID, ids=source)
+                    if (current is None or not focus_interrupt.original(current, OWNER_ID)
+                            or focus_interrupt.fingerprint(current) != self.signal
+                            or _SHUTDOWN.is_set()):
+                        return ""
+                    if self.native_mid is None and _life_source_persisted(str(OWNER_ID), source):
+                        # Already handled by the regular reader before this handoff.
+                        return ""
+                    if time.monotonic() >= admission_deadline:
+                        log.warning("focus handover admission expired")
+                        return ""
+                    continue
+                await _ONE_MIND.yield_to(task)
+                if self.awaiting_question:
+                    continue
+                if self.chat_run:
+                    latest = (_meta.get(str(OWNER_ID)) or {}).get("origin_message_id") or 0
+                    if int(latest) <= self.answered_mid:
+                        break
+                elif _debounce.get(str(OWNER_ID)) is task:
+                    break
+            return self.chat_run
+        except Exception:
+            log.exception("focus handover did not observe an ordinary owner pass")
+            return ""
+        finally:
+            _FOCUS_YIELD = None
+            await client.disconnect()
+
+
 async def _task_window(goal: str, *, mailbox_index: str | None = None,
                        on_open=None, on_run=None,
-                       keep_transport: bool = False) -> bool | None:
+                       keep_transport: bool = False,
+                       hourly: social_pulse.HourlyWindow | None = None,
+                       work_id: str = "", assigned_run_id: str = "",
+                       focus_result: dict | None = None, work_alarm_id: str = "") -> bool | None:
     """Её долгий run над собой под единым замком. Два режима связи, и они разные по смыслу.
 
     ПО УМОЛЧАНИЮ (её ретрит: focus, rest, кодинг, намеченное окно) — старый канон,
@@ -6407,6 +6587,9 @@ async def _task_window(goal: str, *, mailbox_index: str | None = None,
     теперь приходит сразу и отвечается следующим ходом.
 
     -> True/False по исходу, None если замок занят живым ходом (пульс тогда отложится)."""
+    if hourly is not None and not keep_transport:
+        raise ValueError("hourly dispatch requires the live transport path")
+    global _OFFLINE_WORKER
     if _ONE_MIND.locked():
         # Она одна: идёт живой ход — окно не открываем поверх него. Часы не блокируем.
         # Формулировка нарочно без числа: у этой функции два вызывающих с разными
@@ -6425,9 +6608,20 @@ async def _task_window(goal: str, *, mailbox_index: str | None = None,
         # остаётся due и вернётся на следующем тике, а не теряется тихо.
         if on_open is not None:
             try:
-                await on_open()
+                claimed = await on_open()
+                if work_id and claimed is not True:
+                    return False
             except Exception:
                 log.exception("mark-on-open таск-окна упал")
+                if work_id:
+                    return False
+        elif work_id:
+            raise ValueError("specific work needs a claimed occurrence")
+        work_kwargs = ({"work_id": work_id, "assigned_run_id": assigned_run_id,
+                        "work_alarm_id": work_alarm_id}
+                       if work_id else {})
+        if focus_result is not None:
+            work_kwargs["focus_result"] = focus_result
         ok = False
         if keep_transport:
             # Окно без разрыва связи. Замок _ONE_MIND по-прежнему держит «её одну», но
@@ -6445,25 +6639,41 @@ async def _task_window(goal: str, *, mailbox_index: str | None = None,
                 log.debug("не смог прочитать состояние транспорта", exc_info=True)
                 live = "unknown"
             try:
+                if hourly is not None:
+                    await asyncio.to_thread(social_pulse.bind_window, hourly)
                 await asyncio.to_thread(agent.task_window, goal,
                                         mailbox_index=mailbox_index,
-                                        transport=live, on_run=on_run)
+                                        transport=live, on_run=on_run,
+                                        **({"hourly": hourly} if hourly else {}), **work_kwargs)
                 ok = True
             except Exception:
                 log.exception("таск-окно (без разрыва) упало")
             return ok
-        _EXPECT_DISCONNECT.set()  # 13.1: намеренный disconnect; main() должен его пережить
+        bell = _FocusYield(asyncio.get_running_loop(), work_id)
+        if not agent._is_rest_goal(goal):
+            await bell.open()
+        _EXPECT_DISCONNECT.set()  # Main loop retains this intentionally closed window.
         try:
             await client.disconnect()
         except Exception:
             log.exception("disconnect перед окном")
         try:
-            await asyncio.to_thread(agent.task_window, goal, mailbox_index=mailbox_index,
-                                    transport="closed_for_window", on_run=on_run)
+            with focus_interrupt.bind(None if agent._is_rest_goal(goal) else bell.checkpoint):
+                _OFFLINE_WORKER = asyncio.create_task(asyncio.to_thread(
+                    agent.task_window, goal, mailbox_index=mailbox_index,
+                    transport="closed_for_window", on_run=on_run, **work_kwargs))
+                try:
+                    await asyncio.shield(_OFFLINE_WORKER)
+                except asyncio.CancelledError:
+                    await asyncio.shield(_OFFLINE_WORKER)
+                    raise
             ok = True
         except Exception:
             log.exception("таск-окно упало")
         finally:
+            _OFFLINE_WORKER = None
+            if bell.token:
+                await asyncio.to_thread(bell.watch, token=bell.token, close=True)
             # restart_self уже вышел бы из процесса (bootguard поднимет); иначе переподключаемся
             # сами, и накопленный backlog приезжает одной ситуацией. _EXPECT_DISCONNECT снимаем
             # ТОЛЬКО после успешного connect — иначе пусть main() ждёт/сдастся по таймауту, а не
@@ -9026,10 +9236,96 @@ def _email_autonomous_enabled() -> bool:
     )
 
 
+async def _fire_bound_work(t: dict) -> bool | None:
+    import run_context
+    import tasks
+    import work_store
+    from core import notices
+
+    work_id, kind = t["work_id"], t.get("kind")
+    if t.get("author") != "praxis" or t.get("recur") or kind not in {"wake", "window"}:
+        log.error("Malformed focused return %s", t.get("id"))
+        return False
+    run_id = run_context.new_run_id()
+    dependency = t.get("after_forge")
+    selected = t.get("forge_result")
+
+    async def claim() -> bool:
+        row = await asyncio.to_thread(work_store.card, work_id)
+        if not row or row.get("status") in work_store.TERMINAL:
+            # An absent/unreadable card is not proof that its author cancelled it.
+            if row and row.get("status") in work_store.TERMINAL:
+                await asyncio.to_thread(tasks.cancel, t["id"])
+            return False
+        for prior in row.get("run_ids") or ():
+            if not await asyncio.to_thread(agent.run_is_terminal, prior):
+                return False  # existing run has custody; do not create a competing activation
+        if dependency:
+            import forge
+            if not selected or await asyncio.to_thread(forge.observe_focus_child, row, *dependency) != selected:
+                return False
+        return await asyncio.to_thread(tasks.claim_open, t["id"], kind,
+                                       run_id=run_id, work_id=work_id, forge_result=selected)
+
+    def confirm(opened_id: str) -> None:
+        if opened_id != run_id:
+            raise ValueError("focused return received a different run")
+        def handoff():
+            notices.bind_alarm_run(t["id"], run_id)
+            if selected:
+                _ack_focused_forge(t)
+        if not tasks.confirm_work_run(t["id"], work_id, run_id, handoff=handoff):
+            raise ValueError("focused occurrence claim changed before handoff")
+
+    return await _task_window(t.get("goal", ""), on_open=claim, on_run=confirm,
+                              keep_transport=(kind == "wake"), work_id=work_id,
+                              assigned_run_id=run_id, work_alarm_id=t["id"],
+                              **({"focus_result": selected} if selected else {}))
+
+
+def _ack_focused_forge(alarm: dict) -> None:
+    from core import events as core_events, subagents
+    import forge
+
+    task_id, unit = alarm["after_forge"]
+    # The durable bound run now owns this evidence; this is not acceptance of the patch.
+    core_events.mark_delivered([subagents.event_key(task_id, unit)])
+    forge.mark_seen([f"{task_id}:{unit}"])
+
+
+def _focused_forge_keys() -> set[str]:
+    from core import subagents
+    import tasks
+
+    return {subagents.event_key(*pair) for pair in tasks.selected_forge_pairs()}
+
+
+def _release_focused_forge_waits() -> None:
+    import forge
+    import tasks
+    import work_store
+
+    for alarm in tasks.list_open():
+        dep = alarm.get("after_forge")
+        if not (isinstance(dep, list) and len(dep) == 2) or alarm.get("forge_result"):
+            continue
+        row = work_store.card(alarm["work_id"])
+        if not row:
+            continue
+        if row.get("status") in work_store.TERMINAL:
+            tasks.cancel(alarm["id"])
+            continue
+        receipt = forge.observe_focus_child(row, *dep)
+        if receipt:
+            tasks.admit_forge_result(alarm, receipt)
+
+
 async def _fire_task(t: dict) -> bool | None:
     """Исполнить сработавшую задачу. Модель зовётся только здесь, не на каждом тике."""
     kind, goal, target = t.get("kind"), t.get("goal", ""), t.get("target", "")
     log.info("НАМЕРЕНИЕ #%s [%s] -> %s", t.get("id"), kind, (goal or target)[:60])
+    if t.get("work_id"):
+        return await _fire_bound_work(t)
     if kind in ("window", "wake", "note", "message"):
         # 18.4: ПОВТОРЯЮЩЕЕСЯ расписание при паузе фона не поднимается (слово Егора /
         # её состояние); разовые (focus, повод с пульта) — текущее дело, идут как шли.
@@ -9188,6 +9484,9 @@ async def _fire_due_tasks() -> None:
         if finished:
             await asyncio.to_thread(_tasks.clear_after_run, held["id"])
             log.info("часы: намерение #%s дождалось рана %s", held.get("id"), run_id[:12])
+    if not _ONE_MIND.locked():
+        async with _ONE_MIND:
+            await asyncio.to_thread(_release_focused_forge_waits)
     ready = await asyncio.to_thread(_tasks.due)
     for t in ready:
         durable_telegram = (
@@ -10046,7 +10345,6 @@ async def _followups_once() -> None:
 async def _run_social_pulse(pulse_id: str) -> None:
     ok = False
     outcome: bool | None = False
-    mailbox_hashes: list[str] = []
     try:
         followups = await asyncio.to_thread(telegram_followups.LEDGER.context)
         # One wake, one authored task window, one full bounded context.  Heartbeat still
@@ -10064,12 +10362,12 @@ async def _run_social_pulse(pulse_id: str) -> None:
         goal = social_pulse.goal(context)
         import mailroom
         seen = await asyncio.to_thread(social_pulse.mailbox_seen)
-        open_mail = await asyncio.to_thread(mailroom.list_open)
-        mailbox_hashes = [str(entry.get("hash")) for entry in open_mail
-                          if entry.get("hash") and entry.get("hash") not in seen][:12]
+        # Selection is not exposure: the rendered frame may replace this index
+        # with a count-only locator or omit it. Do not acknowledge selected mail here.
         mailbox_index = await asyncio.to_thread(
             mailroom.index_block, 12, exclude_hashes=seen,
         )
+        hourly = social_pulse.HourlyWindow(pulse_id, agent.run_context.new_run_id())
         with social_pulse.active(pulse_id):
             # 26.07: пульс идёт БЕЗ разрыва связи. Он — её единственное регулярное
             # автономное пробуждение, и по содержанию он социальный насквозь: открытые
@@ -10086,7 +10384,7 @@ async def _run_social_pulse(pulse_id: str) -> None:
             # Что меняется для человека: раньше его сообщение в час пульса не приходило
             # вовсе; теперь приходит сразу и отвечается следующим ходом.
             outcome = await _task_window(goal, mailbox_index=mailbox_index,
-                                         keep_transport=True)
+                                         keep_transport=True, hourly=hourly)
             if outcome is None:
                 await asyncio.to_thread(
                     social_pulse.defer, pulse_id,
@@ -10100,12 +10398,16 @@ async def _run_social_pulse(pulse_id: str) -> None:
                          max(0.0, retry_at - time.time()))
                 return
             ok = outcome
+    except asyncio.CancelledError:
+        # Cancelling the await does not cancel a running to_thread window.
+        # Preserve its claim for restart instead of stamping an invented failure.
+        outcome = None
+        raise
     finally:
         if outcome is not None:
             await asyncio.to_thread(
                 social_pulse.finish, pulse_id, ok=ok,
                 detail="hourly social scan completed" if ok else "task window failed",
-                mailbox_hashes=mailbox_hashes,
             )
 
 
@@ -10486,7 +10788,41 @@ async def _group_context_backfill_once() -> None:
 def _release_stale_task_claims() -> list:
     """Снять захваты намерений, чей подъём не состоялся. Звать ТОЛЬКО под _ONE_MIND."""
     import tasks as _tasks
-    return _tasks.release_open_claims()
+    from core import notices
+    from run_manager import RunNotFound
+
+    alarms = {row["id"]: row for row in _tasks.open_claims()}
+
+    def observe(run_id, work_id, alarm_id):
+        try:
+            manager = agent._runs()
+            try:
+                manifest = manager.manifest(run_id)
+                context = manifest.get("context") or {}
+            except RunNotFound:
+                return "absent" if manager.creation_absent(run_id) else "unknown"
+            if (context.get("run_id") != run_id or context.get("work_id") != work_id
+                    or context.get("work_alarm_id") != alarm_id
+                    or context.get("scope") != "owner" or context.get("principal_id") != "praxis:self"
+                    or context.get("origin_chat_id") is not None
+                    or context.get("delivery_chat_id") is not None
+                    or context.get("kind") not in {"task_window", "coding_window"}):
+                return "unknown"
+            import work_store
+            card = work_store.card(work_id)
+            if (manifest.get("status") in {"pending", "running", "in_doubt"}
+                    or not card or run_id not in (card.get("run_ids") or ())):
+                return "unknown"  # preserve the claim until run custody/exposure is settled
+            notices.bind_alarm_run(alarm_id, run_id)
+            alarm = alarms.get(alarm_id) or {}
+            if alarm.get("forge_result"):
+                _ack_focused_forge(alarm)
+            return "bound"
+        except Exception:
+            log.warning("Focused return claim remains unresolved: %s", run_id, exc_info=True)
+            return "unknown"
+
+    return _tasks.release_open_claims(observe)
 
 
 async def _reap_orphans_once() -> None:
@@ -10676,7 +11012,10 @@ async def _run_forge_event_pass() -> None:
         try:
             if not await asyncio.to_thread(agent.llm.configured):
                 return  # мозг недоступен: не потреблять, вернёмся когда оживёт
-            events = await asyncio.to_thread(core_events.undelivered, {"subagent_result","forge_review_result"})
+            selected = await asyncio.to_thread(_focused_forge_keys)
+            events = await asyncio.to_thread(core_events.undelivered,
+                                             {"subagent_result", "forge_review_result"},
+                                             exclude_keys=selected)
             if not events:
                 return
             _FORGE_EVENT_LAST["ts"] = time.time()
@@ -11308,7 +11647,9 @@ async def _wait_reconnected(timeout: float | None = None) -> bool:
 
     Work runs never enter this state; they leave Telethon connected."""
     deadline = time.time() + (RECONNECT_TIMEOUT_SEC if timeout is None else timeout)
-    while time.time() < deadline:
+    while time.time() < deadline or (_OFFLINE_WORKER is not None and not _OFFLINE_WORKER.done()):
+        if _SHUTDOWN.is_set():
+            return False
         if client.is_connected() or not _EXPECT_DISCONNECT.is_set():
             return True
         await asyncio.sleep(0.1)
@@ -11644,6 +11985,10 @@ async def main() -> None:
     global _self_id
     me = await client.get_me()
     _self_id = me.id
+    try:
+        focus_interrupt.publish_peer(_self_id)
+    except OSError:
+        log.warning("focus peer identity could not be published")
     _install_telegram_dispatcher()
     agent._TELETHON["find_telegram_id"] = _sync_get_id
     agent._TELETHON["resolve_entity"] = _sync_resolve_id  # PASS 12.0.b: единый резолвер постановки=отправки

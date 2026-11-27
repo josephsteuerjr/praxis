@@ -11,6 +11,7 @@ import agent
 import media
 import run_context
 import run_manager
+import run_resume
 import telegram_outbox
 import workshop
 
@@ -407,12 +408,12 @@ class AgentResumeRuntimeTests(unittest.TestCase):
             seen.append(copy.deepcopy(kwargs))
             return first if len(seen) == 1 else final
 
-        prefix = "K\n\n---\nK" + frame_serve.frame_shadow._SEP_E
+        self.enterContext(mock.patch.object(frame_serve.frame_shadow, "_read", return_value="K"))
+        prefix = frame_serve.frame_shadow._zone_k() + frame_serve.frame_shadow._SEP_E
         effect = mock.Mock(return_value="sent once")
         with mock.patch.dict(os.environ, PRAXIS_FRAME_V6="serve",
                              PRAXIS_FRAME_V6_STREAMS="dm-100", PRAXIS_OWNER_ID="100"), \
                 mock.patch.object(agent.social, "owner_id", return_value="100"), \
-                mock.patch.object(frame_serve.frame_shadow, "_read", return_value="K"), \
                 mock.patch.object(frame_measure, "assemble", return_value={"system": prefix + "E T"}), \
                 mock.patch.object(agent.llm, "chat", side_effect=provider), \
                 mock.patch.object(agent, "guard_outbound_reply", side_effect=self._guard_passthrough), \
@@ -445,8 +446,8 @@ class AgentResumeRuntimeTests(unittest.TestCase):
         events = self.manager.events(context.run_id)
         inputs = [e for e in events if e.get("kind") == "model_input"]
         self.assertEqual(len(inputs), 2)
-        saved = [json.loads(self.manager.read_result(
-            context.run_id, e["result"]["result_id"])["text"]) for e in inputs]
+        saved = [run_resume.read_full_json_result(self.manager, context.run_id, e["result"])
+                 for e in inputs]
         self.assertEqual(saved[0]["system"], seen[0]["system"])
         self.assertEqual(saved[0]["frame_v6_live_system"], live)
         self.assertEqual(inputs[0]["metadata"]["frame_serve"]["served_variant"], "v6")

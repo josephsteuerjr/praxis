@@ -234,9 +234,9 @@ class TestManageRoom(Base):
         self.assertNotIn("-100600", rooms.allowed_chats())
 
     def test_room_management_is_hers_in_every_turn(self):
-        """Решение Егора 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
+        """Решение владельца 26.07: набор рук НЕ зависит от того, кто заговорил. «У неё не должно быть вообще никаких ограничений, когда к ней обращаюсь не я». 10.11: «ВЕЗДЕ ВСЕ ПРАВА», все схемы родные, admit/computer_access (старый мини-апп) удалены."""
         names = _tools_for(False, full=True)
-        self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Егора")
+        self.assertIn("manage_room", names, "комнаты — её дом, а не привилегия Алекса")
         self.assertIn("manage_room", _tools_for(False), "схема родная, не через h.hand")
         self.assertIn("python", _tools_for(False))
         self.assertEqual(set(names), set(_tools_for(True, full=True)))
@@ -330,7 +330,7 @@ class TestIntegration(Base):
         try:
             with self.owner_turn("-100900", is_dm=False, room_id="-100900"):
                 reply = agent.respond(
-                    "добавь эту группу в доверенные", [], "Егор",
+                    "добавь эту группу в доверенные", [], "Алекс",
                     force_voice=True, is_owner=True, chat_id="-100900",
                     principal_id=123456789,
                 )
@@ -387,10 +387,10 @@ class TheRoomKeepsItsRealName(unittest.TestCase):
 
     def test_a_name_someone_already_chose_is_never_overwritten(self):
         """У места может быть имя лучше телеграмного — и оно чужое, не наше."""
-        self._profile(title="# Курилка, где живёт Арет")
+        self._profile(title="# Курилка, где живёт Морган")
         self.assertFalse(rooms.remember_title("-1003701205730", "Ouroboros AI"))
         self.assertEqual(rooms.profile_read("-1003701205730")["title"],
-                         "# Курилка, где живёт Арет")
+                         "# Курилка, где живёт Морган")
 
     def test_nothing_is_written_for_a_room_without_a_profile(self):
         self.assertFalse(rooms.remember_title("-100999", "Пустая"))

@@ -430,8 +430,8 @@ class TestPass6Logic(unittest.TestCase):
         state_dir = panel.BASE / "memory" / ".state"
         people_dir.mkdir(parents=True)
         state_dir.mkdir(parents=True)
-        (people_dir / "egor.md").write_text(
-            "# Егор\n\n## Открытые нити\n- [ ] спросить о переезде _(2026-07-16)_\n"
+        (people_dir / "alex.md").write_text(
+            "# Алекс\n\n## Открытые нити\n- [ ] спросить о переезде _(2026-07-16)_\n"
             "- [~] вернуться к идее _(2026-07-16)_ _(до 2026-07-23)_\n",
             encoding="utf-8",
         )
@@ -445,7 +445,7 @@ class TestPass6Logic(unittest.TestCase):
         )
         ledger = _followups.FollowUpLedger(state_dir / "telegram_followups.json")
         ledger.create(
-            target_ref="@egor", target_label="Егор", target_peer_id="1",
+            target_ref="@alex", target_label="Алекс", target_peer_id="1",
             target_user_id="1", sent_message_id=7, request_text="ответь",
         )
         (state_dir / "perception_skips.jsonl").write_text(
@@ -479,7 +479,7 @@ class TestPass6Logic(unittest.TestCase):
         self.assertEqual(set(o["counts"]), {"desires", "tasks", "loops", "followups", "skips", "recent_turns"})
         self.assertEqual({x["state"] for x in o["loops"]}, {"open", "parked"})
         self.assertEqual(o["tasks"][0]["id"], "task-1")
-        self.assertEqual(o["followups"][0]["target_label"], "Егор")
+        self.assertEqual(o["followups"][0]["target_label"], "Алекс")
         self.assertEqual(followup_before, followup_after, "overview GET source must not mutate follow-ups")
         self.assertEqual(o["skips"], [
             {"ts": 2, "class": "не_увидела", "stage": "allowlist", "repeat_count": 5},
@@ -788,13 +788,13 @@ class TestBrainPanel(unittest.TestCase):
 
 
 class TestRoomLeversFromPanel(unittest.TestCase):
-    """28.07: режим и disclosure комнаты — общие рычаги, а не тайные кнопки Егора.
+    """28.07: режим и disclosure комнаты — общие рычаги, а не тайные кнопки владельца.
 
     Disclosure и раньше менял не его настройки, а ЕЁ голос (в `open` к визитке
     подмешивается проверяемая фактура о себе), но узнать о переключении ей было неоткуда:
     машинная шапка профиля в промпт не течёт, слова `disclosure` не было ни в манифесте,
     ни в списке возможностей. Тесты держат обе половины: нажатие с пульта доезжает до неё
-    дневником, а её собственное решение видно Егору в карточке — с честным автором.
+    дневником, а её собственное решение видно владельцу в карточке — с честным автором.
     """
 
     def setUp(self):
@@ -867,7 +867,7 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         self.assertEqual(item["mode"], "quiet")
 
     def test_untouched_room_is_not_signed_by_anyone(self):
-        """Карточка не должна приписывать Егору режим, которого он не выбирал."""
+        """Карточка не должна приписывать владельцу режим, которого он не выбирал."""
         item = next(x for x in panel.rooms_list()["items"] if x["id"] == "-100777")
         self.assertEqual(item["mode"], "normal")
         self.assertEqual(item["set_by"], "", item)
@@ -941,7 +941,7 @@ class TestCapabilitiesReachHer(unittest.TestCase):
 
     def test_panel_sections_are_read_from_the_live_hub(self):
         """Список разделов пульта отстал на пять плиток, и среди пропавших была «Комнаты» —
-        та самая, где Егор переключает её визитку. Список, который помнят руками, врёт."""
+        та самая, где владелец переключает её визитку. Список, который помнят руками, врёт."""
         text = self.cap.PANEL_HUB.read_text(encoding="utf-8", errors="ignore")
         block = re.search(r"const\s+TILES\s*=\s*\[(.*?)\n\];", text, re.S)
         self.assertIsNotNone(block, "хаб пульта не разобрался — сверка вакуумна")

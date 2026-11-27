@@ -6,7 +6,7 @@ source paths. Root platform sidecars (including portable BusyBox) stay adjacent
 to Python: Windows searches System32 before PATH for a bare child executable.
 The Git distribution, models and owner state are never copied.
 """
-from pathlib import Path
+from .windows_paths import Path, walk
 import hashlib,json,os,re,stat,sys
 
 
@@ -141,7 +141,7 @@ def _prevent_bytecode(layout,target,stopped=lambda:False):
 def verify(layout,target,stopped=lambda:False):
     if layout is None:return
     target=Path(target);found=set()
-    for directory,dirs,names in os.walk(target):
+    for directory,dirs,names in walk(target):
         for name in [*dirs,*names]:
             p=Path(directory)/name;info=p.lstat()
             if stat.S_ISLNK(info.st_mode) or getattr(info,'st_file_attributes',0)&0x400:

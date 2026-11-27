@@ -1,5 +1,5 @@
 """Explicit code-only update policy, bound to one selected delivery and target."""
-from pathlib import Path
+from .windows_paths import Path
 import time
 from .package_notice import read,write
 from . import source_merge as merge

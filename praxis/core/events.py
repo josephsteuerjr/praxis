@@ -190,7 +190,8 @@ def known_keys() -> set:
         return {_key_of(e) for e in _read_journal() if _key_of(e)}
 
 
-def undelivered(kinds: set | None = None, limit: int = 50) -> list[dict]:
+def undelivered(kinds: set | None = None, limit: int = 50, *,
+                exclude_keys: set[str] | None = None) -> list[dict]:
     """Недоставленные события (по одному на dedup_key, старые → новые). Только раннер."""
     with _LOCK:
         delivered = _load_delivered()
@@ -198,7 +199,7 @@ def undelivered(kinds: set | None = None, limit: int = 50) -> list[dict]:
         out: list[dict] = []
         for e in _read_journal():
             key = _key_of(e)
-            if not key or key in delivered or key in seen_here:
+            if not key or key in delivered or key in seen_here or (exclude_keys and key in exclude_keys):
                 continue
             if kinds and e.get("kind") not in kinds:
                 continue

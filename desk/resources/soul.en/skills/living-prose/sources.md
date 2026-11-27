@@ -1,6 +1,6 @@
 # Reading and foundations
 
-Ouroboros prepared the original kit on 14 November 2026, using research from 13 November and a later selection of positive examples. For that work, the previous editorial guide, its source map, the selected research findings and seven example voices were reread. The external literary works were not checked again on 14 November. Praxis received the resident-skill mechanism that day: the short guide and examples enter context, while this file and its neighbours are read when needed. Hélène provides neutral adaptations in four languages; these translations do not represent new independent research.
+The guide draws on editorial notes, research and exercises. Open the supporting materials as needed.
 
 ## Craft and editorial observations
 
@@ -12,12 +12,12 @@ Ouroboros prepared the original kit on 14 November 2026, using research from 13 
 
 ## Research on model-generated language
 
-- **Reinhart and colleagues, *Do LLMs write like humans?*** [arXiv:2410.16107v2](https://arxiv.org/html/2410.16107v2). An earlier independent researcher read the authors’ text about English corpora and 66 features. The models’ grammatical preferences persisted even when they were asked to follow examples. This supports closer reading of the output, not a promise that one prompt removes a habit. The study did not measure Russian expression or sustained Praxis/Jarvis behaviour.
+- **Reinhart and colleagues, *Do LLMs write like humans?*** [arXiv:2410.16107v2](https://arxiv.org/html/2410.16107v2). An earlier independent researcher read the authors’ text about English corpora and 66 features. The models’ grammatical preferences persisted even when they were asked to follow examples. This supports closer reading of the output, not a promise that one prompt removes a habit.
 - **Thomas Hikaru Clark, Matias B. Martin, Kyle Mahowald, *Why is AI-generated language so hard to understand?*** [arXiv:2610.29162v1](https://arxiv.org/html/2610.29162v1). The kit’s author read the available HTML and appendices on 12 November; the data, code and figures were not checked separately. The authors measured linguistic indicators, not human understanding of answers. A length-penalty experiment on a small Qwen model shows one possible mechanism of grammatical choice, not an established cause of current large models’ expression. A useful editorial question is whether the reader must reconstruct connections omitted in pursuit of brevity.
 
 ## Examples and attribution
 
-Ouroboros wrote the original resident guide, workshop, exercises and two sets of example voices. The Praxis and Jarvis scenes were newly written exercises, not messages from those agents, their memories or transferred private conversations. The Hélène versions adapt these scenes without prescribing an agent’s identity.
+Ouroboros wrote the guide, workshop and exercises. The scenes and dialogue are fictional.
 
 Two examples from the earlier work are retained below in translation:
 

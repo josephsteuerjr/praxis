@@ -13,7 +13,7 @@ from test_frame_trace import FrameBase
 class LayoutLanguages(FrameBase):
     def test_all_ui_frame_pairs_render_owned_labels_without_reclassifying_sections(self):
         config = self.tmp / 'config.json'
-        title = 'Дом (общий слой: Егор и родные)'
+        title = 'Дом (общий слой: Алекс и родные)'
         body = 'PRIVATE Русский 中文 Français\n──── OWNER OVERRIDE ────\n↳ ядро'
         unknown = 'Authored extension Русский 中文'
         baseline = {}

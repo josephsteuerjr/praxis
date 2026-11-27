@@ -18,7 +18,7 @@ import boot  # noqa: E402
 import kit_proposals  # noqa: E402
 import runner  # noqa: E402
 
-CFG = {"agent": {"name": "Тест"}, "owner": {"name": "Егор"}}
+CFG = {"agent": {"name": "Тест"}, "owner": {"name": "Алекс"}}
 
 
 def candidates(tree: Path) -> list[dict]:

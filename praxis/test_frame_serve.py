@@ -26,7 +26,7 @@ class CanaryBoundary(unittest.TestCase):
         source = patch.object(serve.frame_shadow, '_read', return_value='CONSTITUTION')
         source.start()
         self.addCleanup(source.stop)
-        self.k = 'CONSTITUTION\n\n---\nCONSTITUTION' + serve.frame_shadow._SEP_E
+        self.k = serve.frame_shadow._zone_k() + serve.frame_shadow._SEP_E
         self.system = [{'type': 'text', 'text': 'LIVE', 'cache_control': {'type': 'ephemeral'}}]
         self.messages = [{'role': 'user', 'content': 'recipient=owner evidence now'}]
         self.tools = [{'name': 'shell', 'input_schema': {'type': 'object'}}]
@@ -240,6 +240,9 @@ class CanaryBoundary(unittest.TestCase):
         use = {'type': 'tool_use', 'id': 'p', 'name': 'shell', 'input': {}}
         result = {'type': 'tool_result', 'tool_use_id': 'p', 'content': 'done'}
         request = SimpleNamespace(
+            context=agent.run_context.RunContext.create(kind='chat_turn', scope='owner',
+                                                        goal='canary', principal_id='101',
+                                                        origin_chat_id=101),
             model_input={'system': 'STALE_CANARY', 'frame_v6_live_system': self.system,
                          'messages': tape, 'tools': self.tools},
             model_output={'stop_reason': 'tool_use', 'blocks': [use]},

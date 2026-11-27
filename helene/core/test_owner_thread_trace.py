@@ -1,6 +1,6 @@
-"""След её собственной реплики в личке Егора — её память, а не отчёт ему.
+"""След её собственной реплики в личке владельца — её память, а не отчёт ему.
 
-01.08 она дважды за утро поздоровалась с Егором: два часовых пульса подряд (03:30 и
+01.08 она дважды за утро поздоровалась с владельцем: два часовых пульса подряд (03:30 и
 05:30 UTC) выбрали написать, и второй не знал о первом. Внутри пульса Telethon разорван,
 буфер лички не читается вовсе (chat_id=None), `said_recently` из боевого кода не зовётся —
 единственным каналом «что я уже сказала и кому» остаётся леджер нитей. А в нём по личке
@@ -45,13 +45,13 @@ class OwnerTraceTests(unittest.TestCase):
 
     def test_owner_dm_leaves_a_trace_she_can_read(self):
         """Без этой записи внутри пульса у неё нет ни одного способа узнать,
-        что она уже писала Егору."""
-        self._create("809306689", self.now - 60, "Доброе утро, солнце.")
+        что она уже писала владельцу."""
+        self._create("424242424", self.now - 60, "Доброе утро, солнце.")
         text = fu.LEDGER.context()
-        self.assertIn("809306689", text, "следа по личке владельца снова нет")
+        self.assertIn("424242424", text, "следа по личке владельца снова нет")
 
     def test_the_trace_does_not_become_a_report_to_him(self):
-        item = self._create("809306689", self.now - 60, "Доброе утро, солнце.",
+        item = self._create("424242424", self.now - 60, "Доброе утро, солнце.",
                             request="", notify=False)
         self.assertFalse(item.get("notify_owner"),
                          "след превратился в отчёт — ровно то, что чинили 27.07")
@@ -59,9 +59,9 @@ class OwnerTraceTests(unittest.TestCase):
     def test_the_feed_shows_the_freshest_not_the_stalest(self):
         for i in range(18):
             self._create(f"-100{i:04d}", self.now - (60 - i) * 3600, f"чужая нить {i}")
-        newest = self._create("809306689", self.now - 60, "Доброе утро, солнце.")
+        newest = self._create("424242424", self.now - 60, "Доброе утро, солнце.")
         text = fu.LEDGER.context(limit=12)
-        self.assertIn("809306689", text,
+        self.assertIn("424242424", text,
                       "свежую нить вытеснил backlog — она снова не увидит себя")
         self.assertIsNotNone(newest)
 
@@ -104,7 +104,7 @@ class ScratchClockTests(unittest.TestCase):
 
 class RepeatEchoIsAdviceNotFenceTests(unittest.TestCase):
     """`said_recently` существует, ничего не запрещает и до 01.08 из боевого кода не
-    вызывался ни разу. 26.07 Егор получил одно и то же дважды за семь минут, 01.08 —
+    вызывался ни разу. 26.07 владелец получил одно и то же дважды за семь минут, 01.08 —
     «доброе утро» дважды за утро. Теперь шов отправки хотя бы говорит вслух."""
 
     def test_the_seam_asks_before_the_note_is_written(self):
@@ -199,7 +199,7 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
     def test_a_tool_send_reaches_the_digest(self):
         import agent
 
-        self._sent("-1001240718803", "Поправка про рабочий движок.")
+        self._sent("-100999999999999999", "Поправка про рабочий движок.")
         digest = agent.my_sends_today_digest()
         self.assertIn("Поправка про рабочий движок", digest,
                       "отправка туром снова не видна в обзоре «кому я уже писала»")
@@ -209,8 +209,8 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         права вытеснить настоящее сообщение: в обзоре одна строка на место."""
         import agent
 
-        self._sent("-1001240718803", "Настоящее сообщение.", at=self.now - 600)
-        self._sent("-1001240718803", "чиню тест, вернусь через минуту",
+        self._sent("-100999999999999999", "Настоящее сообщение.", at=self.now - 600)
+        self._sent("-100999999999999999", "чиню тест, вернусь через минуту",
                    purpose="tool:narrate", at=self.now - 60)
         digest = agent.my_sends_today_digest()
         self.assertIn("Настоящее сообщение", digest)
@@ -219,7 +219,7 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
     def test_yesterday_stays_out(self):
         import agent
 
-        self._sent("-1001240718803", "вчерашнее", at=self.now - 36 * 3600)
+        self._sent("-100999999999999999", "вчерашнее", at=self.now - 36 * 3600)
         self.assertNotIn("вчерашнее", agent.my_sends_today_digest())
 
     def test_one_place_one_line_and_the_freshest_wins(self):
@@ -227,8 +227,8 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         последнее сказанное. Иначе восемь строк заняла бы одна оживлённая комната."""
         import agent
 
-        self._sent("-1001240718803", "первое", at=self.now - 900)
-        self._sent("-1001240718803", "последнее", at=self.now - 120)
+        self._sent("-100999999999999999", "первое", at=self.now - 900)
+        self._sent("-100999999999999999", "последнее", at=self.now - 120)
         digest = agent.my_sends_today_digest()
         self.assertEqual(len([ln for ln in digest.splitlines() if ln.startswith("- ")]), 1)
         self.assertIn("последнее", digest)

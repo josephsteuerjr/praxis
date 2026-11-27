@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from run_context import RunContext
 from run_executor import (
@@ -248,6 +249,17 @@ class TestToolReplay(RunExecutorBase):
         self.assertIsInstance(request, ToolResponseContinuationRequest)
         self.assertEqual(request.resolutions[0].result_ref, completed.result_ref)
 
+    def test_completed_resultref_for_another_call_is_refused_before_lease(self):
+        recorder = Recorder()
+        completed = ToolCallResume(
+            call_id="done-one", name="fs_read", input={"path": "README.md"},
+            state="completed", result_ref=self.result_ref("another-call"),
+        )
+        outcome = execute_resume(self.replay_plan((completed,)), recorder.callbacks())
+        self.assertEqual(outcome.status, "invalid_plan")
+        self.assertIn("ResultRef belongs to another call", outcome.reason)
+        self.assertEqual(recorder.calls, [])
+
     def test_pending_and_safe_outstanding_are_dispatched_in_model_order(self):
         recorder = Recorder()
         calls = (
@@ -308,6 +320,49 @@ class TestToolReplay(RunExecutorBase):
         outcome = execute_resume(plan, recorder.callbacks())
         self.assertEqual(outcome.status, "invalid_plan")
         self.assertEqual(recorder.calls, [])
+
+    def test_hourly_wrapped_closing_cannot_authorize_pending_or_outstanding_replay(self):
+        for state, replayable, basis in (("pending_start", False, ""),
+                                        ("outstanding", True, "read_only")):
+            with self.subTest(state=state):
+                recorder = Recorder()
+                call = ToolCallResume(
+                    call_id="close", name="end_turn", input={"outcome": "done"},
+                    state=state, replayable=replayable, replay_basis=basis,
+                )
+                context = RunContext.create(
+                    run_id="run-executor", kind="task_window", goal="resume hourly",
+                    principal_id="praxis:self", scope="owner", hourly_pulse_id="pulse_000000000000",
+                ).with_status("paused")
+                plan = replace(self.replay_plan((call,)), context=context)
+                plan.model_input["tools"] = [{"name": "call"}]
+                plan.model_output["blocks"][0].update(
+                    name="call", input={"name": "end_turn", "args_json": '{"outcome":"done"}'},
+                )
+                outcome = execute_resume(plan, recorder.callbacks())
+                self.assertEqual(outcome.status, "invalid_plan")
+                self.assertIn("requires an accepted ResultRef", outcome.reason)
+                self.assertEqual(recorder.calls, [])
+
+    def test_wrapped_review_cannot_authorize_pending_or_outstanding_replay(self):
+        args = {"task_id": "code-12345678", "action": "status"}
+        for state, replayable, basis in (("pending_start", False, ""),
+                                        ("outstanding", True, "read_only")):
+            with self.subTest(state=state):
+                recorder = Recorder()
+                call = ToolCallResume(
+                    call_id="review", name="coding_review", input=args,
+                    state=state, replayable=replayable, replay_basis=basis,
+                )
+                plan = self.replay_plan((call,))
+                plan.model_input["tools"] = [{"name": "call"}]
+                plan.model_output["blocks"][0].update(
+                    name="call", input={"name": "coding_review", "args_json": args},
+                )
+                outcome = execute_resume(plan, recorder.callbacks())
+                self.assertEqual(outcome.status, "invalid_plan")
+                self.assertIn("unsettled wrapped coding_review", outcome.reason)
+                self.assertEqual(recorder.calls, [])
 
     def test_unoffered_model_tool_is_rejected_before_lease(self):
         recorder = Recorder()

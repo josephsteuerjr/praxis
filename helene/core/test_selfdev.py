@@ -112,7 +112,7 @@ class SelfdevFlow(unittest.TestCase):
         self.assertIn("новая строка", (self.repo / "soul" / "note.md").read_text(encoding="utf-8"))
 
     def test_red_tests_block_automerge_immune(self):
-        # 26.09: красный гейт блокирует автомёрж (слово Егора). Без override_reason
+        # 26.09: красный гейт блокирует автомёрж (слово владельца). Без override_reason
         # предложение остаётся proposed, красные тесты видны, master не тронут.
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")  # smoke-тест упадёт
         msg = selfdev.submit(pid, "сломать всё", review=RV, reviewer=GN)
@@ -203,7 +203,7 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_reject_writes_journal_signal(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-        res = selfdev.reject(pid, "не время", by="egor")
+        res = selfdev.reject(pid, "не время", by="alex")
         self.assertTrue(res["ok"])
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "rejected")

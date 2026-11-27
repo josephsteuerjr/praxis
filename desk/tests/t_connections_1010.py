@@ -13,6 +13,7 @@ import types
 import unittest
 from unittest import mock
 import urllib.error
+import zipfile
 
 DESK=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(DESK),str(DESK/'localharness')]
@@ -110,6 +111,7 @@ class Transfer(unittest.TestCase):
         mock.patch.object(transfer.owner_stop,'stopped',return_value=True).start()
         mock.patch.object(transfer,'execute',side_effect=self.execute).start()
         mock.patch.object(transfer,'probe',side_effect=self.probe).start()
+        self.real_export = transfer.carry.export
         mock.patch.object(transfer.carry,'export',side_effect=self.export).start()
         mock.patch.object(transfer.remote_locator,'locate',return_value='https://verified.test').start()
         mock.patch.object(transfer.remote_locator,'read',side_effect=lambda r: {'stopped':False} if r.full_url.endswith('/panic') else {'kind':'serverboot','alive':True,'children':[{'id':'channel','alive':True},{'id':'runner','alive':True}]} if r.full_url.endswith('/supervisor') else {'agent':{'name':'fixture'},'desk':{'version':'2.7.9'},'runner':{'alive':True}}).start()
@@ -138,6 +140,33 @@ class Transfer(unittest.TestCase):
         self.assertTrue(Path(result['archive']).is_relative_to(self.root/'data/memory/.state/server-transfer-archives'))
         row=transfer.saved_transfer(self.config);self.assertEqual(row['phase'],'ready')
         self.assertNotIn('never-in-argv',json.dumps(row));self.assertNotIn('new-owner-key',json.dumps(row))
+    def test_secondary_profile_exports_and_ships_its_own_program(self):
+        from localharness import agents
+        main = {**json.loads(self.config.read_bytes()), 'code': 'tree', 'app': 'app/code.py'}
+        (self.program / 'helene.json').write_text(json.dumps(main))
+        peer = agents.create(self.program, 'Secondary')
+        cfg = agents.read_config(peer.config)
+        cfg.update(code='my-code', app='my-app/channel.py', telegram=main['telegram'])
+        agents._write_config(peer.config, cfg)
+        peer.tree.mkdir(parents=True, exist_ok=True)
+        for name in ('my-code/agent.py', 'my-app/channel.py'):
+            file = peer.config.parent / name
+            file.parent.mkdir(exist_ok=True)
+            file.write_bytes(name.encode())
+        # The transfer test normally stubs the exporter. Here both uploads must
+        # contain the selected profile's bytes after going through the normal move.
+        transfer.carry.export.side_effect = self.real_export
+        result = transfer.run(self.raw, peer.config, self.program)
+        self.assertTrue(result['ok'])
+        with zipfile.ZipFile(result['archive']) as archive:
+            self.assertEqual(archive.read('code/whole/tree/agent.py'), b'my-code/agent.py')
+            self.assertEqual(archive.read('code/whole/app/channel.py'), b'my-app/channel.py')
+        uploaded = next(blob for path, blob in self.files.items() if path.endswith('/program.tar.gz'))
+        with tarfile.open(fileobj=io.BytesIO(uploaded)) as kit:
+            self.assertEqual(kit.extractfile('tree/agent.py').read(), b'my-code/agent.py')
+            self.assertEqual(kit.extractfile('app/channel.py').read(), b'my-app/channel.py')
+            self.assertNotIn('app/code.py', kit.getnames())
+
     def test_archive_is_exported_under_the_actual_runner_lease(self):
         exported=self.export
         def capture(config,path,**kwargs):

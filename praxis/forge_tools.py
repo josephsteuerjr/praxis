@@ -1,4 +1,17 @@
 """Forge team schema additions, kept separate from Praxis's authored tool text."""
+
+
+def source_selection_schema(*, nested=False):
+    guidance = ("Select only a subset of the exact source revisions already granted to you; "
+                "omitted carries no source bytes." if nested else
+                "Grant exact non-private UTF-8 task workspace files; obtain the full hash with "
+                "coding_inspect(action=source_revision,path=...). Never attach secrets or private records.")
+    return {'type': 'array', 'maxItems': 8, 'description': guidance,
+            'items': {'type': 'object', 'additionalProperties': False,
+                      'properties': {'path': {'type': 'string'}, 'sha256': {'type': 'string'}},
+                      'required': ['path', 'sha256']}}
+
+
 def extend(tools,obj):
     by_name={t['name']:t for t in tools}
     def properties(name):return by_name[name]['input_schema']['properties']
@@ -10,11 +23,12 @@ def extend(tools,obj):
                   'phase':{'type':'string'},'success_criteria':{'type':'array','items':{'type':'string'}}})
     agent.update({'payload_sha256':{'type':'string'},'kind':{'type':'string','enum':['payload','result','request']},
                   'offset':{'type':'integer'},'limit':{'type':'integer'},'after_seq':{'type':'integer'}})
+    agent['sources']=source_selection_schema()
     by_name['coding_agent']['description']='Spawn/poll/stop/list a real fresh-context team member, record exact-result disposition, or drain the durable queue. payload reads an exact result/request/payload page: pass payload_sha256 (result_sha256 is also accepted for kind=result); follow next_offset until complete. events reads ordered durable events. Parent identity is runtime-owned; queued editing workers share one root. Read-only critics advise; acceptance never relabels their findings.'
     swarm=properties('coding_swarm');swarm['action']['enum']+=['checkpoint','rework']
     swarm['result_sha256']={'type':'string'}
     by_name['coding_swarm']['description']='Durable dependency graph, exact-result acceptance and rework. plan nodes include phase/success_criteria; dependencies require the exact accepted result revision. For action=checkpoint put a JSON object with next_action/unresolved_reviews in plan (message accepts the same object for compatibility). rework needs node_id, current result_sha256 and concrete correction message. Ownership is advisory.'
-    properties('coding_inspect')['action']['enum']+=['coordination']
+    properties('coding_inspect')['action']['enum']+=['coordination','source_revision']
     tools.extend([
         {'name':'coding_control','description':'Pause/Stop/Resume a task or selected agent subtree. Resume needs current generation and proven old-writer exit, creates a new identity and retains history. For damaged shared history, prepare_recovery preserves exact journal bytes and a pre-reboot witness; it requires host_binding=verified-local-execution-host and a concrete reason on the independently verified original Linux host, after Stop. After an actual later reboot of that same host, recover can release old process custody. Unknown action outcomes remain unknown; this does not reboot, resend or replay anything. Diagnostic codes include exact line, byte offset and hashes when available.',
          'input_schema':obj({'task_id':{'type':'string'},'action':{'type':'string','enum':['pause','stop','resume','prepare_recovery','recover']},

@@ -44,7 +44,7 @@ class TurnsBase(Base):
         turns._reset()
         self.addCleanup(turns._reset)  # кольцо в RAM — процесс-глобал, чистим и после
 
-    def _mk(self, kind="chat", chat_id="777", scope="owner", who="Егор",
+    def _mk(self, kind="chat", chat_id="777", scope="owner", who="Алекс",
             out="ответ", ts=None, **fields):
         t = turns.begin(kind=kind, chat_id=chat_id, scope=scope, who=who,
                         gist_in=fields.pop("gist_in", f"{who}: привет"))
@@ -62,15 +62,15 @@ class TurnsBase(Base):
 
 class TestTurnsCore(TurnsBase):
     def test_roundtrip_and_gist_is_last_line(self):
-        self._mk(gist_in="Praxis: раньше\nЕгор: глянь логи\n", out="смотрю")
+        self._mk(gist_in="Praxis: раньше\nАлекс: глянь логи\n", out="смотрю")
         rows = turns.recent()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["in"], "Егор: глянь логи")
+        self.assertEqual(rows[0]["in"], "Алекс: глянь логи")
         self.assertEqual(rows[0]["out"], "смотрю")
         self.assertTrue(turns.PATH.exists(), "запись должна дойти до jsonl")
 
     def test_clip_on_write_not_on_read(self):
-        t = turns.begin(gist_in="Егор: " + "х" * 900)
+        t = turns.begin(gist_in="Алекс: " + "х" * 900)
         t["out"] = "о" * 900
         t["why"] = "п" * 900
         t["tools"] = [f"tool_{i}(" + "a" * 300 + ")→рез" for i in range(20)]
@@ -104,7 +104,7 @@ class TestTurnsCore(TurnsBase):
         raw_multi = json.loads(turns.PATH.read_text(encoding="utf-8").splitlines()[-1])
         self.assertEqual(raw_multi["out"], multi, "мульти-чанк не режется на 4000")
         # страховочный потолок всё же есть — но обрезка НЕ молчаливая (маркер)
-        t = turns.begin(gist_in="Егор: тест")
+        t = turns.begin(gist_in="Алекс: тест")
         t["out"] = "б" * (turns.OUT_CHARS + 500)
         turns.record(t)
         raw2 = json.loads(turns.PATH.read_text(encoding="utf-8").splitlines()[-1])
@@ -162,7 +162,7 @@ class TestTurnsCore(TurnsBase):
         self._mk(chat_id="-1001999", scope="group", who="Вася",
                  gist_in="Вася: у меня развод и долг 400 тысяч",
                  out="ответила Васе про его долг")
-        self._mk(chat_id="555000100", scope="owner", who="Егор",
+        self._mk(chat_id="555000100", scope="owner", who="Алекс",
                  out="запушила baseline 305fb99")
         for i in range(6):
             self._mk(chat_id="-1002222", scope="group", who="кто-то", out=f"шум {i}")
@@ -384,7 +384,7 @@ class TestTurnsCore(TurnsBase):
         with turns.PATH.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "ts": time.time(), "kind": "chat", "chat_id": "777", "scope": "owner",
-                "who": "Егор", "in": "Егор: ?", "out": "старая строка без поля",
+                "who": "Алекс", "in": "Алекс: ?", "out": "старая строка без поля",
                 "held": "", "tools": [],
             }, ensure_ascii=False) + "\n")
         turns._reset()
@@ -414,12 +414,12 @@ class TestTurnsCore(TurnsBase):
             "empty": "не родился",
         }
         for held, marker in cases.items():
-            t = turns.begin(gist_in="Егор: ?")
+            t = turns.begin(gist_in="Алекс: ?")
             t["held"] = held
             self.assertIn(marker, turns.format_line(t), held)
         # Глагол теперь берётся из ФАКТА доставки, а не из наличия черновика:
         # без расписки ход честно читается как написанный, а не произнесённый.
-        t = turns.begin(gist_in="Егор: ?")
+        t = turns.begin(gist_in="Алекс: ?")
         t.update(out="ответ", rewrote=True, why="лесть")
         line = turns.format_line(t)
         self.assertIn("написано (доставка не подтверждена)", line)
@@ -436,7 +436,7 @@ class TestTurnsCore(TurnsBase):
 
         # Легаси-строки (поля нет вовсе) читаются по-старому: прошлое не переписываем.
         legacy = {"ts": t["ts"], "kind": "chat", "chat_id": "777", "scope": "owner",
-                  "in": "Егор: ?", "out": "ответ"}
+                  "in": "Алекс: ?", "out": "ответ"}
         self.assertIn("сказано", turns.format_line(legacy))
 
     def test_turn_without_an_addressee_is_not_recorded_as_spoken(self):
@@ -546,14 +546,14 @@ class TestTurnsCore(TurnsBase):
 class TestLiveRecording(TurnsBase):
     def test_spoken_turn_recorded(self):
         self._client("ответ по делу")
-        out = agent.voice_turn("777", "Егор: привет", speaker="Егор", is_owner=True)
+        out = agent.voice_turn("777", "Алекс: привет", speaker="Алекс", is_owner=True)
         self.assertEqual(out, "ответ по делу")
         rows = turns.recent()
         self.assertEqual(len(rows), 1)
         r = rows[0]
         self.assertEqual((r["kind"], r["scope"], r["out"], r["held"]),
                          ("chat", "owner", "ответ по делу", ""))
-        self.assertEqual(r["in"], "Егор: привет")
+        self.assertEqual(r["in"], "Алекс: привет")
 
     def test_own_silence_recorded(self):
         self._client("[молчу]")
@@ -564,7 +564,7 @@ class TestLiveRecording(TurnsBase):
         self.assertEqual(r["why"], "")
 
     def test_credential_floor_hold_recorded(self):
-        # Кред-пол — единственное, что держит слово на выходе (Егор 10.11, «сними»).
+        # Кред-пол — единственное, что держит слово на выходе (владелец 10.11, «сними»).
         self._orig.append((agent._core_secrets, "credential_floor",
                            agent._core_secrets.credential_floor))
         agent._core_secrets.credential_floor = lambda text, context="": "api-token"
@@ -589,7 +589,7 @@ class TestLiveRecording(TurnsBase):
 
     def test_owner_dm_records_exact_unmediated_output(self):
         self._client("Мне повезло с архитектором. Тесты зелёные.")
-        out = agent.voice_turn("777", "Егор: как тесты?", speaker="Егор", is_owner=True)
+        out = agent.voice_turn("777", "Алекс: как тесты?", speaker="Алекс", is_owner=True)
         self.assertEqual(out, "Мне повезло с архитектором. Тесты зелёные.")
         r = turns.recent()[-1]
         self.assertFalse(r["rewrote"])
@@ -612,12 +612,12 @@ class TestLiveRecording(TurnsBase):
             raise RuntimeError("сломалась")
         agent._voice = boom
         self._client("не дойдёт")
-        out = agent.voice_turn("777", "Егор: ау", speaker="Егор", is_owner=True)
+        out = agent.voice_turn("777", "Алекс: ау", speaker="Алекс", is_owner=True)
         self.assertEqual(out, "")
         self.assertEqual(turns.recent()[-1]["held"], "error")
 
     def test_heartbeat_and_window_are_turns_too(self):
-        self._client("написала Егору о находке")
+        self._client("написала Алексу о находке")
         agent.heartbeat_turn("хвост дневника")
         self._client("закрыла нить про отпуск")
         agent.task_window("разобрать нить")
@@ -642,7 +642,7 @@ class TestLiveRecording(TurnsBase):
 class TestConsumers(TurnsBase):
     def test_group_turn_makes_one_model_call_and_no_judge_call(self):
         # Раньше вторым вызовом шёл outbound-советник приватности со свежими ходами канала.
-        # Егор 10.11 («сними»): советника нет — ход группы стоит ровно одного вызова мозга.
+        # владелец 10.11 («сними»): советника нет — ход группы стоит ровно одного вызова мозга.
         self._mk(chat_id="-100", scope="group", who="вася", out="MARKER_GRP ответила в группе")
         sc = ScriptedClient(["ответ в группу"])
         llm.use_test_client(sc)

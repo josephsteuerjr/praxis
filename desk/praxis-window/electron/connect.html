@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'" />
+    <title>Праксис</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f8eee0; color: #262320; font: 15px/1.5 "Golos Text", "Segoe UI", sans-serif; }
+      header { height: 46px; display: flex; align-items: center; padding-left: 24px; -webkit-app-region: drag; }
+      header strong { font-weight: 500; }
+      main { max-width: 440px; margin: 18vh auto; padding: 0 24px; }
+      label { display: block; margin: 14px 0 6px; font-size: 14px; }
+      input { display: block; width: 100%; padding: 10px 12px; border: 1px solid #cbbba8; background: #fffaf3; border-radius: 8px; font: inherit; }
+      button { margin-top: 14px; padding: 9px 18px; border: 1px solid #b9651e; background: #b9651e; color: #fff; border-radius: 8px; font: inherit; }
+      p { margin: 0 0 6px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header><strong>Праксис</strong></header>
+    <main>
+      <p id="status" role="status">Подключаюсь…</p>
+      <button id="retry" type="button" hidden>Повторить</button>
+      <form hidden>
+        <label for="key">Ключ подключения</label>
+        <input id="key" type="password" autocomplete="off" />
+        <button type="submit">Подключиться</button>
+      </form>
+    </main>
+    <script src="./connect.cjs"></script>
+  </body>
+</html>

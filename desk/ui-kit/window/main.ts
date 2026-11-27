@@ -447,6 +447,12 @@ export function start(opts: WindowOptions): void {
     document.documentElement.classList.add("native", "electron");
     for (const b of document.querySelectorAll<HTMLButtonElement>(".win")) {
       const action = b.dataset.win as "minimize" | "maximize" | "close";
+      if (action === "close" && bridge.minimizeOnClose) {
+        b.dataset.i18nAriaLabel = "shell.minimize";
+        b.setAttribute("aria-label", uiText("shell.minimize"));
+        b.title = uiText("shell.minimize");
+        b.dataset.i18nTitle = "shell.minimize";
+      }
       b.addEventListener("click", () => bridge.win(action));
     }
     // The frameless pywebview window has no native resize border on Windows/Linux.
@@ -1681,14 +1687,12 @@ export function start(opts: WindowOptions): void {
   }
   if (LOCAL_AGENT && electron?.shell === 'python') {
     const notice=document.createElement('section');q<HTMLElement>('#head').after(notice);
-    releaseNotice(notice, async()=>{
-      const loaded=await shell<settings.Loaded>('config_load');
-      const url=String(loaded.config.update?.url || '').trim() || settings.UPDATE_URL_DEFAULT;
-      return shell<ReleaseSummary>('update_check',{url});
-    },()=>{
-      try{localStorage.setItem('settings.group',settings.GROUP.app);}catch{}
-      void show('settings').then(()=>settings.focusUpdates(pageFor('settings')));
-    });
+    releaseNotice(notice, () => shell<ReleaseSummary>('update_background'), async sha256 => {
+      await shell('update_ready_restart', {sha256});
+    }, () => {
+      try { localStorage.setItem('settings.group',settings.GROUP.app); } catch {}
+      void show('settings').then(() => settings.focusUpdates(pageFor('settings'), true));
+    }, error => toast(humanError(error).text));
   }
   if (LOCAL_AGENT && cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.

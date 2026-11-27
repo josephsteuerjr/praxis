@@ -3,7 +3,7 @@
 The immutable plan is sealed by first-start admission. Progress never restores
 elapsed wall time, and a commit never discovers additional deletion targets.
 """
-from pathlib import Path
+from .windows_paths import Path
 from contextlib import contextmanager
 import datetime as dt
 import copy,hashlib,json,os,subprocess,sys,time,uuid
@@ -268,7 +268,7 @@ def commit(program,value,window,*,places=None,backend=None):
                     raise InterruptedError('Owner stopped before programme deletion')
                 backend.remove(root)
             if root.exists():
-                # 11.11 (Yegor): files Windows protects from a non-administrator stay and are
+                # 11.11 (the owner): files Windows protects from a non-administrator stay and are
                 # named; anything the backend did not record as protected is still a failure.
                 from .first_start import cleanup_leftovers
                 value.setdefault('cleanup_errors',[]).extend(cleanup_leftovers(backend,[root],notes=False))

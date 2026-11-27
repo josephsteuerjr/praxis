@@ -146,27 +146,27 @@ class TestCandidates(Base):
 
 # ⚠ Отсюда удалён класс TestWindowGoal: он целиком проверял
 # heartbeat.window_goal/record_decision/mark_window/WINDOW_DECIDE_SYS — контур,
-# который не вызывался в проде ниоткуда и выброшен 25.07 по решению Егора.
+# который не вызывался в проде ниоткуда и выброшен 25.07 по решению владельца.
 # Стоит запомнить цифру: мёртвый путь был покрыт дюжиной зелёных тестов.
 # Покрытие говорило о том, что код работает, а не о том, что он вызывается.
 
 class TestHeartbeatTurn(Base):
     def test_tick_has_owner_tools_and_frame(self):
-        fc = FakeClient("навела порядок, Егору сказать нечего")
+        fc = FakeClient("навела порядок, Алексу сказать нечего")
         llm.use_test_client(fc)
         try:
             out = agent.heartbeat_turn("Открытые нити:\n- маша: собеседование")
         finally:
             llm.clear_test_clients()
-        self.assertEqual(out, "навела порядок, Егору сказать нечего")
+        self.assertEqual(out, "навела порядок, Алексу сказать нечего")
         names = [t["name"] for t in fc.last.get("tools", [])]
         self.assertIn("shell", names, "у тика должны быть руки (owner-тулы)")
         self.assertIn("write_skill", names)
         self.assertTrue({"python", "telegram_account", "computer"}.issubset(names))
         self.assertIn("manage_room", fc.last_catalog)
-        self.assertIn("manage_room", names, "Егор 10.11: все руки родные")
+        self.assertIn("manage_room", names, "Алекс 10.11: все руки родные")
         self.assertTrue({"admit", "computer_access"}.isdisjoint(names),
-                        "старые руки мини-аппа удалены (Егор 10.11)")
+                        "старые руки мини-аппа удалены (Алекс 10.11)")
         sysp = fc.last.get("system", "")
         sysp = "".join(b["text"] for b in sysp) if isinstance(sysp, list) else sysp
         self.assertIn("own initiative window", sysp, "нет рамки автономного времени")
@@ -196,7 +196,7 @@ class TestTaskWindow(Base):
         self.assertIn("restart_self", names)
         self.assertTrue({"python", "telegram_account", "computer"}.issubset(names))
         self.assertIn("manage_room", fc.last_catalog)
-        self.assertIn("manage_room", names, "Егор 10.11: все руки родные")
+        self.assertIn("manage_room", names, "Алекс 10.11: все руки родные")
         self.assertTrue({"admit", "computer_access"}.isdisjoint(names))
         sysp = fc.last.get("system", "")
         sysp = "".join(b["text"] for b in sysp) if isinstance(sysp, list) else sysp

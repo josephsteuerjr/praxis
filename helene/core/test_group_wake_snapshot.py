@@ -775,7 +775,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "client", client),
             patch.object(runner, "_meta", {chat_id: {
                 "entity": 42, "is_dm": True, "is_owner": True, "known": True,
-                "family": False, "name": "Егор", "title": None, "size": None,
+                "family": False, "name": "Алекс", "title": None, "size": None,
                 "addressed": False, "room_mode": "normal",
             }}),
             patch.object(runner, "_group_wakes", {}),
@@ -785,14 +785,14 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
-            patch.object(runner, "_last_n_text", AsyncMock(return_value="Егор: свежая личка")),
+            patch.object(runner, "_last_n_text", AsyncMock(return_value="Алекс: свежая личка")),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(agent, "voice_turn_envelope", side_effect=voice),
         ):
             await runner._run_pass(chat_id)
             await asyncio.sleep(0)
 
-        self.assertEqual(captured["args"][:3], (chat_id, "Егор: свежая личка", "Егор"))
+        self.assertEqual(captured["args"][:3], (chat_id, "Алекс: свежая личка", "Алекс"))
         self.assertTrue(captured["kwargs"]["ctx"].is_dm)
 
 
@@ -1037,7 +1037,7 @@ class _ChannelEvent(_Event):
 
 
 class TestBroadcastChannelIsClosed(unittest.IsolatedAsyncioTestCase):
-    """Решение Егора 06.08: её место — ЧАТ канала, а не канал.
+    """Решение владельца 06.08: её место — ЧАТ канала, а не канал.
 
     Запись канала и так приезжает в связанное обсуждение авторством канала — так её
     видит человек. Отдельное место для той же записи давало ей второй экземпляр одного

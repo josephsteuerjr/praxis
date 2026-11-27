@@ -865,7 +865,7 @@ class TestRemoteRunDeadlineIsNamed(unittest.TestCase):
 
 
 class TestLostTaskReaperWakesHer(unittest.TestCase):
-    """26.07 18:56:19 задача hcode-c584ba6e открыта по ПРЯМОЙ просьбе Егора и брошена
+    """26.07 18:56:19 задача hcode-c584ba6e открыта по ПРЯМОЙ просьбе владельца и брошена
     через 34 секунды; ещё четыре такие же висели с 19.07. Потерять её намерение молча
     хуже, чем выполнить поздно."""
 
@@ -999,7 +999,7 @@ class TestLostTaskReaperWakesHer(unittest.TestCase):
 class TestUpstreamEye(unittest.TestCase):
     """Глаз на ЧУЖОЙ репозиторий вместо ожидания, пока скажут словами.
 
-    Живой случай: 26.07 она аудитировала замороженный SHA 107fca05 репозитория Арета,
+    Живой случай: 26.07 она аудитировала замороженный SHA 107fca05 репозитория Моргана,
     27.07 он выложил поверх ed288276 — дословно два из трёх её требований, — и она об
     этом не узнала. Её проект локальный (`git remote` пуст), на чужую работу она смотрит
     разовым клоном во временный каталог, и после `finish` не остаётся вообще ничего.
@@ -1373,9 +1373,9 @@ class TestUpstreamEye(unittest.TestCase):
         self.assertIn("HEAD", back)
 
     def test_a_word_that_is_not_an_address_is_named_and_not_swallowed(self):
-        out = forge.upstream_lever("watch", arg="посмотри у Арета")
+        out = forge.upstream_lever("watch", arg="посмотри у Моргана")
         self.assertIn("не видно адреса git-репозитория", out)
-        self.assertIn("«посмотри у Арета»", out)
+        self.assertIn("«посмотри у Моргана»", out)
         self.assertEqual(forge._load_upstreams(), {})
 
     def test_eviction_by_the_ceiling_is_told_to_her_and_not_only_to_the_log(self):

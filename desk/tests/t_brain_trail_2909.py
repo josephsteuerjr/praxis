@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Модель в кадре и кто её менял (1.2.5, слово Егора 29.09: «провенанс нарушен»).
+"""Модель в кадре и кто её менял (1.2.5, слово владельца 29.09: «провенанс нарушен»).
 
-Джарвис на ПК Егора: лимит подписки кончился, Егор переключил модель в Настройках на
+Атлас на ПК владельца: лимит подписки кончился, владелец переключил модель в Настройках на
 glm-5.3 — а агент модели своей в кадре не видел и решил, что «конфиг стёрло обновление»,
 дважды спросив, вернуть ли прежнюю. Теперь каждая смена голоса ложится в след с тем, кто
 её сделал, а в кадре каждого хода — на чём агент сейчас и кто менял последним.
@@ -75,9 +75,9 @@ class Trail(unittest.TestCase):
             return "рукопожатие прошло"
         agent = types.SimpleNamespace(TOOL_IMPL={"switch_brain": switch_brain})
         self.assertTrue(bt.install_switch_hook(agent, self.tree))
-        agent.TOOL_IMPL["switch_brain"](action="switch", model="gpt-6-sol", why="Егор попросил sol")
+        agent.TOOL_IMPL["switch_brain"](action="switch", model="gpt-6-sol", why="Алекс попросил sol")
         row = bt.last(self.tree)
-        self.assertEqual((row["by"], row["to"]["model"], row["why"]), (bt.BY_AGENT, "gpt-6-sol", "Егор попросил sol"))
+        self.assertEqual((row["by"], row["to"]["model"], row["why"]), (bt.BY_AGENT, "gpt-6-sol", "Алекс попросил sol"))
         self.assertIn("подписка через реле", bt.orient_line(self.tree))
 
     def test_a_change_by_no_known_path_is_named_so(self):

@@ -96,7 +96,7 @@ include!("../../common/mac_service.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/owner_stop.rs");
 include!("../../common/run_hidden.rs");
-// Ярлыки — через COM из самого мастера (1.2.3): PowerShell с Add-Type у Егора не смог.
+// Ярлыки — через COM из самого мастера (1.2.3): PowerShell с Add-Type у владельца не смог.
 include!("../../common/shortcut_win.rs");
 // Ссылка входа в подписку — из вывода помощника реле (1.2.3).
 include!("../../common/login_url.rs");
@@ -1943,7 +1943,7 @@ fn desktop_dir() -> Option<PathBuf> {
 }
 
 /// Ярлыки «Пуска» (с AUMID — без него Windows молча выбрасывает уведомления) и Рабочего
-/// стола, свои или общие. «Пуск» не лёг — шаг НЕ ok: 27.09 у Егора расписка «Ярлыки: ok»
+/// стола, свои или общие. «Пуск» не лёг — шаг НЕ ok: 27.09 у владельца расписка «Ярлыки: ok»
 /// стояла над текстом ошибки, а программы в «Пуске» не было. Рабочий стол — примечание:
 /// без него программа живёт, а человек его мог и сам убрать.
 #[cfg(windows)]
@@ -4710,7 +4710,7 @@ fn installed_port(dir: &Path) -> u16 {
 /// Мастер открывал окно сразу после установки, а служба поднимается секунд десять
 /// (выравнивание прав, дети): окно заставало пустой порт, поднимало СВОИХ детей,
 /// и два движка спорили за замок дерева — движок окна выходил, служба гасила
-/// своего, агент оставался без движка (27.09, проба Егора «для всех» со службой).
+/// своего, агент оставался без движка (27.09, проба владельца «для всех» со службой).
 /// Без службы отвечает сразу `true`; `false` — служба за это время канал не подняла.
 pub fn wait_for_channel(dir: &Path, secs: u64) -> bool {
     let service = read_json(&dir.join("helene.json"))
@@ -5179,7 +5179,7 @@ mod tests {
     fn decisions_come_from_the_installed_copy() {
         let cfg = serde_json::json!({
             "agent": {"name": "Мира"},
-            "owner": {"name": "Егор"},
+            "owner": {"name": "владелец"},
             "agent_mode": "sandbox",
             "model": {"framework": "anthropic", "base_url": "https://api.z.ai/api/anthropic",
                       "model": "glm-5.3", "key": "секрет", "reasoning_effort": "low"},
@@ -5189,7 +5189,7 @@ mod tests {
             "installed": {"service": false, "version": "0.8.2"}
         });
         let s = setup_from_installed(&cfg, "конституция", r"C:\Helene").expect("решения есть");
-        assert_eq!((s.agent.as_str(), s.owner.as_str()), ("Мира", "Егор"));
+        assert_eq!((s.agent.as_str(), s.owner.as_str()), ("Мира", "владелец"));
         assert_eq!(s.constitution, "конституция");
         assert!(s.accepted);
         assert_eq!(s.provider, "anthropic");
@@ -5336,7 +5336,7 @@ mod tests {
     fn setup_for(provider: &str) -> Setup {
         Setup {
             agent: "Вера".into(),
-            owner: "Егор".into(),
+            owner: "владелец".into(),
             lang: None,
             frame_language: None,
             living_prose: None,
@@ -5723,23 +5723,23 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn processes_are_matched_by_executable_not_by_arguments() {
-        let dir = Path::new("/Users/yegor/Applications/Helene");
+        let dir = Path::new("/Users/owner/Applications/Helene");
         let me = std::process::id();
         let ps = format!(
             "  1     0 /sbin/launchd\n\
              100     1 /Applications/Utilities/Terminal.app/Contents/MacOS/Terminal\n\
              200   100 sh\n\
-             {me}   200 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
-             300     1 /Users/yegor/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
-             301   300 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n\
-             302   300 /Users/yegor/Applications/Helene/helene-relay\n\
+             {me}   200 /Users/owner/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
+             300     1 /Users/owner/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
+             301   300 /Users/owner/Applications/Helene/runtime/bin/python3.14\n\
+             302   300 /Users/owner/Applications/Helene/helene-relay\n\
              400   100 tail\n\
              500     1 /Applications/TextEdit.app/Contents/MacOS/TextEdit\n\
-             600     1 /Users/yegor/Applications/Helene-old/helene-relay\n"
+             600     1 /Users/owner/Applications/Helene-old/helene-relay\n"
         );
         let table = parse_ps(&ps);
         assert_eq!(table.len(), 10);
-        assert_eq!(table[3].comm, "/Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup", "путь с пробелом цел");
+        assert_eq!(table[3].comm, "/Users/owner/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup", "путь с пробелом цел");
         let found = procs_under_named(dir, &table);
         let pids: Vec<u32> = found.iter().map(|(p, _)| *p).collect();
         assert_eq!(pids, vec![300, 301, 302], "{found:?}");
@@ -5750,9 +5750,9 @@ mod tests {
         let ps2 = format!(
             "  1     0 /sbin/launchd\n\
              200     1 sh\n\
-             300   200 /Users/yegor/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
-             {me}   300 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
-             301   300 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n"
+             300   200 /Users/owner/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
+             {me}   300 /Users/owner/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
+             301   300 /Users/owner/Applications/Helene/runtime/bin/python3.14\n"
         );
         let pids: Vec<u32> = procs_under_named(dir, &parse_ps(&ps2)).iter().map(|(p, _)| *p).collect();
         assert_eq!(pids, vec![300, 301]);
@@ -5760,8 +5760,8 @@ mod tests {
         // запущенный установщиком) — щадим: он ждёт нас.
         let ps3 = format!(
             "  1     0 /sbin/launchd\n\
-             250     1 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n\
-             {me}   250 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n"
+             250     1 /Users/owner/Applications/Helene/runtime/bin/python3.14\n\
+             {me}   250 /Users/owner/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n"
         );
         assert!(procs_under_named(dir, &parse_ps(&ps3)).is_empty());
     }
@@ -6127,8 +6127,8 @@ mod tests {
     #[cfg(windows)]
     fn image_exe_survives_arguments_and_spaces() {
         assert_eq!(
-            image_exe(r"C:\Users\yegor\AppData\Local\Programs\Vera\vera-svc.exe run --config \\?\C:\x\vera.json"),
-            r"C:\Users\yegor\AppData\Local\Programs\Vera\vera-svc.exe"
+            image_exe(r"C:\Users\Example\AppData\Local\Programs\Vera\vera-svc.exe run --config \\?\C:\x\vera.json"),
+            r"C:\Users\Example\AppData\Local\Programs\Vera\vera-svc.exe"
         );
         assert_eq!(
             image_exe("\"C:\\Program Files\\Hélène\\helene-svc.exe\" run"),
@@ -6143,7 +6143,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn parses_single_object_and_array() {
-        let one = r#"{"Name":"Vera","State":"Running","StartMode":"Auto","StartName":"LocalSystem","PathName":"C:\\Users\\yegor\\AppData\\Local\\Programs\\Vera\\vera-svc.exe run --config \\\\?\\C:\\x\\vera.json"}"#;
+        let one = r#"{"Name":"Vera","State":"Running","StartMode":"Auto","StartName":"LocalSystem","PathName":"C:\\Users\\owner\\AppData\\Local\\Programs\\Vera\\vera-svc.exe run --config \\\\?\\C:\\x\\vera.json"}"#;
         let got = parse_services(one, None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].name, "Vera");
@@ -6153,7 +6153,7 @@ mod tests {
 
         // Та же служба, но папка установки — её собственная: это «наша», её
         // снимает сам установщик, второй раз спрашивать согласие незачем.
-        let home = PathBuf::from(r"C:\Users\yegor\AppData\Local\Programs\Vera");
+        let home = PathBuf::from(r"C:\Users\Example\AppData\Local\Programs\Vera");
         assert!(parse_services(one, Some(&home))[0].ours);
 
         let two = r#"[{"Name":"Vera","State":"Running","StartMode":"Auto","StartName":"LocalSystem","PathName":"C:\\a\\vera-svc.exe"},

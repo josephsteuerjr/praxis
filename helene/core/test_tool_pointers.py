@@ -103,9 +103,9 @@ class TestOffered(PointerBase):
                 os.environ.pop("PRAXIS_CHAT_REPLY_HAND", None)
             live = list(offered) + [by_name[n] for n in ("reply", "end_turn")]
             live.append({"type": "web_search"})
-            # 22.10: по прямому решению Егора #8044 бюджет поднят до 32k;
+            # 22.10: по прямому решению владельца #8044 бюджет поднят до 32k;
             # измерение реальной сериализованной схемы остаётся обязательным.
-            # 10.11: пакетные вложенные схемы files/edits и их договор добавлены по слову Егора; бюджет 38k.
+            # 10.11: пакетные вложенные схемы files/edits и их договор добавлены по слову владельца; бюджет 38k.
             self.assertLess(len(json.dumps(live, ensure_ascii=False)), 38000,
                             "боевой состав (с reply/end_turn/web_search) — тоже под 38000")
 
@@ -115,7 +115,7 @@ class TestOffered(PointerBase):
         owner_names = _names(agent.catalog_tools_for(owner))
         self_names = _names(agent.catalog_tools_for(own))
         self.assertIn("shell", owner_names)
-        # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен набору хода владельца (кроме reply,
+        # владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен набору хода владельца (кроме reply,
         # которому в её собственном ходе некому отвечать); пары владельца больше нет.
         self.assertEqual(set(owner_names) - {"reply"}, set(self_names) - {"reply"})
         self.assertFalse({"admit", "computer_access"} & set(owner_names))
@@ -180,7 +180,7 @@ class TestPointerText(PointerBase):
         curated = set(agent.HAND_PURPOSE) | set(agent.windows_mcp_tools.PURPOSES)
         missing = [t["name"] for t in agent.catalog_tools_for(ctx)
                    if t.get("name") and t["name"] not in curated]
-        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Егора 12.09)")
+        self.assertEqual(missing, [], "каждой руке — выверенная строка назначения (слово Алекса 12.09)")
 
     def test_roster_knows_the_section(self):
         self.assertIn("contract.hands_pointer", frame_trace.SYSTEM_ROSTER)
@@ -320,7 +320,7 @@ class TestLoopEndToEnd(PointerBase):
              mock.patch.object(agent.serverd_client, "state_line", return_value=None), \
              mock.patch.object(agent.serverd_client, "available", return_value=False), \
              mock.patch.object(agent.body_client, "available", return_value=False):
-            agent.voice_turn(None, "Егор: поправь и проверь пример", speaker="Егор", is_owner=True)
+            agent.voice_turn(None, "Алекс: поправь и проверь пример", speaker="Алекс", is_owner=True)
 
         after = hashlib.sha256(target.read_bytes()).hexdigest()
         self.assertEqual(target.read_text(encoding="utf-8"), "beta\n")
@@ -384,7 +384,7 @@ class TestLoopEndToEnd(PointerBase):
                                return_value=False), \
              mock.patch.object(agent.body_client, "available",
                                return_value=False):
-            agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
+            agent.voice_turn(None, "Алекс: тест", speaker="Алекс", is_owner=True)
         self.assertEqual(received.get("required_field"), "x")
         self.assertEqual(received.get("optional_field"), "default")
         offered = _names(client.calls[0].get("tools", []))

@@ -8,7 +8,7 @@ import agent
 import frame_language as lang
 import rooms
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class TelegramReads(unittest.TestCase):
     def own(self,value,language):

@@ -263,7 +263,6 @@ class Application:
             return {"ok": True}
         if command == "python_window":
             action = args.get("action")
-            if action == 'close':close_without_tray(self)
             if action == "exit":
                 self.exiting = True
                 if args.get('relaunch') is False:
@@ -368,7 +367,7 @@ class Application:
         from localharness.window_preferences import bootstrap
         saved, seen = bootstrap(self.root)
         return """window.DESK_CONFIG_OVERRIDE = %s;
-window.__HELENE__ = {shell:'python', platform:%s,
+window.__HELENE__ = {shell:'python', platform:%s, minimizeOnClose:%s,
  invoke: async (command,args={}) => {
   const r = await fetch('/__python__/invoke', {method:'POST',headers:{
    'Content-Type':'application/json','X-Helene-Window':%s},body:JSON.stringify({command,args})});
@@ -461,6 +460,7 @@ window.addEventListener('helene:ui-ready',async()=>{
  }
 } catch(e){console.error(e)} setTimeout(events,500)})();
 """ % (json.dumps(self.channel, ensure_ascii=False), json.dumps(desktop_identity()['platform']),
+       json.dumps(sys.platform.startswith('linux') and not self.browser_mode and self.host is not None),
        json.dumps(self.token), json.dumps(seen), json.dumps(saved, ensure_ascii=False), json.dumps(self.token))
 
     def _handler(self):
@@ -736,13 +736,12 @@ def begin_native_drag(app, args):
     return True
 
 
-def close_without_tray(app):
-    """Linux has no background tray view: closing its last view is Exit."""
-    if (sys.platform.startswith('linux') and getattr(app,'host',None) is not None
-            and app.tray is None and not app.exiting and not app.relaunch):
-        app.exiting=True
-        app.exit_session=True
-        app.session_exit_intent=True
+def linux_window_closing(app):
+    """Keep the desktop window in the taskbar until an explicit exit or relaunch."""
+    if app.host is None or app.exiting or app.relaunch:
+        return True
+    app.window.minimize()
+    return False  # pywebview cancels the native close event.
 
 
 def bind_window_state(app):
@@ -775,7 +774,7 @@ def bind_window_state(app):
     app.window.events.shown += shown
     guard_maximized_move(app)
     if sys.platform.startswith('linux'):
-        app.window.events.closing += lambda:close_without_tray(app)
+        app.window.events.closing += lambda:linux_window_closing(app)
 
 
 def set_window_icon(app):

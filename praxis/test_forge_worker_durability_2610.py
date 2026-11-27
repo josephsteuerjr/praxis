@@ -75,6 +75,7 @@ class WorkerDurability(unittest.TestCase):
         fake_llm.EmptyResponseError = type('EmptyResponseError',(fake_llm.BrokenChannelError,),{})
         fake_llm.TornStreamError = type("TornStreamError", (fake_llm.BrokenChannelError,), {})
         fake_llm.single_provider_attempt = contextlib.nullcontext
+        fake_llm.forge_address = lambda role, scope: contextlib.nullcontext()
         fake_llm.limits = lambda: types.SimpleNamespace(max_tool_iters=20)
         fake_llm.chat = self.chat
         fake_llm.snapshot = lambda: {"voice": {"framework": "fake", "model": "snapshot-model"}}
@@ -185,6 +186,54 @@ class WorkerDurability(unittest.TestCase):
         next_page = self.runtime.read_events(self.request_path.parent, page["next_after_seq"], 7)
         self.assertEqual(next_page["events"][0]["seq"], 8)
         self.assertTrue(page["has_more"])
+
+    def test_kimi_signed_thinking_survives_worker_tool_roundtrip(self):
+        think = {"type": "thinking", "thinking": "private reasoning", "signature": "signed+/="}
+        redacted = {"type": "redacted_thinking", "data": "opaque+/="}
+        first = self.response("inspect", 0)
+        first.blocks = [think, redacted, *first.blocks]
+        self.responses = [first, self.response()]
+        with mock.patch.object(self.worker.llm, "SIGNED_THINKING_TYPES",
+                               frozenset({"thinking", "redacted_thinking"}), create=True):
+            self.assertEqual(self.run_worker(Adapter()), 0)
+        replay = self.calls[1]["messages"][-2]
+        self.assertEqual(replay["role"], "assistant")
+        self.assertEqual(replay["content"], [think, redacted,
+            {"type": "tool_use", "id": "call-0", "name": "inspect", "input": {"value": 0}}])
+        self.assertNotIn("private reasoning", self.calls[1]["messages"][-1]["content"][0]["content"])
+
+    def test_kimi_signed_thinking_survives_crash_and_explicit_resume(self):
+        think = {"type": "thinking", "thinking": "private reasoning", "signature": "signed+/="}
+        redacted = {"type": "redacted_thinking", "data": "opaque+/="}
+        first = self.response("inspect", 0)
+        first.blocks = [think, redacted, *first.blocks]
+        self.responses = [first]
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock(return_value="effect done once")
+        save = self.runtime.Journal.save
+
+        def crash_after_tools_ready(journal, boundary, phase, **fields):
+            save(journal, boundary, phase, **fields)
+            if boundary == "tools_ready" and journal.state.get("trace"):
+                raise Interrupted()
+
+        with mock.patch.object(self.worker.llm, "SIGNED_THINKING_TYPES",
+                               frozenset({"thinking", "redacted_thinking"}), create=True), \
+                mock.patch.object(self.runtime.Journal, "save", crash_after_tools_ready), \
+                self.assertRaises(Interrupted):
+            self.run_worker(adapter)
+        checkpoint = json.loads((self.request_path.parent / "checkpoint.json").read_text("utf-8"))
+        self.assertEqual(checkpoint["next_boundary"], "tools_ready")
+        pending_assistant = checkpoint["pending"]["assistant"]
+        self.assertEqual(pending_assistant["content"], [think, redacted, *first.blocks[2:]])
+        self.authorize()
+        self.responses = [self.response(text="resumed with exact signed history")]
+        with mock.patch.object(self.worker.llm, "SIGNED_THINKING_TYPES",
+                               frozenset({"thinking", "redacted_thinking"}), create=True):
+            self.assertEqual(self.run_worker(adapter), 0)
+        self.assertEqual(adapter.dispatch.call_count, 1)
+        self.assertEqual(self.calls[-1]["messages"][-2], pending_assistant)
+        self.assertEqual(self.calls[-1]["messages"][-1]["content"][0]["content"], "effect done once")
 
     def test_intent_and_exact_args_are_persisted_before_dispatch(self):
         adapter = Adapter()

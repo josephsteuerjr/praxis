@@ -343,7 +343,7 @@ class HerWaitIsNotAGrave(WorkWaitBase):
         self.manager.append_event(
             context.run_id, "status_changed", from_status="paused", to_status="paused",
             reason="owner asked to stop", details=dict(stamp),
-            control_action="pause", requested_by="telegram:809306689",
+            control_action="pause", requested_by="telegram:424242424",
         )
         self.assertEqual(self._plan(context).kind, "blocked")
 
@@ -521,7 +521,7 @@ class TheRevivedTurnIsTheSameWork(WorkWaitBase):
             chat_id="777", room_id="777", principal_id="777",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=9, address_kind="direct",
-            reply_targets=((9, "Yegor", "continue"),),
+            reply_targets=((9, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id="run-work-wait-addressed-boundary", kind="chat_turn",

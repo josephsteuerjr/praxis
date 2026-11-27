@@ -23,7 +23,7 @@ const safeRender=(target,fn)=>{void fn().catch(e=>{
  target.querySelector('button').onclick=()=>safeRender(target,fn);
 })};
 globalThis.__frameStand={
- S:{rooms:[{key:'other',name:'Другой чат'},{key:'window-abcdef12',name:'Проект Rocket'}],agent:'Jarvis',stream:'dm-window'},
+ S:{rooms:[{key:'other',name:'Другой чат'},{key:'window-abcdef12',name:'Проект Rocket'}],agent:'Atlas',stream:'dm-window'},
  isWindowRoom:x=>x==='window'||x.startsWith('window-'),esc,fmtN:String,md:esc,
  q:(selector,root)=>root.querySelector(selector),
  safeRender,
@@ -46,7 +46,7 @@ try{
  const file=join(temp,'frame.ts');writeFileSync(file,source);
  const {render,captureTime}=await import(pathToFileURL(file));
  await render(box);await tick();
- assert.match(box.textContent,/Основной чат · Jarvis/);
+ assert.match(box.textContent,/Основной чат · Atlas/);
  assert.equal(box.querySelector('[data-stream="dm-window-abcdef12"] span').firstChild.textContent,'Проект Rocket');
  assert.equal(box.querySelector('#cap-new').options.length,30);
  assert.match(box.querySelector('[data-tool="computer"]').textContent,/timeout_ms/);

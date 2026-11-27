@@ -1,6 +1,6 @@
 # Lectures et fondements
 
-Ouroboros a préparé le kit original le 14 novembre 2026, à partir des recherches du 13 novembre et d’une sélection ultérieure d’exemples positifs. Pour ce travail, le guide éditorial précédent, sa carte des sources, les conclusions retenues de l’étude et les sept tonalités ont été relus. Les œuvres littéraires externes n’ont pas été vérifiées à nouveau le 14 novembre. Praxis a reçu ce jour-là le mécanisme des compétences permanentes : le guide bref et les exemples entrent dans le contexte ; ce fichier et ses voisins se lisent au besoin. Hélène fournit des adaptations neutres dans quatre langues. Ces traductions ne constituent pas une nouvelle recherche indépendante.
+Le guide s’appuie sur des notes éditoriales, des recherches et des exercices. Les documents complémentaires se consultent au besoin.
 
 ## Métier et observations éditoriales
 
@@ -12,12 +12,12 @@ Ouroboros a préparé le kit original le 14 novembre 2026, à partir des recherc
 
 ## Recherches sur la langue des modèles
 
-- **Reinhart et ses collègues, *Do LLMs write like humans?*** [arXiv:2410.16107v2](https://arxiv.org/html/2410.16107v2). Une personne indépendante ayant participé à la recherche précédente a lu le texte des auteurs sur des corpus anglais et 66 caractéristiques. Les préférences grammaticales des modèles persistaient même lorsqu’ils devaient suivre un exemple. Cela invite à lire attentivement la production, sans promettre qu’une seule consigne fera disparaître une habitude. L’étude n’a mesuré ni l’expression russe ni le comportement durable de Praxis ou de Jarvis.
+- **Reinhart et ses collègues, *Do LLMs write like humans?*** [arXiv:2410.16107v2](https://arxiv.org/html/2410.16107v2). Une personne indépendante ayant participé à la recherche précédente a lu le texte des auteurs sur des corpus anglais et 66 caractéristiques. Les préférences grammaticales des modèles persistaient même lorsqu’ils devaient suivre un exemple. Cela invite à lire attentivement la production, sans promettre qu’une seule consigne fera disparaître une habitude.
 - **Thomas Hikaru Clark, Matias B. Martin, Kyle Mahowald, *Why is AI-generated language so hard to understand?*** [arXiv:2610.29162v1](https://arxiv.org/html/2610.29162v1). L’auteur du kit a lu le HTML disponible et les annexes le 12 novembre ; les données, le code et les figures n’ont pas été vérifiés séparément. Les auteurs ont mesuré des indicateurs linguistiques, pas la compréhension des réponses par des personnes. Une expérience pénalisant la longueur sur un petit modèle Qwen montre un mécanisme possible de choix grammatical, pas une cause établie de l’expression des grands modèles actuels. Pour la révision, on peut se demander si le lecteur doit reconstruire des liens supprimés au nom de la brièveté.
 
 ## Exemples et attribution
 
-Ouroboros a rédigé le guide permanent original, l’atelier, les exercices et deux séries de tonalités. Les scènes de Praxis et de Jarvis sont des exercices nouvellement écrits, pas des messages de ces agents, leurs souvenirs ou des conversations privées transférées. Les versions Hélène les adaptent sans prescrire l’identité d’un agent.
+Ouroboros a rédigé le guide, l’atelier et les exercices. Les scènes et les dialogues sont fictifs.
 
 Deux exemples du travail précédent sont conservés ci-dessous en traduction :
 

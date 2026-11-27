@@ -184,7 +184,7 @@ class TestAgentGuardRegressions(RegressionBase):
             patch.object(agent.turns, "begin", return_value={"kind": "chat"}),
         ):
             envelope = agent.voice_turn_envelope(
-                "777", "Егор: ответь голосом", "Егор", ctx=self.owner_ctx)
+                "777", "Алекс: ответь голосом", "Алекс", ctx=self.owner_ctx)
 
         self.assertEqual(envelope.text, "Готово.")
         self.assertEqual(len(envelope.outbound), 1)
@@ -225,7 +225,7 @@ class TestAgentGuardRegressions(RegressionBase):
 
     def _turn_with_staged_photo(self, *, caption="diagram"):
         """Ход гостя с одним вложением -> (конверт, staged-копии). Модель на выходе не зовётся:
-        судьи приватности нет (Егор 10.11, «сними»), и любой вызов llm.chat — регрессия."""
+        судьи приватности нет (владелец 10.11, «сними»), и любой вызов llm.chat — регрессия."""
         source = self.photo_path()
         staged: list[media.OutboundMedia] = []
         known_dm = agent.ChannelContext(chat_id="778", is_dm=True, owner=False, known=True)
@@ -258,7 +258,7 @@ class TestAgentGuardRegressions(RegressionBase):
     def test_guest_image_goes_out_with_her_word_and_no_judge_call(self) -> None:
         # Раньше вложение гостю шло судье второй моделью (единственный стоп — кред на
         # пикселях, и только при PRAXIS_OUTBOUND_ADVISOR=on; вживую он был выключен).
-        # Егор 10.11 («сними»): судьи нет вовсе — слово и вложение уходят как написаны.
+        # владелец 10.11 («сними»): судьи нет вовсе — слово и вложение уходят как написаны.
         envelope, staged = self._turn_with_staged_photo()
 
         self.assertEqual(envelope.text, "Safe-looking wrapper.")
@@ -301,7 +301,7 @@ class TestRunnerRetryRegressions(RegressionBase):
             with patch.object(agent, "voice_turn_envelope", side_effect=blocking_turn):
                 task = asyncio.create_task(
                     runner._await_despite_cancellation(
-                        runner._voice_turn_offloaded("777", "hello", "Егор")
+                        runner._voice_turn_offloaded("777", "hello", "Алекс")
                     )
                 )
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
@@ -333,7 +333,7 @@ class TestRunnerRetryRegressions(RegressionBase):
                 "is_owner": True,
                 "known": True,
                 "family": False,
-                "name": "Егор",
+                "name": "Алекс",
                 "title": "room",
                 "size": 2,
                 # Rolling metadata has already moved to an unrelated later speaker.
@@ -343,9 +343,9 @@ class TestRunnerRetryRegressions(RegressionBase):
             }
         }
         wake = runner.GroupWake(
-            message_id=1, message_ts=100.0, kind="reply", speaker="Егор",
+            message_id=1, message_ts=100.0, kind="reply", speaker="Алекс",
             sender_id=123, owner=True, known=True, family=False,
-            context_snapshot="Егор: фото", reply_targets_snapshot=((1, "Егор", "фото"),),
+            context_snapshot="Алекс: фото", reply_targets_snapshot=((1, "Алекс", "фото"),),
             media_snapshot=(ref,))
         wakes = {chat_id: wake}
         # Медиа из более позднего фонового сообщения остаётся за frozen-границей.
@@ -414,7 +414,7 @@ class TestRunnerRetryRegressions(RegressionBase):
                 "is_owner": True,
                 "known": True,
                 "family": False,
-                "name": "Егор",
+                "name": "Алекс",
             }
         }
 

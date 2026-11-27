@@ -30,6 +30,29 @@ def invalidate():
         _entries.clear()
 
 
+_warm_started = False
+
+
+def _warm():
+    """One pass over the archive right after start, so the first page is not the slow one."""
+    try:
+        from . import readers
+        tree = Path(readers.tree())
+        forge_reader.activity(tree, 30, "")
+        forge_reader.activity(tree, 20, "")
+    except Exception:          # a warm-up is only an optimisation; requests report their own errors
+        pass
+
+
+def warm_once():
+    global _warm_started
+    with _lock:
+        if _warm_started:
+            return
+        _warm_started = True
+    threading.Thread(target=_warm, name="forge-archive-warm", daemon=True).start()
+
+
 def interval(page):
     for task in page.get('active', []):
         for unit in task.get('agents', []):

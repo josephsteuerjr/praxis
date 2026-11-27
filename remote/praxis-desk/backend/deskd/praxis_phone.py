@@ -1,6 +1,8 @@
 """Praxis phone edition. Read existing canonical Forge records, without importing the agent."""
 import asyncio
-from . import readers,phone_activity,forge_reader,forge_control
+from . import readers,phone_activity,forge_reader,forge_control,forge_snapshot
+# Fill the Forge reader's memory before the first phone page asks for it.
+forge_snapshot.warm_once()
 
 def routes(Route,Fail):
     async def tasks(call):

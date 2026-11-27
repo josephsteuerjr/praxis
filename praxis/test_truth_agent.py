@@ -719,6 +719,41 @@ class ReceiptReconcilerTests(_RunHarness):
         )
         return context
 
+    def test_decision_recovers_only_the_call_that_wrote_it(self):
+        import forge_review
+        root = self.base / "fixture-code"
+        root.mkdir()
+        (root / "count.py").write_text("count = 1\n")
+        tid = "code-00112233"
+        forge._save_task(dict(id=tid, root=str(root), goal="check count", status="active"))
+        review = forge_review.prepare(tid, paths=["count.py"])
+        args = dict(task_id=tid, action="decide", review_id=review["id"],
+                    expected_subject_sha256=review["subject_sha256"], decision="defer", reason="fixture")
+        first = self._create("review-writer", kind="task_window", channel=self._internal_channel())
+        other = self._create("review-neighbor", kind="task_window", channel=self._internal_channel())
+        for ctx in (first, other):
+            self.manager.start_tool(ctx.run_id, "same-call", "coding_review", args, side_effect=True)
+        token = agent._TOOL_EXECUTION.set(dict(run_id=first.run_id, call_id="same-call", tool="coding_review"))
+        try:
+            value = json.loads(agent.tool_coding_review(**args))
+        finally:
+            agent._TOOL_EXECUTION.reset(token)
+        self.assertEqual(value["decision"], "defer")
+        self.assertIsNone(forge_review.decision_receipt(first.run_id,"different-call",args))
+        self.assertIsNone(forge_review.decision_receipt(first.run_id,"same-call",dict(args,reason="other")))
+        for ctx in (first, other):
+            self.manager.transition(ctx.run_id, "in_doubt", expected="running", reason="receipt pending")
+        with mock.patch.object(forge_review,"decide",side_effect=AssertionError("decision was replayed")):
+            reports = agent.reconcile_in_doubt_from_receipts()
+            self.assertEqual([r["run_id"] for r in reports], [first.run_id])
+            self.assertEqual(self.manager.manifest(first.run_id)["status"], "paused")
+            self.assertEqual(self.manager.manifest(other.run_id)["status"], "in_doubt")
+            self.assertEqual(agent.reconcile_in_doubt_from_receipts(), [])
+        path=forge_review._directory(tid,review["id"])/"author-disposition.json"
+        del value["source_call_sha256"]
+        path.write_text(json.dumps(value))
+        self.assertIsNone(forge_review.decision_receipt(first.run_id,"same-call",args))
+
     def test_finished_forge_task_closes_its_own_outstanding_call(self):
         self._forge_task("hcode-done", status="done",
                          finished="2026-07-26T21:45:11+00:00")

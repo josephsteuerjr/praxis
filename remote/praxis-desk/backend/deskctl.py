@@ -124,7 +124,7 @@ CONTAINERS = tuple(name.strip() for name in
 
 #: Роли мозга, которые вправе менять окно. Остальные ключи `llm.json` — не наше
 #: дело: там ключи провайдеров и цены.
-BRAIN_FIELDS = ("model", "fallback_model", "framework", "fallback_framework", "reasoning_effort")
+BRAIN_FIELDS = ("model", "fallback_model", "framework", "fallback_framework", "reasoning_effort", "service_tier")
 IMAGE_DEFAULTS = {"enabled": False, "model": "gpt-image-2", "quality": "auto", "size": "auto", "background": "opaque"}
 
 
@@ -329,6 +329,148 @@ def brain_path() -> Path:
     return TREE / "memory" / "llm.json"
 
 
+# --- скоростная линия (fast / ultrafast), 22.11 ---------------------------------
+#
+# Диалект тиров у серверного канала и у продукта разный. Продукт (Hélène) живёт
+# на «priority» Codex-подписки; серверный агент умеет собственную скоростную
+# линию релея: service_tier fast | ultrafast | default в llm.json. Списки моде-
+# лей берутся из ЖИВОГО llm.py дерева, а не из копии в пакете: они меняются
+# вместе с агентом, без перевыкладки канала. Реклама линии — заголовок релея
+# X-Praxis-Relay-Service-Tier, тот же, по которому маршрут решает сам агент.
+
+_SPEED_TIERS = ("default", "fast", "ultrafast")
+_SPEED_TTL = 300.0
+_SPEED_CACHE: dict = {}   # (base_url, key_sha) -> (expires, advertised|None)
+_SPEED_LISTS: dict = {}   # llm.py path -> (mtime, fast:set, ultrafast:set)
+
+
+def _speed_lists() -> tuple[set, set]:
+    """(fast, ultrafast) id моделей скоростной линии агента; пустые, когда неизвестны.
+
+    Основной источник — memory/.state/speed-models.json: контейнер надзора
+    видит из дерева только memory/, а списки меняются вместе с llm.py агента.
+    Фолбэк — разбор живого llm.py (когда он виден, например локально)."""
+    import re as _re
+    dump = TREE / "memory" / ".state" / "speed-models.json"
+    try:
+        stat = dump.stat()
+        hit = _SPEED_LISTS.get(str(dump))
+        if hit and hit[0] == stat.st_mtime:
+            return hit[1], hit[2]
+        payload = json.loads(dump.read_text(encoding="utf8"))
+        fast = {str(item) for item in (payload.get("fast") or [])}
+        ultra = {str(item) for item in (payload.get("ultrafast") or [])}
+        if fast or ultra:
+            fast |= ultra
+            _SPEED_LISTS[str(dump)] = (stat.st_mtime, fast, ultra)
+            return fast, ultra
+    except (OSError, ValueError):
+        pass
+    # Фолбэк: разобрать сам llm.py, если дерево смонтировано целиком.
+    path = TREE / "llm.py"
+    try:
+        stat = path.stat()
+        hit = _SPEED_LISTS.get(str(path))
+        if hit and hit[0] == stat.st_mtime:
+            return hit[1], hit[2]
+        text = path.read_text(encoding="utf8", errors="replace")
+        ultra, fast = set(), set()
+        m = _re.search(r"_ULTRAFAST_MODELS\s*=\s*frozenset\(\{([^}]*)\}\)", text)
+        if m:
+            ultra = set(_re.findall(r'"([^"]+)"', m.group(1)))
+        m = _re.search(r"_FAST_MODELS\s*=\s*_ULTRAFAST_MODELS\s*\|\s*\{([^}]*)\}", text)
+        if not m:
+            m = _re.search(r"_FAST_MODELS\s*=\s*(?:_ULTRAFAST_MODELS\s*\|\s*)?frozenset\(\{([^}]*)\}\)", text)
+        if m:
+            fast = set(_re.findall(r'"([^"]+)"', m.group(1)))
+        fast |= ultra
+        _SPEED_LISTS[str(path)] = (stat.st_mtime, fast, ultra)
+        return fast, ultra
+    except (OSError, ValueError):
+        return set(), set()
+
+
+def _speed_advertised(base_url: str, key: str):
+    """Релей рекламирует скоростную линию? None — спросить не удалось."""
+    import hashlib as _hl
+    import time as _time
+    import urllib.request as _urlreq
+    base = str(base_url or "").rstrip("/")
+    if not base.startswith("http"):
+        return None
+    binding = (base, _hl.sha256(str(key or "").encode()).hexdigest())
+    now = _time.monotonic()
+    hit = _SPEED_CACHE.get(binding)
+    if hit and hit[0] > now:
+        return hit[1]
+    b = base[:-3] if base.endswith("/v1") else base
+    url = b + "/v1/models"
+    advertised = None
+    try:
+        req = _urlreq.Request(url, headers={"Authorization": f"Bearer {key}"})
+        with _urlreq.urlopen(req, timeout=6) as answer:
+            advertised = (answer.headers.get("X-Praxis-Relay-Service-Tier") == "1"
+                          and answer.geturl() == req.full_url)
+    except Exception:  # noqa: BLE001 — причина не важна, важен честный «не знаем»
+        advertised = None
+    _SPEED_CACHE[binding] = (now + _SPEED_TTL, advertised)
+    return advertised
+
+
+def _tier_available(raw: dict, role: str) -> bool:
+    """Скоростная линия доступна роли: openai-роут + модель из списков + реклама релея."""
+    spec = ((raw.get("roles") or {}).get(role) or {})
+    if spec.get("framework") != "openai":
+        return False
+    model = str(spec.get("model") or "")
+    fast, ultra = _speed_lists()
+    if model not in fast and model not in ultra:
+        return False
+    fw = ((raw.get("frameworks") or {}).get("openai") or {})
+    return _speed_advertised(fw.get("base_url"), fw.get("api_key")) is True
+
+
+def _speed_tier_value(value):
+    """'' / None / 'auto' → снять; 'priority' → 'fast' (старый диалект); иначе строгий список."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("service_tier должен быть строкой: default, fast или ultrafast")
+    tier = value.strip().lower()
+    if tier == "auto":
+        return None
+    if tier == "priority":
+        tier = "fast"
+    if tier not in _SPEED_TIERS:
+        raise ValueError("service_tier должен быть default, fast или ultrafast")
+    return tier
+
+
+def _recent_tiers() -> dict:
+    """Последний наблюдённый тир роли — из хвоста журнала вызовов агента, если он его пишет."""
+    result: dict = {}
+    try:
+        with (TREE / "memory" / ".state" / "llm_calls.jsonl").open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - 65536))
+            for line in stream.read().decode("utf8", "replace").splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("role") and "service_tier_actual" in row:
+                    previous = result.get(row["role"]) or {}
+                    if isinstance(previous.get("at"), (int, float)) and row.get("ts", 0) < previous.get("at", 0):
+                        continue
+                    result[row["role"]] = {"actual": row.get("service_tier_actual"),
+                                          "requested": row.get("service_tier_requested"),
+                                          "at": row.get("ts")}
+    except OSError:
+        pass
+    return result
+
+
 def brain_state() -> dict:
     """Роли и их модели. Ключи провайдеров НЕ отдаются — только адреса и имена."""
     path = brain_path()
@@ -346,7 +488,17 @@ def brain_state() -> dict:
             # Адрес — да, ключ — никогда: он тут же уехал бы в окно и в журнал.
             frameworks[name] = {"base_url": spec.get("base_url", ""),
                                 "key_present": bool(str(spec.get("api_key") or "").strip())}
+    observed = _recent_tiers()
+    fast, ultra = _speed_lists()
+    tiers = {}
+    for name in roles:
+        tiers[name] = {"requested": (raw.get("roles") or {}).get(name, {}).get("service_tier"),
+                       "actual": (observed.get(name) or {}).get("actual"),
+                       "available": _tier_available(raw, name),
+                       "ultrafast": str((raw.get("roles") or {}).get(name, {}).get("model") or "") in ultra,
+                       "codex": False, "speed_line": True}
     return {"ok": True, "path": str(path), "roles": roles, "frameworks": frameworks,
+            "service_tiers": tiers,
             "images": image_settings(raw), "image_models": ["gpt-image-2"],
             "writable": os.access(path, os.W_OK)}
 
@@ -373,8 +525,21 @@ def brain_models() -> dict:
         try:
             with urllib.request.urlopen(url, timeout=15) as answer:
                 body = json.loads(answer.read().decode("utf-8", "replace"))
+                advertised = (answer.headers.get("X-Praxis-Relay-Service-Tier") == "1"
+                              and answer.geturl() == url)
             ids = [str(row.get("id")) for row in (body.get("data") or []) if row.get("id")]
-            out["by_framework"][name] = {"ok": True, "models": ids, "url": url}
+            entry = {"ok": True, "models": ids, "url": url}
+            if advertised:
+                # Каталог со скоростными тирами: окно само прячет Fast/Ultrafast
+                # для моделей, которых нет в списке живого llm.py.
+                fast, ultra = _speed_lists()
+                entry["codex"] = True
+                entry["model_details"] = [
+                    {"id": mid, "service_tiers": [{"id": tier} for tier in
+                                                  (("fast", "ultrafast") if mid in ultra else ("fast",))]}
+                    for mid in ids if mid in fast
+                ]
+            out["by_framework"][name] = entry
         except Exception as exc:  # noqa: BLE001 — причина важна как текст
             out["by_framework"][name] = {"ok": False, "url": url,
                                          "why": f"{type(exc).__name__}: {exc}"[:200]}
@@ -422,13 +587,30 @@ def brain_set(role: str, fields: dict) -> dict:
                                      f"(есть: {', '.join(sorted(roles or {}))})"}
     change = {key: value for key, value in (fields or {}).items()
               if key in BRAIN_FIELDS and isinstance(value, (str, int, float))}
+    if "service_tier" in (fields or {}):
+        try:
+            change["service_tier"] = _speed_tier_value(fields.get("service_tier"))
+        except ValueError as exc:
+            return {"ok": False, "note": str(exc)}
     if not change:
         return {"ok": False, "note": f"менять нечего: разрешены {', '.join(BRAIN_FIELDS)}"}
+    preview = dict(raw, roles={**roles, role: {**roles[role], **change}})
+    route_changed = any(key in change and change[key] != roles[role].get(key)
+                        for key in ("framework", "model"))
+    if change.get("service_tier") in ("fast", "ultrafast") and not _tier_available(preview, role):
+        return {"ok": False,
+                "note": f"скоростная линия недоступна роли «{role}»: модель не из скоростного списка или релей её не рекламирует"}
+    if (route_changed and "service_tier" not in change
+            and str(roles[role].get("service_tier") or "").strip().lower() in ("fast", "ultrafast", "priority")
+            and not _tier_available(preview, role)):
+        change["service_tier"] = None
     was = {key: roles[role].get(key) for key in change}
     backup = path.with_name(f"llm.json.before-desk-{dt.datetime.now().strftime('%Y%m%dT%H%M%S')}")
     try:
         shutil.copy2(path, backup)
         roles[role].update(change)
+        if change.get("service_tier") is None:
+            roles[role].pop("service_tier", None)
         tmp = path.with_name(".tmp-llm.json")
         tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                        encoding="utf-8", newline="\n")

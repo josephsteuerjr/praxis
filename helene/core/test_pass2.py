@@ -113,8 +113,8 @@ class Base(unittest.TestCase):
 # ----------------------------------------------------------------------- #1
 class TestBufferPersist(Base):
     def test_roundtrip(self):
-        bufstore.save("123456789", ["Егор: привет", "Praxis: привет"])
-        self.assertEqual(bufstore.load("123456789"), ["Егор: привет", "Praxis: привет"])
+        bufstore.save("123456789", ["Алекс: привет", "Praxis: привет"])
+        self.assertEqual(bufstore.load("123456789"), ["Алекс: привет", "Praxis: привет"])
 
     def test_load_all_keys_match_chat_ids(self):
         bufstore.save("123456789", ["a: 1"])
@@ -195,7 +195,7 @@ class TestCompact(Base):
                        "evaluator": {"model": prev["evaluator"]["model"]}}}))
         sc = ScriptedClient(["сводка: договорились про деплой"])
         llm.use_test_client(sc)
-        out = agent.compact("777", ["Егор: давай задеплоим", "Praxis: ок"])
+        out = agent.compact("777", ["Алекс: давай задеплоим", "Praxis: ок"])
         self.assertIn("деплой", out)
         self.assertEqual(sc.calls[0]["model"], "p2-eval")   # канал оценщика, не голос
         self.assertNotIn("tools", sc.calls[0])  # компакт без инструментов
@@ -204,7 +204,7 @@ class TestCompact(Base):
         agent.write_summary("777", "ранее: познакомились")
         sc = ScriptedClient(["ранее: познакомились; затем: решили деплой"])
         llm.use_test_client(sc)
-        agent.compact("777", ["Егор: деплоим"])
+        agent.compact("777", ["Алекс: деплоим"])
         # прежняя сводка ушла в подсказку модели
         sent = sc.calls[0]["messages"][0]["content"]
         self.assertIn("ранее: познакомились", sent)
@@ -215,7 +215,7 @@ class TestCompact(Base):
         life = agent.memory_life
         agent.write_summary("777", "LEGACY STALE SECRET")
         original = life.record_message(
-            "777", "Егор: исходный текст", actor="Егор", direction="in",
+            "777", "Алекс: исходный текст", actor="Алекс", direction="in",
             source_id="41", ts=41.0, dedupe_key="telegram:777:41:in",
         )
         life._write_compact(
@@ -225,11 +225,11 @@ class TestCompact(Base):
             event_count=1, continued=False,
         )
         life.record_message(
-            "777", "Егор: исправленный текст", actor="Егор", direction="in",
+            "777", "Алекс: исправленный текст", actor="Алекс", direction="in",
             source_id="41:edit:1", ts=42.0,
             dedupe_key="telegram:777:41:edit:in",
         )
-        life.note_message_revision("777", 41, "Егор: исправленный текст")
+        life.note_message_revision("777", 41, "Алекс: исправленный текст")
         life.rebuild_state("777")
 
         self.assertEqual(life.context_summary("777"), "")
@@ -262,7 +262,7 @@ class TestConsolidateNudgeDemoted(Base):
         for i in range(agent.CONSOLIDATE_AT + 2):
             hist.append({"role": "user", "content": f"m{i}"})
             hist.append({"role": "assistant", "content": f"a{i}"})
-        agent._voice("ещё", hist, speaker="Егор", chat_id="777", is_owner=True)
+        agent._voice("ещё", hist, speaker="Алекс", chat_id="777", is_owner=True)
         return _sys_text(sc.calls[0]["system"])
 
     def test_no_nudge_by_default(self):
@@ -284,9 +284,9 @@ class TestTalkativeness(Base):
         self.assertIn("живая группа", frame)
 
     def test_private_tail_has_grounding_without_style_coercion(self):
-        _, private = agent.build_system_parts(speaker="Егор", chat_id="777")
+        _, private = agent.build_system_parts(speaker="Алекс", chat_id="777")
         _, public = agent.build_system_parts(
-            speaker="Егор", ctx=agent.ChannelContext(chat_id="-777", is_dm=False),
+            speaker="Алекс", ctx=agent.ChannelContext(chat_id="-777", is_dm=False),
         )
         self.assertIn(agent.frame_language.text('owned.agent.818295802af1'), private)
         self.assertNotIn("no bureaucratese", private)

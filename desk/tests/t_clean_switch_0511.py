@@ -288,7 +288,8 @@ class CleanSwitch(unittest.TestCase):
     def test_partial_retirement_retry_only_finishes_cleanup_and_never_restores_data(self):
         value,args,spawn=self.internal_fixture()
         def partial(path,**kwargs):
-            self.assertEqual(Path(path),self.old);(self.old/'app/python_app.py').unlink();raise OSError('controlled partial retirement')
+            from localharness.windows_paths import logical
+            self.assertEqual(Path(logical(path)),self.old);(self.old/'app/python_app.py').unlink();raise OSError('controlled partial retirement')
         with patch.object(clean.subprocess,'Popen',side_effect=spawn),patch.object(clean.shutil,'rmtree',side_effect=partial):
             with self.assertRaisesRegex(OSError,'partial retirement'):clean.run(args,value,lambda *a,**k:None,lambda:False)
         target=Path(read(self.new/'helene.json')['tree'])

@@ -199,16 +199,20 @@ def observe(*, system, messages, tools, critical=False):
             value = dict(schema=plan.schema, generation=plan.generation,
                          binding=plan.binding, rows=plan.rows, messages=kept)
             value['checksum'] = _sha(value)
-            plan.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            tmp = plan.path.with_name(plan.path.name + '.' + uuid.uuid4().hex + '.tmp')
-            try:
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-                    stream.write(_json(value))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(tmp, plan.path)
-            finally:
-                tmp.unlink(missing_ok=True)
+            write_checkpoint(plan.path, value)
     except Exception:
         pass  # no private contents or exception text in diagnostics
+
+
+def write_checkpoint(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(_json(value))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)

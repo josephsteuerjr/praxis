@@ -349,7 +349,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const handFence = new Map((a.sandbox?.hands || []).map((h) => [h.name, h]));
   const fenceBox = fenceHTML(a.sandbox?.hands, !!a.sandbox?.enabled);
   const outsideCount = (a.sandbox?.hands || []).filter((h) => h.fence === "outside").length;
-  // Свёртка (Егор 11.10: «раздел сложно воспринимается»): вступление и разрезы
+  // Свёртка (владелец 11.10: «раздел сложно воспринимается»): вступление и разрезы
   // по умолчанию закрыты — разворачиваются по клику; развернутыми остаются
   // мето-инфо, надзор и расход. Руки — сотни строк — свёрнуты с поиском внутри.
   const intro = INTRO().map(

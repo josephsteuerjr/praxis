@@ -1,7 +1,7 @@
 """Move named owner backup/audio assets before their programme is retired."""
 import copy,hashlib,os,tempfile
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from .windows_paths import Path
 from .package_notice import read,write
 
 FORMAT='helene-first-start-assets.v1'

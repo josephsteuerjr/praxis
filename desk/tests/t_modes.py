@@ -308,7 +308,7 @@ class Truth(WindowsToggles, unittest.TestCase):
     def test_ladder_has_the_session0_rung_with_honest_words(self):
         """Верхняя ступень существует, называет «права системы» и говорит,
         что песочница перестаёт быть границей — без этих слов карточка врала
-        бы ровно в момент самого доверительного выбора (слово Егора 04.10)."""
+        бы ровно в момент самого доверительного выбора (слово владельца 04.10)."""
         rungs = modes.ladder()
         names = [r["name"] for r in rungs]
         self.assertEqual(names[:2], ["sandbox", "interactive"])

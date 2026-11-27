@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-from pathlib import Path
+from .windows_paths import Path
 import threading
 import time
 from contextlib import contextmanager, nullcontext

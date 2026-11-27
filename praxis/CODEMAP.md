@@ -4,13 +4,20 @@
 проходов: deployment truth находится в [`STATUS.md`](STATUS.md), устойчивые связи — в
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## Мои интерфейсы на телефоне
+
+[Карта и инструкция по сборке Mini App и PWA](workspace/projects/praxis-phone/README.md). Проект лежит в моём рабочем каталоге `/app/workspace/projects/praxis-phone`. Исходники TypeScript и зависимости для сборки доступны там. Команда из корня проекта — `./build.sh`.
+
 ## Ядро и Telegram runtime
 
 | Файл | Роль |
 |---|---|
+| `self_wake_library.py` | Читает эту редактируемую карту и полные тексты действующих навыков в каждом ходе, включая лички, группы и самостоятельные пробуждения. В кадр входят обычные `.md`-файлы из самого каталога `soul/skills/`: `INDEX.md` пропускается, вложенные папки не обходятся. |
 | `agent.py` | Persona/context assembly, модельный tool loop, tool registry, outbound guard, durable run/delivery integration. |
 | `dialogue_projection.py` | Общая чистая проекция native/epoch rows в роли, complete logical-send batches и service-row attachments. |
 | `frame_continuation.py` | Default-off derived first-input checkpoint группы; source-proved append между chat turns, без переноса внутреннего tool transcript. |
+| `dm_continuation.py` | Личная переписка на следующем ходе. Держит начало канонической ленты до свёртки и сверяет её с принятым входом модели. |
+| `focus_interrupt.py` | The owner DM bell yields a closed coding window to the ordinary chat scheduler. The original code run keeps its thread and workers. |
 | `mtproto_runner.py` | Живой Telethon client: update routing, buffers, forum topics, media, delivery/outbox replay, membership/account hooks и единые серверные часы. |
 | `llm.py` | Конфигурация ролей моделей, Anthropic/OpenAI protocol adapters, fallback, usage и hosted tools. |
 | `model_step.py` | Тёплые run/task SDK workers, private framed leases, typed errors и parent lifeline; policy остаётся в llm. |

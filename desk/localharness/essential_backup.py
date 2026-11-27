@@ -11,7 +11,10 @@ import datetime as dt
 import json
 import os
 import zipfile
-from pathlib import Path
+if __package__:
+    from .windows_paths import Path, walk
+else:
+    from windows_paths import Path, walk
 
 ESSENTIAL = ("soul", "memory", "dossiers", "graph", "state", "workspace/inbox")
 SKIP = {"__pycache__", "node_modules", ".git", ".venv", ".cache", "cache",
@@ -19,6 +22,7 @@ SKIP = {"__pycache__", "node_modules", ".git", ".venv", ".cache", "cache",
 
 
 def configs(root: Path):
+    root=Path(root)
     yield root / "helene.json"
     directory = root / "agents"
     if directory.is_dir():
@@ -26,7 +30,7 @@ def configs(root: Path):
 
 
 def load(path: Path) -> dict:
-    raw = path.read_bytes()
+    raw = Path(path).read_bytes()
     for encoding in ("utf-8-sig", "utf-16"):
         try:
             value = json.loads(raw.decode(encoding))
@@ -58,7 +62,7 @@ def inventory(root: Path, *, resolved_trees=None):
             if source.is_file():
                 yield source, f"{prefix}/{name}"
                 continue
-            for directory, dirs, files in os.walk(source, followlinks=False):
+            for directory, dirs, files in walk(source, followlinks=False):
                 base = Path(directory)
                 dirs[:] = sorted(d for d in dirs if d.lower() not in SKIP and not (base / d).is_symlink())
                 for filename in sorted(files):

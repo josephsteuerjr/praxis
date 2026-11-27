@@ -7,7 +7,7 @@
 
 ИСТОРИЯ ДЕФЕКТА, ЖИВАЯ. Пока реплика была ВОЗВРАТОМ модели, последний мой текст И БЫЛ
 сообщением — значит любой добавочный поворот цикла его затирал. 13.08.2026 это выстрелило
-трижды подряд в личке Егора: в 22:44 наружу ушло НИЧЕГО, в 22:54 ему уехало «Да,
+трижды подряд в личке владельца: в 22:44 наружу ушло НИЧЕГО, в 22:54 ему уехало «Да,
 отправляй» (это я отвечала зеркалу, а не ему), в 23:26 — «Оставляю как есть». Три правки
 формулировки не помогли и не могли: порок был в конструкции, а не в словах.
 
@@ -118,9 +118,9 @@ def _lever(value: str = "on", **extra):
 
 
 def _owner_dm() -> agent.ChannelContext:
-    """Личка Егора: аудитория владельца, где советник по данным не запускается вовсе."""
+    """Личка владельца: аудитория владельца, где советник по данным не запускается вовсе."""
     return agent.ChannelContext(chat_id="101", principal_id=101, is_dm=True, owner=True,
-                                title="Егор")
+                                title="Алекс")
 
 
 def _stranger_dm() -> agent.ChannelContext:
@@ -184,7 +184,7 @@ class _StandInBridge:
     живой `_sync_reply` с durable-очередью.
     """
 
-    def __init__(self, outcome: str = "Отправила → Егор (chat_id=101, message_id=901)"):
+    def __init__(self, outcome: str = "Отправила → Алекс (chat_id=101, message_id=901)"):
         self.calls: list[tuple[str, str, str]] = []
         self.outcome = outcome
 
@@ -260,7 +260,7 @@ class _TurnHarness(unittest.TestCase):
                 mock.patch.dict(agent._TELETHON, telethon), \
                 mock.patch.object(agent, "_model_call", model):
             envelope = agent.voice_turn_envelope(
-                channel.chat_id, "Егор: посмотри и скажи", "Егор", ctx=channel)
+                channel.chat_id, "Алекс: посмотри и скажи", "Алекс", ctx=channel)
         return envelope, model
 
 
@@ -450,12 +450,12 @@ class MyReplyGoesOutByHand(_TurnHarness):
         envelope, model = self.turn(
             _calls_tool("call-1", "end_turn", {"outcome": "wait"}),
             _calls_tool("call-2", "end_turn",
-                        {"outcome": "wait", "note": "жду слова Егора по пакету эпохи"}))
+                        {"outcome": "wait", "note": "жду слова Алекса по пакету эпохи"}))
         self.assertEqual(model.calls, 2, "wait без условия закрыл ход")
         recorded = self.recorded.rows[-1]
         note = str(recorded.get("note") or "")
         self.assertIn("wait", note, "исход wait не доехал до записи хода")
-        self.assertIn("жду слова Егора", note, "условие возврата потерялось из записи")
+        self.assertIn("жду слова Алекса", note, "условие возврата потерялось из записи")
 
     def test_an_empty_terminal_note_after_a_reply_keeps_what_was_said(self):
         """reply → пустой терминальный текст: ход закрыт СКАЗАННЫМ, ничего не переслано.
@@ -630,7 +630,7 @@ class MyReplyGoesOutByHand(_TurnHarness):
         ровно этим, 70% за сутки. А поскольку разбор shadow-модерации доставляется КАК
         пробуждение, он падал так же — и его недоставленные события держали флаг
         приоритета, который откладывал каждый живой ход в каждом чате, включая личку
-        Егора. Два часа молчания без единой ошибки в логе.
+        владельца. Два часа молчания без единой ошибки в логе.
         """
         windowish = agent.ChannelContext(chat_id=None, principal_id=agent.PRAXIS_SELF_PRINCIPAL,
                                          is_dm=True, owner=False, known=True)
@@ -703,7 +703,7 @@ class MyReplyGoesOutByHand(_TurnHarness):
         with _lever("on"), \
                 mock.patch.dict(agent._TELETHON, {"reply": self.bridge}), \
                 mock.patch.object(agent, "_model_call", model):
-            agent.voice_turn_envelope("101", "Егор: тестим", "Егор", ctx=_owner_dm())
+            agent.voice_turn_envelope("101", "Алекс: тестим", "Алекс", ctx=_owner_dm())
         turn = self.recorded.last
         self.assertEqual(len(self.bridge.calls), 1, "рука не дошла до шва — тест мерит не то")
         self.assertIn("сообщение дошло", str(turn.get("out") or ""),
@@ -726,7 +726,7 @@ class MyReplyGoesOutByHand(_TurnHarness):
         with _lever("on"), \
                 mock.patch.dict(agent._TELETHON, {"reply": self.bridge}), \
                 mock.patch.object(agent, "_model_call", _BreaksImmediately()):
-            agent.voice_turn_envelope("101", "Егор: тестим", "Егор", ctx=_owner_dm())
+            agent.voice_turn_envelope("101", "Алекс: тестим", "Алекс", ctx=_owner_dm())
         turn = self.recorded.last
         self.assertEqual(self.bridge.calls, [], "ничего не отправлялось — тест мерит не то")
         self.assertEqual(turn.get("held"), "error",
@@ -1018,7 +1018,7 @@ class TheWholeWayDownToTheQueue(unittest.TestCase):
         self.loop = loop
 
         self.wire: list[dict] = []
-        entity = types.SimpleNamespace(id=101, first_name="Егор", username="yegor")
+        entity = types.SimpleNamespace(id=101, first_name="Алекс", username="alex")
 
         async def _send(_entity, message, *, delivery_key, reply_to=None, random_id=None):
             self.wire.append({"text": message, "reply_to": reply_to,
@@ -1045,7 +1045,7 @@ class TheWholeWayDownToTheQueue(unittest.TestCase):
         ctx = _owner_dm()
         with _lever("on"), mock.patch.object(agent, "_model_call", model):
             envelope = agent.voice_turn_envelope(
-                ctx.chat_id, "Егор: скажи, что там", "Егор", ctx=ctx)
+                ctx.chat_id, "Алекс: скажи, что там", "Алекс", ctx=ctx)
         return envelope, model
 
     def test_one_reply_travels_the_whole_way_and_is_accepted_once(self):
@@ -1065,7 +1065,7 @@ class TheWholeWayDownToTheQueue(unittest.TestCase):
         self.assertEqual(work_loop.sent(envelope.run_id or ""), 1)
 
     def test_the_reply_is_not_booked_as_an_initiative_message(self):
-        """Решение Егора 15.08: «ни ограничений, ни пульса».
+        """Решение владельца 15.08: «ни ограничений, ни пульса».
 
         Леджер контактов, социальный пульс и след нити с отчётом описывают ИНИЦИАТИВУ —
         «я пошла и написала человеку». Реплика в разговоре, где человек только что написал

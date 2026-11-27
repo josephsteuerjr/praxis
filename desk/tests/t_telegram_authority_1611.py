@@ -1,4 +1,4 @@
-"""Telegram authority for nested hands and resume in the edition (Jarvis, AbstractDL, 15-16.11).
+"""Telegram authority for nested hands and resume in the edition (Atlas, AbstractDL, 15-16.11).
 
 The core re-checks the turn's human authority before every nested h.hand and every resume,
 against PRAXIS_OWNER_ID and social.known_ids. The edition sets neither: its owner is
@@ -74,7 +74,7 @@ class TelegramAuthority(unittest.TestCase):
         self.continuity.install()
 
     def write(self, owner):
-        self.config.write_text(json.dumps({"owner": {"name": "Egor"}, "telegram": {"owner_id": owner}}),
+        self.config.write_text(json.dumps({"owner": {"name": "Alex"}, "telegram": {"owner_id": owner}}),
                                encoding="utf-8")
 
     def check(self, runtime):

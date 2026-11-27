@@ -34,6 +34,8 @@ import logging
 import os
 import re
 import socket
+import ssl
+from pathlib import Path
 import time
 import urllib.parse
 from typing import NamedTuple
@@ -84,28 +86,36 @@ def _ip_is_public(addr: str) -> bool:
     return True
 
 
-def _host_is_public(host: str) -> bool:
-    """Все адреса имени — публичные. Не резолвится/приватный/CGNAT/loopback — False."""
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    ok = False
-    for _fam, _t, _p, _c, sa in infos:
-        if not _ip_is_public(sa[0]):
-            return False
-        ok = True
-    return ok
-
-
-def _check_url(url: str) -> None:
-    p = urllib.parse.urlparse(url)
+def _check_url(url: str) -> str:
+    """Validate all DNS answers and return a public address for an explicit proxy."""
+    p = urllib.parse.urlsplit(url)
     if p.scheme not in ("http", "https"):
         raise ValueError("только http/https")
     if not p.hostname:
         raise ValueError("нет хоста в URL")
-    if not _host_is_public(p.hostname):
+    try:
+        addresses = list(dict.fromkeys(row[4][0] for row in socket.getaddrinfo(p.hostname, None)))
+    except OSError:
+        addresses = []
+    if not addresses or not all(_ip_is_public(addr) for addr in addresses):
         raise ValueError(f"«{p.hostname}» вне публичной сети — туда не хожу (SSRF-рельс)")
+    return next((addr for addr in addresses if ":" not in addr), addresses[0])
+
+
+def _web_proxy(url: str) -> str:
+    config = os.getenv("HELENE_CONFIG")
+    if not config:
+        return ""
+    settings = _jsonmod.loads(Path(config).read_bytes())
+    route = (settings.get("network") or {}).get("web_route", "direct")
+    if route == "direct":
+        return ""
+    from deskd.network_route import Route
+    if route == "application":
+        return Route(settings).proxy_for(url)
+    if route == "system":
+        return Route({}).proxy_for(url)
+    raise ValueError("Неизвестный маршрут веб-поиска")
 
 
 def _guard_peer(r) -> None:
@@ -121,31 +131,82 @@ def _guard_peer(r) -> None:
         raise ValueError(f"коннект ушёл в непубличный {addr[0]} — рву (DNS-rebind рельс)")
 
 
+def _payload(status, headers, chunks, cap):
+    location = headers.get("location")
+    if status in (301, 302, 303, 307, 308) and location:
+        return location, b"", ""
+    if not 200 <= status < 300:
+        raise ValueError(f"HTTP {status}")
+    ctype = (headers.get("content-type") or "").lower()
+    if "pdf" in ctype:
+        cap = max(cap, PDF_MAX_BYTES)
+    buf = bytearray()
+    for chunk in chunks:
+        buf.extend(chunk[:cap - len(buf)])
+        if len(buf) >= cap:
+            break
+    return None, bytes(buf), ctype
+
+
+def _web_tls():
+    import certifi
+
+    context = ssl.create_default_context()
+    if not (os.getenv("SSL_CERT_FILE") or os.getenv("SSL_CERT_DIR")):
+        context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
+def _proxy_page(url, address, proxy, timeout, cap, headers):
+    """Send the checked IP to the proxy, retaining the site's Host, TLS SNI and certificate identity."""
+    import httpx
+    import urllib3
+
+    site = httpx.URL(url)
+    via = httpx.URL(proxy)
+    if via.scheme not in ("http", "https") or not via.host:
+        raise ValueError("Для веб-поиска нужен HTTP/HTTPS-прокси")
+    auth = {}
+    if via.username or via.password:
+        auth = urllib3.make_headers(proxy_basic_auth=f"{via.username}:{via.password}")
+    tls = {}
+    if site.scheme == "https":
+        name = site.raw_host.decode("ascii")
+        tls = {"server_hostname": name, "assert_hostname": name, "ssl_context": _web_tls()}
+    manager = urllib3.ProxyManager(str(via.copy_with(username=None, password=None)),
+                                   proxy_headers=auth, proxy_ssl_context=_web_tls() if via.scheme == "https" else None, **tls)
+    target = str(site.copy_with(host=address, username=None, password=None, fragment=None))
+    try:
+        with manager.request("GET", target, headers={**headers, "Host": site.netloc.decode("ascii")},
+                             redirect=False, retries=False, preload_content=False, timeout=timeout) as r:
+            return _payload(r.status, r.headers, r.stream(65536), cap)
+    except urllib3.exceptions.HTTPError as e:
+        # Proxy credentials must never appear in a model result or a run log.
+        raise OSError(f"Ошибка веб-прокси ({type(e).__name__})") from None
+    finally:
+        manager.clear()
+
+
 def _fetch_raw(url: str, *, timeout: float | None = None,
                max_bytes: int | None = None) -> tuple[str, bytes, str]:
-    """(final_url, body, content_type). Редиректы вручную — SSRF-проверка на каждом хопе."""
     import httpx
     tmo = TIMEOUT if timeout is None else timeout
     cap = MAX_BYTES if max_bytes is None else max_bytes
+    headers = {"User-Agent": UA, "Accept-Language": "ru,en"}
     for _ in range(MAX_HOPS):
-        _check_url(url)
-        with httpx.Client(timeout=tmo, follow_redirects=False,
-                          headers={"User-Agent": UA, "Accept-Language": "ru,en"}) as c:
-            with c.stream("GET", url) as r:
-                _guard_peer(r)  # фактический peer-IP, не только имя
-                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
-                    url = urllib.parse.urljoin(url, r.headers["location"])
-                    continue
-                r.raise_for_status()
-                ctype = (r.headers.get("content-type") or "").lower()
-                if "pdf" in ctype:
-                    cap = max(cap, PDF_MAX_BYTES)
-                buf = bytearray()
-                for chunk in r.iter_bytes():
-                    buf += chunk
-                    if len(buf) >= cap:
-                        break
-        return url, bytes(buf), ctype
+        address = _check_url(url)
+        proxy = _web_proxy(url)
+        if proxy:
+            location, body, ctype = _proxy_page(url, address, proxy, tmo, cap, headers)
+        else:
+            with httpx.Client(timeout=tmo, follow_redirects=False, trust_env=False,
+                              verify=_web_tls(), headers=headers) as c:
+                with c.stream("GET", url) as r:
+                    _guard_peer(r)
+                    location, body, ctype = _payload(r.status_code, r.headers, r.iter_bytes(), cap)
+        if not location:
+            return url, body, ctype
+        url = urllib.parse.urljoin(url, location)
     raise ValueError("слишком много редиректов")
 
 

@@ -13,6 +13,9 @@ import base64
 import hashlib
 import json
 import re
+import os
+import stat
+import time
 from pathlib import Path
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\Z")
@@ -35,12 +38,42 @@ def identity(value: str) -> str:
     return value
 
 
-def _inside(base: Path, path: Path) -> Path:
-    base = base.resolve()
-    resolved = path.resolve()
-    if not resolved.is_relative_to(base) or path.is_symlink():
-        raise ReadError("Forge record escapes its identity directory", 403)
+_REAL_PATHS: dict[str, tuple[tuple[int, int], str]] = {}
+_REAL_LIMIT = 40000
+
+
+def _real(path: str) -> str:
+    """`Path.resolve()` for a path of real directories, remembered by device and inode."""
+    head, tail = os.path.split(path)
+    if not tail or tail in (".", ".."):
+        return os.path.realpath(path)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        # The leaf does not exist yet (an optional record): the parent decides.
+        return os.path.join(_real(head), tail)
+    except OSError:
+        return os.path.realpath(path)
+    if stat.S_ISLNK(info.st_mode):
+        return os.path.realpath(path)
+    stamp = (info.st_dev, info.st_ino)
+    hit = _REAL_PATHS.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    resolved = os.path.join(_real(head), tail)
+    if len(_REAL_PATHS) >= _REAL_LIMIT:
+        _REAL_PATHS.pop(next(iter(_REAL_PATHS)), None)
+    _REAL_PATHS[path] = (stamp, resolved)
     return resolved
+
+
+def _inside(base: Path, path: Path) -> Path:
+    base_name = _real(os.fspath(base))
+    name = _real(os.fspath(path))
+    inside = name == base_name or name.startswith(base_name if base_name.endswith("/") else base_name + "/")
+    if not inside or os.path.islink(path):
+        raise ReadError("Forge record escapes its identity directory", 403)
+    return Path(name)
 
 
 def task_dir(tree: Path, task_id: str) -> Path:
@@ -133,7 +166,87 @@ def _payload_refs(result: dict) -> dict:
     return out
 
 
+_UNIT_MEMORY: dict[str, tuple[tuple, str]] = {}      # folder -> (what it was computed from, answer as JSON)
+_UNIT_LIMIT = 8000
+_UNIT_LIVE_WINDOW = 90.0                             # > the 15 s that can make a participant "running"
+_UNIT_TASK_FILES = ('task.json', 'events.jsonl')
+
+
+def _unit_stamp(folder: Path) -> tuple:
+    """Everything _unit_read derives its answer from, with change marks."""
+    rows = []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                continue              # payloads and other folders are not read here
+            rows.append((entry.name, info.st_mtime_ns, info.st_size, info.st_ino, stat.S_ISLNK(info.st_mode)))
+    task = os.path.dirname(os.path.dirname(os.fspath(folder)))
+    for name in _UNIT_TASK_FILES:
+        try:
+            info = os.lstat(os.path.join(task, name))
+        except OSError:
+            rows.append((name + ':',))     # absent
+        else:
+            rows.append((name + ':', info.st_mtime_ns, info.st_size, info.st_ino, stat.S_ISLNK(info.st_mode)))
+    return tuple(sorted(rows))
+
+
+def _unit_clock_matters(value: dict) -> bool:
+    """True while the clock can still change this participant's status."""
+    try:
+        observed = dt.datetime.fromisoformat(str(value['liveness']['observed_at']).replace('Z', '+00:00')).timestamp()
+    except (KeyError, ValueError, TypeError, IndexError):
+        return False
+    return time.time() - observed < _UNIT_LIVE_WINDOW      # recent, or dated ahead
+
+
 def _unit(folder: Path, task_id: str) -> dict:
+    try:
+        stamp = _unit_stamp(folder)
+    except OSError:
+        stamp = None                  # cannot be listed now: read it as before
+    if stamp is None:
+        return _unit_read(folder, task_id)
+    key = os.fspath(folder)
+    hit = _UNIT_MEMORY.get(key)
+    if hit and hit[0] == (stamp, task_id):
+        return json.loads(hit[1])     # the caller's own copy: callers annotate rows
+    value = _unit_read(folder, task_id)
+    if not _unit_clock_matters(value):
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return value              # not plain data: do not remember it
+        if len(_UNIT_MEMORY) >= _UNIT_LIMIT:
+            _UNIT_MEMORY.pop(next(iter(_UNIT_MEMORY)), None)
+        _UNIT_MEMORY[key] = ((stamp, task_id), text)
+    return value
+
+
+def _participant(parent: Path, name: str, task_id: str, identify: bool) -> dict:
+    """A participant under a parent that is already resolved and guarded.
+
+    Same refusals as the full walk it replaces: an identity that is not one,
+    a symlinked folder and a folder outside its parent are refused; a folder
+    that is not a directory is "not found".
+    """
+    if identify:
+        name = identity(name)
+    folder = parent / name
+    try:
+        info = os.lstat(folder)
+    except OSError:
+        folder = _inside(parent, folder)
+    else:
+        if stat.S_ISLNK(info.st_mode):
+            _inside(parent, folder)                    # raises: a symlinked record is refused
+        if not stat.S_ISDIR(info.st_mode):
+            raise ReadError("Forge participant not found", 404)
+    return _unit(folder, task_id)
+
+
+def _unit_read(folder: Path, task_id: str) -> dict:
     request = _read(folder, "request.json", required=True)
     if request.get("id") not in (None, folder.name) or request.get("task_id") not in (None, task_id):
         raise ReadError("Forge participant request identity mismatch", 409)
@@ -223,7 +336,7 @@ def task_detail(tree: Path, task_id: str) -> dict:
     agents_path = _inside(folder, folder / "agents")
     try:
         folders = sorted(p for p in agents_path.iterdir() if p.is_dir()) if agents_path.exists() else []
-        agents = [_unit(unit_dir(tree, task_id, p.name), task_id) for p in folders]
+        agents = [_participant(agents_path, p.name, task_id, identify=True) for p in folders]
     except OSError as exc:
         raise ReadError(f"Forge participants unreadable: {exc}", 503) from exc
     recovery_units=[]
@@ -231,7 +344,7 @@ def task_detail(tree: Path, task_id: str) -> dict:
         directory=_inside(folder,folder/kind)
         for path in sorted(directory.iterdir()) if directory.exists() else []:
             if not path.is_dir():continue
-            unit=_unit(_inside(folder,path),task_id)
+            unit=_participant(directory, path.name, task_id, identify=False)
             if unit['custody']!='recovered' and unit['status'] in {'unknown','lost','stop_pending'}:
                 recovery_units.append({'id':unit['id'],'kind':kind,'status':unit['status'],
                     'history_diagnostic':unit.get('history_diagnostic')})

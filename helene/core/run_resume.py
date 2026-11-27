@@ -1105,7 +1105,7 @@ def _her_word_wait(row: dict | None) -> dict | None:
         return None
     if row.get("control_action") or row.get("requested_by"):
         # Пауза, поставленная пультом ПОВЕРХ её слова, остаётся владельческой: автомат её
-        # не поднимает. Иначе «останови» от Егора снималось бы её же прошлым «жду».
+        # не поднимает. Иначе «останови» от владельца снималось бы её же прошлым «жду».
         return None
     wake = details.get("wake")
     return dict(wake) if isinstance(wake, dict) else {}

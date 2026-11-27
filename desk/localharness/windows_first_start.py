@@ -7,7 +7,7 @@ from ctypes import wintypes as w
 import hashlib
 import json
 import os
-from pathlib import Path
+from .windows_paths import wide, Path, walk
 import shutil
 import stat
 import subprocess
@@ -296,7 +296,7 @@ def _verify_custody(request,captured=None):
 class Backend:
     def __init__(self,root):
         self.root=Path(root).resolve();self.roots=[];self.protected=[];self.keep=[];self.excluded=[];self.process_excluded=[self.root];self._hooks_cleared=None;self._registrations=[];self._pruning=False;self._elevated=False
-        # 11.11 (Yegor): cleanup of a previous installation never asks for administrator
+        # 11.11 (the owner): cleanup of a previous installation never asks for administrator
         # rights. Paths Windows protects and other leftovers are collected for the person.
         self.leftovers=[];self.notes=[]
 
@@ -404,7 +404,7 @@ class Backend:
         # Writable destination and retained source cleanup are checked separately.
         self.custody(data)
         try:
-            for here,dirs,names in os.walk(data,followlinks=False):
+            for here,dirs,names in walk(data,followlinks=False):
                 for name in names:
                     with (Path(here)/name).open('rb') as stream:stream.read(1)
         except PermissionError as error:
@@ -550,7 +550,7 @@ class Backend:
             _verify_custody(captured['scope'],captured)
             try:
                 if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):path.unlink()
-                elif path.is_dir():shutil.rmtree(path,onerror=writable)
+                elif path.is_dir():shutil.rmtree(wide(path),onerror=writable)
                 elif path.exists():path.unlink()
                 self._confirmed_removed(path)
                 return
@@ -581,7 +581,7 @@ class Backend:
                 if not any(k==Path(name) or k.is_relative_to(name) for k in kept):raise
         try:
             if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):path.unlink()
-            elif path.is_dir():shutil.rmtree(path,onerror=tolerant)
+            elif path.is_dir():shutil.rmtree(wide(path),onerror=tolerant)
             elif path.exists():path.unlink()
         except PermissionError:
             kept.append(Path(path))

@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import os
-from pathlib import Path
+from .windows_paths import wide, Path
 import shutil
 import subprocess
 import threading
@@ -374,7 +374,7 @@ def relocate(old,new,value):
         if source.exists() and target.exists():raise ValueError('Retained data destination already exists')
         if source.exists():
             target.parent.mkdir(parents=True,exist_ok=True)
-            shutil.move(str(source),str(target))
+            shutil.move(wide(source),wide(target))
         elif not target.exists():raise ValueError('Retained data is missing from both locations')
     for row in value.get('data_pin_updates',[]):write(row['path'],row['after'])
     write(new/'python-migration.json',value['note'])
@@ -398,7 +398,7 @@ def restore(value):
     for row in reversed([*value.get('moves',[]),*value.get('legacy_components',[])]):
         source,target=plain(row['source']),plain(row['target'])
         if target.exists() and not source.exists():
-            source.parent.mkdir(parents=True,exist_ok=True);shutil.move(str(target),str(source))
+            source.parent.mkdir(parents=True,exist_ok=True);shutil.move(wide(target),wide(source))
     for row in value.get('data_pin_updates',[]):write(row['source_path'],row['before'])
 
 
@@ -461,7 +461,7 @@ def finish(old,new,note,*,stopped=lambda:False):
     note['login_migration']=commit(new)
     # rmtree never follows directory symlinks/junctions. Only the resolved,
     # independent programme chosen in the update request can be removed.
-    # 11.11 (Yegor): what the user's own rights cannot remove stays and is named;
+    # 11.11 (the owner): what the user's own rights cannot remove stays and is named;
     # no administrator prompt, and the rest of the old folder is still removed.
     protected=[]
     def readonly(function,path,error):
@@ -472,7 +472,7 @@ def finish(old,new,note,*,stopped=lambda:False):
         if function in (os.rmdir,os.scandir,os.open) and any(Path(p)==Path(path) or Path(p).is_relative_to(path) for p in protected):return
         if isinstance(error[1],PermissionError):protected.append(path);return
         raise error[1]
-    if old.exists():shutil.rmtree(old,onerror=readonly)
+    if old.exists():shutil.rmtree(wide(old),onerror=readonly)
     leftovers=list(note['integrations'].get('retained') or []) if isinstance(note['integrations'],dict) else []
     if protected:
         leftovers.append(f'Не удалось без прав администратора удалить {len(protected)} элемент(ов) прежней программы в {old}. '
@@ -530,7 +530,9 @@ def run(args,value,report,stopped):
         write(prepared_install_path(new),value)
         write(new/'python-migration.json',value['note'])
         argv=desktop_argv(new,['--root',str(new),'--migration',value['note']['id'],*(['--browser'] if args.browser else [])])
-        process=subprocess.Popen(argv,cwd=new,env=permanent_environment(),stdin=subprocess.DEVNULL,
+        from .update_process import python_launch
+        argv,cwd=python_launch(argv,new)
+        process=subprocess.Popen(argv,executable=argv[0],cwd=cwd,env=permanent_environment(),stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=background_flags(),start_new_session=os.name!='nt')
         launched=True
         deadline=time.monotonic()+120

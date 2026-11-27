@@ -3,7 +3,7 @@
 The incoming pristine-source validation and migration startup receipt do the work.
 The old programme remains intact until the new selected code confirms startup.
 """
-from pathlib import Path
+from .windows_paths import Path
 import copy
 from .package_notice import read,write
 

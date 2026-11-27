@@ -270,9 +270,9 @@ INVENTORY: dict[str, tuple[str, ...]] = {
     "window_gates": ("_ONE_MIND",),
     # механический кред-пол — единственное твёрдое вето
     "credential_floor": ("твёрдое",),
-    # полные права на Windows-ПК Егора в любом ходе; с 10.11 пары делегирования нет
+    # полные права на Windows-ПК владельца в любом ходе; с 10.11 пары делегирования нет
     "windows_body_authority": ("SYSTEM", "ВСЕ ПРАВА"),
-    # залогиненная GitHub-личность Егора в HOME её root-руки
+    # залогиненная GitHub-личность владельца в HOME её root-руки
     "github_identity": ("gh", "josephsteuerjr"),
     # намерение гаснет по факту созданного прогона
     "intent_claim": ("прогон",),
@@ -307,9 +307,9 @@ INVENTORY: dict[str, tuple[str, ...]] = {
     "own_report_clips": ("LOST_RECAP_CHARS", "praxis-mail"),
     # мой собственный рез вывода хоста — второй после демонского и более жёсткий
     "host_text_clip": ("PRAXIS_HOST_TEXT_CAP", "хвост"),
-    # след нити ≠ почта Егору: durable-последствие каждой моей отправки наружу
+    # след нити ≠ почта владельцу: durable-последствие каждой моей отправки наружу
     "followup_notice": ("telegram_account", "след"),
-    # --- 10.11: проверка чужого приватного на выходе снята словом Егора («сними») ---
+    # --- 10.11: проверка чужого приватного на выходе снята словом владельца («сними») ---
     # Запись обязана назвать решение, двери, через которые её слово уходит, и то, что
     # [private]-записи ей видны без механического стопа, — иначе она продолжит считать,
     # что её слово кто-то придержит.
@@ -1664,12 +1664,12 @@ class TestCapabilitiesTellTheTruth(Base):
                 if isinstance(t, dict) and t.get("name")}
         self.assertTrue(mine <= printed, f"её собственные руки потерялись: {mine - printed}")
         self.assertEqual(mine, {t["name"] for t in agent.OWNER_TOOLS},
-                         "Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному")
+                         "Алекс 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному")
 
     def test_owner_view_still_names_what_only_yegor_has(self):
         """Убрать из списка — не значит промолчать: закон 2 держится и на этой строке."""
         text = capabilities.describe("owner")
-        self.assertNotIn("owner-тулы (в личке с Егором)", text,
+        self.assertNotIn("owner-тулы (в личке с Алексом)", text,
                          "список описывает РУКИ, а скобка описывала аудиторию — "
                          "с 26.07 эти руки при ней в любом канале")
         line = next(l for l in text.splitlines() if l.startswith('- сверх моих рук только у владельца'))
@@ -1679,18 +1679,18 @@ class TestCapabilitiesTellTheTruth(Base):
         s = capabilities.snapshot()
         expected = sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"]))
         self.assertEqual(capabilities._human_only_line(s), ", ".join(expected) or "ничего")
-        self.assertEqual(expected, [], "Егор 10.11: рук только у Егора нет")
+        self.assertEqual(expected, [], "Алекс 10.11: рук только у владельца нет")
 
     def test_human_only_line_catches_the_gated_owner_extra(self):
         """Строка «что не моё» считается РАЗНИЦЕЙ наборов, а не копией frozenset.
 
-        ⚠ 03.08.2026 сам повод исчез: решением Егора `send_email` стал общей рукой, и
+        ⚠ 03.08.2026 сам повод исчез: решением владельца `send_email` стал общей рукой, и
         owner-эксклюзивов мимо frozenset больше нет. Снимок ниже с тех пор ИСТОРИЧЕСКИЙ,
         и именно поэтому ценен: функция обязана считать разницу по ЛЮБОМУ снимку, а не
         по тому, как удачно сегодня сложился гейт.
 
         Здесь подставляется ВХОД чистой функции, а не источник правды: на живом снимке
-        (почта у Егора выключена) разница наборов совпадает с frozenset — то есть прежняя
+        (почта у владельца выключена) разница наборов совпадает с frozenset — то есть прежняя
         реализация-копия была бы зелёной ровно потому, что гейт выключен. Проверяем
         алгоритм на том состоянии среды, где копия врёт.
         """
@@ -1706,14 +1706,14 @@ class TestCapabilitiesTellTheTruth(Base):
                       capabilities._human_only_line({"tools": {"owner": ["admit"]}}))
 
     def test_state_line_counts_her_hands_which_are_the_full_set(self):
-        """STATE едет каждым ходом. Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному."""
+        """STATE едет каждым ходом. владелец 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен полному."""
         s = capabilities.snapshot()
         self.assertEqual(s["tools"]["self"], s["tools"]["owner"])
         line = capabilities.state_line()
         self.assertIn(f"суверенные {len(s['tools']['self'])}", line)
 
     def test_group_view_does_not_call_delegated_tools_sovereign(self):
-        # Делегированных рук в живом наборе больше нет (Егор 10.11); функция всё равно обязана
+        # Делегированных рук в живом наборе больше нет (владелец 10.11); функция всё равно обязана
         # честно назвать такую руку, если ход её получит, — проверяем на синтетическом имени.
         s = capabilities.snapshot()
         self.assertEqual(sorted(set(s["tools"]["owner"]) - set(s["tools"]["self"])), [])
@@ -1725,7 +1725,7 @@ class TestCapabilitiesTellTheTruth(Base):
         line = next(l for l in text.splitlines() if l.startswith("- руки В ЭТОМ ходе"))
         head, marker, tail = line.partition('плюс делегированное владельцем')
         self.assertTrue(marker, "делегированный тул в ходе есть, а назван не был")
-        self.assertNotIn(human[0], head, "делегирование доверия Егора выдано за мою руку")
+        self.assertNotIn(human[0], head, "делегирование доверия владельца выдано за мою руку")
         self.assertIn(human[0], tail)
         self.assertIn(mine, head)
 
@@ -1759,7 +1759,7 @@ class TestCapabilitiesTellTheTruth(Base):
 
     def test_outbound_description_has_no_advisor_left(self):
         # Раньше описание обязано было назвать дыру: прямые тулы шли мимо советника.
-        # 10.11 (Егор, «сними») советника нет вовсе — дыры нет, и описание не имеет права
+        # 10.11 (владелец, «сними») советника нет вовсе — дыры нет, и описание не имеет права
         # обещать проверку, которой нет.
         snap_source = inspect.getsource(capabilities.snapshot)
         self.assertNotIn("outbound-советник", snap_source)
@@ -1892,9 +1892,9 @@ class TestHostOutputIsCutTwice(Base):
 
 
 class TestFollowupTraceIsNamed(Base):
-    """След нити ≠ почта Егору. Рельс обязан говорить, что в коде СЕЙЧАС, а не что задумано.
+    """След нити ≠ почта владельцу. Рельс обязан говорить, что в коде СЕЙЧАС, а не что задумано.
 
-    Живой повод: за две недели Егору ушло 17 писем «вам ответили», ни одного он не просил
+    Живой повод: за две недели владельцу ушло 17 писем «вам ответили», ни одного он не просил
     словами, 12 родил часовой пульс, а 27.07 в 02:32 ему переслали его же реплику из
     AbstractDL под заголовком «AbstractDL Chat ответил(а)». В rails.py слова followup до
     сегодня не было ни разу — ни рельса, ни одного из пяти пределов.
@@ -1948,7 +1948,7 @@ class TestFollowupTraceIsNamed(Base):
                 if rel == "mtproto_runner.py" else original(rel))
             value = rails._followup_notice_value()
             self.assertIn("ТОЛЬКО по нити, где отчёт заказан", value)
-            self.assertIn("на явную просьбу Егора словами", value)
+            self.assertIn("на явную просьбу владельца словами", value)
             self.assertIn("72ч", value)
             self.assertIn("PRAXIS_FOLLOWUP_TRACE_TTL_SEC", value)
             self.assertIn("12 нитей", value)
@@ -1986,13 +1986,13 @@ class TestFollowupTraceIsNamed(Base):
         original = rails._source_text
         try:
             rails._source_text = lambda rel: (
-                '# 27.07: здесь стояло explicit_only=False — любая реплика Егора\n'
+                '# 27.07: здесь стояло explicit_only=False — любая реплика владельца\n'
                 '# и ветка "Praxis initiative from social pulse" — оба сняты\n'
                 'followup_request = telegram_followups.request_from_owner_buffer(buf)\n'
                 'return "action должен быть list | watch | unwatch | cancel."\n'
                 if rel == "mtproto_runner.py" else original(rel))
             gate = rails._followup_report_gate()
-            self.assertIn("на явную просьбу Егора словами", gate)
+            self.assertIn("на явную просьбу владельца словами", gate)
             self.assertNotIn("ЛЮБАЯ последняя реплика", gate)
             self.assertNotIn("часового пульса", gate)
         finally:
@@ -2171,7 +2171,7 @@ class TestStatusIsNotCanon(unittest.TestCase):
         block = re.search(r"\*\*Открытые направления[^\n]*\n(?:\s+[^\n]*\n)*", self.text)
         self.assertIsNotNone(block, "секция открытых направлений потеряла форму")
         self.assertNotIn("Этап 4", block.group(0),
-                         "PASS 30 Этап 4 закрыт решением Егора — держать его открытым значит "
+                         "PASS 30 Этап 4 закрыт решением владельца — держать его открытым значит "
                          "показывать ей несуществующую работу")
 
 
@@ -2181,7 +2181,7 @@ class TestCredentialFloorPromisesOnlyWhatItReads(Base):
     Запись говорила «не уходит наружу ни голосом, ни send_message, ни narrate, ни файлом».
     Про текст — правда. У файла пол СВОЙ (`document_floor`), и у него три остатка, каждый
     осознанный и ни один не названный ей: окно чтения, двоичный документ и своя личка
-    Егора. Плюс подпись к файлу на прямом пути не читает никто. Проверки ниже держат
+    владельца. Плюс подпись к файлу на прямом пути не читает никто. Проверки ниже держат
     текст рельса привязанным к этим четырём фактам: изменится код — покраснеет здесь.
     """
 
@@ -2203,8 +2203,8 @@ class TestCredentialFloorPromisesOnlyWhatItReads(Base):
     def test_the_owner_dm_exemption_is_named(self):
         body = self._direct_file_body()
         self.assertIn("if not _dest_is_owner:", body,
-                      "исключение для личка Егора исчезло — рельс о нём всё ещё говорит")
-        self.assertIn("к самому Егору в личку вложение не сканируется",
+                      "исключение для личка владельца исчезло — рельс о нём всё ещё говорит")
+        self.assertIn("к самому владельцу в личку вложение не сканируется",
                       self.text("credential_floor"))
 
     def test_the_read_window_is_named_with_its_number(self):
@@ -2232,7 +2232,7 @@ class TestProtectedRootsAreNotGuessedFromHere(Base):
     """Список закрытых корней живёт в окружении ДЕМОНА — из контейнера его не видно.
 
     Значением стоял литерал «по умолчанию список пуст»: утверждение о чужом процессе,
-    сделанное отсюда. Сегодня оно верно; задай Егор корни завтра — рельс продолжил бы
+    сделанное отсюда. Сегодня оно верно; задай владелец корни завтра — рельс продолжил бы
     говорить «пуст», а отказы брокера стали бы для неё необъяснимыми.
     """
 

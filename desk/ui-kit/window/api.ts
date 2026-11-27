@@ -59,6 +59,7 @@ export interface ElectronBridge {
   /** The full programme shown in Telegram's MiniApp: window actions belong to the phone. */
   presentation?: "miniapp";
   platform: string;
+  minimizeOnClose?: boolean;
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   win(action: "minimize" | "maximize" | "close"): void;
   /** Тон бумаги — оболочке, чтобы окно открывалось уже нужного цвета (look.ts). */

@@ -170,7 +170,7 @@ class SweepOlderThreadsTests(unittest.TestCase):
         owing = [self.ledger.get(x["id"]) for x in owed]
         carriers = [x for x in owing if followups._owes_owner_notice(x)]
         self.assertEqual(len(carriers), 1,
-                         "письмо Егору несёт ровно одна нить, не три")
+                         "письмо Алексу несёт ровно одна нить, не три")
         skipped = [x for x in owing
                    if x.get("notice_skipped") == "тот же ответ — отчёт уходит по свежей нити"]
         self.assertEqual(len(skipped), 2, "остальные гаснут с названной причиной")

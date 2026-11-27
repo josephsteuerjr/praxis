@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence
 
 from run_context import RunContext
+from run_manager import TOOL_OUTCOME_KINDS
 import tool_offerings
 import work_loop
 
@@ -275,6 +276,8 @@ class ToolCallResume:
     replayable: bool = False
     replay_basis: str = ""
     result_ref: dict[str, Any] | None = None
+    closing_word: dict[str, str] | None = None
+    closing_refused: bool = False  # Verified inert receipt, never a closing word.
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -285,6 +288,8 @@ class ToolCallResume:
             "replayable": self.replayable,
             "replay_basis": self.replay_basis,
             "result_ref": copy.deepcopy(self.result_ref),
+            **({"closing_word": dict(self.closing_word)} if self.closing_word else {}),
+            **({"closing_refused": True} if self.closing_refused else {}),
         }
 
 
@@ -308,6 +313,9 @@ class ResumePlan:
     tool_calls: tuple[ToolCallResume, ...] = ()
     diagnostics: tuple[str, ...] = field(default_factory=tuple)
     schema: str = PLAN_SCHEMA
+    # In-process proof for the continuation callback, not a durable plan field
+    # or a list of calls to dispatch. Includes acceptances from nested hands.
+    hourly_closing_words: tuple[tuple[str, dict[str, str]], ...] = field(default=(), repr=False)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -367,6 +375,9 @@ def _validate_result_ref(run_id: str, ref: Any, *, require_json: bool = False) -
             raise ResumeEvidenceError("JSON evidence has a non-JSON media type")
         if normalized.get("encoding") != "utf-8":
             raise ResumeEvidenceError("JSON evidence is not declared as UTF-8")
+    if "call_id" in normalized and (not isinstance(normalized["call_id"], str)
+                                    or not normalized["call_id"]):
+        raise ResumeEvidenceError("ResultRef call_id is malformed")
     return normalized
 
 
@@ -669,6 +680,7 @@ def _validate_events(run_id: str, events: list[dict], manifest: dict, *,
         raise ResumeEvidenceError("run has no event stream")
     reduced_status = "pending"
     model_state: dict[str, dict[str, int]] = {}
+    result_owners: dict[int, str] = {}
     for expected_seq, row in enumerate(events, 1):
         if budget is not None and expected_seq % 512 == 1:
             budget.check_time("validating event evidence")
@@ -716,7 +728,16 @@ def _validate_events(run_id: str, events: list[dict], manifest: dict, *,
                 raise ResumeEvidenceError("model_completed precedes model_output")
             state[kind] = seq
         if "result" in row:
-            _validate_result_ref(run_id, row.get("result"))
+            ref = _validate_result_ref(run_id, row.get("result"))
+            if "call_id" in ref and ref["call_id"] != call_id:
+                raise ResumeEvidenceError("ResultRef call_id differs from WAL receipt")
+            # A v1 legacy ref has no embedded call id. A repeated physical
+            # result identity is nevertheless never a second tool receipt.
+            result_number = int(ref["result_id"][len("result-"):])
+            if result_number in result_owners and (
+                    result_owners[result_number] == "tool_result" or kind == "tool_result"):
+                raise ResumeEvidenceError("ResultRef is reused across WAL receipts")
+            result_owners[result_number] = kind
     if _integer(manifest.get("event_seq"), "manifest.event_seq") != len(events):
         raise ResumeEvidenceError("manifest event cursor differs from WAL")
     if str(manifest.get("status") or "") != reduced_status:
@@ -793,6 +814,92 @@ def _run_has_no_addressee_context(context: RunContext | None) -> bool:
         and context.delivery_chat_id is None
         and not context.origin_message_ids
     )
+
+
+def is_hourly_self_run(context: RunContext | None) -> bool:
+    # The pulse ledger binding is checked at dispatch and again at projection.
+    return (context is not None and context.kind == "task_window"
+            and context.scope == "owner" and bool(context.hourly_pulse_id)
+            and _run_has_no_addressee_context(context))
+
+
+_HOURLY_CLOSING_TOOLS = frozenset({"end_turn", "task_control"})
+_HOURLY_BRIDGE_TOOLS = frozenset({"python", "run_command", "shell", "coding_run"})
+
+
+def hourly_wrapped_closing_intent(name: str, raw_input: dict) -> tuple[str, dict] | None:
+    """Decode evidence, not dispatch authority. Callers must require a completed hand."""
+    if name != "call":
+        return None
+    target = raw_input.get("name")
+    if not isinstance(target, str) or target.strip() not in _HOURLY_CLOSING_TOOLS:
+        return None
+    try:
+        args = tool_offerings.parse_call_args(raw_input.get("args_json"))
+    except (ValueError, RecursionError):
+        raise ResumeEvidenceError("wrapped hourly closing intent has malformed arguments") from None
+    return target.strip(), {key: value for key, value in args.items() if value is not None}
+
+
+def accepted_closing_word(name: str, args: dict, metadata: object) -> dict[str, str] | None:
+    """Read a hand's machine acceptance, not the result prose or the request alone.
+
+    The caller must already have matched the tool intent and result to the exact
+    offered call in this run. `target` is the normalized action the hand accepted.
+    """
+    if (name not in ("end_turn", "task_control") or not isinstance(metadata, dict)
+            or metadata.get("schema") != TOOL_RESULT_METADATA_SCHEMA
+            or metadata.get("outcome") != "ok"):
+        return None
+    key = "outcome" if name == "end_turn" else "action"
+    action = str(args.get(key) or "").strip().lower()
+    if action not in work_loop.CLOSING_ACTIONS or metadata.get("target") != action:
+        return None
+    fields = ("note",) if name == "end_turn" else ("summary", "evidence", "blocker", "wake_on")
+    word = {"action": action}
+    for key in fields:
+        text = str(args.get(key) or "").strip()
+        if text:
+            word[key] = text
+    if name == "end_turn" and action != "done" and not word.get("note"):
+        return None
+    return word
+
+
+def _inert_closing_refusal(metadata: object) -> bool:
+    # A closing hand may read its work card before refusing; writes, opaque
+    # operations, truncated audit, targets, images and outbound are not inert.
+    if (not isinstance(metadata, dict) or metadata.get("schema") != TOOL_RESULT_METADATA_SCHEMA
+            or metadata.get("outcome") != "refused" or metadata.get("outbound") != []
+            or not metadata.keys() <= {"schema", "outcome", "outbound", "operations"}):
+        return False
+    operations = metadata.get("operations", [])
+    return isinstance(operations, list) and all(
+        isinstance(op, list) and len(op) == 2 and op[0] == "read" and isinstance(op[1], str)
+        for op in operations
+    )
+
+
+def hourly_closing_slots(words: Sequence[tuple[str, dict[str, str]]]) -> dict[str, Any]:
+    """Apply acceptances in receipt order, retaining the two independent slots."""
+    slots = {"control": None, "finished": False, "finish_note": ""}
+    for name, word in words:
+        if name == "task_control":
+            slots["control"] = word
+        elif name == "end_turn":
+            slots["finished"] = True
+            note = word.get("note")
+            slots["finish_note"] = word["action"] + (f": {note}" if note else "")
+    return slots
+
+
+def _checkpoint_end_turn(checkpoint: dict) -> bool:
+    state = checkpoint.get("work_loop")
+    if (not isinstance(state, dict) or state.get("schema") != "praxis.work-loop-state.v1"
+            or state.get("finished") is not True or not isinstance(state.get("finish_note"), str)):
+        return False
+    action, _, note = state["finish_note"].partition(": ")
+    return action in work_loop.CLOSING_ACTIONS and bool(action == "done" or note.strip())
 
 
 def _checkpoint_control(checkpoint: dict | None) -> dict | None:
@@ -982,7 +1089,7 @@ def _utc_now_iso() -> str:
 
 
 def _checkpoint_after_her_word(checkpoint: dict, wake: dict | None = None,
-                               parked_at: str = "") -> dict:
+                               parked_at: str = "", *, hourly: bool = False) -> dict:
     """Ход, отданный исполнителю, начинается БЕЗ её уже исполненного слова.
 
     `work_loop.restore()` поднимает из точки продолжения и прогресс, и её управление ЭТИМ
@@ -1002,8 +1109,11 @@ def _checkpoint_after_her_word(checkpoint: dict, wake: dict | None = None,
     woken = {"wake_on": str((wake or {}).get("wake_on") or ""),
              "not_before": str((wake or {}).get("not_before") or ""),
              "parked_at": str(parked_at or "")}
-    return {**checkpoint,
-            "work_loop": {**state, "control": None, "used": 0, "woken": woken}}
+    state = {**state, "control": None, "used": 0, "woken": woken}
+    if hourly:
+        # task_control won if both closing hands were called in this batch.
+        state.update(finished=False, finish_note="")
+    return {**checkpoint, "work_loop": state}
 
 
 def _checkpoint_for_media_ids(checkpoint: dict, queue_ids: Sequence[str]) -> dict:
@@ -1262,6 +1372,7 @@ def _tool_calls_for_output(manager: RunManagerReader, run_id: str, output_row: d
                            outstanding: dict[str, dict], *,
                            max_result_bytes: int,
                            outbound_roots: Sequence[str | os.PathLike[str]],
+                           hourly_run: bool = False,
                            budget: _EvidenceBudget | None = None,
                            ) -> tuple[tuple[ToolCallResume, ...],
                                       tuple[OutboundDescriptor, ...]]:
@@ -1286,14 +1397,30 @@ def _tool_calls_for_output(manager: RunManagerReader, run_id: str, output_row: d
         if name not in offered_tools:
             raise ResumeEvidenceError(
                 f"model requested tool {name!r} that was not in its exact input")
-        # Live execution removes explicit JSON nulls so Python tool defaults
-        # remain authoritative.  Preserve the verbatim block in model_output,
-        # but plan and compare the exact normalized durable invocation.
-        call_input = {key: value for key, value in raw_input.items()
-                      if value is not None}
+        # Match live dispatch: review validates public keywords before
+        # dropping optional nulls. Other tools drop nulls before admission.
+        normalized = {key: value for key, value in raw_input.items() if value is not None}
+        call_input = dict(raw_input) if name == "coding_review" else normalized
+        wrapped = hourly_wrapped_closing_intent(name, raw_input) if hourly_run else None
+        if wrapped is not None:
+            name, call_input = wrapped
         ids.add(call_id)
         starts = [row for row in events
                   if row.get("kind") == "tool_started" and row.get("call_id") == call_id]
+        if wrapped is not None and (not starts or call_id in outstanding):
+            raise ResumeEvidenceError("wrapped hourly closing intent has no completed hand")
+        target = raw_input.get("name")
+        if name == "call" and isinstance(target, str) and target.strip() == "coding_review":
+            # Decode only for matching completed evidence, never for dispatch.
+            if not starts or call_id in outstanding:
+                raise ResumeEvidenceError("unsettled wrapped coding_review requires explicit recovery")
+            try:
+                raw_input = tool_offerings.parse_call_args(raw_input.get("args_json"))
+            except (ValueError, RecursionError) as exc:
+                raise ResumeEvidenceError("completed wrapped coding_review has malformed arguments") from exc
+            name = "coding_review"
+            call_input = dict(raw_input)
+            normalized = {key: value for key, value in raw_input.items() if value is not None}
         if not starts:
             plans.append(ToolCallResume(
                 call_id=call_id, name=name, input=copy.deepcopy(call_input),
@@ -1303,9 +1430,19 @@ def _tool_calls_for_output(manager: RunManagerReader, run_id: str, output_row: d
         if len(starts) != 1 or int(starts[0]["seq"]) <= output_seq:
             raise ResumeEvidenceError(f"tool {call_id} has invalid start ordering")
         started = starts[0]
+        # Older review calls may already have been admitted with nulls removed.
+        # For an existing start, retain the exact recorded invocation.
+        if name == "coding_review" and wrapped is None and started.get("args") == normalized:
+            call_input = normalized
         if started.get("tool") != name or started.get("args") != call_input:
             raise ResumeEvidenceError(f"tool {call_id} intent differs from model block")
         if call_id in outstanding:
+            if name == "coding_review":
+                from forge_review import validate_call
+                try:
+                    validate_call(raw_input)
+                except (TypeError, ValueError) as exc:
+                    raise ResumeEvidenceError("outstanding coding_review has invalid public arguments") from exc
             read_only = started.get("side_effect") is False
             keyed_idempotent = (
                 started.get("side_effect") is True
@@ -1330,9 +1467,22 @@ def _tool_calls_for_output(manager: RunManagerReader, run_id: str, output_row: d
         )
         if results[0].get("name") != name:
             raise ResumeEvidenceError(f"tool {call_id} result name differs from intent")
+        metadata = results[0].get("metadata")
+        closing_word = (
+            accepted_closing_word(name, call_input, metadata)
+            if hourly_run else None
+        )
+        closing_refused = False
+        if wrapped is not None and closing_word is None:
+            # First verify the inert refusal in isolation. Only a complete batch
+            # with a proven acceptance may use it, regardless of its position.
+            closing_refused = _inert_closing_refusal(metadata)
+            if not closing_refused:
+                raise ResumeEvidenceError("wrapped hourly closing hand was not accepted")
         plans.append(ToolCallResume(
             call_id=call_id, name=name, input=copy.deepcopy(call_input),
-            state="completed", result_ref=ref,
+            state="completed", result_ref=ref, closing_word=closing_word,
+            closing_refused=closing_refused,
         ))
         for descriptor in _result_outbound_descriptors(
                 results[0], run_id=run_id, allowed_roots=outbound_roots,
@@ -1349,6 +1499,190 @@ def _tool_calls_for_output(manager: RunManagerReader, run_id: str, output_row: d
             + ", ".join(unrelated)
         )
     return tuple(plans), tuple(result_outbound)
+
+
+def _hourly_batch_closing_words(
+    manager: RunManagerReader, run_id: str, output_seq: int, end_seq: int,
+    events: list[dict], calls: tuple[ToolCallResume, ...], *,
+    checkpoint: dict | None, max_result_bytes: int, budget: _EvidenceBudget,
+) -> tuple[tuple[str, dict[str, str]], ...]:
+    """Prove closing acceptances on either side of checkpoint, never nested replay."""
+    outcome_kinds = TOOL_OUTCOME_KINDS | {"tool_uncertain_error", "tool_side_effect_pending"}
+    by_id: dict[str, dict[str, list[dict]]] = {}
+    prior_row = None
+    prior_wait = False
+    top = {call.call_id for call in calls}
+    closing_ids: set[str] = set()
+    has_acceptance = False
+    for index, row in enumerate(events):
+        if index % 512 == 0:
+            budget.check_time("indexing hourly closing evidence")
+        kind, seq = row["kind"], row["seq"]
+        if seq > output_seq:
+            if kind in {"tool_started", "hand_requested"} and row.get("tool") in _HOURLY_CLOSING_TOOLS:
+                closing_ids.add(str(row.get("call_id") or ""))
+            elif kind == "tool_result" and row.get("name") in _HOURLY_CLOSING_TOOLS:
+                closing_ids.add(str(row.get("call_id") or ""))
+                metadata = row.get("metadata")
+                has_acceptance |= isinstance(metadata, dict) and metadata.get("outcome") == "ok"
+        if seq < output_seq:
+            if kind == "run_checkpoint":
+                prior_row, prior_wait = row, False
+            elif (kind == "status_changed" and row.get("to_status") == "paused"
+                  and _her_word_wait(row) is not None):
+                prior_wait = True
+        if row.get("call_id") and (kind in outcome_kinds or kind in {"tool_started", "hand_requested"}):
+            bucket = "outcome" if kind in outcome_kinds else kind
+            by_id.setdefault(row["call_id"], {}).setdefault(bucket, []).append(row)
+    if not has_acceptance and any(call.closing_refused for call in calls):
+        raise ResumeEvidenceError("wrapped refusal requires an accepted closing word in the same batch")
+    if not has_acceptance and checkpoint is None and closing_ids <= top:
+        # Ordinary pre-checkpoint recovery may still resolve pending calls.
+        return ()
+    if prior_row is not None and not prior_wait:
+        prior = _checkpoint_value(manager, run_id, prior_row, max_result_bytes=max_result_bytes,
+                                  budget=budget).get("work_loop")
+        # The live hourly loop does not start another batch after a closing
+        # word; a durable authored wait is the only reopening exception here.
+        if isinstance(prior, dict) and (prior.get("finished") or prior.get("finish_note")
+                                        or prior.get("control") is not None):
+            raise ResumeEvidenceError("hourly checkpoint follows a prior unconsumed closing state")
+
+    def completed(call_id: str) -> tuple[dict, dict]:
+        kinds = by_id.get(call_id, {})
+        starts, outcomes = kinds.get("tool_started", []), kinds.get("outcome", [])
+        if len(starts) != 1 or len(outcomes) != 1 or outcomes[0]["kind"] != "tool_result":
+            raise ResumeEvidenceError("hourly checkpoint lacks a unique completed tool receipt")
+        start, result = starts[0], outcomes[0]
+        if not output_seq < start["seq"] < result["seq"] < end_seq:
+            raise ResumeEvidenceError("hourly batch/checkpoint ordering crosses a tool receipt")
+        if start.get("tool") != result.get("name") or not isinstance(start.get("args"), dict):
+            raise ResumeEvidenceError("hourly checkpoint has a mismatched tool receipt")
+        return start, result
+
+    previous_result_seq = output_seq
+    for call in calls:
+        if call.state != "completed":
+            raise ResumeEvidenceError("hourly checkpoint has an incomplete model tool batch")
+        start, result = completed(call.call_id)
+        if start["seq"] <= previous_result_seq:
+            raise ResumeEvidenceError("hourly checkpoint ordering differs from model tool order")
+        if by_id[call.call_id].get("hand_requested"):
+            raise ResumeEvidenceError("hourly batch mixes model and nested call identities")
+        previous_result_seq = result["seq"]
+
+    checked_nested: set[str] = set()
+
+    def check_parent(child_id: str) -> None:
+        seen: set[str] = set()
+        while child_id not in top and child_id not in checked_nested:
+            budget.check_time("verifying nested closing parent chain")
+            if child_id in seen or not re.fullmatch(r"hand-[0-9a-f]{64}", child_id):
+                raise ResumeEvidenceError("invalid nested closing parent chain")
+            seen.add(child_id)
+            child_start, child_result = completed(child_id)
+            requests = by_id[child_id].get("hand_requested", [])
+            if len(requests) != 1:
+                raise ResumeEvidenceError("nested closing parent request is not unique")
+            request = requests[0]
+            parent_id = request.get("parent_call_id")
+            if not isinstance(parent_id, str) or parent_id not in by_id:
+                raise ResumeEvidenceError("missing nested closing parent")
+            parent_start, parent_result = completed(parent_id)
+            if (parent_start.get("tool") not in _HOURLY_BRIDGE_TOOLS
+                    or not parent_start["seq"] < request["seq"] < child_start["seq"]
+                    < child_result["seq"] < parent_result["seq"]):
+                raise ResumeEvidenceError("nested closing parent interval is invalid")
+            parent_meta = parent_result.get("metadata")
+            if (not isinstance(parent_meta, dict)
+                    or parent_meta.get("schema") != TOOL_RESULT_METADATA_SCHEMA
+                    or parent_meta.get("outcome") not in {"ok", "failed"}):
+                raise ResumeEvidenceError("nested closing parent has an unproved outcome")
+            digest = hashlib.sha256(json.dumps(
+                child_start["args"], sort_keys=True, ensure_ascii=False,
+            ).encode()).hexdigest()
+            if (request.get("tool") != child_start["tool"]
+                    or request.get("receipt_key") != "hand-request:" + child_id
+                    or request.get("intent_sha256") != digest):
+                raise ResumeEvidenceError("nested closing intent differs from its request")
+            read_full_result_bytes(manager, run_id, child_result.get("result"),
+                                   max_bytes=max_result_bytes, budget=budget)
+            child_id = parent_id
+        checked_nested.update(seen)
+
+    words: list[tuple[int, str, dict[str, str]]] = []
+    for call_id in sorted(closing_ids):
+        # When no word was accepted, leave ordinary top-level outcomes alone.
+        if not has_acceptance and call_id in top:
+            continue
+        start, result = completed(call_id)
+        metadata = result.get("metadata")
+        if call_id not in top:
+            check_parent(call_id)
+        if _inert_closing_refusal(metadata):
+            continue
+        name = start["tool"]
+        word = accepted_closing_word(name, start["args"], metadata)
+        if word is None:
+            raise ResumeEvidenceError("hourly batch has an invalid closing acceptance or refusal")
+        if call_id not in top and (metadata.get("outbound") != [] or "nested_images" in metadata):
+            raise ResumeEvidenceError("nested closing acceptance carries outbound or images")
+        words.append((result["seq"], name, word))
+
+    ordered = tuple((name, word) for _, name, word in sorted(words, key=lambda item: item[0]))
+    if checkpoint is not None:
+        state = checkpoint.get("work_loop")
+        expected = hourly_closing_slots(ordered)
+        if (not isinstance(state, dict) or state.get("schema") != "praxis.work-loop-state.v1"
+                or state.get("finished") is not expected["finished"]
+                or any(state.get(slot) != value for slot, value in expected.items())):
+            raise ResumeEvidenceError("hourly checkpoint closing state differs from WAL acceptances")
+    return ordered
+
+
+def prove_live_hourly_batch(
+    manager: RunManagerReader, plan: ResumePlan, *,
+    outbound_roots: Sequence[str | os.PathLike[str]],
+) -> tuple[tuple[str, dict[str, str]], ...]:
+    """Re-prove the exact batch after pending hands ran under the resume lease."""
+    if not is_hourly_self_run(plan.context):
+        raise ResumeEvidenceError("live closing proof is only for an hourly run")
+    budget = _EvidenceBudget(DEFAULT_MAX_EVIDENCE_BYTES,
+                             time.monotonic() + DEFAULT_MAX_PLANNING_SECONDS)
+    run_id = plan.run_id
+    before = manager.manifest(run_id)
+    events = manager.events(run_id, strict=True, max_events=DEFAULT_MAX_EVENTS,
+                            max_bytes=budget.max_bytes, deadline_monotonic=budget.deadline_monotonic)
+    budget.account_events(events)
+    _validate_events(run_id, events, before, budget=budget)
+    output_row = next((row for row in reversed(events) if row["kind"] == "model_output"), None)
+    if (before.get("status") != "running" or output_row is None
+            or output_row["seq"] > plan.event_seq
+            or any(row["kind"] in {"model_input", "model_started", "model_input_fallback", "run_checkpoint"}
+                   for row in events[output_row["seq"]:])):
+        raise ResumeEvidenceError("live closing proof no longer has the planned tool frontier")
+    max_result_bytes = 64 * 1024 * 1024
+    model_input, model_output = _model_pair(
+        manager, run_id, output_row, events, max_result_bytes=max_result_bytes, budget=budget)
+    if (model_input != plan.model_input or model_output != plan.model_output
+            or model_output["stop_reason"] != "tool_use"):
+        raise ResumeEvidenceError("live closing proof differs from the planned model batch")
+    outstanding = manager.outstanding_tools(
+        run_id, max_events=DEFAULT_MAX_EVENTS, max_bytes=budget.max_bytes,
+        deadline_monotonic=budget.deadline_monotonic)
+    calls, outbound = _tool_calls_for_output(
+        manager, run_id, output_row, model_output, events, _offered_tool_names(model_input),
+        outstanding, max_result_bytes=max_result_bytes, outbound_roots=outbound_roots,
+        hourly_run=True, budget=budget)
+    if outstanding or any(call.state != "completed" for call in calls):
+        raise ResumeEvidenceError("live hourly batch did not finish all planned hands")
+    words = _hourly_batch_closing_words(
+        manager, run_id, output_row["seq"], before["event_seq"] + 1,
+        events, calls, checkpoint=None, max_result_bytes=max_result_bytes, budget=budget)
+    after = manager.manifest(run_id)
+    if any(after.get(key) != before.get(key) for key in ("status", "revision", "event_seq")):
+        raise ResumeEvidenceError("run changed during live hourly closing proof")
+    return () if outbound else words
 
 
 def _base_plan(run_id: str, kind: PlanKind, status: str, reason: str, *,
@@ -1602,6 +1936,8 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                 max_result_bytes=max_result_bytes, budget=budget,
             )
 
+        checkpoint_for_proof = checkpoint
+        hourly_closing = is_hourly_self_run(context)
         if her_wait is not None:
             # Её «жду» дождалось срока. Продолжать надо РАБОТУ, а не доставлять последнюю
             # реплику: ниже её ждал бы `authored_output` — «текст готов, осталось отдать»,
@@ -1622,9 +1958,25 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                 "её «жду» дождалось срока: продолжаем ТУ ЖЕ работу с последней точки",
                 manifest=manifest, context=context, auto_resume=True,
                 checkpoint=_checkpoint_after_her_word(
-                    checkpoint, her_wait, str((pause_row or {}).get("at") or "")),
+                    checkpoint, her_wait, str((pause_row or {}).get("at") or ""),
+                    hourly=hourly_closing),
                 outbound=outbound,
             )
+
+        consumed_wait_row = None
+        if hourly_closing and latest_checkpoint is not None:
+            # A second crash during a wake may expose the same checkpoint again.
+            # A later authored pause proves its word has already been landed.
+            for row in reversed(events):
+                if row["seq"] <= latest_checkpoint["seq"]:
+                    break
+                if row.get("kind") == "status_changed" and row.get("to_status") == "paused":
+                    wake = _her_word_wait(row)
+                    if wake is not None:
+                        consumed_wait_row = row
+                        checkpoint = _checkpoint_after_her_word(
+                            checkpoint, wake, row["at"], hourly=True)
+                        break
 
         # A model_input/model_started/model_input_fallback newer than the latest
         # durable output is a crashed model request, not permission to fall back
@@ -1739,7 +2091,11 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                     checkpoint=checkpoint, outbound=outbound,
                 )
             checkpoint_control = _checkpoint_control(checkpoint)
-            if (_run_has_no_addressee_context(context) and checkpoint_control
+            if hourly_closing and (checkpoint_control or _checkpoint_end_turn(checkpoint)):
+                # The hourly tool loop exits immediately once a closing batch is
+                # checkpointed. A later model output cannot certify that word.
+                raise ResumeEvidenceError("terminal model output follows an unconsumed hourly closing word")
+            if (not hourly_closing and _run_has_no_addressee_context(context) and checkpoint_control
                     and not outstanding):
                 # Legacy self-directed windows may already contain her accepted closing
                 # word in the latest exact checkpoint.  Their old run-wide outbound guard
@@ -1789,15 +2145,48 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
             manager, run_id, latest_output, model_output, events,
             _offered_tool_names(model_input), outstanding,
             max_result_bytes=max_result_bytes, outbound_roots=outbound_roots,
+            hourly_run=hourly_closing,
             budget=budget,
         )
-        if checkpoint_seq > output_seq:
-            if outstanding:
-                raise ResumeEvidenceError("post-response checkpoint has outstanding tools")
+        has_wrapped_refusal = any(call.closing_refused for call in tool_calls)
+        if has_wrapped_refusal and (checkpoint_outbound or result_outbound
+                                    or any(call.state != "completed" for call in tool_calls)):
+            raise ResumeEvidenceError("wrapped refusal can only accompany a completed closing batch")
+        checkpoint_covers_batch = checkpoint_seq > output_seq
+        if checkpoint_covers_batch and outstanding:
+            raise ResumeEvidenceError("post-response checkpoint has outstanding tools")
+        hourly_words = ()
+        if hourly_closing:
+            hourly_words = _hourly_batch_closing_words(
+                manager, run_id, output_seq,
+                checkpoint_seq if checkpoint_covers_batch else pause_row["seq"],
+                events, tool_calls,
+                checkpoint=checkpoint_for_proof if checkpoint_covers_batch else None,
+                max_result_bytes=max_result_bytes, budget=budget,
+            )
+        if checkpoint_covers_batch:
             outbound = _merge_result_outbound(
                 checkpoint_outbound, result_outbound,
                 checkpoint_includes_results=True,
             )
+            if (hourly_closing and not outbound
+                    and (_checkpoint_control(checkpoint) or _checkpoint_end_turn(checkpoint))):
+                # Both closing hands persist their accepted state in the checkpoint.
+                # Claim the exact cursor before landing it, without a model or hand.
+                return _base_plan(
+                    run_id, "checkpoint_control", status,
+                    "land the exact hourly closing word after process recovery",
+                    manifest=manifest, context=context, auto_resume=True,
+                    checkpoint=checkpoint,
+                )
+            if has_wrapped_refusal:
+                # The original checkpoint was verified above. Continue only if
+                # this batch's winning wait is the exact word already landed.
+                control = _checkpoint_control(checkpoint_for_proof)
+                landed = (consumed_wait_row or {}).get("details", {}).get("task_control")
+                if (not control or control.get("action") != "wait" or landed != control
+                        or consumed_wait_row.get("from_status") != "running"):
+                    raise ResumeEvidenceError("wrapped refusal has no checkpointed closing word to land")
             return _base_plan(
                 run_id, "continue_checkpoint", status,
                 "latest checkpoint includes the persisted tool response batch",
@@ -1827,6 +2216,7 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
             manifest=manifest, context=context, auto_resume=True,
             model_input=model_input, model_output=model_output,
             checkpoint=checkpoint, outbound=outbound, tool_calls=tool_calls,
+            hourly_closing_words=hourly_words if not outbound else (),
         )
     except ResumeEvidenceError as exc:
         return _base_plan(

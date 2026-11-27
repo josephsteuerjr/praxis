@@ -155,9 +155,9 @@ class SocialPulseTests(unittest.TestCase):
         state = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(len(state["outbound"]), 1)
 
-    def test_malformed_shape_and_future_receipt_do_not_pin_clock(self):
+    def test_future_outbound_receipt_does_not_pin_clock(self):
         self.path.write_text(json.dumps({
-            "version": 1, "last_started_at": "broken", "runs": {},
+            "version": 1, "last_started_at": 0, "runs": [],
             "outbound": [{"pulse_id": "old", "peer_id": "42", "sent_at": 999999}],
         }), encoding="utf-8")
         pulse = social_pulse.begin(now=100, path=self.path)

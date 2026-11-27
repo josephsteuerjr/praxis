@@ -11,7 +11,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
+from .windows_paths import Path, walk
 import re
 import shutil
 import stat
@@ -24,7 +24,7 @@ EXCLUDED = {'.git', '.ouroboros', '__pycache__', '.pytest_cache', '.venv', 'venv
             'node_modules', 'target', '.cache', '_state'}
 PRIVATE = {'.env', 'helene.json', 'auth.json', 'credentials.json', 'local-build.json'}
 TREES = ('praxis', 'helene/core', 'desk')
-CONTEXT_TREES = ('remote', 'arete-contract', 'swarm-base', '.github')
+CONTEXT_TREES = ('.github',)
 CONTEXT_FILES = ('LICENSE', 'NOTICE', 'README.md', 'CORE-SOURCE.json', 'HELENE-SOURCE.json',
                  'RELAY-SOURCE.json', 'SOURCE-SNAPSHOTS.md', 'helene/EDITION.md', 'helene/PLATFORM-SOURCE.json')
 RUNNERS = ('source_verification_runner.py',)
@@ -119,7 +119,7 @@ def inventory(root):
     if not root.is_dir():
         raise ValueError('Verification directory unavailable: ' + str(root))
     rows = {}
-    for directory, dirs, names in os.walk(root):
+    for directory, dirs, names in walk(root):
         checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED)

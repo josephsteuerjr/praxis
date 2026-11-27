@@ -1639,9 +1639,19 @@ def _forge_lock_value() -> str:
     # правку соседа молча — читаем из его же сигнатуры и вызова.
     wait = _from_source("forge.py", r"def _mutation_lock\(task_id: str, timeout: float = ([\d.]+)",
                         float)
-    wait_finish = _from_source("forge.py", r"_mutation_lock\(task_id, timeout=([\d.]+)\)", float)
+    wait_finish = _from_source(
+        "forge.py", r"(?ms)^def finish\([^\n]*(?:(?!^def ).)*?_mutation_lock\(task_id, timeout=([\d.]+)\)",
+        float,
+    )
+    wait_reconcile = _from_source(
+        "forge.py", r"(?ms)^def reconcile_subagent_events\([^\n]*(?:(?!^def ).)*?_mutation_lock\(task_id, timeout=([\d.]+)\)",
+        float,
+    )
     base = (f"ожидание замка {_num(wait and f'{wait:.0f}', 'с')} "
-            f"(у finish {_num(wait_finish and f'{wait_finish:.0f}', 'с')}); ")
+            f"(у finish {_num(wait_finish and f'{wait_finish:g}', 'с')}")
+    if wait_reconcile is not None:
+        base += f", у сверки завершений {_num(f'{wait_reconcile:g}', 'с')}"
+    base += "); "
     legacy = _legacy_lock_note()
     # Лизинг — вторая половина правды о пороге: заранее объявленный долгий шаг ставит
     # метку в будущее, и порог тишины по нему не бьёт. Без этого числа порог читается как

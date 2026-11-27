@@ -1,6 +1,6 @@
 """Английский текст схем рук — накладкой поверх её собственных литералов (15.09.2026).
 
-ЗАЧЕМ. Слово Егора 15.09: «надо по-английски (официально глм русский не поддерживает) — и
+ЗАЧЕМ. Слово владельца 15.09: «надо по-английски (официально глм русский не поддерживает) — и
 так, чтобы у неё не обрывались ходы… чтобы понимала». Замер того же дня по ЖИВОМУ набору из
 101 руки: 55 описаний содержали кириллицу, 253 параметра из 390 не были описаны ВООБЩЕ, и
 целиком готовыми оказались 7 рук. Живой промах в тот же час: `search_chats` получила
@@ -173,7 +173,7 @@ EN: dict[str, dict] = {
         "p": {"reason": "why you are staying silent, for yourself",
               "cancel": "true lifts a silence decision taken earlier in this turn"},
     },
-    "narrate": {'d': 'Optional short progress BETWEEN commands, not final: done/next/blocker. Sends immediately past evaluators (credential floor applies), verbatim dedup. Gap: manage_perception(narration_gap_sec); switch: PRAXIS_NARRATION. task_id targets ordering thread; otherwise current thread, or Yegor DM from a window/event without one. Receipt names destination.', 'p': {'text': 'the process line', 'task_id': 'narrate into the thread that ordered this coding task, optional'}},
+    "narrate": {'d': 'Optional short progress BETWEEN commands, not final: done/next/blocker. Sends immediately past evaluators (credential floor applies), verbatim dedup. Gap: manage_perception(narration_gap_sec); switch: PRAXIS_NARRATION. task_id targets ordering thread; otherwise current thread, or the owner DM from a window/event without one. Receipt names destination.', 'p': {'text': 'the process line', 'task_id': 'narrate into the thread that ordered this coding task, optional'}},
     "end_turn": {'d': 'Close explicitly: done observable result (speech may itself be the deed); wait event/deadline and return condition in note, remind_self BEFORE closing if needed; blocked obstacle and whose decision. Check pending promises/calls/deliveries with unknown outcomes. Nothing more to do or not wanting more is legitimate.', 'p': {'outcome': 'done | wait | blocked', 'note': 'done: what was done, short and optional; wait: the return condition; blocked: the obstacle'}},
     "speak": {
         "d": ("Voice a short answer in a good Russian female voice and attach the audio to "
@@ -342,7 +342,7 @@ EN: dict[str, dict] = {
               "when": "'in 0m' for now (default), 'today 23:00' and so on"},
     },
     "manage_appetite": {
-        "d": ("The appetite agreement with Yegor: thinking costs his money, requests about "
+        "d": ("The appetite agreement with the owner: thinking costs his money, requests about "
               "spending are part of the relationship, and YOU interpret them (the code only "
               "counts). His four formulations: 'do not save / dig as deep as needed' -> "
               "interpret(mode=free); 'moderate your appetites' -> interpret(mode=considerate) "
@@ -357,7 +357,7 @@ EN: dict[str, dict] = {
               "windows": "interpret: whether to open autonomous windows (your plan)",
               "sleep_depth": "interpret: depth of the next sleeps (light = no REM, no rumination)",
               "note": "interpret: what you sacrifice or postpone",
-              "raw_request": "Yegor's words if the request came in chat",
+              "raw_request": "the owner's words if the request came in chat",
               "daily_cost": "pledge: dollars per day",
               "daily_tokens": "pledge: tokens per day",
               "background_calls": "pledge: background calls per day"},
@@ -369,8 +369,8 @@ EN: dict[str, dict] = {
         "d": ("Your latest lived turns as recorded BY CODE, not from memory: what arrived, "
               "which tools you actually called, what went out, what you decided not to send, "
               "and what the exact data-authority check held back. For an honest 'what was I "
-              "just doing'; outside Yegor's DM only the current channel is visible. room "
-              "looks at ONE specific place by name or address ('Yegor', 'mycelium'): it "
+              "just doing'; outside the owner's DM only the current channel is visible. room "
+              "looks at ONE specific place by name or address ('the owner', 'mycelium'): it "
               "returns your turns there AND your own note about that place. This is the eye "
               "BEFORE deciding to write to someone, especially in an hourly wake where you "
               "are in no room at all."),
@@ -410,7 +410,7 @@ EN: dict[str, dict] = {
 
     "panic": {
         "d": ("Emergency stop: stop yourself (you will go down and will not restart until "
-              "Yegor lifts it)."),
+              "the owner lifts it)."),
         "p": {"reason": "why you are pulling the stop"},
     },
     "switch_brain": {
@@ -780,7 +780,7 @@ def coverage(tools: list | None) -> dict:
 POINTER_PURPOSE: dict[str, str] = {'clear_owner_marks': 'inspect or clear owner edit marks after incorporating the edits',
  'generate_image': 'generate or edit an image with the independent relay image model',
  'add_alias': 'bind an alias name to an existing dossier',
- 'admit': "admit a person into my circle on the owner's word — only Egor may call this",
+ 'admit': "admit a person into my circle on the owner's word — only the owner may call this",
  'call': 'call a tool from the pointer by name',
  'code_map': 'AST map of code: module → classes and functions',
  'code_outline': 'outline a Python file or map a directory, project or self tree',
@@ -795,7 +795,7 @@ POINTER_PURPOSE: dict[str, str] = {'clear_owner_marks': 'inspect or clear owner 
  'coding_swarm': 'coordinating subagents: plan, launch, mail',
  'coding_verify': 'plan and check matrix for the task',
  'computer': 'connected computer; available actions are specified by its schema',
- 'computer_access': 'grant or revoke computer access — only Egor may call this',
+ 'computer_access': 'grant or revoke computer access — only the owner may call this',
  'connections': 'how a memory node (person, topic) links to the others',
  'consolidate_context': 'fold old history into the journal without losing the gist',
  'describe': "show a tool's schema from the pointer",
@@ -812,7 +812,7 @@ POINTER_PURPOSE: dict[str, str] = {'clear_owner_marks': 'inspect or clear owner 
  'get_id': 'look up a telegram id by name or @username',
  'git': 'my git: home tree (self) or public mirror (public)',
  'group_context': "map of this group's topics and participants, search within it",
- 'home_note': 'a line into the shared home layer (Egor and family)',
+ 'home_note': 'a line into the shared home layer (the owner and family)',
  'host_ctl': 'typed root operations: systemd, docker, pkg, file, net, reboot',
  'inbox_list': 'folders and files of the Telegram inbox',
  'inbox_read': 'read a text file from the inbox with line numbers',
@@ -835,7 +835,7 @@ POINTER_PURPOSE: dict[str, str] = {'clear_owner_marks': 'inspect or clear owner 
  'my_agenda': 'what I mean to do, and by when',
  'my_capabilities': 'an honest snapshot: what I can and cannot do right now',
  'narrate': 'short progress line into the thread, between commands',
- 'panic': "emergency brake: stop and stay down until Yegor's word",
+ 'panic': "emergency brake: stop and stay down until the owner's word",
  'pip_install': "packages into the project's venv",
  'project_create': 'a new workshop project with its own git',
  'project_list': 'workshop projects and their size',
@@ -862,7 +862,7 @@ POINTER_PURPOSE: dict[str, str] = {'clear_owner_marks': 'inspect or clear owner 
  'search_chats': 'find my own dialog or chat by name',
  'search_private_messages': 'search text across my private chats — only when asked',
  'second_look': 'a fresh read-only look at my home without my persona',
- 'send_email': 'send an email in my name, when Yegor asks',
+ 'send_email': 'send an email in my name, when the owner asks',
  'send_file': 'send a file to the current chat or a recipient',
  'send_media': 'send a photo, audio or document from my home',
  'send_message': 'write in Telegram on my own initiative: id / @username / name',

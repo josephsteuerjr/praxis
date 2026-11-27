@@ -1007,7 +1007,7 @@ class TestTopicPassAndHistory(unittest.IsolatedAsyncioTestCase):
         chat_id = "555"
         meta = {chat_id: {
             "entity": 555, "peer_id": "555", "topic_id": None, "is_dm": True,
-            "is_owner": True, "known": True, "family": False, "name": "Егор",
+            "is_owner": True, "known": True, "family": False, "name": "Алекс",
             "addressed": True, "addressed_mid": 9, "room_mode": "normal",
             "sender_id": 555, "origin_message_id": 9, "origin_text": "мой вопрос",
         }}

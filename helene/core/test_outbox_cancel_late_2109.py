@@ -2,7 +2,7 @@
 
 Из записки «почему архивы уходили» (workspace/inbox/2026-09-20):
 
-1. Отмена хода с висящим send-намерением. 16:46 — Егор нажал «прервать»; прогон стоял
+1. Отмена хода с висящим send-намерением. 16:46 — владелец нажал «прервать»; прогон стоял
    paused с незакрытым вызовом, резюм-машинерия «узнавала исход» единственным знакомым
    способом — исполняя отправку. 19:24:14 файл дошёл (message_id 4444), 19:24:15 ход
    стал cancelled. Теперь просьба control.action=cancel в манифесте означает: записи
@@ -73,7 +73,7 @@ class _RunScaffold(unittest.TestCase):
             chat_id="100", room_id="100", principal_id="100",
             is_dm=True, owner=True, known=True, addressed=True,
             address_message_id=7, address_kind="direct",
-            reply_targets=((7, "Yegor", "continue"),),
+            reply_targets=((7, "Alex", "continue"),),
         )
         context = run_context.RunContext.create(
             run_id=f"run-cancel2109-{suffix}",

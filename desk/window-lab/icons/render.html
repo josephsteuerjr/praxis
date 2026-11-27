@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><title>Значки — отрисовка</title>
-<!-- Выбор Егора 28.09: Hélène «А» (терракотовый круг, «é» почерком) и реле «А» (мост:
+<!-- Выбор владельца 28.09: Hélène «А» (терракотовый круг, «é» почерком) и реле «А» (мост:
      две точки и дуга на листе бумаги). Каждый размер — своя толщина линий: в 16 px тонкий
      почерк исчез бы. Плитки по 512 px в ряд; icons.py режет, ужимает и собирает .ico. -->
 <style>
@@ -21,7 +21,7 @@ const RELAY = [[256, 7, 10, 9, 24], [128, 8, 12, 10, 25], [64, 11, 16, 13, 28], 
 function helene([size, sw, fs]) {
   // At 16/24 the font's handwritten strokes downsample into a dark blob.
   // Give those two frames a separate, open-counter glyph with a detached accent;
-  // larger frames keep Yegor's original handwriting unchanged.
+  // larger frames keep owner's original handwriting unchanged.
   if (size === 16) return `<svg viewBox="0 0 256 256"><circle cx="128" cy="128" r="122" fill="${TERRA}"/>
     <path d="M70 150 C70 115 96 94 130 94 C165 94 185 117 185 145 L185 154 H72 M72 154 C78 186 99 201 128 201 C138 201 145 199 149 197" fill="none" stroke="${INK}" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M121 72 L151 49" fill="none" stroke="${INK}" stroke-width="18" stroke-linecap="round"/></svg>`;

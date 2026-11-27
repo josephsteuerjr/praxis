@@ -42,7 +42,7 @@ class Knobs(unittest.TestCase):
 
     def test_no_owner_no_keat(self):
         self.assertEqual(boot.keat_knobs(self.tree, {}), {})
-        self.assertEqual(boot.keat_knobs(self.tree, {"telegram": {"owner_id": "@egor"}}), {})
+        self.assertEqual(boot.keat_knobs(self.tree, {"telegram": {"owner_id": "@alex"}}), {})
         self.assertEqual(boot.keat_knobs(self.tree, {"telegram": {"owner_id": "0"}}), {})
         self.assertFalse((self.tree / "memory").exists(), "без владельца файлов не пишем")
 
@@ -105,12 +105,12 @@ class Capture(unittest.TestCase):
 
     def test_off_non_dm_and_non_native_ids_are_not_captured(self):
         with mock.patch.dict(os.environ, {"PRAXIS_KEAT_CAPTURE": "off"}):
-            self.assertIsNone(botapi.keat_capture(OWNER, "x", actor="Егор", outgoing=False,
+            self.assertIsNone(botapi.keat_capture(OWNER, "x", actor="Алекс", outgoing=False,
                                                   source_id="10", is_dm=True))
         with mock.patch.dict(os.environ, {"PRAXIS_KEAT_CAPTURE": "on"}):
             self.assertIsNone(botapi.keat_capture("-100", "x", actor="a", outgoing=False,
                                                   source_id="10", is_dm=False))
-            self.assertIsNone(botapi.keat_capture(OWNER, "x", actor="Егор", outgoing=False,
+            self.assertIsNone(botapi.keat_capture(OWNER, "x", actor="Алекс", outgoing=False,
                                                   source_id="desk-1790000000000", is_dm=True))
         self.assertEqual(self.calls, [])
 
@@ -120,13 +120,13 @@ class Capture(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"PRAXIS_KEAT_CAPTURE": "on"}):
             rooms = botapi.Rooms(Path(tmp), life, "Hélène")
-            rooms.describe(OWNER, title="Егор", is_dm=True)
-            rooms.record(OWNER, "как дела?", outgoing=False, sender="Егор", source_id="10")
+            rooms.describe(OWNER, title="Алекс", is_dm=True)
+            rooms.record(OWNER, "как дела?", outgoing=False, sender="Алекс", source_id="10")
             rooms.record(OWNER, "всё идёт по плану", outgoing=True, source_id="11")
-            rooms.record(OWNER, "из окна", outgoing=False, sender="Егор",
+            rooms.record(OWNER, "из окна", outgoing=False, sender="Алекс",
                          source_id="desk-1", source="window")
         self.assertEqual([(c[2], c[3]) for c in self.calls], [("10", "in"), ("11", "out")])
-        self.assertEqual(self.calls[0][4], {"role": "user", "content": "как дела?", "actor": "Егор"})
+        self.assertEqual(self.calls[0][4], {"role": "user", "content": "как дела?", "actor": "Алекс"})
         self.assertEqual(self.calls[1][4], {"role": "assistant", "content": "всё идёт по плану",
                                             "actor": "Hélène"})
         # Строка расписки = строка памяти; без расписки kwargs прежние (стабы без ключа живы).
@@ -186,7 +186,7 @@ class Sidecar(unittest.TestCase):
                 mock.patch.object(runner, "_dialogue", filled), \
                 mock.patch.object(runner, "_orient", lambda chat_id: ""), \
                 mock.patch.dict(os.environ, {"PRAXIS_KEAT_CAPTURE": "on"}):
-            runner._run_turn(OWNER, "convo", "Егор", owner_ctx)
+            runner._run_turn(OWNER, "convo", "Алекс", owner_ctx)
             self.assertIn("occurrence_sidecar", seen)
             seen.clear()
             runner._run_turn("-100", "convo", "Hope", types.SimpleNamespace(is_dm=False, owner=False))
@@ -196,7 +196,7 @@ class Sidecar(unittest.TestCase):
                 mock.patch.object(runner, "_orient", lambda chat_id: ""), \
                 mock.patch.dict(os.environ, {"PRAXIS_KEAT_CAPTURE": "off"}):
             seen.clear()
-            runner._run_turn(OWNER, "convo", "Егор", owner_ctx)
+            runner._run_turn(OWNER, "convo", "Алекс", owner_ctx)
             self.assertNotIn("occurrence_sidecar", seen)
 
 

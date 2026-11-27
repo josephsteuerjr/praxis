@@ -14,7 +14,7 @@ import frame_language as frame
 import identity
 import perception
 
-RAW='Windows Егор 中文 {literal} $&'
+RAW='Windows Алекс 中文 {literal} $&'
 
 class ManagementResults(unittest.TestCase):
     def setUp(self):

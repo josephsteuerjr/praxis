@@ -63,7 +63,7 @@ SERVICES: dict[str, Service] = {
     "relay": Service("relay", "foreign", "relay", None, "запасной мозг (чужой процесс)"),
 }
 
-# Чьи логи ей можно читать: свои сервисы + запасной мозг. Чужие проекты Егора
+# Чьи логи ей можно читать: свои сервисы + запасной мозг. Чужие проекты владельца
 # (dasha, vroom, hardbot…) в этот список НЕ входят — их логи не её дело.
 LOG_ALLOWED = ("praxis", "praxis-mailbot", "praxis-serverapp", "relay")
 
@@ -131,7 +131,7 @@ def request_restart(unit: str, reason: str = "") -> tuple[bool, str]:
         return False, "Себя перезапускаю через restart_self — это другой рычаг, осознанный."
     if svc.kind == "foreign":
         return False, (f"{svc.name} — чужой процесс ({svc.what}); он мой файл-сигнал не читает. "
-                       "Перезапустить его может только Егор с хоста. Могу посмотреть его логи "
+                       "Перезапустить его может только владелец с хоста. Могу посмотреть его логи "
                        "(read_log с unit) и сказать, что там.")
     if panicked():
         return False, "Стоп-кран поднят (.panic) — руками к сервисам не тянусь."
@@ -139,7 +139,7 @@ def request_restart(unit: str, reason: str = "") -> tuple[bool, str]:
     if used >= RESTARTS_PER_HOUR:
         receipt("restart", unit, False, f"квота {used}/{RESTARTS_PER_HOUR}")
         return False, (f"Уже перезапускала {unit} {used} раза за час — это петля, а не починка. "
-                       "Разберись в причине (read_log с unit) или позови Егора.")
+                       "Разберись в причине (read_log с unit) или позови владельца.")
     try:
         svc.flag.parent.mkdir(parents=True, exist_ok=True)
         svc.flag.write_text(f"{_now()} — {(reason or 'без причины').strip()}", encoding="utf-8")
@@ -188,9 +188,9 @@ def describe() -> str:
     rows = []
     for s in SERVICES.values():
         can = {"signal": "могу попросить перезапуститься", "self": "restart_self",
-               "foreign": "перезапуск — только Егор с хоста"}[s.kind]
+               "foreign": "перезапуск — только владелец с хоста"}[s.kind]
         used = _recent_restarts(s.name) if s.kind == "signal" else 0
         quota = f" (за час: {used}/{RESTARTS_PER_HOUR})" if s.kind == "signal" else ""
         rows.append(f"- {s.name} — {s.what}: {can}{quota}")
     return "Мои сервисы:\n" + "\n".join(rows) + \
-           "\nЛоги читаю у: " + ", ".join(LOG_ALLOWED) + " (чужие проекты Егора — не моё дело)."
+           "\nЛоги читаю у: " + ", ".join(LOG_ALLOWED) + " (чужие проекты владельца — не моё дело)."

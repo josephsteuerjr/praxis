@@ -58,7 +58,7 @@ TOOL = {'name': 'source_update', 'description':
 
 def requires_gate(plan, directory=None):
     """Modified-preserve is semantic reconciliation, even without Git markers."""
-    if directory is not None and plan.get('direct_update'):return True
+    if plan.get('require_review') or (directory is not None and plan.get('direct_update')):return True
     compound = read(Path(directory) / 'composition.json') if directory is not None else {}
     return bool(plan.get('conflicts') or plan.get('repairs') or plan.get('shared_app_required') or plan.get('app_source') or compound.get('repairs')
                 or plan.get('files', {}).get('local') != plan.get('files', {}).get('base'))

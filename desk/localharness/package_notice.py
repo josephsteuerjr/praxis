@@ -3,7 +3,10 @@ import hashlib
 import json
 import os
 import re
-from pathlib import Path
+if __package__:
+    from .windows_paths import Path, wide
+else:
+    from windows_paths import Path, wide
 import time
 import tempfile
 
@@ -38,9 +41,9 @@ def write(path,value):
     hidden=False
     if os.name=='nt' and path.exists():
         import ctypes
-        flags=ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        flags=ctypes.windll.kernel32.GetFileAttributesW(wide(path))
         hidden=flags!=-1 and bool(flags&2)
-    fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix='.write-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as target:
             json.dump(value, target, ensure_ascii=False, indent=2); target.write('\n')

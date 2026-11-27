@@ -123,7 +123,7 @@ class WindowTurn(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.tree = Path(self.tmp.name)
-        self.desks = transport.Desks(self.tree, "Егор", "Hélène",
+        self.desks = transport.Desks(self.tree, "Алекс", "Hélène",
                                      memory_life=None, agent_name="Мира")
         self.desk = self.desks.default
         self.saved = {k: getattr(runner, k) for k in
@@ -142,7 +142,7 @@ class WindowTurn(unittest.TestCase):
         agent = _StubAgent(self.tree, row, envelope)
         runner._agent = agent
         self.desk.archive("Мира, проверь руку", outgoing=False)
-        outcome = runner._turn_in_window("window-1", speaker="Егор")
+        outcome = runner._turn_in_window("window-1", speaker="Алекс")
         return outcome, self.desk.rows(), agent
 
     def test_scheduled_trigger_is_bound_to_the_actual_returned_run(self):
@@ -237,14 +237,14 @@ class WindowTurn(unittest.TestCase):
         agent = _StubAgent(self.tree, row, _Envelope("run-6"))
 
         def speak(chat_id, convo, speaker, *, ctx, history, current_text, orient):
-            self.desk.deliver("Ответила рукой.", label="Егор")
+            self.desk.deliver("Ответила рукой.", label="Алекс")
             return _StubAgent.voice_turn_envelope(agent, chat_id, convo, speaker, ctx=ctx,
                                                   history=history, current_text=current_text,
                                                   orient=orient)
         agent.voice_turn_envelope = speak
         runner._agent = agent
         self.desk.archive("привет", outgoing=False)
-        outcome = runner._turn_in_window("window-6", speaker="Егор")
+        outcome = runner._turn_in_window("window-6", speaker="Алекс")
         self.assertEqual(outcome, "spoken")
         rows = self.desk.rows()
         self.assertEqual(rows[-1]["text"], "Ответила рукой.")

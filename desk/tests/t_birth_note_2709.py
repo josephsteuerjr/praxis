@@ -1,6 +1,6 @@
 """Записка первого запуска — служебной плашкой после первого хода (1.2.3).
 
-27.09 у Егора «паспорт» первого запуска висел в чате длинным сообщением от Hélène, а
+27.09 у владельца «паспорт» первого запуска висел в чате длинным сообщением от Hélène, а
 агент видел его в ленте каждого хода. Стенд держит: до переписки записка — в ленте модели
 (первый ход её читает), после — строка `system`/`kind=birth`, лента её пропускает, прочие
 строки не тронуты; повтор ничего не меняет.
@@ -25,10 +25,10 @@ PREFIX = "Это твой первый запуск"
 class BirthNoteTest(unittest.TestCase):
     def test_note_leaves_the_model_feed_after_first_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
-            desk = transport.Desk(Path(tmp), "window", "Егор", "Окно", agent_name="Джарвис")
-            desk.archive(f"{PREFIX} на устройстве Love. Ты — Джарвис…", outgoing=False, sender="Hélène")
-            desk.archive("Привет, Егор. Я Джарвис.", outgoing=True)
-            desk.archive("привет!", outgoing=False, sender="Егор")
+            desk = transport.Desk(Path(tmp), "window", "Алекс", "Окно", agent_name="Атлас")
+            desk.archive(f"{PREFIX} на устройстве Love. Ты — Атлас…", outgoing=False, sender="Hélène")
+            desk.archive("Привет, Алекс. Я Атлас.", outgoing=True)
+            desk.archive("привет!", outgoing=False, sender="Алекс")
             self.assertTrue(any(PREFIX in line for line in desk.lines()))
 
             self.assertEqual(desk.retire_birth_note("Hélène", PREFIX), 1)
@@ -43,15 +43,15 @@ class BirthNoteTest(unittest.TestCase):
 
     def test_owner_words_with_same_start_stay_his(self):
         with tempfile.TemporaryDirectory() as tmp:
-            desk = transport.Desk(Path(tmp), "window", "Егор", "Окно")
-            desk.archive(f"{PREFIX}? спрашиваю в шутку", outgoing=False, sender="Егор")
+            desk = transport.Desk(Path(tmp), "window", "Алекс", "Окно")
+            desk.archive(f"{PREFIX}? спрашиваю в шутку", outgoing=False, sender="Алекс")
             self.assertEqual(desk.retire_birth_note("Hélène", PREFIX), 0)
             archive = Path(tmp) / "memory" / "groups" / "window.jsonl"
             self.assertNotIn("system", json.loads(archive.read_text(encoding="utf-8").splitlines()[0]))
 
     def test_no_archive_is_nothing_to_do(self):
         with tempfile.TemporaryDirectory() as tmp:
-            desk = transport.Desk(Path(tmp), "window", "Егор", "Окно")
+            desk = transport.Desk(Path(tmp), "window", "Алекс", "Окно")
             self.assertEqual(desk.retire_birth_note("Hélène", PREFIX), 0)
 
 

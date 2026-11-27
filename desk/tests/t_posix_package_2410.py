@@ -54,7 +54,7 @@ class Contracts(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d);old=p/'offline';new=p/'new';old.mkdir();new.mkdir();tree=old/'external/data';code=old/'code'
    (tree/'soul').mkdir(parents=True);(tree/'memory').mkdir();code.mkdir()
-   (tree/'soul/identity.md').write_text('Jarvis authored identity');(tree/'memory/log.txt').write_text('history');(code/'agent.py').write_text('ORIGINAL=1')
+   (tree/'soul/identity.md').write_text('Atlas authored identity');(tree/'memory/log.txt').write_text('history');(code/'agent.py').write_text('ORIGINAL=1')
    def git(*a):return subprocess.check_output(['git','-C',str(code),*a],stderr=subprocess.STDOUT)
    git('init');git('add','agent.py');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture')
    expected=git('rev-parse','HEAD');(code/'agent.py').write_text('SELF_EDIT=2');(code/'new.py').write_text('untracked')
@@ -67,10 +67,10 @@ class Contracts(unittest.TestCase):
    self.assertEqual((old/'helene.json').read_text(),raw);self.assertFalse(now['installed']['service'])
    self.assertEqual((copied/'agent.py').read_text(),'SELF_EDIT=2');self.assertEqual((copied/'new.py').read_text(),'untracked')
    self.assertEqual(subprocess.check_output(['git','-C',str(copied),'rev-parse','HEAD']),expected)
-   self.assertEqual((moved/'soul/identity.md').read_text(),'Jarvis authored identity')
+   self.assertEqual((moved/'soul/identity.md').read_text(),'Atlas authored identity')
    self.assertEqual((new/'window-preferences.json').read_text(),'{"scale":0.7}')
    self.assertEqual(now['model']['key'],'synthetic-key');self.assertTrue(now['python'].endswith('runtime/bin/python3'))
-   with zipfile.ZipFile(note['backup']) as z:self.assertEqual(z.read('data/soul/identity.md'),b'Jarvis authored identity')
+   with zipfile.ZipFile(note['backup']) as z:self.assertEqual(z.read('data/soul/identity.md'),b'Atlas authored identity')
    self.assertEqual(note['state'],'prepared');self.assertNotIn('startup_proof',note)
  def test_configured_backup_is_rehomed_and_actual_snapshot_leaves_offline_source_untouched(self):
   from localharness import essential_backup

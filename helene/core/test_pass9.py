@@ -46,11 +46,11 @@ class TestSaveUnchangedNoRewrite(BufBase):
     """Шаг 6: идентичное содержимое не переписывает файл — mtime честен."""
 
     def test_identical_save_leaves_file_untouched(self):
-        bufstore.save("555", ["Егор: привет", "Praxis: здравствуй"])
+        bufstore.save("555", ["Алекс: привет", "Praxis: здравствуй"])
         f = bufstore.path_for("555")
         first = f.read_text(encoding="utf-8")
         mtime = f.stat().st_mtime_ns
-        bufstore.save("555", ["Егор: привет", "Praxis: здравствуй"])
+        bufstore.save("555", ["Алекс: привет", "Praxis: здравствуй"])
         self.assertEqual(f.read_text(encoding="utf-8"), first)
         self.assertEqual(f.stat().st_mtime_ns, mtime)
 
@@ -233,7 +233,7 @@ class TestUnanswered(BufBase):
 
     def test_guest_answer_goes_out_without_any_verdict(self):
         # Раньше этот же ход становился молчанием: приватностный вердикт придерживал
-        # её слово. 27.07 судья стал советом, 10.11 (Егор, «сними») его не стало вовсе —
+        # её слово. 27.07 судья стал советом, 10.11 (владелец, «сними») его не стало вовсе —
         # ход УХОДИТ как написан.
         unanswered.note_incoming("777", "Евгений", ts=time.time() - 3600)
         self._client("вот что я делала сегодня")
@@ -634,8 +634,8 @@ class TestImmuneQueue(ImmuneBase):
         self.assertEqual(immune.pending_cards(), [])
 
     def test_foreign_commits_ignored(self):
-        sha = self._commit("Yegor", "ручная правка Егора", "# n\nего правка\n")
-        immune.enqueue(sha, "ручная правка Егора")
+        sha = self._commit("Alex", "ручная правка Алекса", "# n\nего правка\n")
+        immune.enqueue(sha, "ручная правка Алекса")
         calls = self._stub_review("red", "не должно быть позвано")
         immune.process_queue()
         self.assertEqual(calls, [], "чужой автор — ревью не зовётся (иммунитет про её руки)")
@@ -649,7 +649,7 @@ class TestImmuneQueue(ImmuneBase):
 
 
 # --------------------------------------------------------------------------- #
-#  9.3 inbox: файлы от Егора в мастерскую
+#  9.3 inbox: файлы от владельца в мастерскую
 # --------------------------------------------------------------------------- #
 
 import asyncio
@@ -868,7 +868,7 @@ class TestMessageTaskResolve(TaskTargetBase):
         social.category = lambda sid: "unknown"
 
         out = agent.tool_remind_self(
-            "message", "разбуди Егора", "in 2h", "10101")
+            "message", "разбуди Алекса", "in 2h", "10101")
 
         self.assertIn("Намечено #", out)
         self.assertNotIn("незнаком", out)
@@ -1009,7 +1009,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
 
 # ⚠ Отсюда удалён класс TestWindowTransparency: он целиком проверял
 # heartbeat.window_goal / record_decision / mark_window / WINDOW_DECIDE_SYS — контур,
-# который не вызывался в проде ниоткуда и выброшен 25.07 по решению Егора.
+# который не вызывался в проде ниоткуда и выброшен 25.07 по решению владельца.
 # Цифра, которую стоит запомнить: мёртвый путь был покрыт дюжиной зелёных
 # тестов. Покрытие говорило, что код работает, а не что он вызывается.
 

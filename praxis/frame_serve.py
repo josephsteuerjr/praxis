@@ -133,7 +133,9 @@ def select(*, system, messages, tools):
         voice = frame_shadow._read(frame_shadow.BASE / 'soul' / 'VOICE.md')
         if not soul.strip() or not voice.strip():
             raise ValueError('missing constitution')
-        expected_k = soul + '\n\n---\n' + voice
+        expected_k = frame_shadow._zone_k()
+        if not expected_k.startswith(soul + '\n\n---\n' + voice):
+            raise ValueError('constitution changed before assembly')
         coverage = {}
         candidate = frame_measure.assemble(
             ctx=copy.deepcopy(ctx), live_sections=[], messages=[], coverage=coverage,

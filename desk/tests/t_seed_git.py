@@ -27,7 +27,7 @@ sys.path.insert(0, str(LIVE))          # self_model живёт в дереве �
 
 import boot  # noqa: E402
 
-CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Егор"}}
+CFG = {"agent": {"name": "Проба"}, "owner": {"name": "Алекс"}}
 
 
 def git(tree: Path, *args: str) -> str:
@@ -102,7 +102,7 @@ class SeedGit(unittest.TestCase):
     def test_owner_backups_moved_into_the_home_leave_the_index_not_the_disk(self) -> None:
         """2.8.3: a migrated `backup.dir` put 5 GB zips under retained-assets/ in the home.
 
-        `add -A` before every agent command then timed out (Jarvis, 252 times since 08.11).
+        `add -A` before every agent command then timed out (Atlas, 252 times since 08.11).
         An old home is healed at the next start: ignored and dropped from the index only.
         """
         ignore = self.tmp / ".gitignore"

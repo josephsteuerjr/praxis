@@ -1,0 +1,58 @@
+name: Verify the packaged ARM server
+on:
+  workflow_run:
+    workflows: ['Hélène platform builders']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Builder run containing the server-linux-arm64 artifact
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && startsWith(github.event.workflow_run.head_branch, 'helene-ci/') && (startsWith(github.event.workflow_run.display_title, 'Hélène all') || startsWith(github.event.workflow_run.display_title, 'Hélène server-linux-arm64')))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 12
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: helene-server-linux-arm64
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          path: input
+      - name: Verify and run the ARM binary and server updater
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib,json,pathlib,platform,subprocess,sys,zipfile
+          assert platform.machine()=='aarch64'
+          base=pathlib.Path('input')
+          receipt=json.loads((base/'server-linux-arm64.json').read_bytes())
+          asset=base/receipt['asset']
+          with asset.open('rb') as f: assert hashlib.file_digest(f,'sha256').hexdigest()==receipt['sha256']
+          with zipfile.ZipFile(asset) as z:
+              assert z.testzip() is None
+              origin=json.loads(z.read('Helene/RELEASE-ORIGIN.json'))
+              assert origin['source_commit']==receipt['source_commit']
+              binary=pathlib.Path(z.extract('Helene/relay-product/praxis-relay-headless','smoke'))
+              passport=json.loads(z.read('Helene/relay-product/BUILD-PASSPORT.json'))
+              assert hashlib.sha256(binary.read_bytes()).hexdigest()==passport['sha256']
+              assert int.from_bytes(binary.read_bytes()[18:20],'little')==183
+              binary.chmod(0o755)
+              subprocess.run([str(binary.resolve()),'--help'],check=True,timeout=30,stdout=subprocess.DEVNULL)
+              for member in z.namelist():
+                  if member.startswith('Helene/server/updater/'): z.extract(member,'smoke')
+          sys.path.insert(0,'smoke/Helene/server/updater')
+          import updater
+          version=origin['version']
+          feed={'tag_name':'v'+version,'assets':[{'name':asset.name,'browser_download_url':'https://example.org/'+asset.name,'digest':'sha256:'+receipt['sha256']}]}
+          selection=updater.pick_release(feed,'Helene',machine=platform.machine())
+          assert selection['sha256']==receipt['sha256'] and selection['asset']==asset.name
+          pathlib.Path('arm-receipt.json').write_text(json.dumps({'commit':origin['source_commit'],'sha256':receipt['sha256'],'machine':platform.machine(),'relay_help':True,'updater_selected':selection['asset']},indent=2))
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-arm-receipt
+          path: arm-receipt.json

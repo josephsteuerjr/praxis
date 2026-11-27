@@ -56,7 +56,7 @@ class RunIntegrationTests(unittest.TestCase):
         with mock.patch.object(agent, "build_system_parts", return_value=("persona", "dynamic")), \
                 mock.patch.object(agent, "_system", return_value="system"), \
                 mock.patch.object(agent.llm, "chat", return_value=response):
-            answer = agent._voice("the complete conversation", [], "Yegor", ctx=ctx,
+            answer = agent._voice("the complete conversation", [], "Alex", ctx=ctx,
                                   no_tools=True)
 
         self.assertEqual(answer, "finished")

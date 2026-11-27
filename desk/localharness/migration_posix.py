@@ -353,7 +353,7 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
                         raise RuntimeError('Old program changed')
                     check();os.unlink(parts[-1],dir_fd=parent)
             except PermissionError:
-                # 11.11 (Yegor): no administrator prompt for cleanup; the file stays and is named.
+                # 11.11 (the owner): no administrator prompt for cleanup; the file stays and is named.
                 protected_files.append(name)
             except OSError as exc:
                 raise RuntimeError('Old program path changed or became linked') from exc
